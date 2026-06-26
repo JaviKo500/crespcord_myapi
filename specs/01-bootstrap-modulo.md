@@ -1,6 +1,6 @@
 # 01 — Bootstrap del módulo myapi
 
-- **Estado:** Implemented
+- **Estado:** Approved
 - **Fecha:** 2026-06-26
 - **Dependencias:** ninguna (primer spec)
 - **Objetivo:** Dejar el módulo `myapi` instalable y activable, con la
