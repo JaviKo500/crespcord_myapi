@@ -1,0 +1,22 @@
+<?php
+
+/**
+ * @file
+ * Routing for the myapi module.
+ */
+
+/**
+ * Implements hook_menu().
+ */
+function myapi_menu() {
+  $items = [];
+
+  $items['api/v1/ping'] = [
+    'page callback'    => 'myapi_ping_dispatch',
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/ping.resource.inc',
+  ];
+
+  return $items;
+}

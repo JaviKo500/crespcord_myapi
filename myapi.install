@@ -1,0 +1,18 @@
+<?php
+
+/**
+ * @file
+ * Install and uninstall hooks for the myapi module.
+ */
+
+/**
+ * Implements hook_install().
+ */
+function myapi_install() {
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+function myapi_uninstall() {
+}
