@@ -1,6 +1,6 @@
 # 01 — Bootstrap del módulo myapi
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-06-26
 - **Dependencias:** ninguna (primer spec)
 - **Objetivo:** Dejar el módulo `myapi` instalable y activable, con la
@@ -71,18 +71,18 @@ Cada paso deja el sistema en estado funcional.
 
 ## Criterios de aceptación
 
-- [ ] `drush en myapi` activa el módulo sin errores ni warnings.
-- [ ] `drush dis myapi` desactiva el módulo sin errores.
-- [ ] `GET /api/v1/ping` devuelve HTTP 200 y el cuerpo
+- [x] `drush en myapi` activa el módulo sin errores ni warnings.
+- [x] `drush dis myapi` desactiva el módulo sin errores.
+- [x] `GET /api/v1/ping` devuelve HTTP 200 y el cuerpo
       `{"success":true,"data":{"pong":true}}`.
-- [ ] `POST /api/v1/ping` devuelve HTTP 405.
-- [ ] Una llamada directa a `myapi_respond(['x' => 1])` produce
+- [x] `POST /api/v1/ping` devuelve HTTP 405.
+- [x] Una llamada directa a `myapi_respond(['x' => 1])` produce
       `{"success":true,"data":{"x":1}}` con HTTP 200.
-- [ ] Una llamada directa a `myapi_error('fallo', 422)` produce
+- [x] Una llamada directa a `myapi_error('fallo', 422)` produce
       `{"success":false,"error":"fallo"}` con HTTP 422.
-- [ ] `myapi_request_require_fields([], ['name'])` responde 422 sin
+- [x] `myapi_request_require_fields([], ['name'])` responde 422 sin
       llegar al código del recurso.
-- [ ] Ningún `.inc` ausente del `files[]` de `myapi.info`
+- [x] Ningún `.inc` ausente del `files[]` de `myapi.info`
       (Drupal no lanza "class not found" ni "function not found").
 
 ---
