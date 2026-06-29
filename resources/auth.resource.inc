@@ -7,6 +7,7 @@
 
 module_load_include('inc', 'myapi', 'includes/myapi.request');
 module_load_include('inc', 'myapi', 'includes/myapi.response');
+module_load_include('inc', 'myapi', 'includes/myapi.i18n');
 module_load_include('inc', 'myapi', 'includes/myapi.token');
 
 /**
@@ -20,7 +21,7 @@ function myapi_auth_dispatch() {
     myapi_auth_login();
   }
   else {
-    myapi_error('Method not allowed', 405);
+    myapi_error('method_not_allowed', 405);
   }
 }
 
@@ -47,7 +48,7 @@ function myapi_auth_login() {
   $account = user_load_by_name($username);
   if (!$account || $account->uid == 0 || $account->status == 0
       || !user_check_password($password, $account)) {
-    myapi_error('Invalid credentials', 401);
+    myapi_error('invalid_credentials', 401);
   }
 
   // Issue and persist a fresh token pair.

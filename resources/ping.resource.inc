@@ -7,6 +7,7 @@
 
 module_load_include('inc', 'myapi', 'includes/myapi.request');
 module_load_include('inc', 'myapi', 'includes/myapi.response');
+module_load_include('inc', 'myapi', 'includes/myapi.i18n');
 
 /**
  * Dispatcher for GET /api/v1/ping.
@@ -17,7 +18,7 @@ function myapi_ping_dispatch() {
     myapi_ping_get();
   }
   else {
-    myapi_error('Method not allowed.', 405);
+    myapi_error('method_not_allowed', 405);
   }
 }
 

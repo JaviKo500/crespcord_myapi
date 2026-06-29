@@ -42,7 +42,7 @@ function myapi_request_method() {
 function myapi_request_require_fields(array $body, array $fields) {
   foreach ($fields as $field) {
     if (!isset($body[$field])) {
-      myapi_error('Missing required field: ' . $field, 422);
+      myapi_error('missing_field', 422, ['@field' => $field]);
     }
   }
 }
@@ -61,10 +61,10 @@ function myapi_request_require_fields(array $body, array $fields) {
 function myapi_request_require_strings(array $body, array $fields, $max_length = 255) {
   foreach ($fields as $field) {
     if (!isset($body[$field]) || !is_string($body[$field]) || trim($body[$field]) === '') {
-      myapi_error('Invalid or missing field: ' . $field, 422);
+      myapi_error('invalid_field', 422, ['@field' => $field]);
     }
     if (strlen($body[$field]) > $max_length) {
-      myapi_error('Field too long: ' . $field, 422);
+      myapi_error('field_too_long', 422, ['@field' => $field]);
     }
   }
 }
