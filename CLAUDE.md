@@ -87,12 +87,21 @@ myapi/
 ## Response envelope (no exceptions)
 
 ```json
-// Success
+// Success (no message)
 { "success": true, "data": { } }
 
+// Success (with optional translated message)
+{ "success": true, "data": { }, "message": "Sesión cerrada correctamente." }
+
 // Error
-{ "success": false, "error": "Human-readable message" }
+{ "success": false, "error_code": "invalid_credentials", "error": "Usuario o contraseña incorrectos." }
 ```
+
+- **`error_code`** — stable catalogue key (English, snake_case), language-independent, for client logic.
+- **`error`** — message translated into the language resolved from `Accept-Language` (`es`/`en`, default `es`).
+- **`message`** — optional, translated; only present on success when a `message_key` is passed to `myapi_respond()`.
+
+Messages are never hard-coded in resources: pass a catalogue **key** to `myapi_error()` / `myapi_respond()` and `myapi_t()` translates it. See `docs/i18n.md`.
 
 HTTP status codes must be correct: 200, 201, 400, 401, 403, 404, 405, 422, 429, 500.
 

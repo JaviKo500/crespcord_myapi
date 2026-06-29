@@ -57,16 +57,24 @@ Notes:
   user` role is included.
 
 **Possible errors**
-| Code | When |
-|------|------|
-| 422  | `username` or `password` missing, not a string, empty, or longer than 255 chars. The database is not touched. |
-| 401  | Invalid credentials: wrong password, nonexistent user, or blocked user (`status = 0`). The same `Invalid credentials` body is returned in all three cases so account existence is never revealed. |
-| 405  | Any HTTP method other than POST. |
+| Code | `error_code` | When |
+|------|--------------|------|
+| 422  | `missing_field` / `invalid_field` / `field_too_long` | `username` or `password` missing, not a string, empty, or longer than 255 chars. The database is not touched. |
+| 401  | `invalid_credentials` | Invalid credentials: wrong password, nonexistent user, or blocked user (`status = 0`). The same `invalid_credentials` body is returned in all three cases so account existence is never revealed. |
+| 405  | `method_not_allowed` | Any HTTP method other than POST. |
 
 Error envelope:
 ```json
-{ "success": false, "error": "Invalid credentials" }
+{
+  "success": false,
+  "error_code": "invalid_credentials",
+  "error": "Usuario o contraseña incorrectos."
+}
 ```
+
+`error_code` is a stable, language-independent key; `error` is translated
+according to the `Accept-Language` header (`es`/`en`, default `es`). See
+[i18n.md](i18n.md).
 
 **Security notes**
 - **HTTPS required in production.** Opaque tokens travel in the response body;
