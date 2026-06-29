@@ -1,6 +1,6 @@
 # 02 — Endpoint de login con tokens opacos
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-06-29
 - **Dependencias:** `01-bootstrap-modulo` (Implemented) — usa los helpers
   `myapi_respond()` / `myapi_error()` y `myapi_request_*()`, y el patrón
@@ -205,38 +205,38 @@ Cada paso deja el sistema en estado funcional.
 
 ## Criterios de aceptación
 
-- [ ] `drush updb` crea la tabla `my_api_tokens` con todas las columnas, PK e
+- [x] `drush updb` crea la tabla `my_api_tokens` con todas las columnas, PK e
       índices (`uid`, `access_token_hash`, `refresh_token_hash`).
-- [ ] Reinstalar el módulo (`drush dis myapi && drush en myapi`) también crea
+- [x] Reinstalar el módulo (`drush dis myapi && drush en myapi`) también crea
       la tabla vía `hook_schema()`.
-- [ ] `POST /api/v1/auth/login` con `username`+`password` válidos de un
+- [x] `POST /api/v1/auth/login` con `username`+`password` válidos de un
       usuario con `status=1` devuelve **HTTP 200** y el envelope
       `{"success":true,"data":{...}}` con `access_token`, `refresh_token`,
       `expires_in` (= TTL de access vigente, por defecto `1800`) y
       `user{uid,name,mail,picture:null,roles[]}`, donde cada elemento de
       `roles` es `{name, uid}` con `uid` = rid del rol.
-- [ ] Tras un login exitoso existe **una fila nueva** en `my_api_tokens` con
+- [x] Tras un login exitoso existe **una fila nueva** en `my_api_tokens` con
       `revoked=0`, los dos hashes (64 chars cada uno),
       `access_expires_at = created + TTL access`,
       `refresh_expires_at = created + TTL refresh`, y `user_agent`/`ip_address`
       poblados.
-- [ ] Con `drush vset myapi_token_access_ttl 3600`, un login posterior
+- [x] Con `drush vset myapi_token_access_ttl 3600`, un login posterior
       devuelve `expires_in:3600` y persiste `access_expires_at = created+3600`,
       **sin** cambios de código ni reinstalar. Sin la variable definida, el
       default sigue siendo `1800` (y `2592000` para el refresh).
-- [ ] En BD **no** aparece ningún token en claro: solo los hashes SHA-256.
-- [ ] `access_token` devuelto mide 64 chars hex; `refresh_token` mide 128
+- [x] En BD **no** aparece ningún token en claro: solo los hashes SHA-256.
+- [x] `access_token` devuelto mide 64 chars hex; `refresh_token` mide 128
       chars hex.
-- [ ] Password incorrecta → **HTTP 401** y
+- [x] Password incorrecta → **HTTP 401** y
       `{"success":false,"error":"Invalid credentials"}`.
-- [ ] Usuario inexistente → **HTTP 401** con el **mismo** cuerpo
+- [x] Usuario inexistente → **HTTP 401** con el **mismo** cuerpo
       `Invalid credentials` (no se distingue de password incorrecta).
-- [ ] Usuario bloqueado (`status=0`) con password correcta → **HTTP 401**
+- [x] Usuario bloqueado (`status=0`) con password correcta → **HTTP 401**
       `Invalid credentials`.
-- [ ] Falta `username` o `password` en el body → **HTTP 422** sin llegar a
+- [x] Falta `username` o `password` en el body → **HTTP 422** sin llegar a
       tocar la BD.
-- [ ] `GET`/`PUT`/`DELETE` sobre `api/v1/auth/login` → **HTTP 405**.
-- [ ] `resources/auth.resource.inc` e `includes/myapi.token.inc` están
+- [x] `GET`/`PUT`/`DELETE` sobre `api/v1/auth/login` → **HTTP 405**.
+- [x] `resources/auth.resource.inc` e `includes/myapi.token.inc` están
       listados en `files[]` de `myapi.info` (sin errores "undefined function").
 
 ---
