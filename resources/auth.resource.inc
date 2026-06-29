@@ -38,6 +38,10 @@ function myapi_auth_login() {
   $username = $body['username'];
   $password = $body['password'];
 
+  // user_check_password() lives in includes/password.inc, which Drupal 7 does
+  // not load on every request; pull it in before verifying credentials.
+  require_once DRUPAL_ROOT . '/' . variable_get('password_inc', 'includes/password.inc');
+
   // Load the account. Any failure below returns the same generic 401 so the
   // response never reveals whether a given username exists.
   $account = user_load_by_name($username);
