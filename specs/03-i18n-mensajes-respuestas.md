@@ -1,6 +1,6 @@
 # 03 — i18n de mensajes y errores según `Accept-Language`
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-06-29
 - **Dependencias:**
   - `01-bootstrap-modulo` (Implemented) — extiende los helpers `myapi_respond()` /
@@ -180,34 +180,34 @@ Cada paso deja el sistema en estado funcional.
 
 ## Criterios de aceptación
 
-- [ ] `POST /api/v1/auth/login` con credenciales inválidas y `Accept-Language: es`
+- [x] `POST /api/v1/auth/login` con credenciales inválidas y `Accept-Language: es`
       → **401** con
       `{"success":false,"error_code":"invalid_credentials","error":"Usuario o contraseña incorrectos."}`.
-- [ ] El mismo caso con `Accept-Language: en` → **401** con `error` =
+- [x] El mismo caso con `Accept-Language: en` → **401** con `error` =
       `"Invalid username or password."` y el **mismo** `error_code` =
       `"invalid_credentials"`.
-- [ ] El mismo caso **sin** header `Accept-Language` → responde en **español**
+- [x] El mismo caso **sin** header `Accept-Language` → responde en **español**
       (default `es`).
-- [ ] `Accept-Language: es-ES,es;q=0.9,en;q=0.8` se resuelve como `es` (se toman los
+- [x] `Accept-Language: es-ES,es;q=0.9,en;q=0.8` se resuelve como `es` (se toman los
       2 primeros chars).
-- [ ] Un idioma no soportado (`Accept-Language: fr`) cae al default `es`.
-- [ ] Falta `username` en el body con `Accept-Language: en` → **422** con
+- [x] Un idioma no soportado (`Accept-Language: fr`) cae al default `es`.
+- [x] Falta `username` en el body con `Accept-Language: en` → **422** con
       `error_code` = `"missing_field"` (estable, sin el nombre) y `error` =
       `"Missing required field: username"` (con el campo interpolado).
-- [ ] El mismo caso con `Accept-Language: es` → `error` =
+- [x] El mismo caso con `Accept-Language: es` → `error` =
       `"Falta el campo requerido: username"`.
-- [ ] `GET`/`PUT`/`DELETE` sobre `api/v1/auth/login` y método no-GET sobre
+- [x] `GET`/`PUT`/`DELETE` sobre `api/v1/auth/login` y método no-GET sobre
       `api/v1/ping` → **405** con `error_code` = `"method_not_allowed"` traducido
       según el header.
-- [ ] El envelope de **éxito** de login sigue siendo `{"success":true,"data":{...}}`
+- [x] El envelope de **éxito** de login sigue siendo `{"success":true,"data":{...}}`
       **sin** campo `message` (no se pasó `message_key`).
-- [ ] Llamar a `myapi_respond($data, 200, 'logout_success')` produce
+- [x] Llamar a `myapi_respond($data, 200, 'logout_success')` produce
       `{"success":true,"data":{...},"message":"<traducido>"}`.
-- [ ] `myapi_t()` con una key inexistente devuelve la key tal cual (no rompe ni emite
+- [x] `myapi_t()` con una key inexistente devuelve la key tal cual (no rompe ni emite
       warning).
-- [ ] `includes/myapi.i18n.inc` está listado en `files[]` de `myapi.info` (sin
+- [x] `includes/myapi.i18n.inc` está listado en `files[]` de `myapi.info` (sin
       "undefined function `myapi_t`").
-- [ ] El `CLAUDE.md` refleja el envelope con `error_code` y el `message` opcional,
+- [x] El `CLAUDE.md` refleja el envelope con `error_code` y el `message` opcional,
       sin contradecir el código.
 
 ---
