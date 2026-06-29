@@ -5,6 +5,10 @@
  * Routing for the myapi module.
  */
 
+// The i18n helpers (myapi_get_lang() / myapi_t()) are used by the shared
+// response and request helpers, so load them globally on every request.
+module_load_include('inc', 'myapi', 'includes/myapi.i18n');
+
 /**
  * Implements hook_menu().
  */

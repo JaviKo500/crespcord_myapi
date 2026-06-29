@@ -7,6 +7,7 @@ files[] = myapi.module
 files[] = myapi.install
 files[] = includes/myapi.response.inc
 files[] = includes/myapi.request.inc
+files[] = includes/myapi.i18n.inc
 files[] = resources/ping.resource.inc
 files[] = includes/myapi.token.inc
 files[] = resources/auth.resource.inc
