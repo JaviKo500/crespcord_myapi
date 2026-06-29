@@ -46,3 +46,25 @@ function myapi_request_require_fields(array $body, array $fields) {
     }
   }
 }
+
+/**
+ * Validates that the given fields are present and non-empty strings.
+ *
+ * Rejects arrays, objects, numbers, booleans and whitespace-only values so
+ * resources never pass unexpected types into downstream APIs. Calls
+ * myapi_error() with HTTP 422 and exits on the first invalid field.
+ *
+ * @param array $body      Decoded request body.
+ * @param array $fields    List of field names that must be non-empty strings.
+ * @param int   $max_length  Maximum allowed length per field (default 255).
+ */
+function myapi_request_require_strings(array $body, array $fields, $max_length = 255) {
+  foreach ($fields as $field) {
+    if (!isset($body[$field]) || !is_string($body[$field]) || trim($body[$field]) === '') {
+      myapi_error('Invalid or missing field: ' . $field, 422);
+    }
+    if (strlen($body[$field]) > $max_length) {
+      myapi_error('Field too long: ' . $field, 422);
+    }
+  }
+}
