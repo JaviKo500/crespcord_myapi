@@ -1,12 +1,15 @@
 #!/bin/bash
 
-KEY="$(dirname "$0")/crespcord.pem"
-SRC="$(dirname "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SRC="$(dirname "$SCRIPT_DIR")"
+KEY="${MYAPI_DEPLOY_KEY:-$HOME/.ssh/crespcord.pem}"
 SERVER="ubuntu@crespcord.lamotora.com"
 DEST="/var/www/html/sites/all/modules/myapi"
 TMP="~/myapi_upload"
 
 echo "Subiendo archivos al servidor..."
+
+ssh -i "$KEY" "$SERVER" "mkdir -p $TMP"
 
 scp -i "$KEY" "$SRC/myapi.info"    "${SERVER}:${TMP}/"
 scp -i "$KEY" "$SRC/myapi.install" "${SERVER}:${TMP}/"
@@ -25,7 +28,7 @@ ssh -i "$KEY" "$SERVER" "
   sudo cp -r $TMP/resources  $DEST/
   sudo chown -R www-data:www-data $DEST
   rm -rf $TMP
-  cd /var/www/html && sudo -u www-data drush cc all
+  cd /var/www/html && sudo -u www-data drush updb -y && sudo -u www-data drush cc all
 "
 
 echo "Deploy completado."
