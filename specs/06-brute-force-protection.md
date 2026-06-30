@@ -1,6 +1,6 @@
 # 06 — Protección contra fuerza bruta en endpoints de autenticación
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-06-29
 - **Dependencias:**
   - `02-login-tokens` (Implemented) — endpoint de login en `resources/auth.resource.inc`.
@@ -155,25 +155,25 @@ Cada paso deja el sistema en estado funcional.
 
 ## Criterios de aceptación
 
-- [ ] 5 intentos de login fallidos con el mismo `username` → el 6.º devuelve
+- [x] 5 intentos de login fallidos con el mismo `username` → el 6.º devuelve
       **HTTP 429** con `error_code: "too_many_attempts"`, independientemente de
       la IP.
-- [ ] 20 intentos de login fallidos desde la misma IP (usuarios distintos) →
+- [x] 20 intentos de login fallidos desde la misma IP (usuarios distintos) →
       el 21.º devuelve **HTTP 429** con `error_code: "too_many_attempts"`.
-- [ ] Un login exitoso limpia los contadores de flood del usuario y de la IP.
-- [ ] 10 intentos de refresh fallidos desde la misma IP → el 11.º devuelve
+- [x] Un login exitoso limpia los contadores de flood del usuario y de la IP.
+- [x] 10 intentos de refresh fallidos desde la misma IP → el 11.º devuelve
       **HTTP 429** con `error_code: "too_many_attempts"`.
-- [ ] Un refresh exitoso limpia el contador de flood de la IP.
-- [ ] 20 intentos de logout fallidos desde la misma IP → el 21.º devuelve
+- [x] Un refresh exitoso limpia el contador de flood de la IP.
+- [x] 20 intentos de logout fallidos desde la misma IP → el 21.º devuelve
       **HTTP 429** con `error_code: "too_many_attempts"`.
-- [ ] Un logout exitoso limpia el contador de flood de la IP.
-- [ ] El check de flood se ejecuta **antes** de cualquier consulta a BD en cada
+- [x] Un logout exitoso limpia el contador de flood de la IP.
+- [x] El check de flood se ejecuta **antes** de cualquier consulta a BD en cada
       endpoint.
-- [ ] Cambiar `myapi_flood_login_user_limit` vía `variable_set()` y rehacer la
+- [x] Cambiar `myapi_flood_login_user_limit` vía `variable_set()` y rehacer la
       prueba refleja el nuevo umbral sin `drush cc all`.
-- [ ] `Accept-Language: en` en una respuesta 429 devuelve el mensaje en inglés;
+- [x] `Accept-Language: en` en una respuesta 429 devuelve el mensaje en inglés;
       sin header o `Accept-Language: es` lo devuelve en español.
-- [ ] `drush cc all` no produce errores tras los cambios.
+- [x] `drush cc all` no produce errores tras los cambios.
 
 ---
 
