@@ -1,6 +1,6 @@
 # 05 — Middleware de access token + endpoint de logout
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-06-29
 - **Dependencias:**
   - `02-login-tokens` (Implemented) — tabla `my_api_tokens` y helpers de
@@ -136,34 +136,34 @@ Cada paso deja el sistema en estado funcional.
 
 ## Criterios de aceptación
 
-- [ ] `POST /api/v1/auth/logout` con access token válido en `Authorization`
+- [x] `POST /api/v1/auth/logout` con access token válido en `Authorization`
       y refresh token válido de la misma sesión en el body devuelve **HTTP 200**
       con `{"success":true,"data":{},"message":"Sesión cerrada correctamente."}`.
-- [ ] Tras un logout exitoso, la fila correspondiente en `my_api_tokens` tiene
+- [x] Tras un logout exitoso, la fila correspondiente en `my_api_tokens` tiene
       `revoked = 1`.
-- [ ] Header `Authorization` ausente → **HTTP 401** con
+- [x] Header `Authorization` ausente → **HTTP 401** con
       `error_code: "missing_authorization"`.
-- [ ] Header `Authorization` con formato incorrecto (sin `Bearer`, token vacío)
+- [x] Header `Authorization` con formato incorrecto (sin `Bearer`, token vacío)
       → **HTTP 401** con `error_code: "missing_authorization"`.
-- [ ] Access token inexistente en BD → **HTTP 401** con
+- [x] Access token inexistente en BD → **HTTP 401** con
       `error_code: "invalid_token"`.
-- [ ] Access token con `revoked = 1` → **HTTP 401** con
+- [x] Access token con `revoked = 1` → **HTTP 401** con
       `error_code: "invalid_token"`.
-- [ ] Access token con `access_expires_at < now` → **HTTP 401** con
+- [x] Access token con `access_expires_at < now` → **HTTP 401** con
       `error_code: "invalid_token"`.
-- [ ] Access token válido pero usuario con `status = 0` → **HTTP 401** con
+- [x] Access token válido pero usuario con `status = 0` → **HTTP 401** con
       `error_code: "invalid_token"`.
-- [ ] Access token válido + `refresh_token` ausente en body → **HTTP 422** con
+- [x] Access token válido + `refresh_token` ausente en body → **HTTP 422** con
       `error_code: "missing_field"` sin modificar la BD.
 - [ ] Access token válido + refresh token de otra sesión del mismo usuario →
       **HTTP 401** con `error_code: "invalid_token"` sin modificar la BD.
-- [ ] `GET`/`PUT`/`DELETE` sobre `api/v1/auth/logout` → **HTTP 405** con
+- [x] `GET`/`PUT`/`DELETE` sobre `api/v1/auth/logout` → **HTTP 405** con
       `error_code: "method_not_allowed"`.
-- [ ] `Accept-Language: en` devuelve textos en inglés; sin header o
+- [x] `Accept-Language: en` devuelve textos en inglés; sin header o
       `Accept-Language: es` los devuelve en español.
-- [ ] `myapi_auth_require_access_token()` es invocable desde cualquier recurso
+- [x] `myapi_auth_require_access_token()` es invocable desde cualquier recurso
       sin duplicar lógica.
-- [ ] `drush cc all` registra la nueva ruta sin errores.
+- [x] `drush cc all` registra la nueva ruta sin errores.
 
 ---
 
