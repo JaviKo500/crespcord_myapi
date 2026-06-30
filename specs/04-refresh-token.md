@@ -1,6 +1,6 @@
 # 04 — Endpoint de refresh token
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-06-29
 - **Dependencias:**
   - `02-login-tokens` (Implemented) — tabla `my_api_tokens` y helpers de
@@ -156,30 +156,30 @@ Cada paso deja el sistema en estado funcional.
 
 ## Criterios de aceptación
 
-- [ ] `POST /api/v1/auth/refresh` con un refresh token válido devuelve **HTTP 200**
+- [x] `POST /api/v1/auth/refresh` con un refresh token válido devuelve **HTTP 200**
       con `{"success":true,"data":{...}}` conteniendo `access_token` (64 chars hex),
       `refresh_token` (128 chars hex), `expires_in` (TTL de access vigente) y
       `user{uid,name,mail,picture:null,roles[]}`.
-- [ ] Tras un refresh exitoso, la fila antigua en `my_api_tokens` tiene `revoked=1`
+- [x] Tras un refresh exitoso, la fila antigua en `my_api_tokens` tiene `revoked=1`
       y existe una fila nueva con `revoked=0` y los nuevos hashes.
-- [ ] El refresh token devuelto es distinto al enviado (rotación real).
-- [ ] Un refresh token inexistente en BD → **HTTP 401** con
+- [x] El refresh token devuelto es distinto al enviado (rotación real).
+- [x] Un refresh token inexistente en BD → **HTTP 401** con
       `error_code: "invalid_token"`.
-- [ ] Un refresh token ya revocado (`revoked=1`) → **HTTP 401** con
+- [x] Un refresh token ya revocado (`revoked=1`) → **HTTP 401** con
       `error_code: "invalid_token"`.
-- [ ] Un refresh token con `refresh_expires_at < now` → **HTTP 401** con
+- [x] Un refresh token con `refresh_expires_at < now` → **HTTP 401** con
       `error_code: "token_expired"`.
-- [ ] Un refresh token válido cuyo usuario tiene `status=0` → **HTTP 401** con
+- [x] Un refresh token válido cuyo usuario tiene `status=0` → **HTTP 401** con
       `error_code: "invalid_token"`.
-- [ ] Usar el mismo refresh token por segunda vez (ya revocado tras el primer
+- [x] Usar el mismo refresh token por segunda vez (ya revocado tras el primer
       refresh) → **HTTP 401** con `error_code: "invalid_token"`.
-- [ ] Falta `refresh_token` en el body → **HTTP 422** con
+- [x] Falta `refresh_token` en el body → **HTTP 422** con
       `error_code: "missing_field"` sin tocar la BD.
-- [ ] `GET`/`PUT`/`DELETE` sobre `api/v1/auth/refresh` → **HTTP 405** con
+- [x] `GET`/`PUT`/`DELETE` sobre `api/v1/auth/refresh` → **HTTP 405** con
       `error_code: "method_not_allowed"`.
-- [ ] `Accept-Language: en` en cualquier error devuelve el texto en inglés;
+- [x] `Accept-Language: en` en cualquier error devuelve el texto en inglés;
       sin header o `Accept-Language: es` lo devuelve en español.
-- [ ] `drush cc all` registra la nueva ruta sin errores.
+- [x] `drush cc all` registra la nueva ruta sin errores.
 
 ---
 
