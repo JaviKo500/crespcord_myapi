@@ -10,6 +10,7 @@ module_load_include('inc', 'myapi', 'includes/myapi.response');
 module_load_include('inc', 'myapi', 'includes/myapi.i18n');
 module_load_include('inc', 'myapi', 'includes/myapi.token');
 module_load_include('inc', 'myapi', 'includes/myapi.auth');
+module_load_include('inc', 'myapi', 'includes/myapi.flood');
 
 /**
  * Dispatcher for /api/v1/auth/login.
@@ -34,11 +35,15 @@ function myapi_auth_dispatch() {
  * the basic user data.
  */
 function myapi_auth_login() {
+  $ip   = ip_address();
   $body = myapi_request_body();
   myapi_request_require_strings((array) $body, ['username', 'password']);
 
   $username = $body['username'];
   $password = $body['password'];
+
+  myapi_flood_check('myapi_login_ip',   $ip,       'myapi_flood_login_ip_limit',   'myapi_flood_login_ip_window');
+  myapi_flood_check('myapi_login_user', $username, 'myapi_flood_login_user_limit', 'myapi_flood_login_user_window');
 
   // user_check_password() lives in includes/password.inc, which Drupal 7 does
   // not load on every request; pull it in before verifying credentials.
@@ -49,8 +54,13 @@ function myapi_auth_login() {
   $account = user_load_by_name($username);
   if (!$account || $account->uid == 0 || $account->status == 0
       || !user_check_password($password, $account)) {
+    myapi_flood_register('myapi_login_ip',   $ip,       'myapi_flood_login_ip_window');
+    myapi_flood_register('myapi_login_user', $username, 'myapi_flood_login_user_window');
     myapi_error('invalid_credentials', 401);
   }
+
+  flood_clear_event('myapi_login_ip',   $ip);
+  flood_clear_event('myapi_login_user', $username);
 
   // Issue and persist a fresh token pair.
   $access = myapi_token_generate_access();
@@ -117,6 +127,10 @@ function myapi_auth_logout_dispatch() {
  * refresh token in the body belongs to the same session, and revokes the row.
  */
 function myapi_auth_logout() {
+  $ip = ip_address();
+
+  myapi_flood_check('myapi_logout_ip', $ip, 'myapi_flood_logout_ip_limit', 'myapi_flood_logout_ip_window');
+
   $row = myapi_auth_require_access_token();
 
   $body = myapi_request_body();
@@ -124,6 +138,7 @@ function myapi_auth_logout() {
 
   $refresh_hash = myapi_token_hash($body['refresh_token']);
   if ($refresh_hash !== $row->refresh_token_hash) {
+    myapi_flood_register('myapi_logout_ip', $ip, 'myapi_flood_logout_ip_window');
     myapi_error('invalid_token', 401);
   }
 
@@ -131,6 +146,8 @@ function myapi_auth_logout() {
     ->fields(['revoked' => 1])
     ->condition('id', $row->id)
     ->execute();
+
+  flood_clear_event('myapi_logout_ip', $ip);
 
   myapi_respond([], 200, 'logout_success');
 }
@@ -142,6 +159,10 @@ function myapi_auth_logout() {
  * and returns the new tokens together with the basic user data.
  */
 function myapi_auth_refresh() {
+  $ip = ip_address();
+
+  myapi_flood_check('myapi_refresh_ip', $ip, 'myapi_flood_refresh_ip_limit', 'myapi_flood_refresh_ip_window');
+
   $body = myapi_request_body();
   myapi_request_require_fields((array) $body, ['refresh_token']);
 
@@ -156,15 +177,18 @@ function myapi_auth_refresh() {
     ->fetchObject();
 
   if (!$row) {
+    myapi_flood_register('myapi_refresh_ip', $ip, 'myapi_flood_refresh_ip_window');
     myapi_error('invalid_token', 401);
   }
 
   if ($row->refresh_expires_at < REQUEST_TIME) {
+    myapi_flood_register('myapi_refresh_ip', $ip, 'myapi_flood_refresh_ip_window');
     myapi_error('token_expired', 401);
   }
 
   $account = user_load($row->uid);
   if (!$account || $account->status != 1) {
+    myapi_flood_register('myapi_refresh_ip', $ip, 'myapi_flood_refresh_ip_window');
     myapi_error('invalid_token', 401);
   }
 
@@ -172,6 +196,8 @@ function myapi_auth_refresh() {
     ->fields(['revoked' => 1])
     ->condition('id', $row->id)
     ->execute();
+
+  flood_clear_event('myapi_refresh_ip', $ip);
 
   $access  = myapi_token_generate_access();
   $refresh = myapi_token_generate_refresh();
