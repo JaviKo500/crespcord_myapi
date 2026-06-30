@@ -61,6 +61,7 @@ Notes:
 |------|--------------|------|
 | 422  | `missing_field` / `invalid_field` / `field_too_long` | `username` or `password` missing, not a string, empty, or longer than 255 chars. The database is not touched. |
 | 401  | `invalid_credentials` | Invalid credentials: wrong password, nonexistent user, or blocked user (`status = 0`). The same `invalid_credentials` body is returned in all three cases so account existence is never revealed. |
+| 429  | `too_many_attempts` | Flood limit reached: 5 failed attempts for the same `username` (window: 1 h) or 20 failed attempts from the same IP (window: 1 h). Thresholds are configurable via `myapi_flood_login_user_limit` / `myapi_flood_login_ip_limit` (and their `_window` variants). |
 | 405  | `method_not_allowed` | Any HTTP method other than POST. |
 
 Error envelope:
@@ -79,9 +80,11 @@ according to the `Accept-Language` header (`es`/`en`, default `es`). See
 **Security notes**
 - **HTTPS required in production.** Opaque tokens travel in the response body;
   over plain HTTP they could be intercepted.
-- **No brute-force protection (known risk).** This endpoint accepts unlimited
-  login attempts. Rate limiting / flood control (Drupal Flood API, per IP and
-  per user) is out of scope for this endpoint and tracked for a future spec.
+- **Brute-force protection** is active via Drupal Flood API. The IP counter
+  allows 20 failed attempts (1 h window); the per-username counter allows 5
+  (1 h window). A successful login clears both counters.
+- IP thresholds are generous to accommodate NAT environments; they can be raised
+  via `variable_set()` without code changes.
 
 ---
 
@@ -143,6 +146,7 @@ Notes:
 | 422  | `missing_field` | `refresh_token` is absent from the request body. |
 | 401  | `invalid_token` | Token not found in the database, already revoked, or the associated user does not exist or is blocked (`status = 0`). |
 | 401  | `token_expired` | Token exists and is not revoked but its `refresh_expires_at` is in the past. |
+| 429  | `too_many_attempts` | Flood limit reached: 10 failed attempts from the same IP (window: 15 min). Threshold configurable via `myapi_flood_refresh_ip_limit` / `myapi_flood_refresh_ip_window`. |
 | 405  | `method_not_allowed` | Any HTTP method other than POST. |
 
 Error envelope:
@@ -163,8 +167,8 @@ according to the `Accept-Language` header (`es`/`en`, default `es`). See
   immediately. Reusing a revoked token returns `invalid_token` 401.
 - The same `invalid_token` error is returned whether the token does not exist
   or belongs to a blocked user — the response never reveals internal state.
-- **No brute-force protection (known risk).** This endpoint accepts unlimited
-  attempts. Rate limiting is out of scope and tracked for a future spec.
+- A successful refresh clears the IP flood counter so a legitimate user is not
+  blocked after a transient error.
 
 ---
 
@@ -210,6 +214,7 @@ After a successful logout the corresponding row in `my_api_tokens` has
 | 401  | `missing_authorization` | `Authorization` header is absent or does not match the `Bearer <token>` pattern. |
 | 401  | `invalid_token` | Access token not found in the database, already revoked, expired, associated user does not exist or is blocked, or the refresh token does not belong to the same session. |
 | 422  | `missing_field` | `refresh_token` is absent from the request body. The database is not modified. |
+| 429  | `too_many_attempts` | Flood limit reached: 20 failed attempts from the same IP (window: 15 min). Threshold configurable via `myapi_flood_logout_ip_limit` / `myapi_flood_logout_ip_window`. |
 | 405  | `method_not_allowed` | Any HTTP method other than POST. |
 
 Error envelope:
@@ -232,5 +237,5 @@ according to the `Accept-Language` header (`es`/`en`, default `es`). See
 - **If the access token is already expired**, the client must call
   `POST /api/v1/auth/refresh` first to obtain a new pair, then logout. This is
   intentional: logout requires a valid authenticated caller.
-- **No brute-force protection (known risk).** Rate limiting is out of scope and
-  tracked for a future spec.
+- A successful logout clears the IP flood counter so a legitimate user is not
+  blocked after a transient error.
