@@ -22,8 +22,26 @@
  * @param string $window_var  Drupal variable name holding the window in seconds.
  */
 function myapi_flood_check($event, $identifier, $limit_var, $window_var) {
-  $limit  = (int) variable_get($limit_var, 0);
-  $window = (int) variable_get($window_var, 3600);
+  // Default values mirror the spec. variable_get() uses them when the variable
+  // has never been set in the database via variable_set().
+  static $limit_defaults = [
+    'myapi_flood_login_user_limit'  => 5,
+    'myapi_flood_login_ip_limit'    => 20,
+    'myapi_flood_refresh_ip_limit'  => 10,
+    'myapi_flood_logout_ip_limit'   => 20,
+  ];
+  static $window_defaults = [
+    'myapi_flood_login_user_window'  => 3600,
+    'myapi_flood_login_ip_window'    => 3600,
+    'myapi_flood_refresh_ip_window'  => 900,
+    'myapi_flood_logout_ip_window'   => 900,
+  ];
+
+  $default_limit  = isset($limit_defaults[$limit_var])   ? $limit_defaults[$limit_var]   : 10;
+  $default_window = isset($window_defaults[$window_var]) ? $window_defaults[$window_var] : 3600;
+
+  $limit  = (int) variable_get($limit_var,  $default_limit);
+  $window = (int) variable_get($window_var, $default_window);
 
   if (!flood_is_allowed($event, $limit, $window, $identifier)) {
     myapi_error('too_many_attempts', 429);
@@ -41,6 +59,14 @@ function myapi_flood_check($event, $identifier, $limit_var, $window_var) {
  * @param string $window_var  Drupal variable name holding the window in seconds.
  */
 function myapi_flood_register($event, $identifier, $window_var) {
-  $window = (int) variable_get($window_var, 3600);
+  static $window_defaults = [
+    'myapi_flood_login_user_window'  => 3600,
+    'myapi_flood_login_ip_window'    => 3600,
+    'myapi_flood_refresh_ip_window'  => 900,
+    'myapi_flood_logout_ip_window'   => 900,
+  ];
+
+  $default_window = isset($window_defaults[$window_var]) ? $window_defaults[$window_var] : 3600;
+  $window = (int) variable_get($window_var, $default_window);
   flood_register_event($event, $window, $identifier);
 }
