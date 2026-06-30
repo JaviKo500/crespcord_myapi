@@ -82,3 +82,86 @@ according to the `Accept-Language` header (`es`/`en`, default `es`). See
 - **No brute-force protection (known risk).** This endpoint accepts unlimited
   login attempts. Rate limiting / flood control (Drupal Flood API, per IP and
   per user) is out of scope for this endpoint and tracked for a future spec.
+
+---
+
+## POST /api/v1/auth/refresh
+
+Validates an opaque refresh token, revokes it, issues a new access + refresh
+token pair, and returns the new tokens together with the basic user data.
+Each successful refresh rotates the refresh token — the old one is immediately
+invalidated so it cannot be reused.
+
+**Authentication:** public (the refresh token itself is the credential)
+
+**Headers**
+| Header | Value |
+|--------|-------|
+| Content-Type | application/json |
+
+**Request body**
+```json
+{ "refresh_token": "<128 chars hex>" }
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| refresh_token | string | yes | 128 hex chars issued by `POST /api/v1/auth/login` or a previous refresh. |
+
+**Success response (200)**
+```json
+{
+  "success": true,
+  "data": {
+    "access_token": "<64 chars hex>",
+    "refresh_token": "<128 chars hex>",
+    "expires_in": 1800,
+    "user": {
+      "uid": 123,
+      "name": "javier",
+      "mail": "correo@correo.com",
+      "picture": null,
+      "roles": [
+        { "name": "administrator", "uid": 3 }
+      ]
+    }
+  }
+}
+```
+
+Notes:
+- The `refresh_token` returned is always different from the one sent (token
+  rotation). The old token is marked `revoked = 1` in `my_api_tokens`.
+- `expires_in` is the TTL of the **new access token** in seconds (same variable
+  as login: `myapi_token_access_ttl`, default `1800`).
+- `picture` is always `null` in this version.
+- Each `roles` entry is `{ name, uid }` where `uid` is the role id (`rid`).
+
+**Possible errors**
+| Code | `error_code` | When |
+|------|--------------|------|
+| 422  | `missing_field` | `refresh_token` is absent from the request body. |
+| 401  | `invalid_token` | Token not found in the database, already revoked, or the associated user does not exist or is blocked (`status = 0`). |
+| 401  | `token_expired` | Token exists and is not revoked but its `refresh_expires_at` is in the past. |
+| 405  | `method_not_allowed` | Any HTTP method other than POST. |
+
+Error envelope:
+```json
+{
+  "success": false,
+  "error_code": "invalid_token",
+  "error": "Token inválido."
+}
+```
+
+`error_code` is a stable, language-independent key; `error` is translated
+according to the `Accept-Language` header (`es`/`en`, default `es`). See
+[i18n.md](i18n.md).
+
+**Security notes**
+- **Token rotation on every refresh.** The old refresh token is revoked
+  immediately. Reusing a revoked token returns `invalid_token` 401.
+- The same `invalid_token` error is returned whether the token does not exist
+  or belongs to a blocked user — the response never reveals internal state.
+- **No brute-force protection (known risk).** This endpoint accepts unlimited
+  attempts. Rate limiting is out of scope and tracked for a future spec.
