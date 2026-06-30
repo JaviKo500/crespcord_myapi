@@ -36,5 +36,12 @@ function myapi_menu() {
     'file'             => 'resources/auth.resource.inc',
   ];
 
+  $items['api/v1/auth/logout'] = [
+    'page callback'    => 'myapi_auth_logout_dispatch',
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/auth.resource.inc',
+  ];
+
   return $items;
 }

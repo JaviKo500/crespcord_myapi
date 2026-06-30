@@ -9,6 +9,7 @@ module_load_include('inc', 'myapi', 'includes/myapi.request');
 module_load_include('inc', 'myapi', 'includes/myapi.response');
 module_load_include('inc', 'myapi', 'includes/myapi.i18n');
 module_load_include('inc', 'myapi', 'includes/myapi.token');
+module_load_include('inc', 'myapi', 'includes/myapi.auth');
 
 /**
  * Dispatcher for /api/v1/auth/login.
@@ -92,6 +93,46 @@ function myapi_auth_refresh_dispatch() {
   else {
     myapi_error('method_not_allowed', 405);
   }
+}
+
+/**
+ * Dispatcher for /api/v1/auth/logout.
+ *
+ * Routes by HTTP method. Only POST is supported.
+ */
+function myapi_auth_logout_dispatch() {
+  $method = myapi_request_method();
+  if ($method === 'POST') {
+    myapi_auth_logout();
+  }
+  else {
+    myapi_error('method_not_allowed', 405);
+  }
+}
+
+/**
+ * Handles POST /api/v1/auth/logout.
+ *
+ * Authenticates via access token in Authorization header, verifies that the
+ * refresh token in the body belongs to the same session, and revokes the row.
+ */
+function myapi_auth_logout() {
+  $row = myapi_auth_require_access_token();
+
+  $body = myapi_request_body();
+  myapi_request_require_fields((array) $body, ['refresh_token']);
+
+  $refresh_hash = myapi_token_hash($body['refresh_token']);
+  if ($refresh_hash !== $row->refresh_token_hash) {
+    myapi_error('invalid_token', 401);
+  }
+
+  db_update('my_api_tokens')
+    ->fields(['revoked' => 1])
+    ->condition('id', $row->id)
+    ->execute();
+
+  myapi_respond([], 200, 'logout_success');
 }
 
 /**
