@@ -165,3 +165,72 @@ according to the `Accept-Language` header (`es`/`en`, default `es`). See
   or belongs to a blocked user — the response never reveals internal state.
 - **No brute-force protection (known risk).** This endpoint accepts unlimited
   attempts. Rate limiting is out of scope and tracked for a future spec.
+
+---
+
+## POST /api/v1/auth/logout
+
+Revokes the current session. Both the access token (via `Authorization` header)
+and the refresh token (via request body) must belong to the same row in
+`my_api_tokens` — this prevents a valid token from one device revoking a
+different device's session.
+
+**Authentication:** required (Bearer access token)
+
+**Headers**
+| Header | Value |
+|--------|-------|
+| Content-Type | application/json |
+| Authorization | Bearer `<access_token>` |
+
+**Request body**
+```json
+{ "refresh_token": "<128 chars hex>" }
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| refresh_token | string | yes | The refresh token issued alongside the access token being used. |
+
+**Success response (200)**
+```json
+{
+  "success": true,
+  "data": {},
+  "message": "Sesión cerrada correctamente."
+}
+```
+
+After a successful logout the corresponding row in `my_api_tokens` has
+`revoked = 1`. Any further attempt to use either token returns `invalid_token`.
+
+**Possible errors**
+| Code | `error_code` | When |
+|------|--------------|------|
+| 401  | `missing_authorization` | `Authorization` header is absent or does not match the `Bearer <token>` pattern. |
+| 401  | `invalid_token` | Access token not found in the database, already revoked, expired, associated user does not exist or is blocked, or the refresh token does not belong to the same session. |
+| 422  | `missing_field` | `refresh_token` is absent from the request body. The database is not modified. |
+| 405  | `method_not_allowed` | Any HTTP method other than POST. |
+
+Error envelope:
+```json
+{
+  "success": false,
+  "error_code": "missing_authorization",
+  "error": "No se proporcionó token de acceso."
+}
+```
+
+`error_code` is a stable, language-independent key; `error` is translated
+according to the `Accept-Language` header (`es`/`en`, default `es`). See
+[i18n.md](i18n.md).
+
+**Security notes**
+- The same `invalid_token` error is returned for an expired access token, an
+  unknown token, a revoked token, a blocked user, and a refresh/access token
+  mismatch — the response never reveals which condition triggered it.
+- **If the access token is already expired**, the client must call
+  `POST /api/v1/auth/refresh` first to obtain a new pair, then logout. This is
+  intentional: logout requires a valid authenticated caller.
+- **No brute-force protection (known risk).** Rate limiting is out of scope and
+  tracked for a future spec.
