@@ -59,6 +59,7 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
   $catalogue = [
     'en' => [
       'invalid_credentials' => 'Invalid username or password.',
+      'invalid_token'       => 'Invalid token.',
       'unauthorized'        => 'Unauthorized.',
       'token_expired'       => 'Token has expired.',
       'user_not_found'      => 'User not found.',
@@ -72,6 +73,7 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
     ],
     'es' => [
       'invalid_credentials' => 'Usuario o contraseña incorrectos.',
+      'invalid_token'       => 'Token inválido.',
       'unauthorized'        => 'No autorizado.',
       'token_expired'       => 'El token ha expirado.',
       'user_not_found'      => 'Usuario no encontrado.',
