@@ -71,6 +71,7 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'invalid_field'       => 'Invalid or missing field: @field',
       'field_too_long'      => 'Field too long: @field',
       'server_error'        => 'Internal server error.',
+      'too_many_attempts'   => 'Too many attempts. Please try again later.',
     ],
     'es' => [
       'invalid_credentials'    => 'Usuario o contraseña incorrectos.',
@@ -86,6 +87,7 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'invalid_field'       => 'Campo inválido o ausente: @field',
       'field_too_long'      => 'Campo demasiado largo: @field',
       'server_error'        => 'Error interno del servidor.',
+      'too_many_attempts'   => 'Demasiados intentos. Inténtalo de nuevo más tarde.',
     ],
   ];
 
