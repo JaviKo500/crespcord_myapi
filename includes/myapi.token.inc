@@ -77,6 +77,74 @@ function myapi_token_refresh_ttl() {
 }
 
 /**
+ * Default password reset token TTL in seconds (1 hour).
+ *
+ * Effective value is resolved by myapi_password_reset_ttl() via variable_get(),
+ * overridable with `drush vset myapi_password_reset_ttl <seconds>`.
+ */
+define('MYAPI_PASSWORD_RESET_TTL_DEFAULT', 3600);
+
+/**
+ * Resolves the effective password reset token TTL in seconds.
+ *
+ * Configurable at runtime with `drush vset myapi_password_reset_ttl <seconds>`.
+ *
+ * @return int
+ */
+function myapi_password_reset_ttl() {
+  return variable_get('myapi_password_reset_ttl', MYAPI_PASSWORD_RESET_TTL_DEFAULT);
+}
+
+/**
+ * Generates an opaque password reset token.
+ *
+ * @return string  64 hex chars (32 random bytes).
+ */
+function myapi_token_generate_reset() {
+  return bin2hex(random_bytes(32));
+}
+
+/**
+ * Persists a freshly issued password reset token into myapi_password_reset_tokens.
+ *
+ * Only the SHA-256 hash is stored, never the plaintext token.
+ *
+ * @param int    $uid    Owner user id.
+ * @param string $token  Plaintext reset token.
+ * @param string $ip     IP address of the /forgot request that generated it.
+ *
+ * @return int  The inserted row id.
+ */
+function myapi_password_reset_token_persist($uid, $token, $ip) {
+  return db_insert('myapi_password_reset_tokens')
+    ->fields([
+      'uid'         => $uid,
+      'token_hash'  => myapi_token_hash($token),
+      'expires_at'  => REQUEST_TIME + myapi_password_reset_ttl(),
+      'used'        => 0,
+      'created'     => REQUEST_TIME,
+      'ip_address'  => $ip,
+    ])
+    ->execute();
+}
+
+/**
+ * Invalidates all unused password reset tokens for a user.
+ *
+ * Called before issuing a new token so only one reset token stays valid at a
+ * time, reducing the attack surface.
+ *
+ * @param int $uid  Owner user id.
+ */
+function myapi_password_reset_token_invalidate_previous($uid) {
+  db_update('myapi_password_reset_tokens')
+    ->fields(['used' => 1])
+    ->condition('uid', $uid)
+    ->condition('used', 0)
+    ->execute();
+}
+
+/**
  * Persists a freshly issued token pair into my_api_tokens.
  *
  * Only the SHA-256 hashes are stored, never the plaintext tokens.

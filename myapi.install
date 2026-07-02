@@ -86,6 +86,58 @@ function myapi_schema() {
     ],
   ];
 
+  $schema['myapi_password_reset_tokens'] = [
+    'description' => 'Single-use tokens issued for password reset requests.',
+    'fields' => [
+      'id' => [
+        'description' => 'Primary key.',
+        'type'        => 'serial',
+        'unsigned'    => TRUE,
+        'not null'    => TRUE,
+      ],
+      'uid' => [
+        'description' => 'Logical FK to dr_users.uid.',
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'not null'    => TRUE,
+      ],
+      'token_hash' => [
+        'description' => 'SHA-256 hex of the reset token.',
+        'type'        => 'char',
+        'length'      => 64,
+        'not null'    => TRUE,
+      ],
+      'expires_at' => [
+        'description' => 'Unix timestamp when the token expires.',
+        'type'        => 'int',
+        'not null'    => TRUE,
+      ],
+      'used' => [
+        'description' => '0 = unused, 1 = used (successful reset or invalidated by a newer request).',
+        'type'        => 'int',
+        'size'        => 'tiny',
+        'not null'    => TRUE,
+        'default'     => 0,
+      ],
+      'created' => [
+        'description' => 'Unix timestamp when the token was issued.',
+        'type'        => 'int',
+        'not null'    => TRUE,
+      ],
+      'ip_address' => [
+        'description' => 'IP address of the /forgot request that generated it.',
+        'type'        => 'varchar',
+        'length'      => 45,
+        'not null'    => FALSE,
+      ],
+    ],
+    'primary key' => ['id'],
+    'indexes' => [
+      'uid'        => ['uid'],
+      'token_hash' => ['token_hash'],
+    ],
+  ];
+
   return $schema;
 }
 
@@ -108,5 +160,16 @@ function myapi_update_7001() {
   if (!db_table_exists('my_api_tokens')) {
     $schema = drupal_get_schema_unprocessed('myapi', 'my_api_tokens');
     db_create_table('my_api_tokens', $schema);
+  }
+}
+
+/**
+ * Creates the myapi_password_reset_tokens table on sites where the module is
+ * already enabled.
+ */
+function myapi_update_7002() {
+  if (!db_table_exists('myapi_password_reset_tokens')) {
+    $schema = drupal_get_schema_unprocessed('myapi', 'myapi_password_reset_tokens');
+    db_create_table('myapi_password_reset_tokens', $schema);
   }
 }

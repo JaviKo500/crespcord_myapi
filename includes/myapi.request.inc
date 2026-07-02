@@ -54,14 +54,18 @@ function myapi_request_require_fields(array $body, array $fields) {
  * resources never pass unexpected types into downstream APIs. Calls
  * myapi_error() with HTTP 422 and exits on the first invalid field.
  *
- * @param array $body      Decoded request body.
- * @param array $fields    List of field names that must be non-empty strings.
+ * @param array $body        Decoded request body.
+ * @param array $fields      List of field names that must be non-empty strings.
  * @param int   $max_length  Maximum allowed length per field (default 255).
+ * @param int   $min_length  Minimum allowed length per field (default 1).
  */
-function myapi_request_require_strings(array $body, array $fields, $max_length = 255) {
+function myapi_request_require_strings(array $body, array $fields, $max_length = 255, $min_length = 1) {
   foreach ($fields as $field) {
     if (!isset($body[$field]) || !is_string($body[$field]) || trim($body[$field]) === '') {
       myapi_error('invalid_field', 422, ['@field' => $field]);
+    }
+    if (strlen($body[$field]) < $min_length) {
+      myapi_error('field_too_short', 422, ['@field' => $field]);
     }
     if (strlen($body[$field]) > $max_length) {
       myapi_error('field_too_long', 422, ['@field' => $field]);
