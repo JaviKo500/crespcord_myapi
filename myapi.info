@@ -12,4 +12,5 @@ files[] = includes/myapi.flood.inc
 files[] = resources/ping.resource.inc
 files[] = includes/myapi.token.inc
 files[] = includes/myapi.auth.inc
+files[] = includes/myapi.mail.inc
 files[] = resources/auth.resource.inc
