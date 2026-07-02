@@ -1,6 +1,6 @@
 # 07 — Reset de password vía token por email
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-07-01
 - **Dependencias:**
   - `02-login-tokens` (Implemented) — tabla `my_api_tokens`, helpers de
@@ -324,70 +324,70 @@ Cada paso deja el sistema en estado funcional.
 
 ## Criterios de aceptación
 
-- [ ] `POST /api/v1/auth/password/forgot` con un `username` existente y activo
+- [x] `POST /api/v1/auth/password/forgot` con un `username` existente y activo
       → **HTTP 200** con `{"success":true,"data":{},"message":"..."}` y se
       envía un correo real (verificable en el log de mail o en un servidor
       SMTP de pruebas) con asunto y cuerpo traducidos según `Accept-Language`.
-- [ ] `POST /api/v1/auth/password/forgot` con un `email` existente y activo
+- [x] `POST /api/v1/auth/password/forgot` con un `email` existente y activo
       (sin `username`) → mismo comportamiento que arriba, resuelto por
       `dr_users.mail`.
-- [ ] `POST /api/v1/auth/password/forgot` con un `identifier` inexistente, o
+- [x] `POST /api/v1/auth/password/forgot` con un `identifier` inexistente, o
       que corresponde a un usuario bloqueado (`status = 0`) → **HTTP 200** con
       el mismo body genérico, **sin** enviar correo.
-- [ ] `POST /api/v1/auth/password/forgot` sin `username` ni `email` en el body
+- [x] `POST /api/v1/auth/password/forgot` sin `username` ni `email` en el body
       → **HTTP 422** con `error_code: "missing_field"`, sin tocar la BD ni el
       flood.
-- [ ] Si el body trae `username` y `email` a la vez, y solo `username` tiene
+- [x] Si el body trae `username` y `email` a la vez, y solo `username` tiene
       match → se usa ese; si solo `email` tiene match, también se resuelve
       correctamente (prioridad `username` primero).
-- [ ] Pedir `/forgot` dos veces seguidas para el mismo usuario invalida
+- [x] Pedir `/forgot` dos veces seguidas para el mismo usuario invalida
       (`used = 1`) el token generado por la primera petición; solo el token de
       la segunda petición es válido en `/reset`.
-- [ ] 10 peticiones a `/forgot` desde la misma IP (identifiers distintos) → la
+- [x] 10 peticiones a `/forgot` desde la misma IP (identifiers distintos) → la
       11.ª devuelve **HTTP 429** con `error_code: "too_many_attempts"`.
-- [ ] 3 peticiones a `/forgot` con el mismo `identifier` (IPs distintas) → la
+- [x] 3 peticiones a `/forgot` con el mismo `identifier` (IPs distintas) → la
       4.ª devuelve **HTTP 429**.
-- [ ] El contador de flood de `/forgot` avanza en cada petición válida, exista
+- [x] El contador de flood de `/forgot` avanza en cada petición válida, exista
       o no la cuenta (verificable llamando 3 veces con un identifier
       inexistente y viendo que la 4.ª ya da 429).
-- [ ] `POST /api/v1/auth/password/reset` con un token válido y `new_password`
+- [x] `POST /api/v1/auth/password/reset` con un token válido y `new_password`
       de 8+ caracteres → **HTTP 200** con
       `message: "Contraseña actualizada correctamente."`; el usuario puede
       loguearse con la nueva password (`POST /api/v1/auth/login`).
-- [ ] Tras un reset exitoso, todas las filas de `my_api_tokens` del usuario
+- [x] Tras un reset exitoso, todas las filas de `my_api_tokens` del usuario
       que estaban `revoked = 0` pasan a `revoked = 1` (sus sesiones previas
       quedan invalidadas).
-- [ ] Reutilizar el mismo token de reset una segunda vez → **HTTP 401** con
+- [x] Reutilizar el mismo token de reset una segunda vez → **HTTP 401** con
       `error_code: "invalid_token"`.
-- [ ] Un token de reset con `expires_at < now` → **HTTP 401** con
+- [x] Un token de reset con `expires_at < now` → **HTTP 401** con
       `error_code: "token_expired"`.
-- [ ] Un token inexistente → **HTTP 401** con `error_code: "invalid_token"`.
-- [ ] `new_password` de menos de 8 caracteres → **HTTP 422** con
+- [x] Un token inexistente → **HTTP 401** con `error_code: "invalid_token"`.
+- [x] `new_password` de menos de 8 caracteres → **HTTP 422** con
       `error_code: "field_too_short"`, sin tocar el token (sigue válido para
       un intento posterior).
-- [ ] Falta `token` o `new_password` en el body de `/reset` → **HTTP 422** con
+- [x] Falta `token` o `new_password` en el body de `/reset` → **HTTP 422** con
       `error_code: "missing_field"`.
-- [ ] 10 intentos fallidos a `/reset` (JSON) desde la misma IP → el 11.º
+- [x] 10 intentos fallidos a `/reset` (JSON) desde la misma IP → el 11.º
       devuelve **HTTP 429**.
-- [ ] El contador de flood de `myapi_reset_ip` es compartido entre el endpoint
+- [x] El contador de flood de `myapi_reset_ip` es compartido entre el endpoint
       JSON y la página web: agotarlo desde uno bloquea también al otro.
-- [ ] `GET password/reset?token=<válido>` devuelve HTML (no JSON) con un
+- [x] `GET password/reset?token=<válido>` devuelve HTML (no JSON) con un
       `<meta http-equiv="refresh">` apuntando a
       `myapp://reset-password?token=<mismo token>` y un formulario visible
       como fallback.
-- [ ] `GET password/reset` sin `token` en el query string → HTML con mensaje
+- [x] `GET password/reset` sin `token` en el query string → HTML con mensaje
       de link inválido, sin exponer detalles internos.
-- [ ] `POST password/reset` (formulario web) con token válido y password de
+- [x] `POST password/reset` (formulario web) con token válido y password de
       8+ caracteres → HTML con el mensaje de éxito traducido; el resultado es
       idéntico en efecto al del endpoint JSON (usuario puede loguearse con la
       nueva password, sesiones previas revocadas).
-- [ ] `POST password/reset` con token inválido/expirado o password corta →
+- [x] `POST password/reset` con token inválido/expirado o password corta →
       HTML con el mensaje de error traducido correspondiente, sin exponer
       JSON crudo ni trazas de PHP.
-- [ ] `Accept-Language: en` en `/forgot`, `/reset` (JSON), el correo, y la
+- [x] `Accept-Language: en` en `/forgot`, `/reset` (JSON), el correo, y la
       página web devuelve todos los textos en inglés; sin header o `es` los
       devuelve en español.
-- [ ] `drush cc all` no produce errores tras los cambios (nuevas rutas, nueva
+- [x] `drush cc all` no produce errores tras los cambios (nuevas rutas, nueva
       tabla, nuevo archivo `.inc`).
 
 ---
