@@ -4,18 +4,22 @@
  * @file
  * Internationalization helpers for the myapi module.
  *
- * Resolves the request language from the Accept-Language header and translates
- * system messages (errors and optional success messages) through a small
- * in-code catalogue. Only 'es' and 'en' are supported; 'es' is the default.
+ * Resolves the request language from a 'lang' query parameter, falling back to
+ * the Accept-Language header, and translates system messages (errors and
+ * optional success messages) through a small in-code catalogue. Only 'es' and
+ * 'en' are supported; 'es' is the default.
  */
 
 /**
- * Resolves the request language from the Accept-Language header.
+ * Resolves the request language.
  *
- * Takes the first two characters of Accept-Language (lowercased) and validates
- * them against the whitelist. Falls back to 'es' when the header is missing or
- * the language is not supported. The result is cached in a static variable so
- * the language is resolved only once per request.
+ * A 'lang' query parameter takes priority over Accept-Language: it lets the
+ * password/reset web page keep rendering in whatever language its email link
+ * was generated in (see myapi_auth_password_forgot()), regardless of the
+ * browser's own Accept-Language header. When no valid 'lang' parameter is
+ * present, falls back to the first two characters of Accept-Language, and
+ * defaults to 'es' when neither is present or valid. The result is cached in a
+ * static variable so the language is resolved only once per request.
  *
  * @return string  Either 'es' or 'en'.
  */
@@ -28,6 +32,14 @@ function myapi_get_lang() {
 
   $allowed = ['es', 'en'];
   $default = 'es';
+
+  if (isset($_GET['lang']) && is_string($_GET['lang'])) {
+    $candidate = strtolower(substr($_GET['lang'], 0, 2));
+    if (in_array($candidate, $allowed, TRUE)) {
+      $lang = $candidate;
+      return $lang;
+    }
+  }
 
   $header = isset($_SERVER['HTTP_ACCEPT_LANGUAGE']) ? $_SERVER['HTTP_ACCEPT_LANGUAGE'] : '';
   $candidate = strtolower(substr($header, 0, 2));

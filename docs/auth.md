@@ -280,9 +280,12 @@ or
 ```
 
 Notes:
-- The reset link points to `password/reset?token=<token>` (the HTML fallback
-  page below), and is sent via `drupal_mail()` with subject/body translated
-  according to the `Accept-Language` header of this request.
+- The reset link points to `password/reset?token=<token>&lang=<es|en>` (the
+  HTML fallback page below), and is sent via `drupal_mail()` with
+  subject/body translated according to the `Accept-Language` header of this
+  request. The `lang` on the link is that same resolved language, so the web
+  page renders in it regardless of the browser's own `Accept-Language` — see
+  the notes under `GET/POST password/reset` below.
 - The email is **HTML**, not plain text: CrespCord branding (brown/sand
   palette matching the `password/reset` web page), a greeting with the
   account's username, a button linking to the reset page, and a
@@ -410,11 +413,13 @@ signal that it is not a JSON API endpoint.
 
 **Authentication:** public (the reset token itself is the credential)
 
-- **`GET password/reset?token=<token>`** — prints the CrespCord-styled HTML
-  page with `<meta http-equiv="refresh" content="0;url=myapp://reset-password?token=<token>">`
+- **`GET password/reset?token=<token>&lang=<es|en>`** — prints the
+  CrespCord-styled HTML page with
+  `<meta http-equiv="refresh" content="0;url=myapp://reset-password?token=<token>">`
   (attempting to hand off to the app) plus a form (`new_password` field, hidden
-  `token` field) as fallback, submitting via `POST` to the same URL. Without a
-  `token` query parameter, prints a generic "invalid link" message instead.
+  `token` field) as fallback, submitting via `POST` to the same URL (which
+  carries `lang` forward in its query string). Without a `token` query
+  parameter, prints a generic "invalid link" message instead.
 - **`POST password/reset`** — validates and executes the same reset logic as
   `POST /api/v1/auth/password/reset` (`myapi_auth_password_reset_execute()`).
   On success, prints a translated success message. On error (invalid/expired
@@ -435,6 +440,14 @@ Design:
   flow, not a navigation entry point back into the app.
 
 Notes:
+- **Language matches the email, not the browser.** `myapi_get_lang()` (used
+  everywhere in the API) checks a `lang` query parameter before falling back
+  to `Accept-Language`. The `/forgot` endpoint stamps the reset link with
+  `lang=<language resolved for that request>`, so opening the link always
+  renders the page in the same language the email was sent in — regardless of
+  the browser's own `Accept-Language` header. The form's `action` carries
+  `lang` forward, so the re-rendered form (validation error) and the final
+  success/error screen after `POST` stay in that same language too.
 - The `myapi_reset_ip` flood counter is **shared** between this page and
   `POST /api/v1/auth/password/reset`: exhausting the limit from one blocks the
   other too.

@@ -284,7 +284,10 @@ function myapi_auth_password_forgot() {
     myapi_password_reset_token_invalidate_previous($account->uid);
     myapi_password_reset_token_persist($account->uid, $token, $ip);
 
-    $link = url('password/reset', ['query' => ['token' => $token], 'absolute' => TRUE]);
+    // 'lang' travels with the link so the password/reset page renders in the
+    // same language the email was sent in, regardless of the browser's own
+    // Accept-Language header (see myapi_get_lang()).
+    $link = url('password/reset', ['query' => ['token' => $token, 'lang' => myapi_get_lang()], 'absolute' => TRUE]);
     $minutes = round(myapi_password_reset_ttl() / 60);
 
     drupal_mail('myapi', 'password_reset', $account->mail, myapi_get_lang(), [
@@ -734,7 +737,11 @@ function myapi_auth_password_reset_page_html_form($token, $error_message = NULL,
   $req_number = check_plain(myapi_t('password_reset_page_req_number'));
   $req_symbol = check_plain(myapi_t('password_reset_page_req_symbol'));
   $safe_token = check_plain($token);
-  $action = check_plain(url('password/reset'));
+  // Carries the resolved language into the POST target's query string, so the
+  // re-rendered form (error or success) after submission stays in the same
+  // language as this GET, instead of falling back to the browser's own
+  // Accept-Language header.
+  $action = check_plain(url('password/reset', ['query' => ['lang' => myapi_get_lang()]]));
 
   $meta_refresh = '';
   if ($include_meta_refresh) {
