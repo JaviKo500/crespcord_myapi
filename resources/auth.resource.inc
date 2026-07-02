@@ -290,6 +290,7 @@ function myapi_auth_password_forgot() {
     drupal_mail('myapi', 'password_reset', $account->mail, myapi_get_lang(), [
       'link'     => $link,
       'minutes'  => $minutes,
+      'name'     => $account->name,
       'language' => myapi_get_lang(),
     ]);
   }
@@ -480,6 +481,215 @@ function myapi_auth_password_reset_page_post() {
 }
 
 /**
+ * Renders the shared HTML document shell (background, card, logo).
+ *
+ * Both the message screen and the form screen wrap their content in this same
+ * shell, so the CSS and logo markup are written once (no duplication between
+ * the two render paths).
+ *
+ * @param string $inner_html    Already-built, already-sanitized HTML to place inside the card.
+ * @param string $meta_refresh  Optional <meta http-equiv="refresh"> tag, or ''.
+ *
+ * @return string  Full HTML document.
+ */
+function myapi_auth_password_reset_page_html_shell($inner_html, $meta_refresh = '') {
+  $title = check_plain(myapi_t('password_reset_page_title'));
+  $lang = check_plain(myapi_get_lang());
+
+  return '<!DOCTYPE html><html lang="' . $lang . '"><head>'
+    . '<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
+    . $meta_refresh
+    . '<title>' . $title . '</title>'
+    . '<style>' . myapi_auth_password_reset_page_css() . '</style>'
+    . '</head><body>'
+    . '<div class="card"><div class="logo">' . myapi_auth_password_reset_page_logo_svg() . '<span>CrespCord</span></div>'
+    . $inner_html
+    . '</div></body></html>';
+}
+
+/**
+ * CrespCord design tokens and styles for the reset page card.
+ *
+ * Inline (no drupal_add_css()) since this page does not use the theme layer.
+ *
+ * @return string  Raw CSS, safe to embed as-is (no user input).
+ */
+function myapi_auth_password_reset_page_css() {
+  return <<<'CSS'
+:root{
+  --brown-900:#2B1D14;
+  --brown-800:#3D2A1E;
+  --brown-700:#4A3326;
+  --brown-600:#604030;
+  --brown-500:#74513E;
+  --brown-400:#8D6B56;
+  --brown-200:#D6C5B6;
+  --sand-25:#FCFAF7;
+  --danger-600:#B14439;
+  --danger-100:#F8E3DF;
+  --success-600:#3F7D5A;
+}
+*{box-sizing:border-box;}
+body{
+  margin:0;
+  min-height:100vh;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:24px;
+  background:linear-gradient(160deg, var(--brown-600), var(--brown-800));
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+}
+.card{
+  width:100%;
+  max-width:420px;
+  background:var(--sand-25);
+  border-radius:20px;
+  box-shadow:0 20px 50px rgba(0,0,0,0.35);
+  padding:36px 32px;
+}
+.logo{display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:24px;}
+.logo span{font-weight:700;font-size:18px;letter-spacing:0.02em;color:var(--brown-700);}
+h1{margin:0 0 8px;font-size:22px;font-weight:700;color:var(--brown-900);text-align:center;}
+.subtitle{margin:0 0 24px;font-size:14px;line-height:1.5;color:var(--brown-500);text-align:center;}
+.message{font-size:15px;color:var(--brown-700);text-align:center;line-height:1.6;}
+.field{margin-bottom:16px;}
+label{display:block;font-size:13px;font-weight:600;color:var(--brown-700);margin-bottom:6px;}
+.field-wrap{position:relative;}
+input[type=password],input[type=text]{
+  width:100%;
+  padding:12px 44px 12px 14px;
+  border:1px solid var(--brown-200);
+  border-radius:10px;
+  font-size:15px;
+  background:#fff;
+  color:var(--brown-900);
+}
+input:focus{outline:none;border-color:var(--brown-500);}
+.toggle{
+  position:absolute;
+  right:8px;
+  top:50%;
+  transform:translateY(-50%);
+  background:none;
+  border:none;
+  cursor:pointer;
+  font-size:16px;
+  padding:4px;
+  line-height:1;
+}
+.reqs{list-style:none;margin:0 0 20px;padding:0;display:flex;flex-direction:column;gap:6px;}
+.reqs li{font-size:13px;color:var(--brown-400);display:flex;align-items:center;gap:8px;}
+.reqs li.ok{color:var(--success-600);}
+.reqs li .dot{width:6px;height:6px;border-radius:50%;background:currentColor;display:inline-block;flex:none;}
+button[type=submit]{
+  width:100%;
+  padding:13px;
+  border:none;
+  border-radius:10px;
+  background:var(--brown-700);
+  color:#fff;
+  font-size:15px;
+  font-weight:600;
+  cursor:pointer;
+  margin-top:4px;
+}
+button[type=submit]:disabled{opacity:0.5;cursor:not-allowed;}
+.alert{background:var(--danger-100);color:var(--danger-600);border-radius:10px;padding:12px 14px;font-size:14px;margin-bottom:20px;}
+CSS;
+}
+
+/**
+ * CrespCord logo badge (circle icon + wordmark), inline SVG.
+ *
+ * No external assets — self-contained, consistent with the rest of the page.
+ *
+ * @return string  Raw SVG markup, safe to embed as-is (no user input).
+ */
+function myapi_auth_password_reset_page_logo_svg() {
+  return <<<'SVG'
+<svg viewBox="0 0 120 120" width="40" height="40" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+<circle cx="60" cy="60" r="60" fill="#4A3326"></circle>
+<g fill="none" stroke="#F7F1EA" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+<circle cx="60" cy="46" r="14"></circle>
+<path d="M60 60 L60 66 M46 66 L74 66 M46 66 L46 80 M74 66 L74 80 M46 80 L74 80"></path>
+</g>
+<circle cx="60" cy="44" r="5" fill="#F7F1EA"></circle>
+</svg>
+SVG;
+}
+
+/**
+ * Progressive-enhancement script for the reset form.
+ *
+ * Show/hide toggles, a live password requirements checklist, and a
+ * confirm-password match check. Purely client-side: the server still only
+ * enforces the 8-255 character rule in myapi_auth_password_reset_execute();
+ * the form still submits new_password + token without JavaScript.
+ *
+ * @return string  Raw <script> tag, safe to embed as-is (no user input).
+ */
+function myapi_auth_password_reset_page_script() {
+  return <<<'SCRIPT'
+<script>
+(function () {
+  var toggles = document.querySelectorAll('.toggle');
+  for (var i = 0; i < toggles.length; i++) {
+    toggles[i].addEventListener('click', function (e) {
+      var input = document.getElementById(e.currentTarget.getAttribute('data-target'));
+      if (input) {
+        input.type = input.type === 'password' ? 'text' : 'password';
+      }
+    });
+  }
+
+  var pwd = document.getElementById('new_password');
+  var confirm = document.getElementById('confirm_password');
+  var submitBtn = document.getElementById('submit-btn');
+  var reqs = document.getElementById('reqs');
+
+  var rules = {
+    length: function (v) { return v.length >= 8; },
+    upper: function (v) { return /[A-Z]/.test(v); },
+    number: function (v) { return /[0-9]/.test(v); },
+    symbol: function (v) { return /[^A-Za-z0-9]/.test(v); }
+  };
+
+  function validate() {
+    if (!pwd) {
+      return;
+    }
+    var value = pwd.value;
+    var allOk = true;
+    for (var rule in rules) {
+      var ok = rules[rule](value);
+      if (!ok) {
+        allOk = false;
+      }
+      var li = reqs ? reqs.querySelector('[data-rule="' + rule + '"]') : null;
+      if (li) {
+        li.classList.toggle('ok', ok);
+      }
+    }
+    var confirmValue = confirm ? confirm.value : value;
+    if (submitBtn) {
+      submitBtn.disabled = !(allOk && confirmValue === value && value.length > 0);
+    }
+  }
+
+  if (pwd) {
+    pwd.addEventListener('input', validate);
+  }
+  if (confirm) {
+    confirm.addEventListener('input', validate);
+  }
+  validate();
+})();
+</script>
+SCRIPT;
+}
+
+/**
  * Renders a minimal HTML page with a single message, no form.
  *
  * Used for the "invalid link", "too many attempts" and success screens.
@@ -492,15 +702,20 @@ function myapi_auth_password_reset_page_html_message($message) {
   $title = check_plain(myapi_t('password_reset_page_title'));
   $safe_message = check_plain($message);
 
-  return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>' . $title . '</title></head>'
-    . '<body><p>' . $safe_message . '</p></body></html>';
+  $inner = '<h1>' . $title . '</h1>'
+    . '<p class="message">' . $safe_message . '</p>';
+
+  return myapi_auth_password_reset_page_html_shell($inner);
 }
 
 /**
- * Renders the minimal HTML reset form.
+ * Renders the CrespCord-styled HTML reset form.
  *
  * When $include_meta_refresh is TRUE, adds a meta-refresh attempting to open
  * the app's deep link (only used on the initial GET, not on POST re-renders).
+ * Includes a confirm-password field and a live requirements checklist as
+ * client-side progressive enhancement; the server only enforces the 8-255
+ * character rule, and the form still works with JavaScript disabled.
  *
  * @param string      $token                 Reset token, echoed into a hidden field (sanitized).
  * @param string|null $error_message         Already-translated error message, or NULL.
@@ -510,8 +725,14 @@ function myapi_auth_password_reset_page_html_message($message) {
  */
 function myapi_auth_password_reset_page_html_form($token, $error_message = NULL, $include_meta_refresh = FALSE) {
   $title = check_plain(myapi_t('password_reset_page_title'));
+  $subtitle = check_plain(myapi_t('password_reset_page_subtitle'));
   $label = check_plain(myapi_t('password_reset_page_new_password_label'));
+  $confirm_label = check_plain(myapi_t('password_reset_page_confirm_label'));
   $button = check_plain(myapi_t('password_reset_page_submit_button'));
+  $req_length = check_plain(myapi_t('password_reset_page_req_length'));
+  $req_upper = check_plain(myapi_t('password_reset_page_req_upper'));
+  $req_number = check_plain(myapi_t('password_reset_page_req_number'));
+  $req_symbol = check_plain(myapi_t('password_reset_page_req_symbol'));
   $safe_token = check_plain($token);
   $action = check_plain(url('password/reset'));
 
@@ -524,16 +745,35 @@ function myapi_auth_password_reset_page_html_form($token, $error_message = NULL,
 
   $error_html = '';
   if ($error_message !== NULL) {
-    $error_html = '<p>' . check_plain($error_message) . '</p>';
+    $error_html = '<div class="alert">' . check_plain($error_message) . '</div>';
   }
 
-  return '<!DOCTYPE html><html><head><meta charset="utf-8">' . $meta_refresh . '<title>' . $title . '</title></head>'
-    . '<body>'
+  $inner = '<h1>' . $title . '</h1>'
+    . '<p class="subtitle">' . $subtitle . '</p>'
     . $error_html
     . '<form method="post" action="' . $action . '">'
-    . '<label>' . $label . '<input type="password" name="new_password"></label>'
+    . '<div class="field">'
+    . '<label for="new_password">' . $label . '</label>'
+    . '<div class="field-wrap">'
+    . '<input type="password" id="new_password" name="new_password" required>'
+    . '<button type="button" class="toggle" data-target="new_password" aria-label="toggle">&#128065;</button>'
+    . '</div></div>'
+    . '<ul class="reqs" id="reqs">'
+    . '<li data-rule="length"><span class="dot"></span>' . $req_length . '</li>'
+    . '<li data-rule="upper"><span class="dot"></span>' . $req_upper . '</li>'
+    . '<li data-rule="number"><span class="dot"></span>' . $req_number . '</li>'
+    . '<li data-rule="symbol"><span class="dot"></span>' . $req_symbol . '</li>'
+    . '</ul>'
+    . '<div class="field">'
+    . '<label for="confirm_password">' . $confirm_label . '</label>'
+    . '<div class="field-wrap">'
+    . '<input type="password" id="confirm_password">'
+    . '<button type="button" class="toggle" data-target="confirm_password" aria-label="toggle">&#128065;</button>'
+    . '</div></div>'
     . '<input type="hidden" name="token" value="' . $safe_token . '">'
-    . '<button type="submit">' . $button . '</button>'
+    . '<button type="submit" id="submit-btn">' . $button . '</button>'
     . '</form>'
-    . '</body></html>';
+    . myapi_auth_password_reset_page_script();
+
+  return myapi_auth_password_reset_page_html_shell($inner, $meta_refresh);
 }

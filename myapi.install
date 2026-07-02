@@ -145,12 +145,37 @@ function myapi_schema() {
  * Implements hook_install().
  */
 function myapi_install() {
+  myapi_mail_system_register();
 }
 
 /**
  * Implements hook_uninstall().
  */
 function myapi_uninstall() {
+  myapi_mail_system_unregister();
+}
+
+/**
+ * Maps the 'myapi_password_reset' mail key to MyapiHtmlMailSystem.
+ *
+ * Drupal's mail_system variable is keyed by "{module}_{key}"; this makes only
+ * the password reset email use the HTML-preserving mail system (see
+ * includes/myapi.mailsystem.inc), leaving every other mail on this site
+ * (core, other modules) on the default plain-text system.
+ */
+function myapi_mail_system_register() {
+  $mail_system = variable_get('mail_system', ['default-system' => 'DefaultMailSystem']);
+  $mail_system['myapi_password_reset'] = 'MyapiHtmlMailSystem';
+  variable_set('mail_system', $mail_system);
+}
+
+/**
+ * Removes the 'myapi_password_reset' mail system mapping.
+ */
+function myapi_mail_system_unregister() {
+  $mail_system = variable_get('mail_system', []);
+  unset($mail_system['myapi_password_reset']);
+  variable_set('mail_system', $mail_system);
 }
 
 /**
@@ -172,4 +197,12 @@ function myapi_update_7002() {
     $schema = drupal_get_schema_unprocessed('myapi', 'myapi_password_reset_tokens');
     db_create_table('myapi_password_reset_tokens', $schema);
   }
+}
+
+/**
+ * Registers the HTML mail system for the password reset email on sites where
+ * the module is already enabled.
+ */
+function myapi_update_7003() {
+  myapi_mail_system_register();
 }

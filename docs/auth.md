@@ -283,6 +283,19 @@ Notes:
 - The reset link points to `password/reset?token=<token>` (the HTML fallback
   page below), and is sent via `drupal_mail()` with subject/body translated
   according to the `Accept-Language` header of this request.
+- The email is **HTML**, not plain text: CrespCord branding (brown/sand
+  palette matching the `password/reset` web page), a greeting with the
+  account's username, a button linking to the reset page, and a
+  "Saludos, Grupo CrespCord" sign-off. All CSS is inline and the layout uses
+  tables, for compatibility with email clients that strip `<style>` blocks or
+  ignore CSS classes — see `myapi_mail_password_reset_html()` in
+  `includes/myapi.mail.inc`.
+- Drupal 7's default mail system converts HTML bodies to plain text before
+  sending. To keep the markup, the `myapi_password_reset` mail key is mapped
+  to a custom `MyapiHtmlMailSystem` class (`includes/myapi.mailsystem.inc`),
+  registered via the `mail_system` variable in `myapi_install()` /
+  `myapi_update_7003()`. Every other mail on the site (core, other modules)
+  keeps the default plain-text behavior.
 - Requesting a new reset invalidates (`used = 1`) any previously unused token
   for the same user — only the most recently requested token is valid.
 - If `drupal_mail()` fails to deliver (misconfigured mail transport), the
@@ -397,8 +410,8 @@ signal that it is not a JSON API endpoint.
 
 **Authentication:** public (the reset token itself is the credential)
 
-- **`GET password/reset?token=<token>`** — prints minimal, unstyled HTML with
-  `<meta http-equiv="refresh" content="0;url=myapp://reset-password?token=<token>">`
+- **`GET password/reset?token=<token>`** — prints the CrespCord-styled HTML
+  page with `<meta http-equiv="refresh" content="0;url=myapp://reset-password?token=<token>">`
   (attempting to hand off to the app) plus a form (`new_password` field, hidden
   `token` field) as fallback, submitting via `POST` to the same URL. Without a
   `token` query parameter, prints a generic "invalid link" message instead.
@@ -407,6 +420,19 @@ signal that it is not a JSON API endpoint.
   On success, prints a translated success message. On error (invalid/expired
   token, password too short, flood limit reached), re-prints the form with the
   translated error message.
+
+Design:
+- The page follows the CrespCord brand (brown/sand palette, rounded card, inline
+  logo SVG). All CSS/SVG/JS are inline in `resources/auth.resource.inc` — no
+  external assets, no `drupal_add_css()`/`drupal_add_js()`, consistent with the
+  page not using Drupal's theme layer.
+- The form also includes a **confirm password** field and a **live password
+  requirements checklist** (8+ chars, uppercase, number, symbol). These are
+  client-side progressive enhancement only: the server still enforces just the
+  8-255 character rule from `myapi_auth_password_reset_execute()`, and the form
+  still submits `new_password` + `token` correctly with JavaScript disabled.
+- There is no "back to login" link on this page — it is a standalone recovery
+  flow, not a navigation entry point back into the app.
 
 Notes:
 - The `myapi_reset_ip` flood counter is **shared** between this page and
