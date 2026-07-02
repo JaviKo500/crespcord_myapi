@@ -239,3 +239,184 @@ according to the `Accept-Language` header (`es`/`en`, default `es`). See
   intentional: logout requires a valid authenticated caller.
 - A successful logout clears the IP flood counter so a legitimate user is not
   blocked after a transient error.
+
+---
+
+## POST /api/v1/auth/password/forgot
+
+Requests a password reset. Always responds with a generic `200`, whether or
+not the account exists, so the response never reveals account existence. If a
+matching, active account is found, issues a single-use reset token (1 h TTL by
+default) and emails a link to it.
+
+**Authentication:** public
+
+**Headers**
+| Header | Value |
+|--------|-------|
+| Content-Type | application/json |
+
+**Request body**
+```json
+{ "username": "javier" }
+```
+or
+```json
+{ "email": "correo@correo.com" }
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| username | string | one of `username`/`email` required | Tried first if both are present. |
+| email | string | one of `username`/`email` required | Used if `username` is absent, or was present but did not match any account. |
+
+**Success response (200)**
+```json
+{
+  "success": true,
+  "data": {},
+  "message": "Si la cuenta existe, se envió un correo con instrucciones."
+}
+```
+
+Notes:
+- The reset link points to `password/reset?token=<token>` (the HTML fallback
+  page below), and is sent via `drupal_mail()` with subject/body translated
+  according to the `Accept-Language` header of this request.
+- Requesting a new reset invalidates (`used = 1`) any previously unused token
+  for the same user — only the most recently requested token is valid.
+- If `drupal_mail()` fails to deliver (misconfigured mail transport), the
+  response is still the generic `200` above by design; delivery failures are
+  not surfaced to the client.
+
+**Possible errors**
+| Code | `error_code` | When |
+|------|--------------|------|
+| 422  | `missing_field` | Neither `username` nor `email` is present in the request body. The database is not touched. |
+| 429  | `too_many_attempts` | Flood limit reached: 10 attempts from the same IP (window: 1 h) or 3 attempts for the same `username`/`email` (window: 1 h). Thresholds configurable via `myapi_flood_forgot_ip_limit` / `myapi_flood_forgot_identifier_limit` (and their `_window` variants). |
+| 405  | `method_not_allowed` | Any HTTP method other than POST. |
+
+Error envelope:
+```json
+{
+  "success": false,
+  "error_code": "missing_field",
+  "error": "Falta el campo requerido: username_or_email"
+}
+```
+
+`error_code` is a stable, language-independent key; `error` is translated
+according to the `Accept-Language` header (`es`/`en`, default `es`). See
+[i18n.md](i18n.md).
+
+**Security notes**
+- Both flood counters (IP and identifier) are registered on **every** valid
+  request, whether or not the account exists — the counter is never a side
+  channel that reveals account existence, and it also limits mail spam toward
+  real accounts.
+- The identifier flood counter (per `username`/`email`) prevents email-bombing
+  a specific account from multiple IPs.
+
+---
+
+## POST /api/v1/auth/password/reset
+
+Completes a password reset using a single-use token. On success, the new
+password is set and all active sessions in `my_api_tokens` for that user are
+revoked.
+
+**Authentication:** public (the reset token itself is the credential)
+
+**Headers**
+| Header | Value |
+|--------|-------|
+| Content-Type | application/json |
+
+**Request body**
+```json
+{ "token": "<64 chars hex>", "new_password": "12345678" }
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| token | string | yes | 64 hex chars, from the `/forgot` email link. |
+| new_password | string | yes | 8–255 chars, no complexity rules. |
+
+**Success response (200)**
+```json
+{
+  "success": true,
+  "data": {},
+  "message": "Contraseña actualizada correctamente."
+}
+```
+
+**Possible errors**
+| Code | `error_code` | When |
+|------|--------------|------|
+| 422  | `missing_field` | `token` or `new_password` is absent from the request body. |
+| 422  | `field_too_short` | `new_password` is shorter than 8 chars. The token remains valid for a subsequent attempt. |
+| 422  | `field_too_long` | `new_password` is longer than 255 chars. |
+| 401  | `invalid_token` | Token not found, already used, or the associated user does not exist or is blocked (`status = 0`). |
+| 401  | `token_expired` | Token exists and is unused but its `expires_at` is in the past. |
+| 429  | `too_many_attempts` | Flood limit reached: 10 failed attempts from the same IP (window: 15 min). This counter is shared with `GET/POST password/reset` below. Threshold configurable via `myapi_flood_reset_ip_limit` / `myapi_flood_reset_ip_window`. |
+| 405  | `method_not_allowed` | Any HTTP method other than POST. |
+
+Error envelope:
+```json
+{
+  "success": false,
+  "error_code": "invalid_token",
+  "error": "Token inválido."
+}
+```
+
+`error_code` is a stable, language-independent key; `error` is translated
+according to the `Accept-Language` header (`es`/`en`, default `es`). See
+[i18n.md](i18n.md).
+
+**Security notes**
+- Tokens are single-use: a successful reset marks the row `used = 1`, so
+  replaying the same token returns `invalid_token`.
+- A successful reset revokes every active row in `my_api_tokens` for the user,
+  closing out any session an attacker may have had if the account was
+  compromised.
+- No `password_confirmation` field: confirmation is handled by the client UI,
+  same pattern as login.
+
+---
+
+## GET/POST password/reset
+
+**This is the only endpoint in the API that does not follow the JSON response
+envelope.** It is an HTML page served to the browser, meant as a fallback when
+the deep link in the password reset email (`myapp://reset-password?token=...`)
+does not open the app — for example, when the OS has no app registered for the
+custom scheme yet. It lives at `password/reset`, outside `api/v1`, precisely to
+signal that it is not a JSON API endpoint.
+
+**Authentication:** public (the reset token itself is the credential)
+
+- **`GET password/reset?token=<token>`** — prints minimal, unstyled HTML with
+  `<meta http-equiv="refresh" content="0;url=myapp://reset-password?token=<token>">`
+  (attempting to hand off to the app) plus a form (`new_password` field, hidden
+  `token` field) as fallback, submitting via `POST` to the same URL. Without a
+  `token` query parameter, prints a generic "invalid link" message instead.
+- **`POST password/reset`** — validates and executes the same reset logic as
+  `POST /api/v1/auth/password/reset` (`myapi_auth_password_reset_execute()`).
+  On success, prints a translated success message. On error (invalid/expired
+  token, password too short, flood limit reached), re-prints the form with the
+  translated error message.
+
+Notes:
+- The `myapi_reset_ip` flood counter is **shared** between this page and
+  `POST /api/v1/auth/password/reset`: exhausting the limit from one blocks the
+  other too.
+- All reflected values (the token, error messages) are sanitized with
+  `check_plain()` before being printed, to prevent reflected XSS via a
+  manipulated `token` query parameter.
+- The deep link base (`myapp://reset-password`) is configurable via the
+  `myapi_password_reset_deep_link_base` Drupal variable.
+- No CSRF token is used (this page does not use Drupal's Form API): the reset
+  token itself — secret, single-use, short-lived — serves as the anti-CSRF
+  credential.
