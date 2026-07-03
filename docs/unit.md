@@ -27,7 +27,10 @@ volume per user is a handful of units).
             "name": "Depto. 4B",
             "category": "departamento",
             "area_m2": 92.0,
-            "owner_name": "Priscila Cordero"
+            "owner_uid": 3,
+            "owner_name": "Priscila Cordero",
+            "occupant_uid": 7,
+            "occupant_name": "Juan Pérez"
           }
         ]
       }
@@ -51,10 +54,32 @@ Notes:
   case.
 - `area_m2` always comes from `field_total_m2_value`, regardless of the
   unit's `category` — there is no per-category field mapping.
+- `owner_uid` is the `uid` of `field_propietario`, `null` when the unit has no
+  owner assigned.
 - `owner_name` is `null` when the unit has no `field_propietario` assigned.
   Otherwise it is `"<field_nombre> <field_apellidos>"` when both are
   non-empty, or the full `users.name` as a fallback when either is missing —
   never a partial/hybrid combination.
+- `occupant_uid`/`occupant_name` reflect the **current** occupant only, not
+  occupancy history. Resolution order:
+  1. If the unit has rows in `field_ocupantes` (multi-value), the row with
+     the highest `delta` wins — this is the last occupant assigned to the
+     unit. `delta` is Drupal 7's storage order for multi-value fields; there
+     is no assignment timestamp in the schema, so `delta` is the only
+     available signal. If `field_ocupantes` values are ever reordered without
+     appending a new one, the highest `delta` may reflect list order rather
+     than true recency.
+  2. If the unit has no rows in `field_ocupantes`, it falls back to the
+     legacy single-value `field_ocupante`.
+  3. If neither field has a value, both `occupant_uid` and `occupant_name`
+     are `null` — not an error.
+  `occupant_name` follows the same fallback as `owner_name`
+  (`"<field_nombre> <field_apellidos>"`, or `users.name` if either part is
+  missing).
+- No additional access restriction is applied to `owner_uid`/`occupant_uid`/
+  `occupant_name` beyond the existing unit-visibility filter: any user who
+  sees a unit in their own listing sees these fields in full, regardless of
+  whether they are the owner or the occupant.
 - `category` is `taxonomy_term_data.name` exactly as stored, with no
   slug/lowercase transformation.
 - Units are grouped by condominium; each condominium appears once in
@@ -79,11 +104,11 @@ will silently break this endpoint without a Drupal update warning:
 | `taxonomy_term_data` | `tid`, `name` | Category name. |
 | `field_data_field_total_m2` | `entity_id`, `field_total_m2_value` | Unit area (`area_m2`). |
 | `field_data_field_propietario` | `entity_id`, `field_propietario_target_id` | Unit owner (single-value, `uid`). |
-| `field_data_field_ocupante` | `entity_id`, `field_ocupante_target_id` | Legacy occupant (single-value, `uid`). |
-| `field_data_field_ocupantes` | `entity_id`, `field_ocupantes_target_id` | Current occupant (multi-value, `uid`). |
-| `field_data_field_nombre` | `entity_id` (uid), `field_nombre_value` | Owner's first name (`entity_type = 'user'`). |
-| `field_data_field_apellidos` | `entity_id` (uid), `field_apellidos_value` | Owner's last name (`entity_type = 'user'`). |
-| `users` | `uid`, `name`, `status` | `owner_name` fallback; authenticated user validation. |
+| `field_data_field_ocupante` | `entity_id`, `field_ocupante_target_id` | Legacy occupant (single-value, `uid`). Fallback when the unit has no rows in `field_ocupantes`. |
+| `field_data_field_ocupantes` | `entity_id`, `field_ocupantes_target_id`, `delta` | Current occupant(s) (multi-value, `uid`). The row with the highest `delta` per unit is the current occupant. |
+| `field_data_field_nombre` | `entity_id` (uid), `field_nombre_value` | Owner's/occupant's first name (`entity_type = 'user'`). |
+| `field_data_field_apellidos` | `entity_id` (uid), `field_apellidos_value` | Owner's/occupant's last name (`entity_type = 'user'`). |
+| `users` | `uid`, `name`, `status` | `owner_name`/`occupant_name` fallback; authenticated user validation. |
 
 **Possible errors**
 | Code | `error_code` | When |
