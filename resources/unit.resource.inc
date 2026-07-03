@@ -48,30 +48,36 @@ function myapi_unit_list() {
   }, $units))));
   $condominium_titles = myapi_unit_fetch_condominium_titles($condominio_nids);
 
-  $owner_uids = array_values(array_unique(array_filter(array_map(function ($unit) {
-    return $unit->owner_uid;
-  }, $units))));
-  $owner_names = myapi_unit_fetch_owner_names($owner_uids);
+  $occupant_uids = myapi_unit_fetch_occupant_uids($nids);
 
-  $properties = myapi_unit_build_properties($units, $condominium_titles, $owner_names);
+  $owner_uids = array_map(function ($unit) {
+    return $unit->owner_uid;
+  }, $units);
+  $user_uids = array_values(array_unique(array_filter(array_merge($owner_uids, array_values($occupant_uids)))));
+  $user_names = myapi_unit_fetch_user_names($user_uids);
+
+  $properties = myapi_unit_build_properties($units, $condominium_titles, $occupant_uids, $user_names);
 
   myapi_respond(['properties' => $properties], 200);
 }
 
 /**
- * Groups units by condominium and resolves owner names, into the response
- * shape documented for GET /api/v1/units.
+ * Groups units by condominium and resolves owner/occupant names, into the
+ * response shape documented for GET /api/v1/units.
  *
  * Units whose condominio_nid has no entry in $condominium_titles (parent
  * condominium missing or unpublished) are dropped from the response.
  *
- * @param array $units                Rows from myapi_unit_fetch_units().
- * @param array $condominium_titles   Map of condominio_nid => title.
- * @param array $owner_names          Map of owner_uid => owner_name.
+ * @param array $units              Rows from myapi_unit_fetch_units().
+ * @param array $condominium_titles Map of condominio_nid => title.
+ * @param array $occupant_uids      Map of nid => occupant_uid, from
+ *                                  myapi_unit_fetch_occupant_uids().
+ * @param array $user_names         Map of uid => name, from
+ *                                  myapi_unit_fetch_user_names().
  *
- * @return array  List of ['id', 'name', 'units' => [['id', 'name', 'category', 'area_m2', 'owner_name'], ...]].
+ * @return array  List of ['id', 'name', 'units' => [['id', 'name', 'category', 'area_m2', 'owner_uid', 'owner_name', 'occupant_uid', 'occupant_name'], ...]].
  */
-function myapi_unit_build_properties($units, $condominium_titles, $owner_names) {
+function myapi_unit_build_properties($units, $condominium_titles, $occupant_uids, $user_names) {
   $properties_by_condominio = [];
 
   foreach ($units as $unit) {
@@ -88,16 +94,24 @@ function myapi_unit_build_properties($units, $condominium_titles, $owner_names) 
       ];
     }
 
-    $owner_name = ($unit->owner_uid !== NULL && isset($owner_names[$unit->owner_uid]))
-      ? $owner_names[$unit->owner_uid]
+    $owner_name = ($unit->owner_uid !== NULL && isset($user_names[$unit->owner_uid]))
+      ? $user_names[$unit->owner_uid]
+      : NULL;
+
+    $occupant_uid = isset($occupant_uids[$unit->nid]) ? $occupant_uids[$unit->nid] : NULL;
+    $occupant_name = ($occupant_uid !== NULL && isset($user_names[$occupant_uid]))
+      ? $user_names[$occupant_uid]
       : NULL;
 
     $properties_by_condominio[$condominio_nid]['units'][] = [
-      'id'         => (int) $unit->nid,
-      'name'       => $unit->name,
-      'category'   => $unit->category,
-      'area_m2'    => $unit->area_m2 !== NULL ? (float) $unit->area_m2 : NULL,
-      'owner_name' => $owner_name,
+      'id'            => (int) $unit->nid,
+      'name'          => $unit->name,
+      'category'      => $unit->category,
+      'area_m2'       => $unit->area_m2 !== NULL ? (float) $unit->area_m2 : NULL,
+      'owner_uid'     => $unit->owner_uid !== NULL ? (int) $unit->owner_uid : NULL,
+      'owner_name'    => $owner_name,
+      'occupant_uid'  => $occupant_uid !== NULL ? (int) $occupant_uid : NULL,
+      'occupant_name' => $occupant_name,
     ];
   }
 
@@ -209,7 +223,57 @@ function myapi_unit_fetch_condominium_titles($nids) {
 }
 
 /**
- * Fetches display names for a set of user ids.
+ * Fetches the current occupant uid for a set of 'vivienda' nids.
+ *
+ * Resolution order per nid:
+ *  - Rows in field_data_field_ocupantes (current, multi-value), keeping the
+ *    one with the highest delta (the most recently assigned occupant). The
+ *    query orders by delta ASC and the loop overwrites the map entry for
+ *    each entity_id, so the last write per nid is the highest delta.
+ *  - For nids not resolved above, fall back to field_data_field_ocupante
+ *    (legacy, single-value).
+ *
+ * @param array $nids  'vivienda' nids to look up.
+ *
+ * @return array  Map of nid => occupant_uid. Nids with no occupant in either
+ *                field are absent from the map.
+ */
+function myapi_unit_fetch_occupant_uids($nids) {
+  if (empty($nids)) {
+    return [];
+  }
+
+  $occupant_uids = [];
+
+  $result = db_select('field_data_field_ocupantes', 'os')
+    ->fields('os', ['entity_id', 'field_ocupantes_target_id'])
+    ->condition('entity_id', $nids, 'IN')
+    ->condition('deleted', 0)
+    ->orderBy('delta', 'ASC')
+    ->execute();
+
+  foreach ($result as $row) {
+    $occupant_uids[$row->entity_id] = $row->field_ocupantes_target_id;
+  }
+
+  $unresolved_nids = array_values(array_diff($nids, array_keys($occupant_uids)));
+  if (!empty($unresolved_nids)) {
+    $legacy_result = db_select('field_data_field_ocupante', 'o')
+      ->fields('o', ['entity_id', 'field_ocupante_target_id'])
+      ->condition('entity_id', $unresolved_nids, 'IN')
+      ->condition('deleted', 0)
+      ->execute();
+
+    foreach ($legacy_result as $row) {
+      $occupant_uids[$row->entity_id] = $row->field_ocupante_target_id;
+    }
+  }
+
+  return $occupant_uids;
+}
+
+/**
+ * Fetches display names for a set of user ids (owners and/or occupants).
  *
  * Uses "$field_nombre $field_apellidos" when both are non-empty; falls back
  * to the full users.name otherwise, to avoid hybrid names mixing a username
@@ -217,9 +281,9 @@ function myapi_unit_fetch_condominium_titles($nids) {
  *
  * @param array $uids  User ids to fetch.
  *
- * @return array  Map of uid => owner_name.
+ * @return array  Map of uid => name.
  */
-function myapi_unit_fetch_owner_names($uids) {
+function myapi_unit_fetch_user_names($uids) {
   if (empty($uids)) {
     return [];
   }
