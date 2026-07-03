@@ -8,6 +8,7 @@
 module_load_include('inc', 'myapi', 'includes/myapi.request');
 module_load_include('inc', 'myapi', 'includes/myapi.response');
 module_load_include('inc', 'myapi', 'includes/myapi.i18n');
+module_load_include('inc', 'myapi', 'includes/myapi.token');
 module_load_include('inc', 'myapi', 'includes/myapi.auth');
 
 /**
