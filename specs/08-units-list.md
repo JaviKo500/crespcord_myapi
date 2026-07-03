@@ -1,6 +1,6 @@
 # 08 — Listado de unidades por condominio para el usuario autenticado
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-07-02
 - **Dependencias:**
   - `02-login-tokens` (Implemented) — tabla `my_api_tokens`.
@@ -217,39 +217,39 @@ Cada paso deja el sistema en estado funcional.
 
 ## Criterios de aceptación
 
-- [ ] `GET /api/v1/units` con un access token válido de un usuario que es
+- [x] `GET /api/v1/units` con un access token válido de un usuario que es
       **propietario** de al menos una unidad → **HTTP 200** con
       `{"success":true,"data":{"properties":[...]}}`, incluyendo el
       condominio correspondiente y la unidad con `id`, `name`, `category`,
       `area_m2` y `owner_name` correctos.
-- [ ] `GET /api/v1/units` con un usuario que es **ocupante** de una unidad vía
+- [x] `GET /api/v1/units` con un usuario que es **ocupante** de una unidad vía
       `field_ocupante` (single-value) → la unidad aparece igual que si fuera
       propietario.
-- [ ] `GET /api/v1/units` con un usuario que es **ocupante** de una unidad vía
+- [x] `GET /api/v1/units` con un usuario que es **ocupante** de una unidad vía
       `field_ocupantes` (multi-value) → la unidad aparece igual.
-- [ ] Un usuario que es propietario en un condominio y ocupante en otro →
+- [x] Un usuario que es propietario en un condominio y ocupante en otro →
       ambos condominios aparecen en `properties`, cada uno con únicamente sus
       propias unidades anidadas.
-- [ ] Un usuario sin ninguna unidad relacionada (ni propietario ni ocupante) →
+- [x] Un usuario sin ninguna unidad relacionada (ni propietario ni ocupante) →
       **HTTP 200** con `{"success":true,"data":{"properties":[]}}`.
-- [ ] Una unidad cuyo nodo `condominio` padre tiene `status = 0` (no
+- [x] Una unidad cuyo nodo `condominio` padre tiene `status = 0` (no
       publicado) → esa unidad **no aparece** en la respuesta.
-- [ ] Una unidad con `status = 0` (no publicada) → no aparece en la
+- [x] Una unidad con `status = 0` (no publicada) → no aparece en la
       respuesta, aunque el usuario sea su propietario u ocupante.
-- [ ] Una unidad sin `field_propietario` asignado → aparece con
+- [x] Una unidad sin `field_propietario` asignado → aparece con
       `owner_name: null`, sin error.
-- [ ] Un propietario cuyos `field_nombre`/`field_apellidos` están vacíos →
+- [x] Un propietario cuyos `field_nombre`/`field_apellidos` están vacíos →
       `owner_name` usa `users.name` completo como fallback.
-- [ ] `area_m2` en la respuesta coincide siempre con `field_total_m2_value`
+- [x] `area_m2` en la respuesta coincide siempre con `field_total_m2_value`
       de la unidad, sin importar su categoría.
-- [ ] La respuesta **no incluye** ningún campo de alícuota.
-- [ ] Header `Authorization` ausente → **HTTP 401** con
+- [x] La respuesta **no incluye** ningún campo de alícuota.
+- [x] Header `Authorization` ausente → **HTTP 401** con
       `error_code: "missing_authorization"`.
-- [ ] Access token inválido, expirado, revocado, o de un usuario con
+- [x] Access token inválido, expirado, revocado, o de un usuario con
       `status = 0` → **HTTP 401** con `error_code: "invalid_token"`.
-- [ ] `POST`/`PUT`/`DELETE` sobre `api/v1/units` → **HTTP 405** con
+- [x] `POST`/`PUT`/`DELETE` sobre `api/v1/units` → **HTTP 405** con
       `error_code: "method_not_allowed"`.
-- [ ] `drush cc all` registra la nueva ruta sin errores.
+- [x] `drush cc all` registra la nueva ruta sin errores.
 
 ---
 
