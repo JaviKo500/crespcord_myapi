@@ -51,6 +51,56 @@ function myapi_unit_list() {
     return $unit->owner_uid;
   }, $units))));
   $owner_names = myapi_unit_fetch_owner_names($owner_uids);
+
+  $properties = myapi_unit_build_properties($units, $condominium_titles, $owner_names);
+
+  myapi_respond(['properties' => $properties], 200);
+}
+
+/**
+ * Groups units by condominium and resolves owner names, into the response
+ * shape documented for GET /api/v1/units.
+ *
+ * Units whose condominio_nid has no entry in $condominium_titles (parent
+ * condominium missing or unpublished) are dropped from the response.
+ *
+ * @param array $units                Rows from myapi_unit_fetch_units().
+ * @param array $condominium_titles   Map of condominio_nid => title.
+ * @param array $owner_names          Map of owner_uid => owner_name.
+ *
+ * @return array  List of ['id', 'name', 'units' => [['id', 'name', 'category', 'area_m2', 'owner_name'], ...]].
+ */
+function myapi_unit_build_properties($units, $condominium_titles, $owner_names) {
+  $properties_by_condominio = [];
+
+  foreach ($units as $unit) {
+    $condominio_nid = $unit->condominio_nid;
+    if ($condominio_nid === NULL || !isset($condominium_titles[$condominio_nid])) {
+      continue;
+    }
+
+    if (!isset($properties_by_condominio[$condominio_nid])) {
+      $properties_by_condominio[$condominio_nid] = [
+        'id'    => (int) $condominio_nid,
+        'name'  => $condominium_titles[$condominio_nid],
+        'units' => [],
+      ];
+    }
+
+    $owner_name = ($unit->owner_uid !== NULL && isset($owner_names[$unit->owner_uid]))
+      ? $owner_names[$unit->owner_uid]
+      : NULL;
+
+    $properties_by_condominio[$condominio_nid]['units'][] = [
+      'id'         => (int) $unit->nid,
+      'name'       => $unit->name,
+      'category'   => $unit->category,
+      'area_m2'    => $unit->area_m2 !== NULL ? (float) $unit->area_m2 : NULL,
+      'owner_name' => $owner_name,
+    ];
+  }
+
+  return array_values($properties_by_condominio);
 }
 
 /**

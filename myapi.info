@@ -15,3 +15,4 @@ files[] = includes/myapi.auth.inc
 files[] = includes/myapi.mail.inc
 files[] = includes/myapi.mailsystem.inc
 files[] = resources/auth.resource.inc
+files[] = resources/unit.resource.inc
