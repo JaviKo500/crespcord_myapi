@@ -75,7 +75,7 @@ function myapi_unit_list() {
  * @param array $user_names         Map of uid => name, from
  *                                  myapi_unit_fetch_user_names().
  *
- * @return array  List of ['id', 'name', 'units' => [['id', 'name', 'category', 'area_m2', 'owner_uid', 'owner_name', 'occupant_uid', 'occupant_name'], ...]].
+ * @return array  List of ['id', 'name', 'units' => [['id', 'name', 'category', 'area_m2', 'owner_uid', 'owner_name', 'occupant_uid', 'occupant_name', 'current_balance'], ...]].
  */
 function myapi_unit_build_properties($units, $condominium_titles, $occupant_uids, $user_names) {
   $properties_by_condominio = [];
@@ -112,6 +112,7 @@ function myapi_unit_build_properties($units, $condominium_titles, $occupant_uids
       'owner_name'    => $owner_name,
       'occupant_uid'  => $occupant_uid !== NULL ? (int) $occupant_uid : NULL,
       'occupant_name' => $occupant_name,
+      'current_balance' => $unit->saldo_actual !== NULL ? (float) $unit->saldo_actual : NULL,
     ];
   }
 
@@ -163,7 +164,7 @@ function myapi_unit_related_nids($uid) {
  * @param array $nids  'vivienda' nids to fetch.
  *
  * @return array  Rows keyed numerically, each with nid, name, category,
- *                area_m2, condominio_nid, owner_uid.
+ *                area_m2, condominio_nid, owner_uid, saldo_actual.
  */
 function myapi_unit_fetch_units($nids) {
   $query = db_select('node', 'n')
@@ -187,6 +188,9 @@ function myapi_unit_fetch_units($nids) {
 
   $query->leftJoin('field_data_field_propietario', 'fown', "fown.entity_id = n.nid AND fown.entity_type = 'node' AND fown.deleted = 0");
   $query->addField('fown', 'field_propietario_target_id', 'owner_uid');
+
+  $query->leftJoin('field_data_field_saldo_actual', 'fsa', "fsa.entity_id = n.nid AND fsa.entity_type = 'node' AND fsa.deleted = 0");
+  $query->addField('fsa', 'field_saldo_actual_value', 'saldo_actual');
 
   return $query->execute()->fetchAll();
 }

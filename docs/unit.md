@@ -30,7 +30,8 @@ volume per user is a handful of units).
             "owner_uid": 3,
             "owner_name": "Priscila Cordero",
             "occupant_uid": 7,
-            "occupant_name": "Juan Pérez"
+            "occupant_name": "Juan Pérez",
+            "current_balance": -3393.0
           }
         ]
       }
@@ -80,6 +81,12 @@ Notes:
   `occupant_name` beyond the existing unit-visibility filter: any user who
   sees a unit in their own listing sees these fields in full, regardless of
   whether they are the owner or the occupant.
+- `current_balance` is the unit's `field_saldo_actual_value` as a number
+  (`float`), `null` when the unit has no row in
+  `field_data_field_saldo_actual`. The value is exposed exactly as stored,
+  including a negative sign — no transformation and no business meaning is
+  attached to the sign by this endpoint. `field_saldo_actual` is a single-value
+  field on the `vivienda` bundle, so there is one balance per unit.
 - `category` is `taxonomy_term_data.name` exactly as stored, with no
   slug/lowercase transformation.
 - Units are grouped by condominium; each condominium appears once in
@@ -104,6 +111,7 @@ will silently break this endpoint without a Drupal update warning:
 | `taxonomy_term_data` | `tid`, `name` | Category name. |
 | `field_data_field_total_m2` | `entity_id`, `field_total_m2_value` | Unit area (`area_m2`). |
 | `field_data_field_propietario` | `entity_id`, `field_propietario_target_id` | Unit owner (single-value, `uid`). |
+| `field_data_field_saldo_actual` | `entity_id`, `field_saldo_actual_value` | Unit current balance (`current_balance`, single-value, `decimal(10,4)`). |
 | `field_data_field_ocupante` | `entity_id`, `field_ocupante_target_id` | Legacy occupant (single-value, `uid`). Fallback when the unit has no rows in `field_ocupantes`. |
 | `field_data_field_ocupantes` | `entity_id`, `field_ocupantes_target_id`, `delta` | Current occupant(s) (multi-value, `uid`). The row with the highest `delta` per unit is the current occupant. |
 | `field_data_field_nombre` | `entity_id` (uid), `field_nombre_value` | Owner's/occupant's first name (`entity_type = 'user'`). |
