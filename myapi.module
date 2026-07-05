@@ -71,6 +71,14 @@ function myapi_menu() {
     'file'             => 'resources/unit.resource.inc',
   ];
 
+  $items['api/v1/units/%/receipts'] = [
+    'page callback'    => 'myapi_receipt_dispatch',
+    'page arguments'   => [3],
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/receipt.resource.inc',
+  ];
+
   return $items;
 }
 
