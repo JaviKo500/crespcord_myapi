@@ -43,7 +43,7 @@ function myapi_receipt_list($unit_id) {
   $uid = $row->uid;
 
   $nids = myapi_unit_related_nids($uid);
-  if (!in_array((int) $unit_id, $nids, TRUE)) {
+  if (!in_array((int) $unit_id, $nids)) {
     myapi_error('unit_access_denied', 403);
   }
 
