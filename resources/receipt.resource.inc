@@ -240,7 +240,7 @@ function myapi_receipt_fetch($unit_id, $page, $limit, $sort) {
  *
  * @param object $receipt  One row from myapi_receipt_fetch().
  *
- * @return array  Response item with all 37 mapped keys.
+ * @return array  Response item with all 40 mapped keys.
  */
 function myapi_receipt_build_item($receipt) {
   $float_fields = [
