@@ -1,6 +1,6 @@
 # 11 — Listado de alícuotas (recibos) de una unidad
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-07-04
 - **Dependencias:**
   - `08-units-list` (Implemented) — `GET /api/v1/units`, en particular `myapi_unit_related_nids()` en `resources/unit.resource.inc`, que este spec extrae a un helper compartido.
@@ -175,20 +175,20 @@ Content type `recibo`, verificado en `schema.sql`. Todos los campos de lectura/c
 
 ## Criterios de aceptación
 
-- [ ] `GET /api/v1/units/<unit_id>/receipts` con token válido y `unit_id` de una unidad donde el usuario es propietario u ocupante devuelve `200` con `receipts` (array de recibos mapeados según la tabla del modelo de datos) y `pagination` (`total`, `page`, `limit`, `total_pages`).
-- [ ] Cada recibo devuelto incluye exactamente las claves de la tabla de mapeo (37 en total: `id`, `title`, `unit_id` + 34 campos traducidos), con `NULL` cuando el nodo no tiene fila en ese campo.
-- [ ] Solo se listan recibos publicados (`status = 1`) cuyo `field_vivienda_target_id` sea igual al `unit_id` de la ruta.
-- [ ] `unit_id` de una unidad que no es del usuario autenticado (ni propietario ni ocupante) devuelve `403` con `error_code: unit_access_denied`.
-- [ ] `unit_id` inexistente devuelve el mismo `403 unit_access_denied` que el caso anterior (no se distingue el motivo).
-- [ ] Sin header `Authorization` devuelve `401 missing_authorization`; token inválido/expirado/revocado devuelve `401 invalid_token` — mismo comportamiento que el resto de endpoints autenticados.
-- [ ] Cualquier método distinto de `GET` devuelve `405 method_not_allowed`.
-- [ ] `?page` y `?limit` paginan correctamente; `limit` se clampa a `[1, 50]`; valores inválidos o ausentes caen a los defaults (`page=1`, `limit=20`) sin error.
-- [ ] `?sort=asc`/`?sort=desc` invierte el orden por `period_start` (`field_periodo_value`); default `desc`; valor inválido cae a `desc`.
-- [ ] Una unidad sin recibos devuelve `200` con `receipts: []` y `pagination.total: 0`, `total_pages: 0` (no es un error).
-- [ ] Pedir una página fuera de rango devuelve `200` con `receipts: []`, no un error.
-- [ ] `GET /api/v1/units` no cambia su comportamiento tras extraer `myapi_unit_related_nids()` a `includes/myapi.unit_access.inc`.
-- [ ] `docs/receipt.md` documenta el endpoint completo (auth, query params, campos de respuesta, errores).
-- [ ] `drush cc all` no reporta errores tras el cambio.
+- [x] `GET /api/v1/units/<unit_id>/receipts` con token válido y `unit_id` de una unidad donde el usuario es propietario u ocupante devuelve `200` con `receipts` (array de recibos mapeados según la tabla del modelo de datos) y `pagination` (`total`, `page`, `limit`, `total_pages`).
+- [x] Cada recibo devuelto incluye exactamente las claves de la tabla de mapeo (40 en total: `id`, `title`, `unit_id` + 37 campos traducidos), con `NULL` cuando el nodo no tiene fila en ese campo.
+- [x] Solo se listan recibos publicados (`status = 1`) cuyo `field_vivienda_target_id` sea igual al `unit_id` de la ruta.
+- [x] `unit_id` de una unidad que no es del usuario autenticado (ni propietario ni ocupante) devuelve `403` con `error_code: unit_access_denied`.
+- [x] `unit_id` inexistente devuelve el mismo `403 unit_access_denied` que el caso anterior (no se distingue el motivo).
+- [x] Sin header `Authorization` devuelve `401 missing_authorization`; token inválido/expirado/revocado devuelve `401 invalid_token` — mismo comportamiento que el resto de endpoints autenticados.
+- [x] Cualquier método distinto de `GET` devuelve `405 method_not_allowed`.
+- [x] `?page` y `?limit` paginan correctamente; `limit` se clampa a `[1, 50]`; valores inválidos o ausentes caen a los defaults (`page=1`, `limit=20`) sin error.
+- [c] `?sort=asc`/`?sort=desc` invierte el orden por `period_start` (`field_periodo_value`); default `desc`; valor inválido cae a `desc`.
+- [c] Una unidad sin recibos devuelve `200` con `receipts: []` y `pagination.total: 0`, `total_pages: 0` (no es un error).
+- [c] Pedir una página fuera de rango devuelve `200` con `receipts: []`, no un error.
+- [x] `GET /api/v1/units` no cambia su comportamiento tras extraer `myapi_unit_related_nids()` a `includes/myapi.unit_access.inc`.
+- [x] `docs/receipt.md` documenta el endpoint completo (auth, query params, campos de respuesta, errores).
+- [x] `drush cc all` no reporta errores tras el cambio.
 
 ---
 
