@@ -33,7 +33,7 @@ no create/update/delete, no single-receipt detail endpoint.
         "unit_id": 45,
         "period_start": "2026-06-01",
         "period_end": "2026-06-30",
-        "status": "pendiente",
+        "status": "Enviado",
         "gas_previous_reading": 120.5,
         "gas_current_reading": 135.2,
         "gas_consumption": 14.7,
@@ -95,6 +95,11 @@ Notes:
   does not exist at all return the exact same `403 unit_access_denied` — the
   response never reveals whether a unit exists.
 - Only published (`status = 1`) `recibo` nodes are returned.
+- Only receipts whose `field_estado` state is `Enviado` are exposed. Receipts
+  in any other state, and receipts with no `field_estado` row at all, are
+  silently excluded from both the `receipts` list and the `pagination.total`
+  count — they behave as if they did not exist for this endpoint. Because of
+  this filter, `status` in every returned item is always `"Enviado"`.
 - Every receipt includes exactly 40 keys: `id`, `title`, `unit_id`, and 37
   data fields (see mapping table below). A field is `null` when the node has
   no row in that field's storage table — no other transformation or business
@@ -145,7 +150,7 @@ decimal fields are single-value and mapped 1:1.
 | `field_vivienda_target_id` | `unit_id` | int | never `NULL` (it is the query filter) |
 | `field_periodo_value` | `period_start` | string | `NULL` if no row |
 | `field_periodo_value2` | `period_end` | string | `NULL` if no row |
-| `field_estado_value` | `status` | string | `NULL` if no row |
+| `field_estado_value` | `status` | string | always `"Enviado"` (endpoint filter) |
 | `field_gas_lectura_anterior_value` | `gas_previous_reading` | float | `NULL` if no row |
 | `field_gas_lectura_actual_value` | `gas_current_reading` | float | `NULL` if no row |
 | `field_consumo_gas_value` | `gas_consumption` | float | `NULL` if no row |
@@ -186,7 +191,7 @@ decimal fields are single-value and mapped 1:1.
 | `node` | `nid`, `title`, `type`, `status` | `recibo` nodes. |
 | `field_data_field_vivienda` | `entity_id`, `field_vivienda_target_id` | Receipt → unit relation (`unit_id`). Main filter of the endpoint. |
 | `field_data_field_periodo` | `entity_id`, `field_periodo_value`, `field_periodo_value2` | Receipt period (`period_start`/`period_end`). Default sort column. |
-| `field_data_field_estado` | `entity_id`, `field_estado_value` | `status`, raw free text. |
+| `field_data_field_estado` | `entity_id`, `field_estado_value` | `status`. Inner join filtered to `Enviado`; other states are excluded from the endpoint. |
 | `field_data_field_observacion` | `entity_id`, `field_observacion_value` | `observation`, free text (`_format` column ignored). |
 | `field_data_field_mensaje_demora` | `entity_id`, `field_mensaje_demora_value` | `late_payment_message`, free text (`_format` column ignored). |
 | Remaining `field_data_field_*` tables (30 tables) | `entity_id`, `field_*_value` | All `decimal`, mapped 1:1 per the table above. |

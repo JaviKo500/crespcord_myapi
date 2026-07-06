@@ -13,6 +13,12 @@ module_load_include('inc', 'myapi', 'includes/myapi.auth');
 module_load_include('inc', 'myapi', 'includes/myapi.unit_access');
 
 /**
+ * Only receipts in this 'field_estado' state are exposed by the endpoint.
+ * Any other state (or a receipt with no estado row) is silently ignored.
+ */
+define('MYAPI_RECEIPT_EXPOSED_STATUS', 'Enviado');
+
+/**
  * Dispatcher for /api/v1/units/%/receipts.
  *
  * Routes by HTTP method. Only GET is supported.
@@ -142,6 +148,11 @@ function myapi_receipt_count($unit_id, $from = NULL, $to = NULL) {
   $query->innerJoin('field_data_field_vivienda', 'fv', "fv.entity_id = n.nid AND fv.entity_type = 'node' AND fv.deleted = 0");
   $query->condition('fv.field_vivienda_target_id', $unit_id);
 
+  // Only receipts in the exposed state are counted; any other state (or none)
+  // is excluded so the count matches the fetched, filtered set.
+  $query->innerJoin('field_data_field_estado', 'fest', "fest.entity_id = n.nid AND fest.entity_type = 'node' AND fest.deleted = 0");
+  $query->condition('fest.field_estado_value', MYAPI_RECEIPT_EXPOSED_STATUS);
+
   if ($from !== NULL || $to !== NULL) {
     $query->innerJoin('field_data_field_periodo', 'fper', "fper.entity_id = n.nid AND fper.entity_type = 'node' AND fper.deleted = 0");
     if ($from !== NULL) {
@@ -191,7 +202,11 @@ function myapi_receipt_fetch($unit_id, $page, $limit, $sort, $from = NULL, $to =
     $query->where('SUBSTR(fper.field_periodo_value, 1, 10) <= :date_to', [':date_to' => $to]);
   }
 
-  $query->leftJoin('field_data_field_estado', 'fest', "fest.entity_id = n.nid AND fest.entity_type = 'node' AND fest.deleted = 0");
+  // Estado is an inner join with an equality condition: only receipts whose
+  // state is the exposed one are returned, every other state (or a missing
+  // estado row) is excluded.
+  $query->innerJoin('field_data_field_estado', 'fest', "fest.entity_id = n.nid AND fest.entity_type = 'node' AND fest.deleted = 0");
+  $query->condition('fest.field_estado_value', MYAPI_RECEIPT_EXPOSED_STATUS);
   $query->addField('fest', 'field_estado_value', 'status');
 
   $query->leftJoin('field_data_field_gas_lectura_anterior', 'fgla', "fgla.entity_id = n.nid AND fgla.entity_type = 'node' AND fgla.deleted = 0");
