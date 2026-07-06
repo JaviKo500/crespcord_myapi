@@ -60,10 +60,14 @@ function myapi_receipt_list($unit_id) {
     ? $_GET['sort']
     : 'desc';
 
-  $total = myapi_receipt_count($unit_id);
+  $range = myapi_receipt_parse_date_range();
+  $from = $range['from'];
+  $to = $range['to'];
+
+  $total = myapi_receipt_count($unit_id, $from, $to);
   $total_pages = $total > 0 ? (int) ceil($total / $limit) : 0;
 
-  $rows = myapi_receipt_fetch($unit_id, $page, $limit, $sort);
+  $rows = myapi_receipt_fetch($unit_id, $page, $limit, $sort, $from, $to);
   $receipts = array_map('myapi_receipt_build_item', $rows);
 
   myapi_respond([
@@ -78,13 +82,59 @@ function myapi_receipt_list($unit_id) {
 }
 
 /**
+ * Parses the optional date-range filter from the query string.
+ *
+ * Reads $_GET['date_from'] and $_GET['date_to'], each expected as an ISO
+ * 'YYYY-MM-DD' string. A bound is kept only when it matches that format and
+ * is a real calendar date (validated with checkdate()); anything else is
+ * silently ignored, exactly like page/limit/sort. If both bounds are present
+ * but inverted (from > to), the whole filter is dropped so the endpoint
+ * responds as if no range were given. No 422 is ever raised here.
+ *
+ * @return array  ['from' => string|NULL, 'to' => string|NULL].
+ */
+function myapi_receipt_parse_date_range() {
+  $from = myapi_receipt_valid_date(isset($_GET['date_from']) ? $_GET['date_from'] : NULL);
+  $to = myapi_receipt_valid_date(isset($_GET['date_to']) ? $_GET['date_to'] : NULL);
+
+  if ($from !== NULL && $to !== NULL && $from > $to) {
+    return ['from' => NULL, 'to' => NULL];
+  }
+
+  return ['from' => $from, 'to' => $to];
+}
+
+/**
+ * Validates a single 'YYYY-MM-DD' date string.
+ *
+ * @param mixed $value  Raw query-string value, or NULL when absent.
+ *
+ * @return string|NULL  The value when it is a real ISO calendar date,
+ *                       NULL otherwise.
+ */
+function myapi_receipt_valid_date($value) {
+  if (!is_string($value) || !preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $value, $m)) {
+    return NULL;
+  }
+  if (!checkdate((int) $m[2], (int) $m[3], (int) $m[1])) {
+    return NULL;
+  }
+  return $value;
+}
+
+/**
  * Counts published 'recibo' nodes for a unit, unpaginated.
  *
- * @param int $unit_id  The 'vivienda' nid to filter by.
+ * When a date bound is given, joins field_data_field_periodo and restricts by
+ * period_start so the count matches the same filtered set as the fetched page.
+ *
+ * @param int         $unit_id  The 'vivienda' nid to filter by.
+ * @param string|NULL $from     Inclusive lower bound 'YYYY-MM-DD', or NULL.
+ * @param string|NULL $to       Inclusive upper bound 'YYYY-MM-DD', or NULL.
  *
  * @return int  Total number of matching receipts.
  */
-function myapi_receipt_count($unit_id) {
+function myapi_receipt_count($unit_id, $from = NULL, $to = NULL) {
   $query = db_select('node', 'n')
     ->condition('n.type', 'recibo')
     ->condition('n.status', 1);
@@ -92,20 +142,32 @@ function myapi_receipt_count($unit_id) {
   $query->innerJoin('field_data_field_vivienda', 'fv', "fv.entity_id = n.nid AND fv.entity_type = 'node' AND fv.deleted = 0");
   $query->condition('fv.field_vivienda_target_id', $unit_id);
 
+  if ($from !== NULL || $to !== NULL) {
+    $query->innerJoin('field_data_field_periodo', 'fper', "fper.entity_id = n.nid AND fper.entity_type = 'node' AND fper.deleted = 0");
+    if ($from !== NULL) {
+      $query->where('SUBSTR(fper.field_periodo_value, 1, 10) >= :date_from', [':date_from' => $from]);
+    }
+    if ($to !== NULL) {
+      $query->where('SUBSTR(fper.field_periodo_value, 1, 10) <= :date_to', [':date_to' => $to]);
+    }
+  }
+
   return (int) $query->countQuery()->execute()->fetchField();
 }
 
 /**
  * Fetches a page of 'recibo' nodes for a unit, with every mapped field.
  *
- * @param int    $unit_id  The 'vivienda' nid to filter by.
- * @param int    $page     1-based page number.
- * @param int    $limit    Rows per page, already clamped to [1, 50].
- * @param string $sort     'asc' or 'desc', applied to field_periodo_value.
+ * @param int         $unit_id  The 'vivienda' nid to filter by.
+ * @param int         $page     1-based page number.
+ * @param int         $limit    Rows per page, already clamped to [1, 50].
+ * @param string      $sort     'asc' or 'desc', applied to field_periodo_value.
+ * @param string|NULL $from     Inclusive lower bound 'YYYY-MM-DD', or NULL.
+ * @param string|NULL $to       Inclusive upper bound 'YYYY-MM-DD', or NULL.
  *
  * @return array  Rows keyed numerically, one per receipt.
  */
-function myapi_receipt_fetch($unit_id, $page, $limit, $sort) {
+function myapi_receipt_fetch($unit_id, $page, $limit, $sort, $from = NULL, $to = NULL) {
   $query = db_select('node', 'n')
     ->fields('n', ['nid', 'title'])
     ->condition('n.type', 'recibo')
@@ -118,6 +180,16 @@ function myapi_receipt_fetch($unit_id, $page, $limit, $sort) {
   $query->leftJoin('field_data_field_periodo', 'fper', "fper.entity_id = n.nid AND fper.entity_type = 'node' AND fper.deleted = 0");
   $query->addField('fper', 'field_periodo_value', 'period_start');
   $query->addField('fper', 'field_periodo_value2', 'period_end');
+
+  // Optional date-range filter on period_start. Applying a condition on the
+  // left-joined column also excludes receipts with no periodo row (NULL), which
+  // is the desired behaviour: a receipt without period cannot fall in a range.
+  if ($from !== NULL) {
+    $query->where('SUBSTR(fper.field_periodo_value, 1, 10) >= :date_from', [':date_from' => $from]);
+  }
+  if ($to !== NULL) {
+    $query->where('SUBSTR(fper.field_periodo_value, 1, 10) <= :date_to', [':date_to' => $to]);
+  }
 
   $query->leftJoin('field_data_field_estado', 'fest', "fest.entity_id = n.nid AND fest.entity_type = 'node' AND fest.deleted = 0");
   $query->addField('fest', 'field_estado_value', 'status');
