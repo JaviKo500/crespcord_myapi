@@ -1,6 +1,6 @@
 # 13 — Listado de alícuotas extras de una unidad
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-07-06
 - **Dependencias:**
   - `08-units-list` (Implemented) — `myapi_unit_related_nids()`, ya extraído a `includes/myapi.unit_access.inc`.
@@ -144,21 +144,21 @@ Content type `alicuota_extra`, verificado en `schema.sql`. `field_valor_extra`, 
 
 ## Criterios de aceptación
 
-- [ ] `GET /api/v1/units/<unit_id>/extra-fees` con token válido y `unit_id` de una unidad donde el usuario es propietario u ocupante devuelve `200` con `extra_fees` (array mapeado según el modelo de datos) y `pagination` (`total`, `page`, `limit`, `total_pages`).
-- [ ] Cada ítem incluye exactamente las 8 claves: `id`, `title`, `unit_id`, `date`, `status`, `extra_fee`, `previous_balance`, `total`, con `NULL` en los decimales/`date` cuando el nodo no tiene fila en ese campo.
-- [ ] Solo se listan nodos `alicuota_extra` publicados (`status = 1`) con `field_vivienda_target_id = unit_id` **y** `field_estado = 'Enviado'`; cualquier otro estado (o sin fila de estado) queda excluido.
-- [ ] `unit_id` de una unidad ajena (ni propietario ni ocupante) devuelve `403 unit_access_denied`.
-- [ ] `unit_id` inexistente devuelve el mismo `403 unit_access_denied` (no se distingue el motivo).
-- [ ] Sin header `Authorization` → `401 missing_authorization`; token inválido/expirado/revocado → `401 invalid_token`.
-- [ ] Cualquier método distinto de `GET` → `405 method_not_allowed`.
-- [ ] `?page` y `?limit` paginan correctamente; `limit` se clampa a `[1, 50]`; valores inválidos/ausentes caen a los defaults (`page=1`, `limit=20`) sin error.
-- [ ] `?sort=asc`/`?sort=desc` invierte el orden por `date` (`field_fecha_value`); default `desc`; valor inválido cae a `desc`.
-- [ ] `date_from`/`date_to` filtran sobre `date` (primeros 10 caracteres) de forma inclusiva; cada límite es independiente; el borde superior incluye el día indicado aunque haya sufijo de hora.
-- [ ] `pagination.total` y `total_pages` reflejan el conjunto **ya filtrado** (estado `Enviado` + rango de fechas), no el total bruto de la unidad.
-- [ ] `date_from`/`date_to` con formato inválido, o rango invertido (`from > to`), se ignoran sin `422`; nodos sin fila en `field_fecha` quedan excluidos cuando hay al menos un límite activo.
-- [ ] Una unidad sin alícuotas extras `Enviado` (o una página fuera de rango) devuelve `200` con `extra_fees: []` y `pagination.total: 0`, `total_pages: 0` (no es error).
-- [ ] `docs/extra_fee.md` documenta el endpoint completo (auth, query params, campos de respuesta, errores).
-- [ ] `drush cc all` no reporta errores tras el cambio.
+- [x] `GET /api/v1/units/<unit_id>/extra-fees` con token válido y `unit_id` de una unidad donde el usuario es propietario u ocupante devuelve `200` con `extra_fees` (array mapeado según el modelo de datos) y `pagination` (`total`, `page`, `limit`, `total_pages`).
+- [x] Cada ítem incluye exactamente las 8 claves: `id`, `title`, `unit_id`, `date`, `status`, `extra_fee`, `previous_balance`, `total`, con `NULL` en los decimales/`date` cuando el nodo no tiene fila en ese campo.
+- [x] Solo se listan nodos `alicuota_extra` publicados (`status = 1`) con `field_vivienda_target_id = unit_id` **y** `field_estado = 'Enviado'`; cualquier otro estado (o sin fila de estado) queda excluido.
+- [x] `unit_id` de una unidad ajena (ni propietario ni ocupante) devuelve `403 unit_access_denied`.
+- [x] `unit_id` inexistente devuelve el mismo `403 unit_access_denied` (no se distingue el motivo).
+- [x] Sin header `Authorization` → `401 missing_authorization`; token inválido/expirado/revocado → `401 invalid_token`.
+- [x] Cualquier método distinto de `GET` → `405 method_not_allowed`.
+- [x] `?page` y `?limit` paginan correctamente; `limit` se clampa a `[1, 50]`; valores inválidos/ausentes caen a los defaults (`page=1`, `limit=20`) sin error.
+- [x] `?sort=asc`/`?sort=desc` invierte el orden por `date` (`field_fecha_value`); default `desc`; valor inválido cae a `desc`.
+- [x] `date_from`/`date_to` filtran sobre `date` (primeros 10 caracteres) de forma inclusiva; cada límite es independiente; el borde superior incluye el día indicado aunque haya sufijo de hora.
+- [x] `pagination.total` y `total_pages` reflejan el conjunto **ya filtrado** (estado `Enviado` + rango de fechas), no el total bruto de la unidad.
+- [x] `date_from`/`date_to` con formato inválido, o rango invertido (`from > to`), se ignoran sin `422`; nodos sin fila en `field_fecha` quedan excluidos cuando hay al menos un límite activo.
+- [x] Una unidad sin alícuotas extras `Enviado` (o una página fuera de rango) devuelve `200` con `extra_fees: []` y `pagination.total: 0`, `total_pages: 0` (no es error).
+- [x] `docs/extra_fee.md` documenta el endpoint completo (auth, query params, campos de respuesta, errores).
+- [x] `drush cc all` no reporta errores tras el cambio.
 
 ---
 
