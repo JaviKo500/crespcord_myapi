@@ -492,7 +492,7 @@ CREATE TABLE `dr_comment` (
   KEY `comment_uid` (`uid`),
   KEY `comment_nid_language` (`nid`,`language`),
   KEY `comment_created` (`created`)
-) ENGINE=InnoDB AUTO_INCREMENT=19 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Stores comments and associated data.';
+) ENGINE=InnoDB AUTO_INCREMENT=20 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Stores comments and associated data.';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -769,7 +769,7 @@ CREATE TABLE `dr_field_config` (
   KEY `storage_module` (`storage_module`),
   KEY `type` (`type`),
   KEY `storage_type` (`storage_type`)
-) ENGINE=InnoDB AUTO_INCREMENT=183 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=184 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -789,7 +789,7 @@ CREATE TABLE `dr_field_config_instance` (
   PRIMARY KEY (`id`),
   KEY `field_name_bundle` (`field_name`,`entity_type`,`bundle`),
   KEY `deleted` (`deleted`)
-) ENGINE=InnoDB AUTO_INCREMENT=228 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=229 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -1748,6 +1748,33 @@ CREATE TABLE `dr_field_data_field_descripcion` (
   KEY `language` (`language`),
   KEY `field_descripcion_format` (`field_descripcion_format`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Data storage for field 108 (field_descripcion)';
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `dr_field_data_field_detalle`
+--
+
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `dr_field_data_field_detalle` (
+  `entity_type` varchar(128) NOT NULL DEFAULT '' COMMENT 'The entity type this data is attached to',
+  `bundle` varchar(128) NOT NULL DEFAULT '' COMMENT 'The field instance bundle to which this row belongs, used when deleting a field instance',
+  `deleted` tinyint(4) NOT NULL DEFAULT 0 COMMENT 'A boolean indicating whether this data item has been deleted',
+  `entity_id` int(10) unsigned NOT NULL COMMENT 'The entity id this data is attached to',
+  `revision_id` int(10) unsigned DEFAULT NULL COMMENT 'The entity revision id this data is attached to, or NULL if the entity type is not versioned',
+  `language` varchar(32) NOT NULL DEFAULT '' COMMENT 'The language for this data item.',
+  `delta` int(10) unsigned NOT NULL COMMENT 'The sequence number for this data item, used for multi-value fields',
+  `field_detalle_value` varchar(255) DEFAULT NULL,
+  `field_detalle_format` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`entity_type`,`entity_id`,`deleted`,`delta`,`language`),
+  KEY `entity_type` (`entity_type`),
+  KEY `bundle` (`bundle`),
+  KEY `deleted` (`deleted`),
+  KEY `entity_id` (`entity_id`),
+  KEY `revision_id` (`revision_id`),
+  KEY `language` (`language`),
+  KEY `field_detalle_format` (`field_detalle_format`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Data storage for field 183 (field_detalle)';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -5350,6 +5377,33 @@ CREATE TABLE `dr_field_revision_field_descripcion` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
+-- Table structure for table `dr_field_revision_field_detalle`
+--
+
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `dr_field_revision_field_detalle` (
+  `entity_type` varchar(128) NOT NULL DEFAULT '' COMMENT 'The entity type this data is attached to',
+  `bundle` varchar(128) NOT NULL DEFAULT '' COMMENT 'The field instance bundle to which this row belongs, used when deleting a field instance',
+  `deleted` tinyint(4) NOT NULL DEFAULT 0 COMMENT 'A boolean indicating whether this data item has been deleted',
+  `entity_id` int(10) unsigned NOT NULL COMMENT 'The entity id this data is attached to',
+  `revision_id` int(10) unsigned NOT NULL COMMENT 'The entity revision id this data is attached to',
+  `language` varchar(32) NOT NULL DEFAULT '' COMMENT 'The language for this data item.',
+  `delta` int(10) unsigned NOT NULL COMMENT 'The sequence number for this data item, used for multi-value fields',
+  `field_detalle_value` varchar(255) DEFAULT NULL,
+  `field_detalle_format` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`entity_type`,`entity_id`,`revision_id`,`deleted`,`delta`,`language`),
+  KEY `entity_type` (`entity_type`),
+  KEY `bundle` (`bundle`),
+  KEY `deleted` (`deleted`),
+  KEY `entity_id` (`entity_id`),
+  KEY `revision_id` (`revision_id`),
+  KEY `language` (`language`),
+  KEY `field_detalle_format` (`field_detalle_format`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Revision archive storage for field 183 (field_detalle)';
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
 -- Table structure for table `dr_field_revision_field_energia_electrica`
 --
 
@@ -8083,7 +8137,7 @@ CREATE TABLE `dr_flood` (
   PRIMARY KEY (`fid`),
   KEY `allow` (`event`,`identifier`,`timestamp`),
   KEY `purge` (`expiration`)
-) ENGINE=InnoDB AUTO_INCREMENT=2896 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Flood controls the threshold of events, such as the...';
+) ENGINE=InnoDB AUTO_INCREMENT=3113 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Flood controls the threshold of events, such as the...';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -8199,7 +8253,7 @@ CREATE TABLE `dr_locales_source` (
   `version` varchar(20) NOT NULL DEFAULT 'none' COMMENT 'Version of Drupal, where the string was last used (for locales optimization).',
   PRIMARY KEY (`lid`),
   KEY `source_context` (`source`(30),`context`)
-) ENGINE=InnoDB AUTO_INCREMENT=11251 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='List of English source strings.';
+) ENGINE=InnoDB AUTO_INCREMENT=11260 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='List of English source strings.';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -8272,7 +8326,7 @@ CREATE TABLE `dr_menu_links` (
   KEY `menu_plid_expand_child` (`menu_name`,`plid`,`expanded`,`has_children`),
   KEY `menu_parents` (`menu_name`,`p1`,`p2`,`p3`,`p4`,`p5`,`p6`,`p7`,`p8`,`p9`),
   KEY `router_path` (`router_path`(128))
-) ENGINE=InnoDB AUTO_INCREMENT=1103 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Contains the individual links within a menu.';
+) ENGINE=InnoDB AUTO_INCREMENT=1104 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Contains the individual links within a menu.';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -8313,6 +8367,51 @@ CREATE TABLE `dr_menu_router` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
+-- Table structure for table `dr_my_api_tokens`
+--
+
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `dr_my_api_tokens` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT COMMENT 'Primary key.',
+  `uid` int(10) unsigned NOT NULL COMMENT 'Logical FK to dr_users.uid.',
+  `access_token_hash` char(64) NOT NULL COMMENT 'SHA-256 hex of the access token.',
+  `refresh_token_hash` char(64) NOT NULL COMMENT 'SHA-256 hex of the refresh token.',
+  `access_expires_at` int(11) NOT NULL COMMENT 'Unix timestamp when the access token expires.',
+  `refresh_expires_at` int(11) NOT NULL COMMENT 'Unix timestamp when the refresh token expires.',
+  `revoked` tinyint(4) NOT NULL DEFAULT 0 COMMENT '0 = active, 1 = revoked.',
+  `created` int(11) NOT NULL COMMENT 'Unix timestamp when the token was issued.',
+  `last_used` int(11) DEFAULT NULL COMMENT 'Unix timestamp of the last access token use.',
+  `user_agent` varchar(255) DEFAULT NULL COMMENT 'User-Agent header of the issuing request.',
+  `ip_address` varchar(45) DEFAULT NULL COMMENT 'IP address of the issuing request (IPv6 capable).',
+  PRIMARY KEY (`id`),
+  KEY `uid` (`uid`),
+  KEY `access_token_hash` (`access_token_hash`),
+  KEY `refresh_token_hash` (`refresh_token_hash`)
+) ENGINE=InnoDB AUTO_INCREMENT=113 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Opaque access and refresh tokens issued on login.';
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `dr_myapi_password_reset_tokens`
+--
+
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `dr_myapi_password_reset_tokens` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT COMMENT 'Primary key.',
+  `uid` int(10) unsigned NOT NULL COMMENT 'Logical FK to dr_users.uid.',
+  `token_hash` char(64) NOT NULL COMMENT 'SHA-256 hex of the reset token.',
+  `expires_at` int(11) NOT NULL COMMENT 'Unix timestamp when the token expires.',
+  `used` tinyint(4) NOT NULL DEFAULT 0 COMMENT '0 = unused, 1 = used (successful reset or invalidated by a newer request).',
+  `created` int(11) NOT NULL COMMENT 'Unix timestamp when the token was issued.',
+  `ip_address` varchar(45) DEFAULT NULL COMMENT 'IP address of the /forgot request that generated it.',
+  PRIMARY KEY (`id`),
+  KEY `uid` (`uid`),
+  KEY `token_hash` (`token_hash`)
+) ENGINE=InnoDB AUTO_INCREMENT=21 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Single-use tokens issued for password reset requests.';
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
 -- Table structure for table `dr_node`
 --
 
@@ -8345,7 +8444,7 @@ CREATE TABLE `dr_node` (
   KEY `tnid` (`tnid`),
   KEY `translate` (`translate`),
   KEY `language` (`language`)
-) ENGINE=InnoDB AUTO_INCREMENT=501278 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='The base table for nodes.';
+) ENGINE=InnoDB AUTO_INCREMENT=501293 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='The base table for nodes.';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -8405,7 +8504,7 @@ CREATE TABLE `dr_node_revision` (
   PRIMARY KEY (`vid`),
   KEY `nid` (`nid`),
   KEY `uid` (`uid`)
-) ENGINE=InnoDB AUTO_INCREMENT=1244389 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Stores information about each saved version of a dr_node.';
+) ENGINE=InnoDB AUTO_INCREMENT=1244450 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Stores information about each saved version of a dr_node.';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -8538,7 +8637,7 @@ CREATE TABLE `dr_queue` (
   PRIMARY KEY (`item_id`),
   KEY `name_created` (`name`,`created`),
   KEY `expire` (`expire`)
-) ENGINE=InnoDB AUTO_INCREMENT=131727 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Stores items in queues.';
+) ENGINE=InnoDB AUTO_INCREMENT=132418 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Stores items in queues.';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -8670,7 +8769,7 @@ CREATE TABLE `dr_rules_scheduler` (
   `handler` varchar(255) DEFAULT NULL COMMENT 'The fully qualified class name of a the queue item handler.',
   PRIMARY KEY (`tid`),
   KEY `date` (`date`)
-) ENGINE=InnoDB AUTO_INCREMENT=777 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Stores scheduled tasks.';
+) ENGINE=InnoDB AUTO_INCREMENT=779 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Stores scheduled tasks.';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -8784,7 +8883,7 @@ CREATE TABLE `dr_semaphore` (
 CREATE TABLE `dr_sequences` (
   `value` int(10) unsigned NOT NULL AUTO_INCREMENT COMMENT 'The value of the sequence.',
   PRIMARY KEY (`value`)
-) ENGINE=InnoDB AUTO_INCREMENT=76761 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Stores IDs.';
+) ENGINE=InnoDB AUTO_INCREMENT=76765 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Stores IDs.';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -9095,7 +9194,7 @@ CREATE TABLE `dr_watchdog` (
   KEY `type` (`type`),
   KEY `uid` (`uid`),
   KEY `severity` (`severity`)
-) ENGINE=InnoDB AUTO_INCREMENT=6306124 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Table that contains logs of all system events.';
+) ENGINE=InnoDB AUTO_INCREMENT=6321214 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Table that contains logs of all system events.';
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 
@@ -9107,4 +9206,4 @@ CREATE TABLE `dr_watchdog` (
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2026-06-29  3:09:34
+-- Dump completed on 2026-07-06 16:37:08
