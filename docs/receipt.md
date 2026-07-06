@@ -18,6 +18,8 @@ no create/update/delete, no single-receipt detail endpoint.
 | `page` | `1` | 1-based. Any non-positive-integer value falls back to the default silently (no `422`). |
 | `limit` | `20` | Clamped to `[1, 50]`. Any non-positive-integer or out-of-range value falls back to the default/clamp silently. |
 | `sort` | `desc` | `asc` or `desc`, applied to `period_start` (`field_periodo_value`). Any other value falls back to `desc`. |
+| `date_from` | absent = no lower bound | ISO `YYYY-MM-DD`. When valid, keeps only receipts with `period_start >= date_from`. Any malformed or non-calendar value (e.g. `2026-13-40`, `01-06-2026`, `hoy`) is ignored silently (no `422`), as if absent. |
+| `date_to` | absent = no upper bound | ISO `YYYY-MM-DD`. When valid, keeps only receipts with `period_start <= date_to`. Same silent-ignore rule as `date_from`. |
 
 **Success response (200)**
 ```json
@@ -99,10 +101,34 @@ Notes:
   validation is applied (e.g. `status` is the raw stored text, not validated
   against a fixed list; `period_start`/`period_end` are raw strings, not
   reformatted).
-- `total`/`total_pages` in `pagination` reflect the unit's full receipt count,
-  unpaginated. `total_pages` is `0` when `total` is `0`.
+- `total`/`total_pages` in `pagination` reflect the unpaginated count of the
+  **filtered** set (after `date_from`/`date_to` are applied, if any), not the
+  unit's full receipt count. `total_pages` is `0` when `total` is `0`.
 - Sorting is always by `period_start` (`field_periodo_value`); there is no
   other sort field.
+
+**Date-range filter (`date_from` / `date_to`)**
+
+Both bounds are optional and independent: you may send only `date_from`, only
+`date_to`, both, or neither. They filter on `period_start` only (never on
+`period_end`), inclusively on both ends.
+
+- Comparison is made on the first 10 characters of `field_periodo_value`
+  (`SUBSTR(..., 1, 10)`), so a receipt stored as either `2026-06-30` or
+  `2026-06-30T00:00:00` is **included** by `date_to=2026-06-30` — the time
+  suffix never pushes the last day out of range.
+- The filter is applied **before** pagination and sorting, so `page`, `limit`
+  and `sort` operate over the already-filtered set.
+- Receipts with no `field_periodo` row (`period_start = null`) are **excluded**
+  whenever at least one bound is active — a receipt without a period cannot
+  belong to a date range.
+- Invalid values (bad format or non-calendar dates) are ignored per bound, and
+  an inverted range (`date_from > date_to`) drops the whole filter, so the
+  endpoint responds exactly as if no range had been sent. No `422` is raised
+  for either case — this mirrors the lax handling of `page`/`limit`/`sort`.
+
+Example: `GET /api/v1/units/45/receipts?date_from=2026-06-01&date_to=2026-06-30`
+returns only receipts whose `period_start` falls within June 2026 inclusive.
 
 **Data model assumptions**
 
