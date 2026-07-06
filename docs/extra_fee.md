@@ -35,7 +35,8 @@ no create/update/delete, no single-extra-fee detail endpoint.
         "status": "Enviado",
         "extra_fee": 25.0,
         "previous_balance": 10.5,
-        "total": 35.5
+        "total": 35.5,
+        "details": "Reparación de bomba de agua"
       }
     ],
     "pagination": {
@@ -68,12 +69,14 @@ Notes:
   silently excluded from both the `extra_fees` list and the `pagination.total`
   count — they behave as if they did not exist for this endpoint. Because of
   this filter, `status` in every returned item is always `"Enviado"`.
-- Every extra fee includes exactly 8 keys: `id`, `title`, `unit_id`, `date`,
-  `status`, `extra_fee`, `previous_balance`, `total` (see mapping table below).
-  A decimal field (or `date`) is `null` when the node has no row in that field's
-  storage table — no other transformation or business validation is applied
-  (e.g. `status` is the raw stored text, not validated against a fixed list;
-  `date` is a raw string, not reformatted).
+- Every extra fee includes exactly 9 keys: `id`, `title`, `unit_id`, `date`,
+  `status`, `extra_fee`, `previous_balance`, `total`, `details` (see mapping
+  table below). A decimal field (or `date`) is `null` when the node has no row
+  in that field's storage table — no other transformation or business
+  validation is applied (e.g. `status` is the raw stored text, not validated
+  against a fixed list; `date` is a raw string, not reformatted). `details` is
+  the exception: it is an **empty string (`""`)**, never `null`, when the node
+  has no `field_detalle` row.
 - `total`/`total_pages` in `pagination` reflect the unpaginated count of the
   **filtered** set (after `date_from`/`date_to` are applied, if any), not the
   unit's full extra-fee count. `total_pages` is `0` when `total` is `0`.
@@ -123,6 +126,7 @@ the per-join `entity_id` binding keep the query scoped to extra-fee nodes only.
 | `field_valor_extra_value` | `extra_fee` | float | `NULL` if no row |
 | `field_saldo_anterior_value` | `previous_balance` | float | `NULL` if no row |
 | `field_total_value` | `total` | float | `NULL` if no row |
+| `field_detalle_value` | `details` | string | `""` (empty string) if no row, never `NULL` |
 
 | Table | Relevant columns | Use |
 |---|---|---|
@@ -133,6 +137,7 @@ the per-join `entity_id` binding keep the query scoped to extra-fee nodes only.
 | `field_data_field_valor_extra` | `entity_id`, `field_valor_extra_value` | `extra_fee`, `decimal`, mapped 1:1. |
 | `field_data_field_saldo_anterior` | `entity_id`, `field_saldo_anterior_value` | `previous_balance`, `decimal`, mapped 1:1. |
 | `field_data_field_total` | `entity_id`, `field_total_value` | `total`, `decimal`, mapped 1:1. |
+| `field_data_field_detalle` | `entity_id`, `field_detalle_value` | `details`, text; empty string when the row is absent. |
 
 **Possible errors**
 | Code | `error_code` | When |

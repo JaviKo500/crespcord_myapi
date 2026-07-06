@@ -223,6 +223,9 @@ function myapi_extra_fee_fetch($unit_id, $page, $limit, $sort, $from = NULL, $to
   $query->leftJoin('field_data_field_total', 'ftot', "ftot.entity_id = n.nid AND ftot.entity_type = 'node' AND ftot.deleted = 0");
   $query->addField('ftot', 'field_total_value', 'total');
 
+  $query->leftJoin('field_data_field_detalle', 'fdet', "fdet.entity_id = n.nid AND fdet.entity_type = 'node' AND fdet.deleted = 0");
+  $query->addField('fdet', 'field_detalle_value', 'details');
+
   $query->orderBy('ffec.field_fecha_value', $sort === 'asc' ? 'ASC' : 'DESC');
   $query->range(($page - 1) * $limit, $limit);
 
@@ -235,11 +238,12 @@ function myapi_extra_fee_fetch($unit_id, $page, $limit, $sort, $from = NULL, $to
  *
  * The decimal fields are cast to float when present, NULL otherwise. Text
  * fields (date, status) pass through as stored, with no business
- * interpretation.
+ * interpretation. 'details' is the exception: it is an empty string ("") when
+ * the node has no field_detalle row, never NULL.
  *
  * @param object $extra_fee  One row from myapi_extra_fee_fetch().
  *
- * @return array  Response item with all 8 mapped keys.
+ * @return array  Response item with all 9 mapped keys.
  */
 function myapi_extra_fee_build_item($extra_fee) {
   $float_fields = ['extra_fee', 'previous_balance', 'total'];
@@ -255,6 +259,8 @@ function myapi_extra_fee_build_item($extra_fee) {
   foreach ($float_fields as $field) {
     $item[$field] = $extra_fee->$field !== NULL ? (float) $extra_fee->$field : NULL;
   }
+
+  $item['details'] = $extra_fee->details !== NULL ? (string) $extra_fee->details : '';
 
   return $item;
 }
