@@ -1,6 +1,6 @@
 # 12 — Filtro por rango de fechas en el listado de recibos
 
-> **Estado:** Approved · **Depende de:** SPEC 11 · **Fecha:** 2026-07-06
+> **Estado:** Implemented · **Depende de:** SPEC 11 · **Fecha:** 2026-07-06
 > **Objetivo:** Agregar a `GET /api/v1/units/<unit_id>/receipts` un filtro opcional por rango de fechas (`date_from`/`date_to`) sobre `period_start`, que solo se aplica cuando los params vienen y deja el endpoint idéntico cuando no.
 
 ---
@@ -73,19 +73,19 @@ Como el formato `YYYY-MM-DD` ordena lexicográficamente igual que cronológicame
 
 ## Criterios de aceptación
 
-- [ ] Sin `date_from` ni `date_to`, la respuesta es idéntica a la del SPEC 11 (mismos recibos, misma `pagination`).
-- [ ] Con `date_from=2026-06-01&date_to=2026-06-30`, solo se devuelven recibos cuyo `period_start` (primeros 10 caracteres) esté entre `2026-06-01` y `2026-06-30` inclusive.
-- [ ] Un recibo con `period_start = 2026-06-30` (o `2026-06-30T00:00:00`) queda **incluido** con `date_to=2026-06-30` (el límite superior no lo excluye por el sufijo de hora).
-- [ ] Solo `date_from=2026-06-01` (sin `date_to`) devuelve todos los recibos con `period_start >= 2026-06-01`.
-- [ ] Solo `date_to=2026-06-30` (sin `date_from`) devuelve todos los recibos con `period_start <= 2026-06-30`.
-- [ ] `pagination.total` y `total_pages` reflejan el conjunto **ya filtrado**, no el total de la unidad.
-- [ ] El filtro se combina correctamente con `page`, `limit` y `sort` (se filtra primero, luego se ordena y pagina).
-- [ ] `date_from` o `date_to` con formato inválido (p. ej. `2026-13-40`, `01-06-2026`, `hoy`) se ignora ese límite y el endpoint responde como si no viniera, sin `422`.
-- [ ] `date_from > date_to` (rango invertido) ignora el filtro completo y responde como sin filtro, sin `422`.
-- [ ] Recibos sin fila en `field_periodo` (`period_start = NULL`) quedan excluidos cuando hay al menos un límite activo.
-- [ ] El control de acceso (`403 unit_access_denied`), la autenticación (`401`) y el método (`405`) se comportan igual que en el SPEC 11.
-- [ ] `docs/receipt.md` documenta ambos params, su formato, opcionalidad y casos borde.
-- [ ] `drush cc all` no reporta errores tras el cambio.
+- [x] Sin `date_from` ni `date_to`, la respuesta es idéntica a la del SPEC 11 (mismos recibos, misma `pagination`).
+- [x] Con `date_from=2026-06-01&date_to=2026-06-30`, solo se devuelven recibos cuyo `period_start` (primeros 10 caracteres) esté entre `2026-06-01` y `2026-06-30` inclusive.
+- [x] Un recibo con `period_start = 2026-06-30` (o `2026-06-30T00:00:00`) queda **incluido** con `date_to=2026-06-30` (el límite superior no lo excluye por el sufijo de hora).
+- [x] Solo `date_from=2026-06-01` (sin `date_to`) devuelve todos los recibos con `period_start >= 2026-06-01`.
+- [x] Solo `date_to=2026-06-30` (sin `date_from`) devuelve todos los recibos con `period_start <= 2026-06-30`.
+- [x] `pagination.total` y `total_pages` reflejan el conjunto **ya filtrado**, no el total de la unidad.
+- [x] El filtro se combina correctamente con `page`, `limit` y `sort` (se filtra primero, luego se ordena y pagina).
+- [x] `date_from` o `date_to` con formato inválido (p. ej. `2026-13-40`, `01-06-2026`, `hoy`) se ignora ese límite y el endpoint responde como si no viniera, sin `422`.
+- [x] `date_from > date_to` (rango invertido) ignora el filtro completo y responde como sin filtro, sin `422`.
+- [x] Recibos sin fila en `field_periodo` (`period_start = NULL`) quedan excluidos cuando hay al menos un límite activo.
+- [x] El control de acceso (`403 unit_access_denied`), la autenticación (`401`) y el método (`405`) se comportan igual que en el SPEC 11.
+- [x] `docs/receipt.md` documenta ambos params, su formato, opcionalidad y casos borde.
+- [x] `drush cc all` no reporta errores tras el cambio.
 
 ---
 
