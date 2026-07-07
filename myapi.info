@@ -20,3 +20,4 @@ files[] = includes/myapi.unit_access.inc
 files[] = resources/receipt.resource.inc
 files[] = resources/extra_fee.resource.inc
 files[] = resources/payment.resource.inc
+files[] = resources/expense.resource.inc

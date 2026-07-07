@@ -40,3 +40,28 @@ function myapi_unit_related_nids($uid) {
 
   return array_values(array_unique(array_merge($owner_nids, $occupant_nids, $occupants_nids)));
 }
+
+/**
+ * Returns the nids of 'condominio' nodes related to a user through any
+ * 'vivienda' node they own or occupy.
+ *
+ * @param int $uid  User id to look up.
+ *
+ * @return array  Unique list of 'condominio' nids.
+ */
+function myapi_condominium_related_nids($uid) {
+  $unit_nids = myapi_unit_related_nids($uid);
+  if (empty($unit_nids)) {
+    return [];
+  }
+
+  $condo_nids = db_select('field_data_field_condominio', 'fc')
+    ->fields('fc', ['field_condominio_target_id'])
+    ->condition('entity_id', $unit_nids, 'IN')
+    ->condition('entity_type', 'node')
+    ->condition('deleted', 0)
+    ->execute()
+    ->fetchCol();
+
+  return array_values(array_unique($condo_nids));
+}
