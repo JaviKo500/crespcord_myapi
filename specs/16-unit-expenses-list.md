@@ -1,6 +1,6 @@
 # 16 — Listado de gastos de un condominio
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-07-07
 - **Dependencias:**
   - `08-units-list` (Implemented) — `myapi_unit_related_nids()`, base sobre la que se construye el nuevo `myapi_condominium_related_nids()`.
@@ -180,23 +180,23 @@ El endpoint verifica `in_array((int) $condominium_id, myapi_condominium_related_
 
 ## Criterios de aceptación
 
-- [ ] `GET /api/v1/condominiums/<condominium_id>/expenses` con token válido y `condominium_id` de un condominio donde el usuario tiene al menos una unidad (propietario u ocupante) devuelve `200` con `expenses` (array mapeado según el modelo de datos) y `pagination` (`total`, `page`, `limit`, `total_pages`).
-- [ ] Cada ítem incluye exactamente las 9 claves: `id`, `title`, `condominium_id`, `description`, `category_id`, `category_name`, `expense_date`, `amount`, `reference`, `status`, con `NULL` en `description`/`category_id`/`category_name`/`expense_date`/`amount`/`reference` cuando el nodo no tiene fila en ese campo.
-- [ ] Solo se listan nodos `gastos` publicados (`status = 1`) cuyo `field_condominio_target_id` coincide con `condominium_id` **y** `field_estado_gasto = 'Activo'`; un gasto en otro estado o sin fila de estado queda excluido.
-- [ ] `status` es siempre `"Activo"` en cada ítem devuelto.
-- [ ] `condominium_id` inexistente o ajeno (el usuario no tiene ninguna unidad ahí) devuelve `403 condominium_access_denied`, sin distinguir el motivo.
-- [ ] Un usuario con unidades en dos condominios distintos solo ve los `expenses` del `condominium_id` pedido en la ruta, no los del otro condominio donde también tiene acceso.
-- [ ] Sin header `Authorization` → `401 missing_authorization`; token inválido/expirado/revocado → `401 invalid_token`.
-- [ ] Cualquier método distinto de `GET` → `405 method_not_allowed`.
-- [ ] `?page` y `?limit` paginan correctamente; `limit` se clampa a `[1, 50]`; valores inválidos/ausentes caen a los defaults (`page=1`, `limit=20`) sin error.
-- [ ] `?limit=-1` devuelve todos los gastos del conjunto filtrado en un solo array, con `pagination.limit: -1`, `pagination.page: 1` (ignorando `?page` si vino) y `pagination.total_pages` en `1` (si `total > 0`) o `0` (si `total` es `0`).
-- [ ] `?sort=asc`/`?sort=desc` invierte el orden por `expense_date` (`field_fecha_de_gasto_value`); default `desc`; valor inválido cae a `desc`.
-- [ ] `date_from`/`date_to` filtran sobre `expense_date` (primeros 10 caracteres) de forma inclusiva; cada límite es independiente; el borde superior incluye el día indicado aunque haya sufijo de hora.
-- [ ] `pagination.total` y `total_pages` reflejan el conjunto **ya filtrado** (`Activo` + rango de fechas), no el total bruto del condominio.
-- [ ] `date_from`/`date_to` con formato inválido, o rango invertido (`from > to`), se ignoran sin `422`; nodos sin fila en `field_fecha_de_gasto` quedan excluidos cuando hay al menos un límite activo.
-- [ ] Un condominio sin gastos en estado `Activo` (o una página fuera de rango) devuelve `200` con `expenses: []` y `pagination.total: 0`, `total_pages: 0` (no es error).
-- [ ] `docs/expense.md` documenta el endpoint completo (auth, query params, campos de respuesta, errores).
-- [ ] `drush cc all` no reporta errores tras el cambio.
+- [x] `GET /api/v1/condominiums/<condominium_id>/expenses` con token válido y `condominium_id` de un condominio donde el usuario tiene al menos una unidad (propietario u ocupante) devuelve `200` con `expenses` (array mapeado según el modelo de datos) y `pagination` (`total`, `page`, `limit`, `total_pages`).
+- [x] Cada ítem incluye exactamente las 9 claves: `id`, `title`, `condominium_id`, `description`, `category_id`, `category_name`, `expense_date`, `amount`, `reference`, `status`, con `NULL` en `description`/`category_id`/`category_name`/`expense_date`/`amount`/`reference` cuando el nodo no tiene fila en ese campo.
+- [x] Solo se listan nodos `gastos` publicados (`status = 1`) cuyo `field_condominio_target_id` coincide con `condominium_id` **y** `field_estado_gasto = 'Activo'`; un gasto en otro estado o sin fila de estado queda excluido.
+- [x] `status` es siempre `"Activo"` en cada ítem devuelto.
+- [x] `condominium_id` inexistente o ajeno (el usuario no tiene ninguna unidad ahí) devuelve `403 condominium_access_denied`, sin distinguir el motivo.
+- [x] Un usuario con unidades en dos condominios distintos solo ve los `expenses` del `condominium_id` pedido en la ruta, no los del otro condominio donde también tiene acceso.
+- [x] Sin header `Authorization` → `401 missing_authorization`; token inválido/expirado/revocado → `401 invalid_token`.
+- [x] Cualquier método distinto de `GET` → `405 method_not_allowed`.
+- [x] `?page` y `?limit` paginan correctamente; `limit` se clampa a `[1, 50]`; valores inválidos/ausentes caen a los defaults (`page=1`, `limit=20`) sin error.
+- [x] `?limit=-1` devuelve todos los gastos del conjunto filtrado en un solo array, con `pagination.limit: -1`, `pagination.page: 1` (ignorando `?page` si vino) y `pagination.total_pages` en `1` (si `total > 0`) o `0` (si `total` es `0`).
+- [x] `?sort=asc`/`?sort=desc` invierte el orden por `expense_date` (`field_fecha_de_gasto_value`); default `desc`; valor inválido cae a `desc`.
+- [x] `date_from`/`date_to` filtran sobre `expense_date` (primeros 10 caracteres) de forma inclusiva; cada límite es independiente; el borde superior incluye el día indicado aunque haya sufijo de hora.
+- [x] `pagination.total` y `total_pages` reflejan el conjunto **ya filtrado** (`Activo` + rango de fechas), no el total bruto del condominio.
+- [x] `date_from`/`date_to` con formato inválido, o rango invertido (`from > to`), se ignoran sin `422`; nodos sin fila en `field_fecha_de_gasto` quedan excluidos cuando hay al menos un límite activo.
+- [x] Un condominio sin gastos en estado `Activo` (o una página fuera de rango) devuelve `200` con `expenses: []` y `pagination.total: 0`, `total_pages: 0` (no es error).
+- [x] `docs/expense.md` documenta el endpoint completo (auth, query params, campos de respuesta, errores).
+- [x] `drush cc all` no reporta errores tras el cambio.
 
 ---
 
