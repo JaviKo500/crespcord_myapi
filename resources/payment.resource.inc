@@ -64,10 +64,15 @@ function myapi_payment_list($unit_id) {
     ? (int) $_GET['page']
     : 1;
 
-  $limit = isset($_GET['limit']) && ctype_digit((string) $_GET['limit']) && (int) $_GET['limit'] > 0
-    ? (int) $_GET['limit']
-    : 20;
-  $limit = max(1, min(50, $limit));
+  $limit = isset($_GET['limit']) && $_GET['limit'] === '-1'
+    ? -1
+    : (isset($_GET['limit']) && ctype_digit((string) $_GET['limit']) && (int) $_GET['limit'] > 0
+      ? max(1, min(50, (int) $_GET['limit']))
+      : 20);
+
+  if ($limit === -1) {
+    $page = 1;
+  }
 
   $sort = isset($_GET['sort']) && in_array($_GET['sort'], ['asc', 'desc'], TRUE)
     ? $_GET['sort']
@@ -78,7 +83,9 @@ function myapi_payment_list($unit_id) {
   $to = $range['to'];
 
   $total = myapi_payment_count($unit_id, $from, $to);
-  $total_pages = $total > 0 ? (int) ceil($total / $limit) : 0;
+  $total_pages = $limit === -1
+    ? ($total > 0 ? 1 : 0)
+    : ($total > 0 ? (int) ceil($total / $limit) : 0);
 
   $rows = myapi_payment_fetch($unit_id, $page, $limit, $sort, $from, $to);
   $payments = array_map('myapi_payment_build_item', $rows);
@@ -182,7 +189,8 @@ function myapi_payment_count($unit_id, $from = NULL, $to = NULL) {
  *
  * @param int         $unit_id  The 'vivienda' nid to filter by.
  * @param int         $page     1-based page number.
- * @param int         $limit    Rows per page, already clamped to [1, 50].
+ * @param int         $limit    Rows per page, already clamped to [1, 50], or
+ *                              -1 to return every row unpaginated.
  * @param string      $sort     'asc' or 'desc', applied to
  *                              field_fecha_de_pago_value.
  * @param string|NULL $from     Inclusive lower bound 'YYYY-MM-DD', or NULL.
@@ -230,7 +238,9 @@ function myapi_payment_fetch($unit_id, $page, $limit, $sort, $from = NULL, $to =
   $query->addField('fval', 'field_valor_value', 'amount');
 
   $query->orderBy('ffec.field_fecha_de_pago_value', $sort === 'asc' ? 'ASC' : 'DESC');
-  $query->range(($page - 1) * $limit, $limit);
+  if ($limit !== -1) {
+    $query->range(($page - 1) * $limit, $limit);
+  }
 
   return $query->execute()->fetchAll();
 }

@@ -16,7 +16,7 @@ no create/update/delete, no single-receipt detail endpoint.
 | Param | Default | Notes |
 |-------|---------|-------|
 | `page` | `1` | 1-based. Any non-positive-integer value falls back to the default silently (no `422`). |
-| `limit` | `20` | Clamped to `[1, 50]`. Any non-positive-integer or out-of-range value falls back to the default/clamp silently. |
+| `limit` | `20` | Clamped to `[1, 50]`. Any non-positive-integer or out-of-range value falls back to the default/clamp silently. Special value `-1` disables pagination entirely: every matching receipt is returned in one response, `page` is forced to `1`, and `total_pages` is `1` (or `0` when `total` is `0`). |
 | `sort` | `desc` | `asc` or `desc`, applied to `period_start` (`field_periodo_value`). Any other value falls back to `desc`. |
 | `date_from` | absent = no lower bound | ISO `YYYY-MM-DD`. When valid, keeps only receipts with `period_start >= date_from`. Any malformed or non-calendar value (e.g. `2026-13-40`, `01-06-2026`, `hoy`) is ignored silently (no `422`), as if absent. |
 | `date_to` | absent = no upper bound | ISO `YYYY-MM-DD`. When valid, keeps only receipts with `period_start <= date_to`. Same silent-ignore rule as `date_from`. |
