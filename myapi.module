@@ -103,6 +103,14 @@ function myapi_menu() {
     'file'             => 'resources/expense.resource.inc',
   ];
 
+  $items['api/v1/condominiums/%/summary'] = [
+    'page callback'    => 'myapi_condominium_dispatch',
+    'page arguments'   => [3],
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/condominium.resource.inc',
+  ];
+
   return $items;
 }
 

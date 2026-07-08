@@ -72,3 +72,47 @@ function myapi_request_require_strings(array $body, array $fields, $max_length =
     }
   }
 }
+
+/**
+ * Parses the optional date-range filter from the query string.
+ *
+ * Reads $_GET['date_from'] and $_GET['date_to'], each expected as an ISO
+ * 'YYYY-MM-DD' string. A bound is kept only when it matches that format and
+ * is a real calendar date (validated with checkdate()); anything else is
+ * silently ignored. If both bounds are present but inverted (from > to), the
+ * whole filter is dropped so the caller responds as if no range were given.
+ * No 422 is ever raised here.
+ *
+ * Shared by every resource that offers a lax date-range filter (expenses,
+ * condominium summary, ...), so the parsing lives in one place.
+ *
+ * @return array  ['from' => string|NULL, 'to' => string|NULL].
+ */
+function myapi_parse_date_range_param() {
+  $from = myapi_valid_iso_date(isset($_GET['date_from']) ? $_GET['date_from'] : NULL);
+  $to = myapi_valid_iso_date(isset($_GET['date_to']) ? $_GET['date_to'] : NULL);
+
+  if ($from !== NULL && $to !== NULL && $from > $to) {
+    return ['from' => NULL, 'to' => NULL];
+  }
+
+  return ['from' => $from, 'to' => $to];
+}
+
+/**
+ * Validates a single 'YYYY-MM-DD' date string.
+ *
+ * @param mixed $value  Raw query-string value, or NULL when absent.
+ *
+ * @return string|NULL  The value when it is a real ISO calendar date,
+ *                       NULL otherwise.
+ */
+function myapi_valid_iso_date($value) {
+  if (!is_string($value) || !preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $value, $m)) {
+    return NULL;
+  }
+  if (!checkdate((int) $m[2], (int) $m[3], (int) $m[1])) {
+    return NULL;
+  }
+  return $value;
+}
