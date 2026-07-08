@@ -1,6 +1,6 @@
 # 17 — Resumen de condominio (total de gastos y saldo de caja)
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-07-07
 - **Dependencias:**
   - `16-unit-expenses-list` (Implemented) — provee `myapi_condominium_related_nids()`, la clave i18n `condominium_access_denied`, el criterio de estado único `Activo` (`MYAPI_EXPENSE_EXPOSED_STATUS`) y el parseo de rango de fechas que aquí se **extrae a un helper compartido**.
@@ -143,21 +143,21 @@ Mismo contrato laxo que spec 16, ahora vía el helper compartido `myapi_parse_da
 
 ## Criterios de aceptación
 
-- [ ] `GET /api/v1/condominiums/<condominium_id>/summary` con token válido y un `condominium_id` donde el usuario tiene al menos una unidad (propietario u ocupante) devuelve `200` con `data` conteniendo exactamente 5 claves: `id`, `name`, `total_expenses`, `expenses_count`, `cash_balance`.
-- [ ] `id` = `condominium_id` de la ruta (int); `name` = title del nodo `condominio`.
-- [ ] `total_expenses` = suma (`float`) de `field_valor` de los gastos `type='gastos'`, `status=1`, `field_condominio = condominium_id` y `field_estado_gasto = 'Activo'`; es `0.0` cuando no hay ningún gasto en ese conjunto.
-- [ ] `expenses_count` = cantidad (`int`) de gastos de ese mismo conjunto; es `0` cuando el conjunto está vacío.
-- [ ] Un gasto sin fila en `field_valor` cuenta en `expenses_count` pero aporta `0` a `total_expenses`.
-- [ ] Gastos en un estado distinto de `Activo` o sin fila de estado no entran ni en la suma ni en el conteo.
-- [ ] `cash_balance` = `field_saldo_caja_value` del nodo condominio (`float`), tal cual (incluido signo); es `null` cuando el condominio no tiene fila en `field_data_field_saldo_caja`.
-- [ ] `date_from`/`date_to` acotan el agregado sobre `expense_date` (primeros 10 caracteres) de forma inclusiva; `total_expenses` y `expenses_count` reflejan el conjunto ya filtrado.
-- [ ] `date_from`/`date_to` con formato inválido, o rango invertido (`from > to`), se ignoran sin `422`; con filtro activo, gastos sin fila de fecha quedan excluidos del agregado.
-- [ ] `condominium_id` inexistente o ajeno → `403 condominium_access_denied`, sin distinguir el motivo; un `condominium_id` no numérico también cae en `403`.
-- [ ] Sin header `Authorization` → `401 missing_authorization`; token inválido/expirado/revocado → `401 invalid_token`.
-- [ ] Cualquier método distinto de `GET` → `405 method_not_allowed`.
-- [ ] `GET /api/v1/condominiums/%/expenses` (spec 16) sigue respondiendo idéntico tras el refactor del helper de fechas.
-- [ ] `docs/condominium.md` documenta el endpoint completo (auth, query params, campos de respuesta, errores).
-- [ ] `drush cc all` no reporta errores tras el cambio.
+- [x] `GET /api/v1/condominiums/<condominium_id>/summary` con token válido y un `condominium_id` donde el usuario tiene al menos una unidad (propietario u ocupante) devuelve `200` con `data` conteniendo exactamente 5 claves: `id`, `name`, `total_expenses`, `expenses_count`, `cash_balance`.
+- [x] `id` = `condominium_id` de la ruta (int); `name` = title del nodo `condominio`.
+- [x] `total_expenses` = suma (`float`) de `field_valor` de los gastos `type='gastos'`, `status=1`, `field_condominio = condominium_id` y `field_estado_gasto = 'Activo'`; es `0.0` cuando no hay ningún gasto en ese conjunto.
+- [x] `expenses_count` = cantidad (`int`) de gastos de ese mismo conjunto; es `0` cuando el conjunto está vacío.
+- [x] Un gasto sin fila en `field_valor` cuenta en `expenses_count` pero aporta `0` a `total_expenses`.
+- [x] Gastos en un estado distinto de `Activo` o sin fila de estado no entran ni en la suma ni en el conteo.
+- [x] `cash_balance` = `field_saldo_caja_value` del nodo condominio (`float`), tal cual (incluido signo); es `null` cuando el condominio no tiene fila en `field_data_field_saldo_caja`.
+- [x] `date_from`/`date_to` acotan el agregado sobre `expense_date` (primeros 10 caracteres) de forma inclusiva; `total_expenses` y `expenses_count` reflejan el conjunto ya filtrado.
+- [x] `date_from`/`date_to` con formato inválido, o rango invertido (`from > to`), se ignoran sin `422`; con filtro activo, gastos sin fila de fecha quedan excluidos del agregado.
+- [x] `condominium_id` inexistente o ajeno → `403 condominium_access_denied`, sin distinguir el motivo; un `condominium_id` no numérico también cae en `403`.
+- [x] Sin header `Authorization` → `401 missing_authorization`; token inválido/expirado/revocado → `401 invalid_token`.
+- [x] Cualquier método distinto de `GET` → `405 method_not_allowed`.
+- [x] `GET /api/v1/condominiums/%/expenses` (spec 16) sigue respondiendo idéntico tras el refactor del helper de fechas.
+- [x] `docs/condominium.md` documenta el endpoint completo (auth, query params, campos de respuesta, errores).
+- [x] `drush cc all` no reporta errores tras el cambio.
 
 ---
 
