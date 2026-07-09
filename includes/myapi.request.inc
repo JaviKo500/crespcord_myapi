@@ -32,6 +32,26 @@ function myapi_request_method() {
 }
 
 /**
+ * Reads a single scalar field from a multipart/form-data request ($_POST).
+ *
+ * Used by resources that accept multipart/form-data (file uploads) instead of a
+ * JSON body, so they never touch $_POST directly. In multipart requests the
+ * fields arrive in $_POST, not through php://input, so myapi_request_body()
+ * does not see them.
+ *
+ * @param string $name  The form-data field name.
+ *
+ * @return string|null  The trimmed value when it is a scalar string,
+ *                       NULL when absent or not a scalar (e.g. an array).
+ */
+function myapi_request_post_field($name) {
+  if (!isset($_POST[$name]) || !is_string($_POST[$name])) {
+    return NULL;
+  }
+  return trim($_POST[$name]);
+}
+
+/**
  * Validates that all required fields are present in the request body.
  *
  * Calls myapi_error() with HTTP 422 and exits if any field is missing.

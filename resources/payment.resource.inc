@@ -43,6 +43,335 @@ function myapi_payment_dispatch($unit_id) {
 }
 
 /**
+ * Dispatcher for the flat /api/v1/payments route.
+ *
+ * Routes by HTTP method. Only POST is supported (create a payment); any other
+ * method returns 405. Authentication is resolved inside myapi_payment_create(),
+ * not here.
+ */
+function myapi_payment_create_dispatch() {
+  $method = myapi_request_method();
+  if ($method === 'POST') {
+    myapi_payment_create();
+  }
+  else {
+    myapi_error('method_not_allowed', 405);
+  }
+}
+
+/**
+ * The 'field_forma_de_pago' machine field whose allowed_values gate the input.
+ */
+define('MYAPI_PAYMENT_METHOD_FIELD', 'field_forma_de_pago');
+
+/**
+ * Handles POST /api/v1/payments.
+ *
+ * Creates a 'pagos' node from a multipart/form-data request. Requires a valid
+ * Bearer access token; the authenticated user must be the owner or occupant of
+ * the target unit. Every field is validated in order, and each check aborts
+ * with its own error before anything is created. On success responds 201 with
+ * the full payment and a translated message.
+ *
+ * See the ordered plan in specs/20-register-payment.md, step 4.
+ */
+function myapi_payment_create() {
+  // 1. Authentication: valid Bearer access token, or 401.
+  $row = myapi_auth_require_access_token();
+  $uid = $row->uid;
+
+  // 2. Read the multipart/form-data fields (never touch $_POST directly).
+  $vivienda_raw = myapi_request_post_field('field_vivienda');
+  $referencia   = myapi_request_post_field('field_referencia');
+  $valor_raw    = myapi_request_post_field('field_valor');
+  $forma        = myapi_request_post_field('field_forma_de_pago');
+  $banco_raw    = myapi_request_post_field('field_banco');
+  $fecha_raw    = myapi_request_post_field('field_fecha_de_pago');
+
+  // 3. Required fields present (the 5 mandatory ones).
+  $required = [
+    'field_vivienda'      => $vivienda_raw,
+    'field_referencia'    => $referencia,
+    'field_valor'         => $valor_raw,
+    'field_forma_de_pago' => $forma,
+    'field_banco'         => $banco_raw,
+  ];
+  foreach ($required as $name => $value) {
+    if ($value === NULL || $value === '') {
+      myapi_error('missing_field', 422, ['@field' => $name]);
+    }
+  }
+
+  // 4. field_vivienda: integer > 0; the node must exist, be a published
+  // 'vivienda'; and the user must own or occupy it.
+  if (!ctype_digit((string) $vivienda_raw) || (int) $vivienda_raw <= 0) {
+    myapi_error('invalid_field', 422, ['@field' => 'field_vivienda']);
+  }
+  $vivienda_nid = (int) $vivienda_raw;
+  $unit = node_load($vivienda_nid);
+  if (!$unit || $unit->type !== 'vivienda' || (int) $unit->status !== 1) {
+    myapi_error('invalid_field', 422, ['@field' => 'field_vivienda']);
+  }
+  // Access: same non-strict rule as myapi_payment_list() in this file, since
+  // myapi_unit_related_nids() returns nids as strings.
+  if (!in_array($vivienda_nid, myapi_unit_related_nids($uid))) {
+    myapi_error('unit_access_denied', 403);
+  }
+
+  // 5. field_valor: numeric and strictly > 0.
+  if (!is_numeric($valor_raw) || (float) $valor_raw <= 0) {
+    myapi_error('invalid_amount', 422);
+  }
+  $valor = (float) $valor_raw;
+
+  // 6. field_referencia: non-empty string, <= 255 chars.
+  if (strlen($referencia) > 255) {
+    myapi_error('invalid_field', 422, ['@field' => 'field_referencia']);
+  }
+  $referencia = check_plain($referencia);
+
+  // 7. field_forma_de_pago: must be a key of the field's allowed_values.
+  $field_info = field_info_field(MYAPI_PAYMENT_METHOD_FIELD);
+  $allowed = ($field_info && isset($field_info['settings']['allowed_values']))
+    ? $field_info['settings']['allowed_values']
+    : [];
+  if (!array_key_exists($forma, $allowed)) {
+    myapi_error('invalid_payment_method', 422);
+  }
+
+  // 8. field_banco: integer > 0; a term that exists and belongs to 'bancos'.
+  if (!ctype_digit((string) $banco_raw) || (int) $banco_raw <= 0) {
+    myapi_error('invalid_bank', 422);
+  }
+  $banco_tid = (int) $banco_raw;
+  $vocabulary = taxonomy_vocabulary_machine_name_load('bancos');
+  $term = taxonomy_term_load($banco_tid);
+  if (!$vocabulary || !$term || (int) $term->vid !== (int) $vocabulary->vid) {
+    myapi_error('invalid_bank', 422);
+  }
+
+  // 9. field_fecha_de_pago: optional; validate/normalize, else server time.
+  if ($fecha_raw !== NULL && $fecha_raw !== '') {
+    $fecha = myapi_payment_normalize_date($fecha_raw);
+    if ($fecha === NULL) {
+      myapi_error('invalid_date', 422);
+    }
+  }
+  else {
+    $fecha = date('Y-m-d\TH:i:s');
+  }
+
+  // 10. Duplicate reference within the same unit -> 409.
+  if (myapi_payment_reference_exists($referencia, $vivienda_nid)) {
+    myapi_error('duplicate_reference', 409);
+  }
+
+  // 11. Optional attached file (validated inside; aborts 422 on failure).
+  $file = NULL;
+  if (!empty($_FILES['field_archivo']['name'])) {
+    $file = myapi_payment_save_file();
+  }
+
+  // 12. Build and persist the node.
+  $node = myapi_payment_build_node($uid, $vivienda_nid, $referencia, $valor, $forma, $banco_tid, $fecha, $file);
+  node_save($node);
+
+  // 13. Tie the managed file to the node so cron does not reap it.
+  if ($file) {
+    file_usage_add($file, 'myapi', 'node', $node->nid);
+  }
+
+  // 14. Respond 201 with the full payment.
+  myapi_respond(
+    ['payment' => myapi_payment_build_created_item($node, $file)],
+    201,
+    'payment_created'
+  );
+}
+
+/**
+ * Normalizes an accepted payment-date string to 'Y-m-d\TH:i:s'.
+ *
+ * Accepts 'YYYY-MM-DD' (normalized to T00:00:00) or 'YYYY-MM-DDTHH:MM:SS'. The
+ * calendar date is validated with checkdate(); the time part (when present) is
+ * range-checked. Returns NULL on any invalid format or impossible date/time.
+ *
+ * @param string $value  Raw ISO date/datetime from the request.
+ *
+ * @return string|null  Normalized 'Y-m-d\TH:i:s', or NULL when invalid.
+ */
+function myapi_payment_normalize_date($value) {
+  if (preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $value, $m)) {
+    if (!checkdate((int) $m[2], (int) $m[3], (int) $m[1])) {
+      return NULL;
+    }
+    return $value . 'T00:00:00';
+  }
+  if (preg_match('/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/', $value, $m)) {
+    if (!checkdate((int) $m[2], (int) $m[3], (int) $m[1])) {
+      return NULL;
+    }
+    if ((int) $m[4] > 23 || (int) $m[5] > 59 || (int) $m[6] > 59) {
+      return NULL;
+    }
+    return $value;
+  }
+  return NULL;
+}
+
+/**
+ * Checks whether a reference already exists for a given unit.
+ *
+ * Uniqueness is per unit: joins field_data_field_referencia and
+ * field_data_field_vivienda on the same 'pagos' node and looks for any row with
+ * the same reference and target unit. Best-effort (no DB-level unique index);
+ * see the race-condition risk in the spec.
+ *
+ * @param string $referencia    The reference string to look up.
+ * @param int    $vivienda_nid  The target unit nid.
+ *
+ * @return bool  TRUE when a payment with that reference already exists in the
+ *               unit, FALSE otherwise.
+ */
+function myapi_payment_reference_exists($referencia, $vivienda_nid) {
+  $query = db_select('field_data_field_referencia', 'fref')
+    ->fields('fref', ['entity_id'])
+    ->condition('fref.entity_type', 'node')
+    ->condition('fref.deleted', 0)
+    ->condition('fref.field_referencia_value', $referencia);
+
+  $query->innerJoin('field_data_field_vivienda', 'fv', "fv.entity_id = fref.entity_id AND fv.entity_type = 'node' AND fv.deleted = 0");
+  $query->condition('fv.field_vivienda_target_id', $vivienda_nid);
+
+  $query->innerJoin('node', 'n', 'n.nid = fref.entity_id');
+  $query->condition('n.type', 'pagos');
+
+  return (bool) $query->range(0, 1)->execute()->fetchField();
+}
+
+/**
+ * Saves and validates the optional 'field_archivo' upload.
+ *
+ * The caller invokes this only when $_FILES['field_archivo'] carries a file.
+ * Validates extension (pdf/jpg/jpeg/png) and size (<= 5 MB) with Drupal
+ * validators, then re-checks the real MIME with finfo so a renamed file (e.g. a
+ * .php disguised as .pdf) is rejected. On any failure it aborts the request
+ * with a 422 (and deletes the just-saved file on a MIME mismatch); on success
+ * it marks the file permanent and returns it.
+ *
+ * @return object  The saved permanent managed file object.
+ */
+function myapi_payment_save_file() {
+  $directory = 'private://comprobantes_pago';
+  if (!file_prepare_directory($directory, FILE_CREATE_DIRECTORY)) {
+    // Private filesystem not configured or not writable: cannot store the
+    // sensitive receipt, so abort before creating anything.
+    myapi_error('invalid_file', 422);
+  }
+
+  $validators = [
+    'file_validate_extensions' => ['pdf jpg jpeg png'],
+    'file_validate_size'       => [5 * 1024 * 1024],
+  ];
+
+  $file = file_save_upload('field_archivo', $validators, $directory . '/');
+  if (!is_object($file)) {
+    // FALSE on validation error (extension/size) or a failed upload.
+    myapi_error('invalid_file', 422);
+  }
+
+  // Real MIME check: the stored extension is not enough on an EOL platform.
+  $allowed_mimes = ['application/pdf', 'image/jpeg', 'image/png'];
+  $real_path = drupal_realpath($file->uri);
+  $finfo = finfo_open(FILEINFO_MIME_TYPE);
+  $mime = $finfo ? finfo_file($finfo, $real_path) : FALSE;
+  if ($finfo) {
+    finfo_close($finfo);
+  }
+  if (!in_array($mime, $allowed_mimes, TRUE)) {
+    file_delete($file);
+    myapi_error('invalid_file_type', 422);
+  }
+
+  $file->status = FILE_STATUS_PERMANENT;
+  return file_save($file);
+}
+
+/**
+ * Builds an unsaved 'pagos' node from the validated payment input.
+ *
+ * All values are already validated by the caller. field_estado_pago is always
+ * forced to 'Pendiente de verificar' regardless of the request, and the title
+ * is autogenerated as "Pago {referencia} - {YYYY-MM-DD}". The node is returned
+ * unsaved so the caller controls node_save() ordering relative to
+ * file_usage_add().
+ *
+ * @param int         $uid           Author (authenticated user) id.
+ * @param int         $vivienda_nid  Target unit nid.
+ * @param string      $referencia    Sanitized reference.
+ * @param float       $valor         Amount (> 0).
+ * @param string      $forma         Payment method (allowed_values key).
+ * @param int         $banco_tid     Bank term id (vocabulary 'bancos').
+ * @param string      $fecha         Normalized 'Y-m-d\TH:i:s' payment date.
+ * @param object|null $file          Saved managed file, or NULL when none.
+ *
+ * @return object  The prepared, unsaved node object.
+ */
+function myapi_payment_build_node($uid, $vivienda_nid, $referencia, $valor, $forma, $banco_tid, $fecha, $file) {
+  $node = new stdClass();
+  $node->type = 'pagos';
+  node_object_prepare($node);
+  $node->uid = $uid;
+  $node->status = 1;
+  $node->language = LANGUAGE_NONE;
+  $node->title = 'Pago ' . $referencia . ' - ' . substr($fecha, 0, 10);
+
+  $node->field_vivienda[LANGUAGE_NONE][0]['target_id']  = $vivienda_nid;
+  $node->field_referencia[LANGUAGE_NONE][0]['value']    = $referencia;
+  $node->field_valor[LANGUAGE_NONE][0]['value']         = $valor;
+  $node->field_forma_de_pago[LANGUAGE_NONE][0]['value'] = $forma;
+  $node->field_banco[LANGUAGE_NONE][0]['tid']           = $banco_tid;
+  $node->field_fecha_de_pago[LANGUAGE_NONE][0]['value'] = $fecha;
+  $node->field_estado_pago[LANGUAGE_NONE][0]['value']   = 'Pendiente de verificar';
+
+  if ($file) {
+    $node->field_archivo[LANGUAGE_NONE][0] = ['fid' => $file->fid, 'display' => 1];
+  }
+
+  return $node;
+}
+
+/**
+ * Maps the created 'pagos' node into the 201 response shape.
+ *
+ * Reads the values straight from the node built by myapi_payment_build_node(),
+ * so it reflects exactly what was persisted (including the forced estado). Both
+ * file_id and file_url are NULL when no attachment was provided; the
+ * private:// URI is exposed alongside the fid for a future authenticated
+ * download endpoint, per the spec.
+ *
+ * @param object      $node  The saved payment node.
+ * @param object|null $file  The saved managed file, or NULL when none.
+ *
+ * @return array  Response item with all documented keys.
+ */
+function myapi_payment_build_created_item($node, $file) {
+  return [
+    'id'             => (int) $node->nid,
+    'title'          => $node->title,
+    'unit_id'        => (int) $node->field_vivienda[LANGUAGE_NONE][0]['target_id'],
+    'payment_date'   => $node->field_fecha_de_pago[LANGUAGE_NONE][0]['value'],
+    'status'         => $node->field_estado_pago[LANGUAGE_NONE][0]['value'],
+    'payment_method' => $node->field_forma_de_pago[LANGUAGE_NONE][0]['value'],
+    'reference'      => $node->field_referencia[LANGUAGE_NONE][0]['value'],
+    'amount'         => (float) $node->field_valor[LANGUAGE_NONE][0]['value'],
+    'bank_id'        => (int) $node->field_banco[LANGUAGE_NONE][0]['tid'],
+    'file_id'        => $file ? (int) $file->fid : NULL,
+    'file_url'       => $file ? $file->uri : NULL,
+  ];
+}
+
+/**
  * Handles GET /api/v1/units/%/payments.
  *
  * Returns, for the authenticated user, a paginated list of 'pagos' nodes
