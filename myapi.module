@@ -118,6 +118,13 @@ function myapi_menu() {
     'file'             => 'resources/bank.resource.inc',
   ];
 
+  $items['api/v1/payment-methods'] = [
+    'page callback'    => 'myapi_payment_method_dispatch',
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/payment_method.resource.inc',
+  ];
+
   return $items;
 }
 
