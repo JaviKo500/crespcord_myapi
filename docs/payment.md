@@ -228,17 +228,18 @@ The server also sets: `node->type = pagos`, `node->title = "Pago {reference} -
       "bank_id": 7,
       "bank_name": "Banco Pichincha",
       "file_id": 55,
-      "file_url": "private://comprobantes_pago/000123.pdf"
+      "file_name": "000123.pdf"
     }
   },
   "message": "Pago registrado correctamente."
 }
 ```
 
-`file_id` and `file_url` are `null` when no file is attached. Both are exposed
-(the internal `fid` plus the `private://…` URI) so a future authenticated
-download endpoint has the `fid`; the `private://…` URI is **not** directly
-downloadable by the client.
+`file_id` and `file_name` are `null` when no file is attached. `file_name` is
+the stored filename (`drupal_basename` of the `private://…` URI, including any
+rename suffix Drupal added on a name collision); neither the URI nor a public
+URL is exposed. The `fid` is exposed so a future authenticated download endpoint
+can serve the receipt.
 
 `bank_id` and `bank_name` are `null` **together** when the payment has no bank
 (e.g. a cash payment sent without `bank_id`). `bank_name` is the `bancos` term

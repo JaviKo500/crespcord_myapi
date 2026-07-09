@@ -289,6 +289,17 @@ function myapi_payment_save_file() {
     myapi_error('invalid_file', 422);
   }
 
+  // Drupal 7's file_save_upload() reads uploads from the nested
+  // $_FILES['files']['name'][<field>] structure that its own form API produces,
+  // not from $_FILES['file'] where PHP puts a plain multipart field named
+  // 'file'. Remap our flat upload into that structure so file_save_upload('file')
+  // can find it (Flutter's MultipartRequest and curl -F both send it flat).
+  if (isset($_FILES['file']) && !isset($_FILES['files']['name']['file'])) {
+    foreach (['name', 'type', 'tmp_name', 'error', 'size'] as $key) {
+      $_FILES['files'][$key]['file'] = $_FILES['file'][$key];
+    }
+  }
+
   $validators = [
     'file_validate_extensions' => ['pdf jpg jpeg png'],
     'file_validate_size'       => [5 * 1024 * 1024],
@@ -370,9 +381,10 @@ function myapi_payment_build_node($uid, $vivienda_nid, $referencia, $valor, $for
  *
  * Reads the values straight from the node built by myapi_payment_build_node(),
  * so it reflects exactly what was persisted (including the forced estado). Both
- * file_id and file_url are NULL when no attachment was provided; the
- * private:// URI is exposed alongside the fid for a future authenticated
- * download endpoint, per the spec.
+ * file_id and file_name are NULL when no attachment was provided. file_name is
+ * the stored filename (basename of the private:// URI, including any rename
+ * suffix Drupal added on collision); the fid is exposed for a future
+ * authenticated download endpoint, per the spec.
  *
  * bank_id and bank_name are NULL together when the payment has no bank (e.g. a
  * cash payment); bank_name is the term name, sanitized with check_plain().
@@ -398,7 +410,7 @@ function myapi_payment_build_created_item($node, $file, $bank_term = NULL) {
     'bank_id'        => $has_bank ? (int) $node->field_banco[LANGUAGE_NONE][0]['tid'] : NULL,
     'bank_name'      => $bank_term ? check_plain($bank_term->name) : NULL,
     'file_id'        => $file ? (int) $file->fid : NULL,
-    'file_url'       => $file ? $file->uri : NULL,
+    'file_name'      => $file ? drupal_basename($file->uri) : NULL,
   ];
 }
 
