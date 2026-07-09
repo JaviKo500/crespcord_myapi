@@ -33,13 +33,21 @@ function myapi_bank_dispatch() {
  * Handles GET /api/v1/banks.
  *
  * Requires a valid Bearer access token (any authenticated user). Returns the
- * terms of the `bancos` taxonomy vocabulary. If the vocabulary does not exist
+ * terms of the `bancos` taxonomy vocabulary ordered by `id`, ascending by
+ * default, or descending with ?sort=desc. If the vocabulary does not exist
  * (or has no terms), responds 200 with an empty list.
  */
 function myapi_bank_list() {
   // Authentication only: any user with a valid access token may list the
   // banks. The returned token row is not used (the catalog is not per-user).
   myapi_auth_require_access_token();
+
+  // Sort direction over `id`. Any value other than 'asc'/'desc' (absent,
+  // empty, uppercase, another field) is silently ignored and defaults to
+  // 'asc', the same lax rule used by the payment/expense resources.
+  $sort = (isset($_GET['sort']) && in_array($_GET['sort'], ['asc', 'desc'], TRUE))
+    ? $_GET['sort']
+    : 'asc';
 
   $vocabulary = taxonomy_vocabulary_machine_name_load('bancos');
   if ($vocabulary === FALSE) {
@@ -49,6 +57,12 @@ function myapi_bank_list() {
 
   $tree = taxonomy_get_tree($vocabulary->vid);
   $banks = array_map('myapi_bank_build_item', $tree);
+
+  // Order by `id`, regardless of taxonomy_get_tree()'s natural weight/name
+  // order.
+  usort($banks, function ($a, $b) use ($sort) {
+    return $sort === 'desc' ? ($b['id'] - $a['id']) : ($a['id'] - $b['id']);
+  });
 
   myapi_respond(['banks' => $banks], 200);
 }
