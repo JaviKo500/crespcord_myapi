@@ -65,6 +65,15 @@ function myapi_payment_create_dispatch() {
 define('MYAPI_PAYMENT_METHOD_FIELD', 'field_forma_de_pago');
 
 /**
+ * Payment method (compared case-insensitively) for which the bank is optional.
+ *
+ * When the submitted payment_method matches this value ignoring case, bank_id
+ * becomes optional: a cash payment has no originating bank. Centralized here so
+ * the rule can be adjusted in one place.
+ */
+define('MYAPI_PAYMENT_METHOD_CASH', 'efectivo');
+
+/**
  * Handles POST /api/v1/payments.
  *
  * Creates a 'pagos' node from a multipart/form-data request. Requires a valid
@@ -80,37 +89,42 @@ function myapi_payment_create() {
   $row = myapi_auth_require_access_token();
   $uid = $row->uid;
 
-  // 2. Read the multipart/form-data fields (never touch $_POST directly).
-  $vivienda_raw = myapi_request_post_field('field_vivienda');
-  $referencia   = myapi_request_post_field('field_referencia');
-  $valor_raw    = myapi_request_post_field('field_valor');
-  $forma        = myapi_request_post_field('field_forma_de_pago');
-  $banco_raw    = myapi_request_post_field('field_banco');
-  $fecha_raw    = myapi_request_post_field('field_fecha_de_pago');
+  // 2. Read the multipart/form-data fields (English contract; never touch
+  // $_POST directly). Each API field maps to a Drupal field internally.
+  $vivienda_raw = myapi_request_post_field('unit_id');
+  $referencia   = myapi_request_post_field('reference');
+  $valor_raw    = myapi_request_post_field('amount');
+  $forma        = myapi_request_post_field('payment_method');
+  $banco_raw    = myapi_request_post_field('bank_id');
+  $fecha_raw    = myapi_request_post_field('payment_date');
 
-  // 3. Required fields present (the 5 mandatory ones).
+  // 3. Required fields present. unit_id, reference, amount and payment_method
+  // are always required; bank_id is required only when the method is not cash.
   $required = [
-    'field_vivienda'      => $vivienda_raw,
-    'field_referencia'    => $referencia,
-    'field_valor'         => $valor_raw,
-    'field_forma_de_pago' => $forma,
-    'field_banco'         => $banco_raw,
+    'unit_id'        => $vivienda_raw,
+    'reference'      => $referencia,
+    'amount'         => $valor_raw,
+    'payment_method' => $forma,
   ];
   foreach ($required as $name => $value) {
     if ($value === NULL || $value === '') {
       myapi_error('missing_field', 422, ['@field' => $name]);
     }
   }
+  $is_cash = strtolower($forma) === MYAPI_PAYMENT_METHOD_CASH;
+  if (!$is_cash && ($banco_raw === NULL || $banco_raw === '')) {
+    myapi_error('missing_field', 422, ['@field' => 'bank_id']);
+  }
 
-  // 4. field_vivienda: integer > 0; the node must exist, be a published
-  // 'vivienda'; and the user must own or occupy it.
+  // 4. unit_id: integer > 0; the node must exist, be a published 'vivienda';
+  // and the user must own or occupy it.
   if (!ctype_digit((string) $vivienda_raw) || (int) $vivienda_raw <= 0) {
-    myapi_error('invalid_field', 422, ['@field' => 'field_vivienda']);
+    myapi_error('invalid_field', 422, ['@field' => 'unit_id']);
   }
   $vivienda_nid = (int) $vivienda_raw;
   $unit = node_load($vivienda_nid);
   if (!$unit || $unit->type !== 'vivienda' || (int) $unit->status !== 1) {
-    myapi_error('invalid_field', 422, ['@field' => 'field_vivienda']);
+    myapi_error('invalid_field', 422, ['@field' => 'unit_id']);
   }
   // Access: same non-strict rule as myapi_payment_list() in this file, since
   // myapi_unit_related_nids() returns nids as strings.
@@ -118,19 +132,19 @@ function myapi_payment_create() {
     myapi_error('unit_access_denied', 403);
   }
 
-  // 5. field_valor: numeric and strictly > 0.
+  // 5. amount: numeric and strictly > 0.
   if (!is_numeric($valor_raw) || (float) $valor_raw <= 0) {
     myapi_error('invalid_amount', 422);
   }
   $valor = (float) $valor_raw;
 
-  // 6. field_referencia: non-empty string, <= 255 chars.
+  // 6. reference: non-empty string, <= 255 chars.
   if (strlen($referencia) > 255) {
-    myapi_error('invalid_field', 422, ['@field' => 'field_referencia']);
+    myapi_error('invalid_field', 422, ['@field' => 'reference']);
   }
   $referencia = check_plain($referencia);
 
-  // 7. field_forma_de_pago: must be a key of the field's allowed_values.
+  // 7. payment_method: must be a key of the field's allowed_values.
   $field_info = field_info_field(MYAPI_PAYMENT_METHOD_FIELD);
   $allowed = ($field_info && isset($field_info['settings']['allowed_values']))
     ? $field_info['settings']['allowed_values']
@@ -139,18 +153,24 @@ function myapi_payment_create() {
     myapi_error('invalid_payment_method', 422);
   }
 
-  // 8. field_banco: integer > 0; a term that exists and belongs to 'bancos'.
-  if (!ctype_digit((string) $banco_raw) || (int) $banco_raw <= 0) {
-    myapi_error('invalid_bank', 422);
-  }
-  $banco_tid = (int) $banco_raw;
-  $vocabulary = taxonomy_vocabulary_machine_name_load('bancos');
-  $term = taxonomy_term_load($banco_tid);
-  if (!$vocabulary || !$term || (int) $term->vid !== (int) $vocabulary->vid) {
-    myapi_error('invalid_bank', 422);
+  // 8. bank_id: optional for cash, required otherwise (enforced in step 3).
+  // When present (even for cash), it must be an integer > 0 and a term of the
+  // 'bancos' vocabulary; otherwise the payment is stored with no bank.
+  $banco_tid = NULL;
+  $term = NULL;
+  if ($banco_raw !== NULL && $banco_raw !== '') {
+    if (!ctype_digit((string) $banco_raw) || (int) $banco_raw <= 0) {
+      myapi_error('invalid_bank', 422);
+    }
+    $banco_tid = (int) $banco_raw;
+    $vocabulary = taxonomy_vocabulary_machine_name_load('bancos');
+    $term = taxonomy_term_load($banco_tid);
+    if (!$vocabulary || !$term || (int) $term->vid !== (int) $vocabulary->vid) {
+      myapi_error('invalid_bank', 422);
+    }
   }
 
-  // 9. field_fecha_de_pago: optional; validate/normalize, else server time.
+  // 9. payment_date: optional; validate/normalize, else server time.
   if ($fecha_raw !== NULL && $fecha_raw !== '') {
     $fecha = myapi_payment_normalize_date($fecha_raw);
     if ($fecha === NULL) {
@@ -168,7 +188,7 @@ function myapi_payment_create() {
 
   // 11. Optional attached file (validated inside; aborts 422 on failure).
   $file = NULL;
-  if (!empty($_FILES['field_archivo']['name'])) {
+  if (!empty($_FILES['file']['name'])) {
     $file = myapi_payment_save_file();
   }
 
@@ -181,9 +201,9 @@ function myapi_payment_create() {
     file_usage_add($file, 'myapi', 'node', $node->nid);
   }
 
-  // 14. Respond 201 with the full payment.
+  // 14. Respond 201 with the full payment (including the bank name).
   myapi_respond(
-    ['payment' => myapi_payment_build_created_item($node, $file)],
+    ['payment' => myapi_payment_build_created_item($node, $file, $term)],
     201,
     'payment_created'
   );
@@ -252,7 +272,7 @@ function myapi_payment_reference_exists($referencia, $vivienda_nid) {
 /**
  * Saves and validates the optional 'field_archivo' upload.
  *
- * The caller invokes this only when $_FILES['field_archivo'] carries a file.
+ * The caller invokes this only when $_FILES['file'] carries a file.
  * Validates extension (pdf/jpg/jpeg/png) and size (<= 5 MB) with Drupal
  * validators, then re-checks the real MIME with finfo so a renamed file (e.g. a
  * .php disguised as .pdf) is rejected. On any failure it aborts the request
@@ -274,7 +294,7 @@ function myapi_payment_save_file() {
     'file_validate_size'       => [5 * 1024 * 1024],
   ];
 
-  $file = file_save_upload('field_archivo', $validators, $directory . '/');
+  $file = file_save_upload('file', $validators, $directory . '/');
   if (!is_object($file)) {
     // FALSE on validation error (extension/size) or a failed upload.
     myapi_error('invalid_file', 422);
@@ -311,7 +331,8 @@ function myapi_payment_save_file() {
  * @param string      $referencia    Sanitized reference.
  * @param float       $valor         Amount (> 0).
  * @param string      $forma         Payment method (allowed_values key).
- * @param int         $banco_tid     Bank term id (vocabulary 'bancos').
+ * @param int|null    $banco_tid     Bank term id (vocabulary 'bancos'), or NULL
+ *                                   when none (e.g. a cash payment).
  * @param string      $fecha         Normalized 'Y-m-d\TH:i:s' payment date.
  * @param object|null $file          Saved managed file, or NULL when none.
  *
@@ -330,9 +351,12 @@ function myapi_payment_build_node($uid, $vivienda_nid, $referencia, $valor, $for
   $node->field_referencia[LANGUAGE_NONE][0]['value']    = $referencia;
   $node->field_valor[LANGUAGE_NONE][0]['value']         = $valor;
   $node->field_forma_de_pago[LANGUAGE_NONE][0]['value'] = $forma;
-  $node->field_banco[LANGUAGE_NONE][0]['tid']           = $banco_tid;
   $node->field_fecha_de_pago[LANGUAGE_NONE][0]['value'] = $fecha;
   $node->field_estado_pago[LANGUAGE_NONE][0]['value']   = 'Pendiente de verificar';
+
+  if ($banco_tid !== NULL) {
+    $node->field_banco[LANGUAGE_NONE][0]['tid'] = $banco_tid;
+  }
 
   if ($file) {
     $node->field_archivo[LANGUAGE_NONE][0] = ['fid' => $file->fid, 'display' => 1];
@@ -350,12 +374,18 @@ function myapi_payment_build_node($uid, $vivienda_nid, $referencia, $valor, $for
  * private:// URI is exposed alongside the fid for a future authenticated
  * download endpoint, per the spec.
  *
- * @param object      $node  The saved payment node.
- * @param object|null $file  The saved managed file, or NULL when none.
+ * bank_id and bank_name are NULL together when the payment has no bank (e.g. a
+ * cash payment); bank_name is the term name, sanitized with check_plain().
+ *
+ * @param object      $node       The saved payment node.
+ * @param object|null $file       The saved managed file, or NULL when none.
+ * @param object|null $bank_term  The 'bancos' term, or NULL when no bank.
  *
  * @return array  Response item with all documented keys.
  */
-function myapi_payment_build_created_item($node, $file) {
+function myapi_payment_build_created_item($node, $file, $bank_term = NULL) {
+  $has_bank = isset($node->field_banco[LANGUAGE_NONE][0]['tid']);
+
   return [
     'id'             => (int) $node->nid,
     'title'          => $node->title,
@@ -365,7 +395,8 @@ function myapi_payment_build_created_item($node, $file) {
     'payment_method' => $node->field_forma_de_pago[LANGUAGE_NONE][0]['value'],
     'reference'      => $node->field_referencia[LANGUAGE_NONE][0]['value'],
     'amount'         => (float) $node->field_valor[LANGUAGE_NONE][0]['value'],
-    'bank_id'        => (int) $node->field_banco[LANGUAGE_NONE][0]['tid'],
+    'bank_id'        => $has_bank ? (int) $node->field_banco[LANGUAGE_NONE][0]['tid'] : NULL,
+    'bank_name'      => $bank_term ? check_plain($bank_term->name) : NULL,
     'file_id'        => $file ? (int) $file->fid : NULL,
     'file_url'       => $file ? $file->uri : NULL,
   ];
