@@ -22,3 +22,4 @@ files[] = resources/extra_fee.resource.inc
 files[] = resources/payment.resource.inc
 files[] = resources/expense.resource.inc
 files[] = resources/condominium.resource.inc
+files[] = resources/bank.resource.inc
