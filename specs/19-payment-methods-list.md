@@ -1,6 +1,6 @@
 # 19 — Listado de métodos de pago (términos del vocabulario `metodos_pago`)
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-07-09
 - **Dependencias:**
   - `01-bootstrap-modulo` (Implemented) — esqueleto del módulo, `hook_menu()`, envelope de respuesta y helpers `myapi_respond()`/`myapi_error()`.
@@ -146,25 +146,25 @@ Acceso seguro al campo: se comprueba `isset($term->field_tipo_pago[LANGUAGE_NONE
 
 ## Criterios de aceptación
 
-- [ ] `GET /api/v1/payment-methods` con un Bearer access token válido devuelve `200` con `{ "success": true, "data": { "payment_methods": [...] } }`.
-- [ ] `GET /api/v1/payment-methods` sin header `Authorization` devuelve `401 missing_authorization`.
-- [ ] `GET /api/v1/payment-methods` con un token inválido o expirado devuelve `401 invalid_token`.
-- [ ] Cada elemento de `payment_methods` tiene exactamente 4 claves: `id`, `name`, `type_method`, `description`.
-- [ ] `id` es el `tid` del término como entero.
-- [ ] `name` es el nombre del término saneado con `check_plain()`.
-- [ ] `type_method` es el valor de `field_tipo_pago` saneado con `check_plain()`; nunca es vacío (los términos sin ese valor no se devuelven).
-- [ ] Un término sin valor en `field_tipo_pago` (ausente, vacío o solo espacios) **no aparece** en `payment_methods`.
-- [ ] Si ningún término tiene `field_tipo_pago`, la respuesta es `200` con `payment_methods: []`.
-- [ ] `description` es la descripción del término saneada con `check_plain()`; un término sin descripción devuelve `""` (string vacío), nunca `null`.
-- [ ] Sin `sort` (o con un valor inválido: ausente, vacío, `ASC`, `weight`, etc.) los métodos vienen ordenados por `id` ascendente, sin `422`.
-- [ ] Con `?sort=asc` vienen ordenados por `id` ascendente.
-- [ ] Con `?sort=desc` vienen ordenados por `id` descendente.
-- [ ] Si el vocabulario `metodos_pago` no existe, la respuesta es `200` con `payment_methods: []` (sin error `500`).
-- [ ] Si el vocabulario existe pero no tiene términos, la respuesta es `200` con `payment_methods: []`.
-- [ ] Cualquier método distinto de `GET` (`POST`, `PUT`, `DELETE`) devuelve `405 method_not_allowed`.
-- [ ] El endpoint `GET /api/v1/banks` (spec 18) sigue respondiendo idéntico; este recurso no lo modifica.
-- [ ] `docs/payment_method.md` documenta el endpoint completo (método, auth requerida, `sort`, campos de respuesta, errores `401`/`405`, caso de vocabulario ausente/vacío y `type_method` vacío).
-- [ ] `myapi.info` incluye `files[] = resources/payment_method.resource.inc` y `drush cc all` no reporta errores tras el cambio.
+- [x] `GET /api/v1/payment-methods` con un Bearer access token válido devuelve `200` con `{ "success": true, "data": { "payment_methods": [...] } }`.
+- [x] `GET /api/v1/payment-methods` sin header `Authorization` devuelve `401 missing_authorization`.
+- [x] `GET /api/v1/payment-methods` con un token inválido o expirado devuelve `401 invalid_token`.
+- [x] Cada elemento de `payment_methods` tiene exactamente 4 claves: `id`, `name`, `type_method`, `description`.
+- [x] `id` es el `tid` del término como entero.
+- [x] `name` es el nombre del término saneado con `check_plain()`.
+- [x] `type_method` es el valor de `field_tipo_pago` saneado con `check_plain()`; nunca es vacío (los términos sin ese valor no se devuelven).
+- [x] Un término sin valor en `field_tipo_pago` (ausente, vacío o solo espacios) **no aparece** en `payment_methods`.
+- [x] Si ningún término tiene `field_tipo_pago`, la respuesta es `200` con `payment_methods: []`.
+- [x] `description` es la descripción del término saneada con `check_plain()`; un término sin descripción devuelve `""` (string vacío), nunca `null`.
+- [x] Sin `sort` (o con un valor inválido: ausente, vacío, `ASC`, `weight`, etc.) los métodos vienen ordenados por `id` ascendente, sin `422`.
+- [x] Con `?sort=asc` vienen ordenados por `id` ascendente.
+- [x] Con `?sort=desc` vienen ordenados por `id` descendente.
+- [x] Si el vocabulario `metodos_pago` no existe, la respuesta es `200` con `payment_methods: []` (sin error `500`).
+- [x] Si el vocabulario existe pero no tiene términos, la respuesta es `200` con `payment_methods: []`.
+- [x] Cualquier método distinto de `GET` (`POST`, `PUT`, `DELETE`) devuelve `405 method_not_allowed`.
+- [x] El endpoint `GET /api/v1/banks` (spec 18) sigue respondiendo idéntico; este recurso no lo modifica.
+- [x] `docs/payment_method.md` documenta el endpoint completo (método, auth requerida, `sort`, campos de respuesta, errores `401`/`405`, caso de vocabulario ausente/vacío y `type_method` vacío).
+- [x] `myapi.info` incluye `files[] = resources/payment_method.resource.inc` y `drush cc all` no reporta errores tras el cambio.
 
 ---
 
