@@ -45,6 +45,10 @@ Content type `pagos`, verificado en `schema.sql`. `field_valor` es `decimal(10,2
 | `field_data_field_forma_de_pago` | `entity_id`, `field_forma_de_pago_value` | `payment_method`, texto. |
 | `field_data_field_referencia` | `entity_id`, `field_referencia_value` | `reference`, texto. |
 | `field_data_field_valor` | `entity_id`, `field_valor_value` | `amount`, decimal. |
+| `field_data_field_detalle` | `entity_id`, `field_detalle_value` | `detail`, texto. Left join. |
+| `field_data_field_archivo` | `entity_id`, `field_archivo_fid` | `file_id`, referencia a archivo gestionado. Left join; solo se expone el `fid`. |
+| `field_data_field_banco` | `entity_id`, `field_banco_tid` | `bank_id`, término de taxonomía (`bancos`). Left join. |
+| `taxonomy_term_data` | `tid`, `name` | `bank_name`. Left join sobre `field_banco_tid`. |
 
 ### Mapeo de campos → claves JSON
 
@@ -58,6 +62,10 @@ Content type `pagos`, verificado en `schema.sql`. `field_valor` es `decimal(10,2
 | `field_forma_de_pago_value` | `payment_method` | string | `NULL` si no hay fila |
 | `field_referencia_value` | `reference` | string | `NULL` si no hay fila |
 | `field_valor_value` | `amount` | float | `NULL` si no hay fila |
+| `field_detalle_value` | `detail` | string | `NULL` si no hay fila |
+| `field_archivo_fid` | `file_id` | int | `NULL` si no hay archivo adjunto |
+| `field_banco_tid` | `bank_id` | int | `NULL` si no hay banco (p. ej. efectivo) |
+| `taxonomy_term_data.name` | `bank_name` | string | `NULL` cuando `bank_id` es `NULL` |
 
 ### Contrato de paginación / orden
 
@@ -90,7 +98,11 @@ Content type `pagos`, verificado en `schema.sql`. `field_valor` es `decimal(10,2
       "status": "Aprobado",
       "payment_method": "Transferencia",
       "reference": "TRX-88213",
-      "amount": 187.32
+      "amount": 187.32,
+      "detail": "Pago correspondiente a la cuota de julio",
+      "file_id": 55,
+      "bank_id": 7,
+      "bank_name": "Banco Pichincha"
     }
   ],
   "pagination": {
@@ -120,9 +132,9 @@ Content type `pagos`, verificado en `schema.sql`. `field_valor` es `decimal(10,2
 
 2. **`myapi_payment_count($unit_id, $from, $to)`** — `db_select('node')` con `type = 'pagos'` y `status = 1`; inner join a `field_data_field_vivienda` (`= $unit_id`); inner join a `field_data_field_estado_pago` con condición `field_estado_pago_value <> 'Nuevo'`; si hay algún límite, inner join a `field_data_field_fecha_de_pago` con las condiciones `SUBSTR(field_fecha_de_pago_value,1,10) >= / <= :bound`. Devuelve `countQuery()`.
 
-3. **`myapi_payment_fetch($unit_id, $page, $limit, $sort, $from, $to)`** — misma base; `leftJoin` a `field_fecha_de_pago` (`payment_date`) con las condiciones de rango cuando hay filtro; inner join a `field_estado_pago` (`<> 'Nuevo'`, expone `status`); left joins a `field_forma_de_pago`, `field_referencia`, `field_valor`. `orderBy('fecha.field_fecha_de_pago_value', $sort)`, `range()` según `page`/`limit`.
+3. **`myapi_payment_fetch($unit_id, $page, $limit, $sort, $from, $to)`** — misma base; `leftJoin` a `field_fecha_de_pago` (`payment_date`) con las condiciones de rango cuando hay filtro; inner join a `field_estado_pago` (`<> 'Nuevo'`, expone `status`); left joins a `field_forma_de_pago`, `field_referencia`, `field_valor`, `field_detalle` (`detail`), `field_archivo` (`file_id` = `field_archivo_fid`) y `field_banco` (`bank_id` = `field_banco_tid`), más un left join a `taxonomy_term_data` sobre `field_banco_tid` para `bank_name`. `orderBy('fecha.field_fecha_de_pago_value', $sort)`, `range()` según `page`/`limit`.
 
-4. **`myapi_payment_build_item($row)`** — arma el ítem: `id`/`unit_id` a `int`, `title`/`payment_date`/`status`/`payment_method`/`reference` tal cual, y `amount` a `float` cuando no es `NULL`.
+4. **`myapi_payment_build_item($row)`** — arma el ítem: `id`/`unit_id` a `int`, `title`/`payment_date`/`status`/`payment_method`/`reference`/`detail`/`bank_name` tal cual, `amount` a `float` cuando no es `NULL`, y `file_id`/`bank_id` a `int` cuando no son `NULL`.
 
 5. **Registrar la ruta en `myapi.module`:**
    ```php
@@ -146,7 +158,7 @@ Content type `pagos`, verificado en `schema.sql`. `field_valor` es `decimal(10,2
 ## Criterios de aceptación
 
 - [x] `GET /api/v1/units/<unit_id>/payments` con token válido y `unit_id` de una unidad donde el usuario es propietario u ocupante devuelve `200` con `payments` (array mapeado según el modelo de datos) y `pagination` (`total`, `page`, `limit`, `total_pages`).
-- [x] Cada ítem incluye exactamente las 8 claves: `id`, `title`, `unit_id`, `payment_date`, `status`, `payment_method`, `reference`, `amount`, con `NULL` en `payment_date`/`payment_method`/`reference`/`amount` cuando el nodo no tiene fila en ese campo.
+- [x] Cada ítem incluye exactamente las 12 claves: `id`, `title`, `unit_id`, `payment_date`, `status`, `payment_method`, `reference`, `amount`, `detail`, `file_id`, `bank_id`, `bank_name`, con `NULL` en `payment_date`/`payment_method`/`reference`/`amount`/`detail`/`file_id`/`bank_id`/`bank_name` cuando el nodo no tiene fila en ese campo. `bank_id` y `bank_name` son `NULL` en conjunto cuando el pago no tiene banco.
 - [x] Solo se listan nodos `pagos` publicados (`status = 1`) con `field_vivienda_target_id = unit_id` **y** `field_estado_pago <> 'Nuevo'`; un pago en estado `Nuevo` o sin fila de estado queda excluido.
 - [x] `unit_id` de una unidad ajena (ni propietario ni ocupante) devuelve `403 unit_access_denied`.
 - [x] `unit_id` inexistente devuelve el mismo `403 unit_access_denied` (no se distingue el motivo).
@@ -187,7 +199,7 @@ Content type `pagos`, verificado en `schema.sql`. `field_valor` es `decimal(10,2
 
 | Riesgo | Mitigación |
 |---|---|
-| **Lectura directa de tablas de Field API.** Un cambio de schema en `field_valor`, `field_forma_de_pago`, `field_referencia`, `field_fecha_de_pago` o `field_estado_pago` (rename, cambio de tipo, paso a multi-value) rompe silenciosamente la consulta sin aviso de Drupal. | Documentado en la tabla de mapeo del spec y en `docs/payment.md`; mismo criterio ya aceptado en `receipts`/`extra-fees`. |
+| **Lectura directa de tablas de Field API.** Un cambio de schema en `field_valor`, `field_forma_de_pago`, `field_referencia`, `field_fecha_de_pago`, `field_estado_pago`, `field_detalle`, `field_archivo` o `field_banco` (rename, cambio de tipo, paso a multi-value) rompe silenciosamente la consulta sin aviso de Drupal. | Documentado en la tabla de mapeo del spec y en `docs/payment.md`; mismo criterio ya aceptado en `receipts`/`extra-fees`. |
 | **Campos compartidos entre content types.** `field_vivienda`, `field_referencia` y `field_valor` los usan también otros bundles. Sin filtro por tipo de nodo, la query traería filas ajenas. | Todas las consultas filtran por `n.type = 'pagos'`; el `entity_id` de cada join amarra la fila al nodo correcto. Criterio de aceptación explícito de que solo se listan nodos `pagos`. |
 | **Criterio por exclusión (`<> 'Nuevo'`).** A diferencia de `receipts`/`extra-fees` (que incluyen un estado conocido), aquí se expone cualquier estado que no sea `Nuevo`. Si el negocio agrega un estado nuevo (p.ej. un borrador interno), se expondrá automáticamente sin que el endpoint lo sepa. | Aceptado y explícito en el spec: el criterio es "todo menos `Nuevo`". El valor está centralizado en `MYAPI_PAYMENT_EXCLUDED_STATUS` para ajustarlo en un solo lugar si aparece otro estado a ocultar. |
 | **Formato real de `field_fecha_de_pago_value` desconocido.** `schema.sql` solo trae estructura (`varchar(20)`), no datos; no se confirmó si guarda `2026-07-05` o `2026-07-05T00:00:00`. | La comparación por `SUBSTR(...,1,10)` y el orden por la columna cruda funcionan en ambos casos. Verificar en el paso 8 que el borde `date_to = último día` incluye ese nodo. |

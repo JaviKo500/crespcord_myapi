@@ -35,7 +35,11 @@ create/update/delete, no single-payment detail endpoint.
         "status": "Aprobado",
         "payment_method": "Transferencia",
         "reference": "TRX-88213",
-        "amount": 187.32
+        "amount": 187.32,
+        "detail": "Pago correspondiente a la cuota de julio",
+        "file_id": 55,
+        "bank_id": 7,
+        "bank_name": "Banco Pichincha"
       }
     ],
     "pagination": {
@@ -72,12 +76,16 @@ Notes:
   be exposed automatically unless it is also called `Nuevo`; the excluded value
   is centralized in the `MYAPI_PAYMENT_EXCLUDED_STATUS` constant so it can be
   adjusted in one place.
-- Every payment includes exactly 8 keys: `id`, `title`, `unit_id`,
-  `payment_date`, `status`, `payment_method`, `reference`, `amount` (see mapping
-  table below). `amount` (or a text field) is `null` when the node has no row in
-  that field's storage table — no other transformation or business validation is
-  applied (e.g. `status`/`payment_method` are the raw stored text, not validated
-  against a fixed list; `payment_date` is a raw string, not reformatted).
+- Every payment includes exactly 12 keys: `id`, `title`, `unit_id`,
+  `payment_date`, `status`, `payment_method`, `reference`, `amount`, `detail`,
+  `file_id`, `bank_id`, `bank_name` (see mapping table below). `amount`, `detail`,
+  `file_id`, `bank_id`, `bank_name` (or any text field) are `null` when the node
+  has no row in that field's storage table — no other transformation or business
+  validation is applied (e.g. `status`/`payment_method` are the raw stored text,
+  not validated against a fixed list; `payment_date` is a raw string, not
+  reformatted). `file_id` is only the managed-file id (`fid`); the file itself is
+  not served by this endpoint. `bank_id` and `bank_name` are `null` **together**
+  when the payment has no bank (e.g. a cash payment).
 - `total`/`total_pages` in `pagination` reflect the unpaginated count of the
   **filtered** set (estado `<> 'Nuevo'`, plus `date_from`/`date_to` if any), not
   the unit's full payment count. `total_pages` is `0` when `total` is `0`.
@@ -128,6 +136,10 @@ nodes only.
 | `field_forma_de_pago_value` | `payment_method` | string | `NULL` if no row |
 | `field_referencia_value` | `reference` | string | `NULL` if no row |
 | `field_valor_value` | `amount` | float | `NULL` if no row |
+| `field_detalle_value` | `detail` | string | `NULL` if no row |
+| `field_archivo_fid` | `file_id` | int | `NULL` if no file attached |
+| `field_banco_tid` | `bank_id` | int | `NULL` if no bank (e.g. cash) |
+| `taxonomy_term_data.name` | `bank_name` | string | `NULL` when `bank_id` is `NULL` |
 
 | Table | Relevant columns | Use |
 |---|---|---|
@@ -138,6 +150,10 @@ nodes only.
 | `field_data_field_forma_de_pago` | `entity_id`, `field_forma_de_pago_value` | `payment_method`, text. |
 | `field_data_field_referencia` | `entity_id`, `field_referencia_value` | `reference`, text. |
 | `field_data_field_valor` | `entity_id`, `field_valor_value` | `amount`, `decimal`, mapped 1:1. |
+| `field_data_field_detalle` | `entity_id`, `field_detalle_value` | `detail`, text. Left join. |
+| `field_data_field_archivo` | `entity_id`, `field_archivo_fid` | `file_id`, managed-file reference. Left join; only the `fid` is exposed. |
+| `field_data_field_banco` | `entity_id`, `field_banco_tid` | `bank_id`, taxonomy term (`bancos`). Left join. |
+| `taxonomy_term_data` | `tid`, `name` | `bank_name`. Left-joined on `field_banco_tid`. |
 
 **Possible errors**
 | Code | `error_code` | When |

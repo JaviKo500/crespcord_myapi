@@ -609,6 +609,17 @@ function myapi_payment_fetch($unit_id, $page, $limit, $sort, $from = NULL, $to =
   $query->leftJoin('field_data_field_valor', 'fval', "fval.entity_id = n.nid AND fval.entity_type = 'node' AND fval.deleted = 0");
   $query->addField('fval', 'field_valor_value', 'amount');
 
+  $query->leftJoin('field_data_field_detalle', 'fdet', "fdet.entity_id = n.nid AND fdet.entity_type = 'node' AND fdet.deleted = 0");
+  $query->addField('fdet', 'field_detalle_value', 'detail');
+
+  $query->leftJoin('field_data_field_archivo', 'farc', "farc.entity_id = n.nid AND farc.entity_type = 'node' AND farc.deleted = 0");
+  $query->addField('farc', 'field_archivo_fid', 'file_id');
+
+  $query->leftJoin('field_data_field_banco', 'fban', "fban.entity_id = n.nid AND fban.entity_type = 'node' AND fban.deleted = 0");
+  $query->addField('fban', 'field_banco_tid', 'bank_id');
+  $query->leftJoin('taxonomy_term_data', 'tban', 'tban.tid = fban.field_banco_tid');
+  $query->addField('tban', 'name', 'bank_name');
+
   $query->orderBy('ffec.field_fecha_de_pago_value', $sort === 'asc' ? 'ASC' : 'DESC');
   if ($limit !== -1) {
     $query->range(($page - 1) * $limit, $limit);
@@ -621,14 +632,16 @@ function myapi_payment_fetch($unit_id, $page, $limit, $sort, $from = NULL, $to =
  * Maps one raw payment row into the response shape documented for
  * GET /api/v1/units/%/payments.
  *
- * 'amount' (decimal) is cast to float when present, NULL otherwise. Text
- * fields (payment_date, status, payment_method, reference) pass through as
- * stored, with no business interpretation, and stay NULL when the node has no
- * row for that field.
+ * 'amount' (decimal) is cast to float when present, NULL otherwise. 'file_id'
+ * and 'bank_id' are cast to int, each only when not NULL. Text fields
+ * (payment_date, status, payment_method, reference, detail, bank_name) pass
+ * through as stored, with no business interpretation, and stay NULL when the
+ * node has no row for that field. 'bank_id' and 'bank_name' are NULL together
+ * when the payment has no bank (e.g. a cash payment).
  *
  * @param object $payment  One row from myapi_payment_fetch().
  *
- * @return array  Response item with all 8 mapped keys.
+ * @return array  Response item with all 11 mapped keys.
  */
 function myapi_payment_build_item($payment) {
   return [
@@ -640,5 +653,9 @@ function myapi_payment_build_item($payment) {
     'payment_method' => $payment->payment_method,
     'reference'      => $payment->reference,
     'amount'         => $payment->amount !== NULL ? (float) $payment->amount : NULL,
+    'detail'         => $payment->detail,
+    'file_id'        => $payment->file_id !== NULL ? (int) $payment->file_id : NULL,
+    'bank_id'        => $payment->bank_id !== NULL ? (int) $payment->bank_id : NULL,
+    'bank_name'      => $payment->bank_name,
   ];
 }
