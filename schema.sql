@@ -769,7 +769,7 @@ CREATE TABLE `dr_field_config` (
   KEY `storage_module` (`storage_module`),
   KEY `type` (`type`),
   KEY `storage_type` (`storage_type`)
-) ENGINE=InnoDB AUTO_INCREMENT=184 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=188 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -789,7 +789,7 @@ CREATE TABLE `dr_field_config_instance` (
   PRIMARY KEY (`id`),
   KEY `field_name_bundle` (`field_name`,`entity_type`,`bundle`),
   KEY `deleted` (`deleted`)
-) ENGINE=InnoDB AUTO_INCREMENT=229 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=234 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -1202,6 +1202,34 @@ CREATE TABLE `dr_field_data_field_app_id` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
+-- Table structure for table `dr_field_data_field_archivo`
+--
+
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `dr_field_data_field_archivo` (
+  `entity_type` varchar(128) NOT NULL DEFAULT '' COMMENT 'The entity type this data is attached to',
+  `bundle` varchar(128) NOT NULL DEFAULT '' COMMENT 'The field instance bundle to which this row belongs, used when deleting a field instance',
+  `deleted` tinyint(4) NOT NULL DEFAULT 0 COMMENT 'A boolean indicating whether this data item has been deleted',
+  `entity_id` int(10) unsigned NOT NULL COMMENT 'The entity id this data is attached to',
+  `revision_id` int(10) unsigned DEFAULT NULL COMMENT 'The entity revision id this data is attached to, or NULL if the entity type is not versioned',
+  `language` varchar(32) NOT NULL DEFAULT '' COMMENT 'The language for this data item.',
+  `delta` int(10) unsigned NOT NULL COMMENT 'The sequence number for this data item, used for multi-value fields',
+  `field_archivo_fid` int(10) unsigned DEFAULT NULL COMMENT 'The dr_file_managed.fid being referenced in this field.',
+  `field_archivo_display` tinyint(3) unsigned NOT NULL DEFAULT 1 COMMENT 'Flag to control whether this file should be displayed when viewing content.',
+  `field_archivo_description` text DEFAULT NULL COMMENT 'A description of the file.',
+  PRIMARY KEY (`entity_type`,`entity_id`,`deleted`,`delta`,`language`),
+  KEY `entity_type` (`entity_type`),
+  KEY `bundle` (`bundle`),
+  KEY `deleted` (`deleted`),
+  KEY `entity_id` (`entity_id`),
+  KEY `revision_id` (`revision_id`),
+  KEY `language` (`language`),
+  KEY `field_archivo_fid` (`field_archivo_fid`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Data storage for field 185 (field_archivo)';
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
 -- Table structure for table `dr_field_data_field_authorization_code`
 --
 
@@ -1226,6 +1254,32 @@ CREATE TABLE `dr_field_data_field_authorization_code` (
   KEY `language` (`language`),
   KEY `field_authorization_code_format` (`field_authorization_code_format`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Data storage for field 60 (field_authorization_code)';
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `dr_field_data_field_banco`
+--
+
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `dr_field_data_field_banco` (
+  `entity_type` varchar(128) NOT NULL DEFAULT '' COMMENT 'The entity type this data is attached to',
+  `bundle` varchar(128) NOT NULL DEFAULT '' COMMENT 'The field instance bundle to which this row belongs, used when deleting a field instance',
+  `deleted` tinyint(4) NOT NULL DEFAULT 0 COMMENT 'A boolean indicating whether this data item has been deleted',
+  `entity_id` int(10) unsigned NOT NULL COMMENT 'The entity id this data is attached to',
+  `revision_id` int(10) unsigned DEFAULT NULL COMMENT 'The entity revision id this data is attached to, or NULL if the entity type is not versioned',
+  `language` varchar(32) NOT NULL DEFAULT '' COMMENT 'The language for this data item.',
+  `delta` int(10) unsigned NOT NULL COMMENT 'The sequence number for this data item, used for multi-value fields',
+  `field_banco_tid` int(10) unsigned DEFAULT NULL,
+  PRIMARY KEY (`entity_type`,`entity_id`,`deleted`,`delta`,`language`),
+  KEY `entity_type` (`entity_type`),
+  KEY `bundle` (`bundle`),
+  KEY `deleted` (`deleted`),
+  KEY `entity_id` (`entity_id`),
+  KEY `revision_id` (`revision_id`),
+  KEY `language` (`language`),
+  KEY `field_banco_tid` (`field_banco_tid`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Data storage for field 186 (field_banco)';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -3584,6 +3638,33 @@ CREATE TABLE `dr_field_data_field_tipo_de_boletin` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
+-- Table structure for table `dr_field_data_field_tipo_pago`
+--
+
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `dr_field_data_field_tipo_pago` (
+  `entity_type` varchar(128) NOT NULL DEFAULT '' COMMENT 'The entity type this data is attached to',
+  `bundle` varchar(128) NOT NULL DEFAULT '' COMMENT 'The field instance bundle to which this row belongs, used when deleting a field instance',
+  `deleted` tinyint(4) NOT NULL DEFAULT 0 COMMENT 'A boolean indicating whether this data item has been deleted',
+  `entity_id` int(10) unsigned NOT NULL COMMENT 'The entity id this data is attached to',
+  `revision_id` int(10) unsigned DEFAULT NULL COMMENT 'The entity revision id this data is attached to, or NULL if the entity type is not versioned',
+  `language` varchar(32) NOT NULL DEFAULT '' COMMENT 'The language for this data item.',
+  `delta` int(10) unsigned NOT NULL COMMENT 'The sequence number for this data item, used for multi-value fields',
+  `field_tipo_pago_value` varchar(255) DEFAULT NULL,
+  `field_tipo_pago_format` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`entity_type`,`entity_id`,`deleted`,`delta`,`language`),
+  KEY `entity_type` (`entity_type`),
+  KEY `bundle` (`bundle`),
+  KEY `deleted` (`deleted`),
+  KEY `entity_id` (`entity_id`),
+  KEY `revision_id` (`revision_id`),
+  KEY `language` (`language`),
+  KEY `field_tipo_pago_format` (`field_tipo_pago_format`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Data storage for field 187 (field_tipo_pago)';
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
 -- Table structure for table `dr_field_data_field_token`
 --
 
@@ -4828,6 +4909,34 @@ CREATE TABLE `dr_field_revision_field_app_id` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
+-- Table structure for table `dr_field_revision_field_archivo`
+--
+
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `dr_field_revision_field_archivo` (
+  `entity_type` varchar(128) NOT NULL DEFAULT '' COMMENT 'The entity type this data is attached to',
+  `bundle` varchar(128) NOT NULL DEFAULT '' COMMENT 'The field instance bundle to which this row belongs, used when deleting a field instance',
+  `deleted` tinyint(4) NOT NULL DEFAULT 0 COMMENT 'A boolean indicating whether this data item has been deleted',
+  `entity_id` int(10) unsigned NOT NULL COMMENT 'The entity id this data is attached to',
+  `revision_id` int(10) unsigned NOT NULL COMMENT 'The entity revision id this data is attached to',
+  `language` varchar(32) NOT NULL DEFAULT '' COMMENT 'The language for this data item.',
+  `delta` int(10) unsigned NOT NULL COMMENT 'The sequence number for this data item, used for multi-value fields',
+  `field_archivo_fid` int(10) unsigned DEFAULT NULL COMMENT 'The dr_file_managed.fid being referenced in this field.',
+  `field_archivo_display` tinyint(3) unsigned NOT NULL DEFAULT 1 COMMENT 'Flag to control whether this file should be displayed when viewing content.',
+  `field_archivo_description` text DEFAULT NULL COMMENT 'A description of the file.',
+  PRIMARY KEY (`entity_type`,`entity_id`,`revision_id`,`deleted`,`delta`,`language`),
+  KEY `entity_type` (`entity_type`),
+  KEY `bundle` (`bundle`),
+  KEY `deleted` (`deleted`),
+  KEY `entity_id` (`entity_id`),
+  KEY `revision_id` (`revision_id`),
+  KEY `language` (`language`),
+  KEY `field_archivo_fid` (`field_archivo_fid`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Revision archive storage for field 185 (field_archivo)';
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
 -- Table structure for table `dr_field_revision_field_authorization_code`
 --
 
@@ -4852,6 +4961,32 @@ CREATE TABLE `dr_field_revision_field_authorization_code` (
   KEY `language` (`language`),
   KEY `field_authorization_code_format` (`field_authorization_code_format`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Revision archive storage for field 60 (field...';
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `dr_field_revision_field_banco`
+--
+
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `dr_field_revision_field_banco` (
+  `entity_type` varchar(128) NOT NULL DEFAULT '' COMMENT 'The entity type this data is attached to',
+  `bundle` varchar(128) NOT NULL DEFAULT '' COMMENT 'The field instance bundle to which this row belongs, used when deleting a field instance',
+  `deleted` tinyint(4) NOT NULL DEFAULT 0 COMMENT 'A boolean indicating whether this data item has been deleted',
+  `entity_id` int(10) unsigned NOT NULL COMMENT 'The entity id this data is attached to',
+  `revision_id` int(10) unsigned NOT NULL COMMENT 'The entity revision id this data is attached to',
+  `language` varchar(32) NOT NULL DEFAULT '' COMMENT 'The language for this data item.',
+  `delta` int(10) unsigned NOT NULL COMMENT 'The sequence number for this data item, used for multi-value fields',
+  `field_banco_tid` int(10) unsigned DEFAULT NULL,
+  PRIMARY KEY (`entity_type`,`entity_id`,`revision_id`,`deleted`,`delta`,`language`),
+  KEY `entity_type` (`entity_type`),
+  KEY `bundle` (`bundle`),
+  KEY `deleted` (`deleted`),
+  KEY `entity_id` (`entity_id`),
+  KEY `revision_id` (`revision_id`),
+  KEY `language` (`language`),
+  KEY `field_banco_tid` (`field_banco_tid`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Revision archive storage for field 186 (field_banco)';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -7210,6 +7345,33 @@ CREATE TABLE `dr_field_revision_field_tipo_de_boletin` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
+-- Table structure for table `dr_field_revision_field_tipo_pago`
+--
+
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `dr_field_revision_field_tipo_pago` (
+  `entity_type` varchar(128) NOT NULL DEFAULT '' COMMENT 'The entity type this data is attached to',
+  `bundle` varchar(128) NOT NULL DEFAULT '' COMMENT 'The field instance bundle to which this row belongs, used when deleting a field instance',
+  `deleted` tinyint(4) NOT NULL DEFAULT 0 COMMENT 'A boolean indicating whether this data item has been deleted',
+  `entity_id` int(10) unsigned NOT NULL COMMENT 'The entity id this data is attached to',
+  `revision_id` int(10) unsigned NOT NULL COMMENT 'The entity revision id this data is attached to',
+  `language` varchar(32) NOT NULL DEFAULT '' COMMENT 'The language for this data item.',
+  `delta` int(10) unsigned NOT NULL COMMENT 'The sequence number for this data item, used for multi-value fields',
+  `field_tipo_pago_value` varchar(255) DEFAULT NULL,
+  `field_tipo_pago_format` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`entity_type`,`entity_id`,`revision_id`,`deleted`,`delta`,`language`),
+  KEY `entity_type` (`entity_type`),
+  KEY `bundle` (`bundle`),
+  KEY `deleted` (`deleted`),
+  KEY `entity_id` (`entity_id`),
+  KEY `revision_id` (`revision_id`),
+  KEY `language` (`language`),
+  KEY `field_tipo_pago_format` (`field_tipo_pago_format`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Revision archive storage for field 187 (field_tipo_pago)';
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
 -- Table structure for table `dr_field_revision_field_token`
 --
 
@@ -8064,7 +8226,7 @@ CREATE TABLE `dr_file_managed` (
   KEY `uid` (`uid`),
   KEY `status` (`status`),
   KEY `timestamp` (`timestamp`)
-) ENGINE=InnoDB AUTO_INCREMENT=37559 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Stores information for uploaded files.';
+) ENGINE=InnoDB AUTO_INCREMENT=37565 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Stores information for uploaded files.';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -8388,7 +8550,7 @@ CREATE TABLE `dr_my_api_tokens` (
   KEY `uid` (`uid`),
   KEY `access_token_hash` (`access_token_hash`),
   KEY `refresh_token_hash` (`refresh_token_hash`)
-) ENGINE=InnoDB AUTO_INCREMENT=113 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Opaque access and refresh tokens issued on login.';
+) ENGINE=InnoDB AUTO_INCREMENT=159 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Opaque access and refresh tokens issued on login.';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -8444,7 +8606,7 @@ CREATE TABLE `dr_node` (
   KEY `tnid` (`tnid`),
   KEY `translate` (`translate`),
   KEY `language` (`language`)
-) ENGINE=InnoDB AUTO_INCREMENT=501293 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='The base table for nodes.';
+) ENGINE=InnoDB AUTO_INCREMENT=501345 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='The base table for nodes.';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -8504,7 +8666,7 @@ CREATE TABLE `dr_node_revision` (
   PRIMARY KEY (`vid`),
   KEY `nid` (`nid`),
   KEY `uid` (`uid`)
-) ENGINE=InnoDB AUTO_INCREMENT=1244450 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Stores information about each saved version of a dr_node.';
+) ENGINE=InnoDB AUTO_INCREMENT=1244582 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Stores information about each saved version of a dr_node.';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -8637,7 +8799,7 @@ CREATE TABLE `dr_queue` (
   PRIMARY KEY (`item_id`),
   KEY `name_created` (`name`,`created`),
   KEY `expire` (`expire`)
-) ENGINE=InnoDB AUTO_INCREMENT=132418 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Stores items in queues.';
+) ENGINE=InnoDB AUTO_INCREMENT=132921 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Stores items in queues.';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -8769,7 +8931,7 @@ CREATE TABLE `dr_rules_scheduler` (
   `handler` varchar(255) DEFAULT NULL COMMENT 'The fully qualified class name of a the queue item handler.',
   PRIMARY KEY (`tid`),
   KEY `date` (`date`)
-) ENGINE=InnoDB AUTO_INCREMENT=779 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Stores scheduled tasks.';
+) ENGINE=InnoDB AUTO_INCREMENT=788 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Stores scheduled tasks.';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -8989,7 +9151,7 @@ CREATE TABLE `dr_taxonomy_term_data` (
   KEY `taxonomy_tree` (`vid`,`weight`,`name`),
   KEY `vid_name` (`vid`,`name`),
   KEY `name` (`name`)
-) ENGINE=InnoDB AUTO_INCREMENT=26 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Stores term information.';
+) ENGINE=InnoDB AUTO_INCREMENT=30 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Stores term information.';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -9023,7 +9185,7 @@ CREATE TABLE `dr_taxonomy_vocabulary` (
   PRIMARY KEY (`vid`),
   UNIQUE KEY `machine_name` (`machine_name`),
   KEY `list` (`weight`,`name`)
-) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Stores vocabulary information.';
+) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Stores vocabulary information.';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -9194,7 +9356,7 @@ CREATE TABLE `dr_watchdog` (
   KEY `type` (`type`),
   KEY `uid` (`uid`),
   KEY `severity` (`severity`)
-) ENGINE=InnoDB AUTO_INCREMENT=6321214 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Table that contains logs of all system events.';
+) ENGINE=InnoDB AUTO_INCREMENT=6399778 DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='Table that contains logs of all system events.';
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 
@@ -9206,4 +9368,4 @@ CREATE TABLE `dr_watchdog` (
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2026-07-06 16:37:08
+-- Dump completed on 2026-07-10 21:28:56
