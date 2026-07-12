@@ -1,1 +1,10 @@
 *.pem
+
+# PHPUnit dependencies (tests/unit).
+vendor/
+
+# Real Postman environment and IMAP credentials (tests/e2e) -- only the
+# .example.json placeholders are committed.
+tests/e2e/*.postman_environment.json
+tests/e2e/.env
+tests/e2e/node_modules/

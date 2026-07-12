@@ -1,0 +1,14 @@
+{
+  "name": "myapi-e2e-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "End-to-end tests for the myapi auth resource, running against production with a dedicated test account.",
+  "scripts": {
+    "test:collection": "newman run auth.postman_collection.json -e auth.postman_environment.json",
+    "test:roundtrip": "node password-reset-roundtrip.js"
+  },
+  "devDependencies": {
+    "newman": "^6.1.0",
+    "imapflow": "^1.0.10"
+  }
+}
