@@ -1,0 +1,7 @@
+name = My API Tests
+description = SimpleTest integration tests for the myapi auth resource. Dev-only, never deployed to production.
+core = 7.x
+package = Custom
+dependencies[] = myapi
+dependencies[] = simpletest
+files[] = MyapiAuthTestCase.test

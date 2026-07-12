@@ -1,0 +1,669 @@
+<?php
+
+/**
+ * @file
+ * Integration tests for the 5 JSON endpoints of /api/v1/auth.
+ *
+ * Runs against a real HTTP sandbox (DrupalWebTestCase's own install),
+ * exercising the resource exactly as a real client would. Uses curlExec()
+ * directly (not drupalPost(), which targets Drupal's Form API) so requests
+ * are sent as raw JSON, matching what the Flutter app actually sends.
+ * myapi_respond()/myapi_error() end in drupal_exit(), which would kill the
+ * test runner if the resource functions were invoked in-process — real HTTP
+ * requests are the only way to test this resource from outside.
+ *
+ * The HTML password/reset page is out of scope here (see 21-auth-testing.md).
+ */
+class MyapiAuthTestCase extends DrupalWebTestCase {
+
+  /**
+   * Dedicated account created fresh in setUp() for every test method.
+   *
+   * @var object
+   */
+  protected $testAccount;
+
+  public static function getInfo() {
+    return array(
+      'name' => 'Myapi auth resource',
+      'description' => 'Tests the 5 JSON endpoints of /api/v1/auth (login, refresh, logout, password/forgot, password/reset) over real HTTP.',
+      'group' => 'My API',
+    );
+  }
+
+  public function setUp() {
+    parent::setUp('myapi');
+    // Needed so tests can directly manipulate my_api_tokens rows (hash a
+    // known plaintext token, force-expire a row) without a second HTTP
+    // round-trip. Production code loads this the same way via
+    // module_load_include() in resources/auth.resource.inc.
+    module_load_include('inc', 'myapi', 'includes/myapi.token');
+    $this->testAccount = $this->drupalCreateUser();
+  }
+
+  /**
+   * Sends a raw JSON request to a myapi path and decodes the JSON response.
+   *
+   * @param string     $path    Path relative to the site root, e.g. 'api/v1/auth/login'.
+   * @param string     $method  HTTP method, e.g. 'POST' or 'GET'.
+   * @param array|null $body    Request body, JSON-encoded, or NULL for no body.
+   * @param array      $extra_headers  Additional raw header lines, e.g. 'Authorization: Bearer xxx'.
+   *
+   * @return array  Decoded JSON response body.
+   */
+  protected function myapiRequest($path, $method = 'POST', $body = NULL, $extra_headers = array()) {
+    $headers = array_merge(array('Content-Type: application/json'), $extra_headers);
+
+    $options = array(
+      CURLOPT_URL => url($path, array('absolute' => TRUE)),
+      CURLOPT_CUSTOMREQUEST => $method,
+      CURLOPT_HTTPHEADER => $headers,
+    );
+
+    if ($body !== NULL) {
+      $options[CURLOPT_POSTFIELDS] = drupal_json_encode($body);
+    }
+
+    $raw = $this->curlExec($options);
+
+    return drupal_json_decode($raw);
+  }
+
+  /**
+   * Extracts the reset token from the most recently intercepted email.
+   *
+   * The SimpleTest sandbox never sends real mail; drupalGetMails() exposes
+   * every message drupal_mail() built. The token is a 64 hex char string
+   * embedded in the reset link (see myapi_auth_password_forgot()), and stays
+   * verbatim in the mail body whether it ends up as HTML or as the
+   * plain-text conversion Drupal's test mail system applies — so a direct
+   * regex match is more robust here than trying to parse the link's markup.
+   *
+   * @return string  The plaintext reset token.
+   */
+  protected function extractResetTokenFromLastMail() {
+    $mails = $this->drupalGetMails();
+    $mail = end($mails);
+    $body = is_array($mail['body']) ? implode(' ', $mail['body']) : $mail['body'];
+
+    $this->assertTrue((bool) preg_match('/token=([0-9a-f]{64})/', $body, $matches), 'The reset link with its token is found in the intercepted email.');
+
+    return $matches[1];
+  }
+
+  /**
+   * POST /api/v1/auth/login — success.
+   */
+  public function testLoginSuccess() {
+    $response = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+      'username' => $this->testAccount->name,
+      'password' => $this->testAccount->pass_raw,
+    ));
+
+    $this->assertResponse(200);
+    $this->assertTrue($response['success'], 'Response envelope reports success.');
+
+    $this->assertTrue(isset($response['data']['access_token']), 'access_token is present.');
+    $this->assertEqual(64, strlen($response['data']['access_token']), 'access_token is 64 hex chars.');
+
+    $this->assertTrue(isset($response['data']['refresh_token']), 'refresh_token is present.');
+    $this->assertEqual(128, strlen($response['data']['refresh_token']), 'refresh_token is 128 hex chars.');
+
+    $this->assertEqual((int) $this->testAccount->uid, $response['data']['user']['uid'], 'user.uid matches the authenticated account.');
+    $this->assertEqual($this->testAccount->name, $response['data']['user']['name'], 'user.name matches the authenticated account.');
+    $this->assertNull($response['data']['user']['picture'], 'user.picture is always null.');
+  }
+
+  /**
+   * POST /api/v1/auth/login — username missing.
+   *
+   * myapi_auth_login() validates username/password with
+   * myapi_request_require_strings(), which does not distinguish a missing
+   * field from an empty one: both yield 'invalid_field' (never
+   * 'missing_field', unlike refresh/logout/forgot which use
+   * myapi_request_require_fields() instead).
+   */
+  public function testLoginMissingUsernameReturnsInvalidField() {
+    $response = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+      'password' => $this->testAccount->pass_raw,
+    ));
+
+    $this->assertResponse(422);
+    $this->assertFalse($response['success']);
+    $this->assertEqual('invalid_field', $response['error_code']);
+  }
+
+  /**
+   * POST /api/v1/auth/login — password present but empty.
+   */
+  public function testLoginEmptyPasswordReturnsInvalidField() {
+    $response = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+      'username' => $this->testAccount->name,
+      'password' => '',
+    ));
+
+    $this->assertResponse(422);
+    $this->assertFalse($response['success']);
+    $this->assertEqual('invalid_field', $response['error_code']);
+  }
+
+  /**
+   * POST /api/v1/auth/login — wrong password, nonexistent user and blocked
+   * user all return the exact same body, so the response never reveals
+   * account existence.
+   */
+  public function testLoginInvalidCredentialsReturnsSameBodyForAllCauses() {
+    $wrong_password = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+      'username' => $this->testAccount->name,
+      'password' => $this->testAccount->pass_raw . 'x',
+    ));
+    $this->assertResponse(401);
+
+    $blocked_account = $this->drupalCreateUser();
+    user_save($blocked_account, array('status' => 0));
+
+    $blocked_user = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+      'username' => $blocked_account->name,
+      'password' => $blocked_account->pass_raw,
+    ));
+    $this->assertResponse(401);
+
+    $nonexistent_user = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+      'username' => $this->randomName(16),
+      'password' => $this->randomName(16),
+    ));
+    $this->assertResponse(401);
+
+    $this->assertEqual('invalid_credentials', $wrong_password['error_code']);
+    $this->assertEqual($wrong_password, $blocked_user, 'Blocked user gets the exact same body as a wrong password.');
+    $this->assertEqual($wrong_password, $nonexistent_user, 'Nonexistent user gets the exact same body as a wrong password.');
+  }
+
+  /**
+   * POST /api/v1/auth/login — flood: 5 failed attempts for the same username
+   * are allowed (each returns invalid_credentials), the 6th is blocked.
+   */
+  public function testLoginFloodBlocksSixthAttemptForSameUsername() {
+    for ($i = 0; $i < 5; $i++) {
+      $response = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+        'username' => $this->testAccount->name,
+        'password' => 'wrong-password',
+      ));
+      $this->assertResponse(401);
+      $this->assertEqual('invalid_credentials', $response['error_code']);
+    }
+
+    $response = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+      'username' => $this->testAccount->name,
+      'password' => 'wrong-password',
+    ));
+
+    $this->assertResponse(429);
+    $this->assertFalse($response['success']);
+    $this->assertEqual('too_many_attempts', $response['error_code']);
+  }
+
+  /**
+   * GET /api/v1/auth/login — method not allowed.
+   */
+  public function testLoginMethodNotAllowedForGet() {
+    $response = $this->myapiRequest('api/v1/auth/login', 'GET');
+
+    $this->assertResponse(405);
+    $this->assertFalse($response['success']);
+    $this->assertEqual('method_not_allowed', $response['error_code']);
+  }
+
+  /**
+   * POST /api/v1/auth/refresh — success, with rotation: the old refresh
+   * token stops working immediately after being used.
+   */
+  public function testRefreshSuccessRotatesToken() {
+    $login = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+      'username' => $this->testAccount->name,
+      'password' => $this->testAccount->pass_raw,
+    ));
+    $old_refresh_token = $login['data']['refresh_token'];
+
+    $response = $this->myapiRequest('api/v1/auth/refresh', 'POST', array(
+      'refresh_token' => $old_refresh_token,
+    ));
+
+    $this->assertResponse(200);
+    $this->assertTrue($response['success']);
+    $this->assertEqual(64, strlen($response['data']['access_token']), 'access_token is 64 hex chars.');
+    $this->assertEqual(128, strlen($response['data']['refresh_token']), 'refresh_token is 128 hex chars.');
+    $this->assertNotEqual($old_refresh_token, $response['data']['refresh_token'], 'A fresh refresh_token is issued (rotation).');
+    $this->assertEqual((int) $this->testAccount->uid, $response['data']['user']['uid']);
+
+    $reuse = $this->myapiRequest('api/v1/auth/refresh', 'POST', array(
+      'refresh_token' => $old_refresh_token,
+    ));
+    $this->assertResponse(401);
+    $this->assertEqual('invalid_token', $reuse['error_code'], 'The old refresh_token no longer works after rotation.');
+  }
+
+  /**
+   * POST /api/v1/auth/refresh — token_expired.
+   *
+   * Forces refresh_expires_at into the past directly via db_update(), since
+   * the default TTL (30 days) makes a real expiry impractical to reproduce.
+   */
+  public function testRefreshExpiredTokenReturnsTokenExpired() {
+    $login = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+      'username' => $this->testAccount->name,
+      'password' => $this->testAccount->pass_raw,
+    ));
+    $refresh_token = $login['data']['refresh_token'];
+
+    db_update('my_api_tokens')
+      ->fields(array('refresh_expires_at' => REQUEST_TIME - 10))
+      ->condition('refresh_token_hash', myapi_token_hash($refresh_token))
+      ->execute();
+
+    $response = $this->myapiRequest('api/v1/auth/refresh', 'POST', array(
+      'refresh_token' => $refresh_token,
+    ));
+
+    $this->assertResponse(401);
+    $this->assertEqual('token_expired', $response['error_code']);
+  }
+
+  /**
+   * POST /api/v1/auth/refresh — invalid_token, unknown token.
+   */
+  public function testRefreshUnknownTokenReturnsInvalidToken() {
+    $response = $this->myapiRequest('api/v1/auth/refresh', 'POST', array(
+      'refresh_token' => $this->randomName(128),
+    ));
+
+    $this->assertResponse(401);
+    $this->assertEqual('invalid_token', $response['error_code']);
+  }
+
+  /**
+   * POST /api/v1/auth/refresh — invalid_token, token already revoked.
+   */
+  public function testRefreshRevokedTokenReturnsInvalidToken() {
+    $login = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+      'username' => $this->testAccount->name,
+      'password' => $this->testAccount->pass_raw,
+    ));
+    $refresh_token = $login['data']['refresh_token'];
+
+    db_update('my_api_tokens')
+      ->fields(array('revoked' => 1))
+      ->condition('refresh_token_hash', myapi_token_hash($refresh_token))
+      ->execute();
+
+    $response = $this->myapiRequest('api/v1/auth/refresh', 'POST', array(
+      'refresh_token' => $refresh_token,
+    ));
+
+    $this->assertResponse(401);
+    $this->assertEqual('invalid_token', $response['error_code']);
+  }
+
+  /**
+   * POST /api/v1/auth/refresh — refresh_token missing.
+   */
+  public function testRefreshMissingFieldReturnsMissingField() {
+    $response = $this->myapiRequest('api/v1/auth/refresh', 'POST', array());
+
+    $this->assertResponse(422);
+    $this->assertEqual('missing_field', $response['error_code']);
+  }
+
+  /**
+   * GET /api/v1/auth/refresh — method not allowed.
+   */
+  public function testRefreshMethodNotAllowedForGet() {
+    $response = $this->myapiRequest('api/v1/auth/refresh', 'GET');
+
+    $this->assertResponse(405);
+    $this->assertEqual('method_not_allowed', $response['error_code']);
+  }
+
+  /**
+   * POST /api/v1/auth/logout — success: the session row ends up revoked = 1.
+   */
+  public function testLogoutSuccessRevokesRow() {
+    $login = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+      'username' => $this->testAccount->name,
+      'password' => $this->testAccount->pass_raw,
+    ));
+    $access_token = $login['data']['access_token'];
+    $refresh_token = $login['data']['refresh_token'];
+
+    $response = $this->myapiRequest('api/v1/auth/logout', 'POST',
+      array('refresh_token' => $refresh_token),
+      array('Authorization: Bearer ' . $access_token)
+    );
+
+    $this->assertResponse(200);
+    $this->assertTrue($response['success']);
+
+    $revoked = db_select('my_api_tokens', 't')
+      ->fields('t', array('revoked'))
+      ->condition('access_token_hash', myapi_token_hash($access_token))
+      ->execute()
+      ->fetchField();
+    $this->assertEqual(1, (int) $revoked, 'The session row is revoked after logout.');
+  }
+
+  /**
+   * POST /api/v1/auth/logout — invalid_token when the body's refresh_token
+   * does not belong to the same session as the Authorization access_token.
+   */
+  public function testLogoutMismatchedRefreshTokenReturnsInvalidToken() {
+    $login = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+      'username' => $this->testAccount->name,
+      'password' => $this->testAccount->pass_raw,
+    ));
+    $access_token = $login['data']['access_token'];
+
+    // A second, unrelated session for the same account: its refresh_token
+    // belongs to a different row than the one $access_token authenticates.
+    $other_login = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+      'username' => $this->testAccount->name,
+      'password' => $this->testAccount->pass_raw,
+    ));
+    $other_refresh_token = $other_login['data']['refresh_token'];
+
+    $response = $this->myapiRequest('api/v1/auth/logout', 'POST',
+      array('refresh_token' => $other_refresh_token),
+      array('Authorization: Bearer ' . $access_token)
+    );
+
+    $this->assertResponse(401);
+    $this->assertEqual('invalid_token', $response['error_code']);
+  }
+
+  /**
+   * POST /api/v1/auth/logout — Authorization header missing.
+   */
+  public function testLogoutMissingAuthorizationHeader() {
+    $response = $this->myapiRequest('api/v1/auth/logout', 'POST', array(
+      'refresh_token' => $this->randomName(128),
+    ));
+
+    $this->assertResponse(401);
+    $this->assertEqual('missing_authorization', $response['error_code']);
+  }
+
+  /**
+   * POST /api/v1/auth/logout — refresh_token missing from the body.
+   */
+  public function testLogoutMissingFieldReturnsMissingField() {
+    $login = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+      'username' => $this->testAccount->name,
+      'password' => $this->testAccount->pass_raw,
+    ));
+    $access_token = $login['data']['access_token'];
+
+    $response = $this->myapiRequest('api/v1/auth/logout', 'POST', array(),
+      array('Authorization: Bearer ' . $access_token)
+    );
+
+    $this->assertResponse(422);
+    $this->assertEqual('missing_field', $response['error_code']);
+  }
+
+  /**
+   * GET /api/v1/auth/logout — method not allowed.
+   */
+  public function testLogoutMethodNotAllowedForGet() {
+    $response = $this->myapiRequest('api/v1/auth/logout', 'GET');
+
+    $this->assertResponse(405);
+    $this->assertEqual('method_not_allowed', $response['error_code']);
+  }
+
+  /**
+   * POST /api/v1/auth/password/forgot — existing, active account: creates a
+   * new unused row and invalidates any previous unused row for that user. The
+   * reset email is intercepted by the SimpleTest sandbox (drupalGetMails()),
+   * never actually sent — see myapi_auth_password_forgot()'s drupal_mail() call.
+   */
+  public function testForgotExistingAccountCreatesTokenAndInvalidatesPrevious() {
+    $response = $this->myapiRequest('api/v1/auth/password/forgot', 'POST', array(
+      'username' => $this->testAccount->name,
+    ));
+
+    $this->assertResponse(200);
+    $this->assertTrue($response['success']);
+
+    $first_row = db_select('myapi_password_reset_tokens', 't')
+      ->fields('t')
+      ->condition('uid', $this->testAccount->uid)
+      ->execute()
+      ->fetchObject();
+    $this->assertTrue((bool) $first_row, 'A new row is created for the account.');
+    $this->assertEqual(0, (int) $first_row->used, 'The new row starts unused.');
+
+    $mails = $this->drupalGetMails();
+    $this->assertEqual(1, count($mails), 'The reset email is intercepted by the sandbox, never sent for real.');
+
+    // A second request must invalidate the first token, not reuse it.
+    $this->myapiRequest('api/v1/auth/password/forgot', 'POST', array(
+      'username' => $this->testAccount->name,
+    ));
+
+    $rows = db_select('myapi_password_reset_tokens', 't')
+      ->fields('t')
+      ->condition('uid', $this->testAccount->uid)
+      ->execute()
+      ->fetchAll();
+    $this->assertEqual(2, count($rows), 'A second request adds a new row rather than reusing the first.');
+
+    $used_flags = array();
+    foreach ($rows as $row) {
+      $used_flags[] = (int) $row->used;
+    }
+    sort($used_flags);
+    $this->assertEqual(array(0, 1), $used_flags, 'The previous row ends up used, the new one does not.');
+  }
+
+  /**
+   * POST /api/v1/auth/password/forgot — nonexistent account gets the exact
+   * same generic 200 response, and no row is created.
+   */
+  public function testForgotNonexistentAccountReturnsSameGenericResponse() {
+    $existing_response = $this->myapiRequest('api/v1/auth/password/forgot', 'POST', array(
+      'username' => $this->testAccount->name,
+    ));
+    $this->assertResponse(200);
+
+    $nonexistent_response = $this->myapiRequest('api/v1/auth/password/forgot', 'POST', array(
+      'username' => $this->randomName(16),
+    ));
+    $this->assertResponse(200);
+
+    $this->assertEqual($existing_response, $nonexistent_response, 'The response body never reveals whether the account exists.');
+
+    $total_rows = db_select('myapi_password_reset_tokens', 't')
+      ->countQuery()
+      ->execute()
+      ->fetchField();
+    $this->assertEqual(1, (int) $total_rows, 'Only the existing account request created a row; the nonexistent one created none.');
+  }
+
+  /**
+   * POST /api/v1/auth/password/forgot — neither username nor email present.
+   */
+  public function testForgotMissingFieldReturnsMissingField() {
+    $response = $this->myapiRequest('api/v1/auth/password/forgot', 'POST', array());
+
+    $this->assertResponse(422);
+    $this->assertEqual('missing_field', $response['error_code']);
+  }
+
+  /**
+   * GET /api/v1/auth/password/forgot — method not allowed.
+   */
+  public function testForgotMethodNotAllowedForGet() {
+    $response = $this->myapiRequest('api/v1/auth/password/forgot', 'GET');
+
+    $this->assertResponse(405);
+    $this->assertEqual('method_not_allowed', $response['error_code']);
+  }
+
+  /**
+   * POST /api/v1/auth/password/reset — full roundtrip: forgot issues a
+   * token, the token from the intercepted email resets the password for
+   * real (verified with a login using the new password), and every
+   * previously active session for the account is revoked.
+   */
+  public function testResetRoundtripChangesPasswordAndRevokesSessions() {
+    $login = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+      'username' => $this->testAccount->name,
+      'password' => $this->testAccount->pass_raw,
+    ));
+    $access_token = $login['data']['access_token'];
+
+    $this->myapiRequest('api/v1/auth/password/forgot', 'POST', array(
+      'username' => $this->testAccount->name,
+    ));
+    $token = $this->extractResetTokenFromLastMail();
+
+    $new_password = $this->testAccount->pass_raw . '-new';
+
+    $response = $this->myapiRequest('api/v1/auth/password/reset', 'POST', array(
+      'token' => $token,
+      'new_password' => $new_password,
+    ));
+
+    $this->assertResponse(200);
+    $this->assertTrue($response['success']);
+
+    $old_password_login = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+      'username' => $this->testAccount->name,
+      'password' => $this->testAccount->pass_raw,
+    ));
+    $this->assertResponse(401);
+    $this->assertEqual('invalid_credentials', $old_password_login['error_code'], 'The old password no longer works.');
+
+    $new_password_login = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+      'username' => $this->testAccount->name,
+      'password' => $new_password,
+    ));
+    $this->assertResponse(200);
+    $this->assertTrue($new_password_login['success'], 'The new password really works.');
+
+    $active_sessions = db_select('my_api_tokens', 't')
+      ->condition('access_token_hash', myapi_token_hash($access_token))
+      ->condition('revoked', 0)
+      ->countQuery()
+      ->execute()
+      ->fetchField();
+    $this->assertEqual(0, (int) $active_sessions, 'The session active before the reset is revoked by it.');
+  }
+
+  /**
+   * POST /api/v1/auth/password/reset — new_password too short (7 chars).
+   *
+   * The length checks run before the token lookup, so no valid token or
+   * forgot roundtrip is needed to reach this branch.
+   */
+  public function testResetTooShortPasswordReturnsFieldTooShort() {
+    $response = $this->myapiRequest('api/v1/auth/password/reset', 'POST', array(
+      'token' => $this->randomName(64),
+      'new_password' => str_repeat('a', 7),
+    ));
+
+    $this->assertResponse(422);
+    $this->assertEqual('field_too_short', $response['error_code']);
+  }
+
+  /**
+   * POST /api/v1/auth/password/reset — new_password too long (256 chars).
+   */
+  public function testResetTooLongPasswordReturnsFieldTooLong() {
+    $response = $this->myapiRequest('api/v1/auth/password/reset', 'POST', array(
+      'token' => $this->randomName(64),
+      'new_password' => str_repeat('a', 256),
+    ));
+
+    $this->assertResponse(422);
+    $this->assertEqual('field_too_long', $response['error_code']);
+  }
+
+  /**
+   * POST /api/v1/auth/password/reset — invalid_token, token never issued.
+   */
+  public function testResetUnknownTokenReturnsInvalidToken() {
+    $response = $this->myapiRequest('api/v1/auth/password/reset', 'POST', array(
+      'token' => $this->randomName(64),
+      'new_password' => 'a-valid-password',
+    ));
+
+    $this->assertResponse(401);
+    $this->assertEqual('invalid_token', $response['error_code']);
+  }
+
+  /**
+   * POST /api/v1/auth/password/reset — invalid_token, token already used.
+   */
+  public function testResetAlreadyUsedTokenReturnsInvalidToken() {
+    $this->myapiRequest('api/v1/auth/password/forgot', 'POST', array(
+      'username' => $this->testAccount->name,
+    ));
+    $token = $this->extractResetTokenFromLastMail();
+
+    $first_use = $this->myapiRequest('api/v1/auth/password/reset', 'POST', array(
+      'token' => $token,
+      'new_password' => $this->testAccount->pass_raw . '-first',
+    ));
+    $this->assertResponse(200);
+    $this->assertTrue($first_use['success']);
+
+    $second_use = $this->myapiRequest('api/v1/auth/password/reset', 'POST', array(
+      'token' => $token,
+      'new_password' => $this->testAccount->pass_raw . '-second',
+    ));
+
+    $this->assertResponse(401);
+    $this->assertEqual('invalid_token', $second_use['error_code']);
+  }
+
+  /**
+   * POST /api/v1/auth/password/reset — token_expired.
+   *
+   * Forces expires_at into the past directly via db_update(), since the
+   * default TTL (1 hour) makes a real expiry impractical to reproduce.
+   */
+  public function testResetExpiredTokenReturnsTokenExpired() {
+    $this->myapiRequest('api/v1/auth/password/forgot', 'POST', array(
+      'username' => $this->testAccount->name,
+    ));
+    $token = $this->extractResetTokenFromLastMail();
+
+    db_update('myapi_password_reset_tokens')
+      ->fields(array('expires_at' => REQUEST_TIME - 10))
+      ->condition('token_hash', myapi_token_hash($token))
+      ->execute();
+
+    $response = $this->myapiRequest('api/v1/auth/password/reset', 'POST', array(
+      'token' => $token,
+      'new_password' => $this->testAccount->pass_raw . '-new',
+    ));
+
+    $this->assertResponse(401);
+    $this->assertEqual('token_expired', $response['error_code']);
+  }
+
+  /**
+   * GET /api/v1/auth/password/reset — method not allowed.
+   *
+   * Only exercises the JSON dispatcher (myapi_auth_password_reset_dispatch()).
+   * The HTML page callback for GET/POST password/reset is out of scope
+   * (see 21-auth-testing.md).
+   */
+  public function testResetMethodNotAllowedForGet() {
+    $response = $this->myapiRequest('api/v1/auth/password/reset', 'GET');
+
+    $this->assertResponse(405);
+    $this->assertEqual('method_not_allowed', $response['error_code']);
+  }
+
+}

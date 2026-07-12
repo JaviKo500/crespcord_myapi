@@ -1,0 +1,10 @@
+<?php
+
+/**
+ * @file
+ * Companion module for myapi_test.info.
+ *
+ * No hooks: this module exists only so Drupal will discover and enable
+ * MyapiAuthTestCase.test (declared via files[] in myapi_test.info). Dev-only,
+ * never deployed to production by scripts/deploy.sh.
+ */
