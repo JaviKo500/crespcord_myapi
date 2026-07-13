@@ -38,6 +38,20 @@ class MyapiAuthTestCase extends DrupalWebTestCase {
     // round-trip. Production code loads this the same way via
     // module_load_include() in resources/auth.resource.inc.
     module_load_include('inc', 'myapi', 'includes/myapi.token');
+
+    // myapi_enable() (in myapi.install) maps the 'myapi_password_reset' mail
+    // key to MyapiHtmlMailSystem, whose mail() really sends the message instead
+    // of storing it in SimpleTest's collector — so drupalGetMails() would come
+    // back empty and the reset roundtrip could never read the token. Point that
+    // key back at TestingMailSystem for the sandbox only: this rewrites the
+    // sandbox's mail_system variable, never production code. The token survives
+    // TestingMailSystem's html_to_text conversion intact (verified: the reset
+    // URL is emitted as an unwrapped footnote), so extractResetTokenFromLastMail()
+    // still matches it.
+    $mail_system = variable_get('mail_system', array('default-system' => 'TestingMailSystem'));
+    $mail_system['myapi_password_reset'] = 'TestingMailSystem';
+    variable_set('mail_system', $mail_system);
+
     $this->testAccount = $this->drupalCreateUser();
   }
 
@@ -65,6 +79,14 @@ class MyapiAuthTestCase extends DrupalWebTestCase {
     }
 
     $raw = $this->curlExec($options);
+
+    // curlExec() runs the request in a separate thread (the site under test)
+    // and, unlike drupalGet(), does not refresh the parent's variable cache
+    // afterwards. Without this, variables the request changed — notably
+    // drupal_test_email_collector, which backs drupalGetMails() — would still
+    // look empty here, breaking the password reset roundtrip. drupalGet()
+    // performs this very same refresh, for this very same reason.
+    $this->refreshVariables();
 
     return drupal_json_decode($raw);
   }
