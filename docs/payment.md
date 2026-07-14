@@ -90,7 +90,10 @@ Notes:
   **filtered** set (estado `<> 'Nuevo'`, plus `date_from`/`date_to` if any), not
   the unit's full payment count. `total_pages` is `0` when `total` is `0`.
 - Sorting is always by `payment_date` (`field_fecha_de_pago_value`); there is no
-  other sort field.
+  other sort field. Payments sharing the same `payment_date` are broken by `id`
+  (`nid`) in the same direction as `sort`, so the order is deterministic and
+  stable across requests and pages (no row can shift between pages on repeated
+  calls).
 
 **Date-range filter (`date_from` / `date_to`)**
 

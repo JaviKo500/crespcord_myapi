@@ -621,6 +621,11 @@ function myapi_payment_fetch($unit_id, $page, $limit, $sort, $from = NULL, $to =
   $query->addField('tban', 'name', 'bank_name');
 
   $query->orderBy('ffec.field_fecha_de_pago_value', $sort === 'asc' ? 'ASC' : 'DESC');
+  // Deterministic tie-breaker: payments sharing the same payment_date would
+  // otherwise come back in an unstable order across requests (and could shift
+  // between pages), because SQL does not guarantee row order for ties. nid is
+  // unique, never NULL and immutable, so it makes the ordering reproducible.
+  $query->orderBy('n.nid', $sort === 'asc' ? 'ASC' : 'DESC');
   if ($limit !== -1) {
     $query->range(($page - 1) * $limit, $limit);
   }
