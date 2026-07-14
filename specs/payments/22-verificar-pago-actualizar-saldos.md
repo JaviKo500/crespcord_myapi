@@ -1,6 +1,6 @@
 # 22 — Verificar pago: actualizar saldos y completar (`hook_node_presave`)
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-07-14
 - **Dependencias:**
   - `20-register-payment` (Implemented) — crea los nodos `pagos` con `field_estado_pago = "Pendiente de verificar"`, que es el estado inicial desde el cual dispara este hook. Reutiliza los mismos machine names (`field_vivienda`, `field_valor`, `field_estado_pago`).
@@ -164,31 +164,31 @@ Las 4 `schedule_delete` de la regla se replican borrando las filas pendientes de
 ## Criterios de aceptación
 
 **Disparo correcto**
-- [ ] Guardar un pago editándolo de `field_estado_pago` `"Pendiente de verificar"` a `"Nuevo"` deja el pago persistido como `"Completado"` (nunca queda `"Nuevo"` en BD).
-- [ ] Tras la verificación, `field_saldo_actual` de la vivienda referenciada = saldo anterior **−** `field_valor` del pago.
-- [ ] Tras la verificación, `field_saldo_caja` del condominio de esa vivienda = caja anterior **+** `field_valor` del pago.
-- [ ] La vivienda y el condominio quedan con una **revisión nueva** cada uno tras la actualización.
-- [ ] Las filas de `rules_scheduler` con `identifier` `recordatorio {nid}`, `penalizacion 10 {nid}`, `penalizacion 15 {nid}` y `penalizacion 31 {nid}` (donde `{nid}` = nid de la vivienda) quedan borradas; si no existían, no hay error.
+- [x] Guardar un pago editándolo de `field_estado_pago` `"Pendiente de verificar"` a `"Nuevo"` deja el pago persistido como `"Completado"` (nunca queda `"Nuevo"` en BD).
+- [x] Tras la verificación, `field_saldo_actual` de la vivienda referenciada = saldo anterior **−** `field_valor` del pago.
+- [x] Tras la verificación, `field_saldo_caja` del condominio de esa vivienda = caja anterior **+** `field_valor` del pago.
+- [x] La vivienda y el condominio quedan con una **revisión nueva** cada uno tras la actualización.
+- [x] Las filas de `rules_scheduler` con `identifier` `recordatorio {nid}`, `penalizacion 10 {nid}`, `penalizacion 15 {nid}` y `penalizacion 31 {nid}` (donde `{nid}` = nid de la vivienda) quedan borradas; si no existían, no hay error.
 
 **No dispara / idempotencia**
-- [ ] Crear un pago nuevo directamente con estado `"Nuevo"` (sin `$node->original`) **no** aplica saldos ni cambia el estado a `"Completado"`.
-- [ ] Re-guardar un pago que ya está en `"Completado"` (cambiando o no otros campos) **no** vuelve a mover saldos ni cancela tareas.
-- [ ] Editar un pago de `"Completado"` a `"Nuevo"` **no** dispara la lógica (el estado anterior no es `"Pendiente de verificar"`).
-- [ ] Guardar nodos que no son `pagos` (`vivienda`, `condominio`, cualquier otro tipo) sale del hook en la primera línea, sin efecto ni recursión.
+- [x] Crear un pago nuevo directamente con estado `"Nuevo"` (sin `$node->original`) **no** aplica saldos ni cambia el estado a `"Completado"`.
+- [x] Re-guardar un pago que ya está en `"Completado"` (cambiando o no otros campos) **no** vuelve a mover saldos ni cancela tareas.
+- [x] Editar un pago de `"Completado"` a `"Nuevo"` **no** dispara la lógica (el estado anterior no es `"Pendiente de verificar"`).
+- [x] Guardar nodos que no son `pagos` (`vivienda`, `condominio`, cualquier otro tipo) sale del hook en la primera línea, sin efecto ni recursión.
 
 **Precondiciones que abortan sin efecto**
-- [ ] Un pago sin `field_vivienda`, o cuya vivienda no existe / no es bundle `vivienda` / no está publicada → el hook no toca saldos, no cancela tareas y **no** fuerza `"Completado"` (el pago conserva el estado entrante).
-- [ ] Una vivienda sin `field_condominio`, o cuyo condominio no existe / no es bundle `condominio` → mismo comportamiento: sin efecto y sin forzar `"Completado"`.
-- [ ] Un pago con `field_valor` ausente, no numérico o `≤ 0` → sin efecto y sin forzar `"Completado"`.
+- [x] Un pago sin `field_vivienda`, o cuya vivienda no existe / no es bundle `vivienda` / no está publicada → el hook no toca saldos, no cancela tareas y **no** fuerza `"Completado"` (el pago conserva el estado entrante).
+- [x] Una vivienda sin `field_condominio`, o cuyo condominio no existe / no es bundle `condominio` → mismo comportamiento: sin efecto y sin forzar `"Completado"`.
+- [x] Un pago con `field_valor` ausente, no numérico o `≤ 0` → sin efecto y sin forzar `"Completado"`.
 
 **Saldos en `NULL`**
-- [ ] Vivienda sin fila/valor en `field_saldo_actual` → se trata como `0` y queda `0 − field_valor`.
-- [ ] Condominio sin fila/valor en `field_saldo_caja` → se trata como `0` y queda `0 + field_valor`.
+- [x] Vivienda sin fila/valor en `field_saldo_actual` → se trata como `0` y queda `0 − field_valor`.
+- [x] Condominio sin fila/valor en `field_saldo_caja` → se trata como `0` y queda `0 + field_valor`.
 
 **Infra / no regresión**
-- [ ] `includes/myapi.payment_workflow.inc` está listado en `myapi.info` y el módulo carga sin errores tras `drush cc all`.
-- [ ] `docs/payment-workflow.md` describe disparador, precondiciones, efectos sobre saldos/estado/revisiones y las 4 tareas canceladas.
-- [ ] Registrar un pago (spec 20) sigue funcionando idéntico y sigue creándolo en `"Pendiente de verificar"`.
+- [x] `includes/myapi.payment_workflow.inc` está listado en `myapi.info` y el módulo carga sin errores tras `drush cc all`.
+- [x] `docs/payment-workflow.md` describe disparador, precondiciones, efectos sobre saldos/estado/revisiones y las 4 tareas canceladas.
+- [x] Registrar un pago (spec 20) sigue funcionando idéntico y sigue creándolo en `"Pendiente de verificar"`.
 
 ---
 
