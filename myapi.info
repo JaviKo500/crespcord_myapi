@@ -24,3 +24,4 @@ files[] = resources/expense.resource.inc
 files[] = resources/condominium.resource.inc
 files[] = resources/bank.resource.inc
 files[] = resources/payment_method.resource.inc
+files[] = includes/myapi.payment_workflow.inc
