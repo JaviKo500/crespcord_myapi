@@ -144,3 +144,21 @@ function myapi_mail($key, &$message, $params) {
     myapi_mail_format_password_reset($message, $params);
   }
 }
+
+/**
+ * Implements hook_node_presave().
+ *
+ * Glue only: ignores everything that is not a 'pagos' node and delegates the
+ * payment verification workflow to includes/myapi.payment_workflow.inc. The
+ * type guard on the first line keeps every other node save untouched and avoids
+ * recursion when the workflow re-saves the 'vivienda' and 'condominio' nodes.
+ */
+function myapi_node_presave($node) {
+  if ($node->type !== 'pagos') {
+    return;
+  }
+  module_load_include('inc', 'myapi', 'includes/myapi.payment_workflow');
+  if (myapi_payment_is_verification_transition($node)) {
+    myapi_payment_apply_verification($node);
+  }
+}

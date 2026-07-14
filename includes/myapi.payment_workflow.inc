@@ -73,3 +73,44 @@ function myapi_payment_is_verification_transition($node) {
   return $previous === MYAPI_PAYMENT_STATUS_PENDING
     && $incoming === MYAPI_PAYMENT_STATUS_TRIGGER;
 }
+
+/**
+ * Applies the verification workflow to a 'pagos' node in presave.
+ *
+ * Validates the preconditions and, only if they all pass, discounts the amount
+ * from the unit balance, adds it to the condominium cash balance, forces the
+ * payment to "Completado" and cancels the pending scheduled tasks. If any
+ * precondition fails it returns without any effect: balances are untouched and
+ * the payment keeps its incoming status (it is NOT forced to "Completado").
+ *
+ * @param object $node  The 'pagos' node being saved (modified in place).
+ */
+function myapi_payment_apply_verification($node) {
+  // Precondition 1: the amount must be numeric and strictly positive.
+  $amount = myapi_payment_field_value($node, 'field_valor');
+  if (!is_numeric($amount) || (float) $amount <= 0) {
+    return;
+  }
+
+  // Precondition 2: the payment must reference a published 'vivienda' node.
+  if (!isset($node->field_vivienda[LANGUAGE_NONE][0]['target_id'])) {
+    return;
+  }
+  $vivienda_nid = $node->field_vivienda[LANGUAGE_NONE][0]['target_id'];
+  $vivienda = node_load($vivienda_nid);
+  if (!$vivienda || $vivienda->type !== 'vivienda' || empty($vivienda->status)) {
+    return;
+  }
+
+  // Precondition 3: the unit must reference an existing 'condominio' node.
+  if (!isset($vivienda->field_condominio[LANGUAGE_NONE][0]['target_id'])) {
+    return;
+  }
+  $condominio_nid = $vivienda->field_condominio[LANGUAGE_NONE][0]['target_id'];
+  $condominio = node_load($condominio_nid);
+  if (!$condominio || $condominio->type !== 'condominio') {
+    return;
+  }
+
+  // Balance updates and scheduled-task cancellation are added in steps 6-7.
+}
