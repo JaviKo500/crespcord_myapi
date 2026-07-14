@@ -112,5 +112,52 @@ function myapi_payment_apply_verification($node) {
     return;
   }
 
-  // Balance updates and scheduled-task cancellation are added in steps 6-7.
+  // Discount the amount from the unit balance (NULL treated as 0) and save it
+  // as a new revision.
+  $saldo = (float) myapi_payment_field_value($vivienda, 'field_saldo_actual');
+  $vivienda->field_saldo_actual[LANGUAGE_NONE][0]['value'] = $saldo - (float) $amount;
+  $vivienda->revision = 1;
+  node_save($vivienda);
+
+  // Add the amount to the condominium cash balance (NULL treated as 0) and save
+  // it as a new revision.
+  $caja = (float) myapi_payment_field_value($condominio, 'field_saldo_caja');
+  $condominio->field_saldo_caja[LANGUAGE_NONE][0]['value'] = $caja + (float) $amount;
+  $condominio->revision = 1;
+  node_save($condominio);
+
+  // Force the payment status on the incoming node: the in-progress node_save()
+  // persists "Completado" directly, so "Nuevo" is never stored and there is no
+  // second save nor recursion on the payment itself.
+  $node->field_estado_pago[LANGUAGE_NONE][0]['value'] = MYAPI_PAYMENT_STATUS_COMPLETED;
+
+  // Cancel the pending reminder/penalty tasks scheduled for this unit.
+  myapi_payment_cancel_scheduled_tasks($vivienda_nid);
+}
+
+/**
+ * Cancels the pending rules_scheduler tasks of a unit.
+ *
+ * Replicates the four schedule_delete of the legacy rule by removing the
+ * pending rows of the reminder and penalty components for this unit. Each row
+ * is identified by its component name ('config') and identifier, where {nid} is
+ * the unit nid. The delete is idempotent: if no matching row exists, nothing is
+ * removed and no error is raised.
+ *
+ * @param int $vivienda_nid  The nid of the referenced 'vivienda' node.
+ */
+function myapi_payment_cancel_scheduled_tasks($vivienda_nid) {
+  $tasks = array(
+    'rules_recordatorio_pago'              => 'recordatorio ' . $vivienda_nid,
+    'rules_recalcular_con_penalizacion'    => 'penalizacion 10 ' . $vivienda_nid,
+    'rules_recalcular_con_penalizacion_15' => 'penalizacion 15 ' . $vivienda_nid,
+    'rules_recalcular_con_penalizacion_31' => 'penalizacion 31 ' . $vivienda_nid,
+  );
+
+  foreach ($tasks as $config => $identifier) {
+    db_delete('rules_scheduler')
+      ->condition('config', $config)
+      ->condition('identifier', $identifier)
+      ->execute();
+  }
 }
