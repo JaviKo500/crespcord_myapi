@@ -58,7 +58,7 @@ The tests are packaged as a dev-only companion module, `myapi_test`
 `myapi.install`, `myapi.module`, `includes/` and `resources/`.
 
 **Prerequisites:** SSH access to the server (`scripts/crespcord.pem`), `drush`
-installed there.
+installed there (used only to enable/disable `myapi_test`).
 
 **Run:**
 
@@ -67,15 +67,49 @@ scripts/run-integration-tests.sh    # or .ps1 on Windows
 ```
 
 This uploads `tests/integration/` to `sites/all/modules/myapi_test`, runs
-`drush en myapi_test -y && drush test-run MyapiAuthTestCase`, and disables the
-module again at the end — **even if the test run itself fails** (a
-trap/`finally` block guarantees the disable step runs). If that disable step
-also fails (e.g. the SSH connection dropped), disable it by hand:
+`drush en myapi_test -y` followed by Drupal core's own SimpleTest runner, and
+disables the module again at the end — **even if the test run itself fails** (a
+trap/`finally` block guarantees the cleanup runs). If that cleanup also fails
+(e.g. the SSH connection dropped), undo it by hand:
 
 ```bash
 ssh -i scripts/crespcord.pem ubuntu@crespcord.lamotora.com \
   "cd /var/www/html && sudo -u www-data drush dis myapi_test -y"
 ```
+
+**Design constraints — discovered while getting the suite green** (all against
+the production server, Drush 8 / PHP 7.4):
+
+- **The runner is `scripts/run-tests.sh`, not `drush test-run`.** Drush 8
+  dropped the `test-run`/`test-clean` commands that Drush 5/6 shipped; Drupal
+  core's native runner is the supported path:
+  `php scripts/run-tests.sh --class MyapiAuthTestCase --url <site>`.
+- **`run-tests.sh` scans *every* `.test` file on the site to discover
+  classes.** A single contrib file that does not parse under PHP 7.4
+  (`sites/all/modules/rules_forms/rules_forms.test`) fataled the whole run.
+  The script moves that file aside for the duration of the run and restores it
+  in the cleanup block. Safe because the module is disabled and `.test` files
+  only load during test runs — even if the restore is skipped, production
+  runtime is unaffected. If discovery starts fataling again, lint the site's
+  `.test` files (`php -l`) to find the new offender.
+- **The reset email needs the mail system forced back to `TestingMailSystem`
+  in `setUp()`.** `myapi_enable()` (in `myapi.install`) maps the
+  `myapi_password_reset` mail key to `MyapiHtmlMailSystem`, whose `mail()`
+  really sends instead of storing the message in SimpleTest's collector — so
+  `drupalGetMails()` would come back empty. `setUp()` rewrites the sandbox's
+  `mail_system` variable for that key only; production code is never touched.
+- **Raw `curlExec()` does not refresh the parent's variables.** Unlike
+  `drupalGet()`, `curlExec()` skips `refreshVariables()`, so changes the
+  request thread made to variables (notably `drupal_test_email_collector`,
+  which backs `drupalGetMails()`) stay invisible to the test. `myapiRequest()`
+  calls `refreshVariables()` after every request, exactly as `drupalGet()`
+  does.
+- **Expect ~14 harmless exceptions from the contrib `entity` module.**
+  `entity_metadata_convert_schema()` emits PHP 7.4 notices/warnings during the
+  test bootstrap. They come from contrib code, not from `myapi` or these tests
+  (no assertion is involved), but SimpleTest counts them, so `run-tests.sh`
+  exits non-zero even on a fully passing run. Judge the result by the
+  **`N pases, 0 fallos`** line, not the exit code.
 
 ---
 
