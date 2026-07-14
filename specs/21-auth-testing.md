@@ -1,6 +1,6 @@
 # 21 — Tests unitarios, de integración y e2e para `/api/v1/auth`
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-07-11
 - **Dependencias:**
   - `02-login-tokens` (Implemented)
@@ -122,23 +122,23 @@ files[] = MyapiAuthTestCase.test
 
 ## Criterios de aceptación
 
-- [ ] `composer install && vendor/bin/phpunit` corre en verde sin bootstrapear Drupal.
-- [ ] `TokenTest`: `myapi_token_hash()` es determinístico (mismo input → mismo hash) y de 64 hex chars; `generate_access()` devuelve 64 hex chars distintos en cada llamada; `generate_refresh()` 128 hex chars distintos; `generate_reset()` 64 hex chars distintos.
-- [ ] `AuthBearerTest`: `myapi_auth_parse_bearer()` devuelve el token correcto con `"Bearer <token>"` (incluyendo prefijo case-insensitive), y `NULL` con header ausente, `"Basic xxx"`, o formato malformado.
-- [ ] `PasswordResetExecuteTest`: `myapi_auth_password_reset_execute()` devuelve `field_too_short` con password de 7 chars y `field_too_long` con 256, sin tocar la base de datos.
-- [ ] `drush en myapi_test -y && drush test-run MyapiAuthTestCase` corre en verde contra el sandbox de SimpleTest, sin afectar datos de producción.
-- [ ] Integración cubre `login`: éxito con tokens/user correctos, `invalid_credentials` (password incorrecto, usuario inexistente, usuario bloqueado — mismo body en los tres), `missing_field`/`invalid_field`, `429` tras 5 intentos fallidos del mismo username, `405` con método distinto de POST.
-- [ ] Integración cubre `refresh`: éxito con rotación verificada (el `refresh_token` viejo deja de servir), `token_expired`, `invalid_token`, `missing_field`, `405`.
-- [ ] Integración cubre `logout`: éxito con la fila quedando `revoked=1`, `invalid_token` por mismatch de sesión, `missing_authorization`, `missing_field`, `405`.
-- [ ] Integración cubre `forgot`: cuenta existente crea fila nueva en `myapi_password_reset_tokens` e invalida la anterior; cuenta inexistente responde el mismo `200` genérico sin crear fila; `missing_field`; `405`.
-- [ ] Integración cubre `reset`: roundtrip completo (token extraído de `$this->drupalGetMails()`) cambia el password de verdad y revoca todas las sesiones activas del usuario; `field_too_short`/`field_too_long`; `invalid_token`; `token_expired`; `405`.
-- [ ] `myapi_test` queda deshabilitado en el servidor al terminar `run-integration-tests.sh`, sin dejar rastros en producción.
-- [ ] `newman run tests/e2e/auth.postman_collection.json -e <env>` corre en verde contra `https://crespcord.lamotora.com`: `login → refresh → logout` completo, más los negativos baratos (`401`, `422`, `405`) y el smoke check de `/forgot`.
-- [ ] `node tests/e2e/password-reset-roundtrip.js` completa el roundtrip `forgot → IMAP → reset` contra producción y deja la cuenta de prueba con el mismo password que tenía antes (verificado con un login posterior exitoso).
-- [ ] Ninguna corrida de e2e se acerca a los umbrales reales de flood (máximo 1 intento fallido por caso negativo, muy por debajo de 5/20).
-- [ ] El archivo real de credenciales (`auth.postman_environment.json`, `.env` de IMAP) nunca queda commiteado — solo los `.example.json` con placeholders.
-- [ ] `tests/README.md` documenta cómo correr las 3 capas y cómo provisionar credenciales.
-- [ ] Ningún archivo de `tests/` es subido por `scripts/deploy.sh` (deploy normal de producción queda sin cambios).
+- [x] `composer install && vendor/bin/phpunit` corre en verde sin bootstrapear Drupal.
+- [x] `TokenTest`: `myapi_token_hash()` es determinístico (mismo input → mismo hash) y de 64 hex chars; `generate_access()` devuelve 64 hex chars distintos en cada llamada; `generate_refresh()` 128 hex chars distintos; `generate_reset()` 64 hex chars distintos.
+- [x] `AuthBearerTest`: `myapi_auth_parse_bearer()` devuelve el token correcto con `"Bearer <token>"` (incluyendo prefijo case-insensitive), y `NULL` con header ausente, `"Basic xxx"`, o formato malformado.
+- [x] `PasswordResetExecuteTest`: `myapi_auth_password_reset_execute()` devuelve `field_too_short` con password de 7 chars y `field_too_long` con 256, sin tocar la base de datos.
+- [x] `drush en myapi_test -y && drush test-run MyapiAuthTestCase` corre en verde contra el sandbox de SimpleTest, sin afectar datos de producción.
+- [x] Integración cubre `login`: éxito con tokens/user correctos, `invalid_credentials` (password incorrecto, usuario inexistente, usuario bloqueado — mismo body en los tres), `missing_field`/`invalid_field`, `429` tras 5 intentos fallidos del mismo username, `405` con método distinto de POST.
+- [x] Integración cubre `refresh`: éxito con rotación verificada (el `refresh_token` viejo deja de servir), `token_expired`, `invalid_token`, `missing_field`, `405`.
+- [x] Integración cubre `logout`: éxito con la fila quedando `revoked=1`, `invalid_token` por mismatch de sesión, `missing_authorization`, `missing_field`, `405`.
+- [x] Integración cubre `forgot`: cuenta existente crea fila nueva en `myapi_password_reset_tokens` e invalida la anterior; cuenta inexistente responde el mismo `200` genérico sin crear fila; `missing_field`; `405`.
+- [x] Integración cubre `reset`: roundtrip completo (token extraído de `$this->drupalGetMails()`) cambia el password de verdad y revoca todas las sesiones activas del usuario; `field_too_short`/`field_too_long`; `invalid_token`; `token_expired`; `405`.
+- [x] `myapi_test` queda deshabilitado en el servidor al terminar `run-integration-tests.sh`, sin dejar rastros en producción.
+- [x] `newman run tests/e2e/auth.postman_collection.json -e <env>` corre en verde contra `https://crespcord.lamotora.com`: `login → refresh → logout` completo, más los negativos baratos (`401`, `422`, `405`) y el smoke check de `/forgot`.
+- [x] `node tests/e2e/password-reset-roundtrip.js` completa el roundtrip `forgot → IMAP → reset` contra producción y deja la cuenta de prueba con el mismo password que tenía antes (verificado con un login posterior exitoso).
+- [x] Ninguna corrida de e2e se acerca a los umbrales reales de flood (máximo 1 intento fallido por caso negativo, muy por debajo de 5/20).
+- [x] El archivo real de credenciales (`auth.postman_environment.json`, `.env` de IMAP) nunca queda commiteado — solo los `.example.json` con placeholders.
+- [x] `tests/README.md` documenta cómo correr las 3 capas y cómo provisionar credenciales.
+- [x] Ningún archivo de `tests/` es subido por `scripts/deploy.sh` (deploy normal de producción queda sin cambios).
 
 ---
 
