@@ -13,7 +13,14 @@
 
 const fs = require('fs');
 const path = require('path');
+const dns = require('dns');
 const { ImapFlow } = require('imapflow');
+
+// Some networks have broken/black-holed IPv6 routes to mail providers: the
+// TCP handshake succeeds but no data ever follows, so the IMAP connection
+// hangs until the socket's own multi-minute timeout instead of failing fast.
+// Preferring IPv4 avoids that failure mode.
+dns.setDefaultResultOrder('ipv4first');
 
 const REQUIRED_KEYS = [
   'base_url', 'test_username', 'test_password',
