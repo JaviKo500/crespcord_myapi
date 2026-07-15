@@ -112,7 +112,7 @@ function myapi_menu() {
 
   $items['api/v1/payments/%'] = [
     'page callback'    => 'myapi_payment_detail_dispatch',
-    'page arguments'   => [2],
+    'page arguments'   => [3],
     'access callback'  => TRUE,
     'type'             => MENU_CALLBACK,
     'file'             => 'resources/payment.resource.inc',
