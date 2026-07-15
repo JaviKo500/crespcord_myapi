@@ -33,6 +33,12 @@ define('MYAPI_PAYMENT_STATUS_TRIGGER', 'Nuevo');
 define('MYAPI_PAYMENT_STATUS_COMPLETED', 'Completado');
 
 /**
+ * Payment status written when a pending payment is cancelled by its owner or
+ * occupant (PUT /api/v1/payments/%/cancel).
+ */
+define('MYAPI_PAYMENT_STATUS_CANCELLED', 'Anulado');
+
+/**
  * Reads the first value of a single-value Field API field on a node.
  *
  * Centralizes the LANGUAGE_NONE[0]['value'] access so callers do not repeat
