@@ -51,7 +51,7 @@ Fan-out: **una fila por usuario destinatario y por boletín**. Así el estado le
 | `source_nid` | int unsigned, null | nid del nodo origen (el `boletin`). Para deep-link e idempotencia. |
 | `type` | varchar(32), not null | Categoría de la notificación en el sentido 4.2.7. En este spec siempre `'bulletin'` (constante). **No** es `field_tipo_de_boletin`, que solo resuelve audiencia. |
 | `title` | varchar(255), not null | `node.title` del boletín (Asunto). |
-| `body` | text, null | `field_mensaje` (texto largo), tal cual, sin interpretar formato. |
+| `body` | text, null | `field_mensaje` (texto largo) **normalizado a texto plano** (`myapi_notification_plain_text()`: saltos de bloque → `\n`, `strip_tags`, decode de entidades). Se guarda ya plano porque el inbox y el push comparten este valor y un push con HTML mostraría etiquetas literales. |
 | `deep_link_target` | varchar(64), null | Sección de la app a abrir. En este spec `'bulletin'`. |
 | `deep_link_id` | int unsigned, null | Id para esa sección. En este spec = `source_nid`. |
 | `is_read` | int tiny, not null, default 0 | 0 = no leída, 1 = leída. |
@@ -65,7 +65,7 @@ Fan-out: **una fila por usuario destinatario y por boletín**. Así el estado le
 | Campo Drupal | Uso en este spec |
 |---|---|
 | `title` | `myapi_notifications.title`. |
-| `field_mensaje` (texto largo) | `myapi_notifications.body` (`field_mensaje_value`). |
+| `field_mensaje` (texto largo) | `myapi_notifications.body` (`field_mensaje_value`), normalizado a texto plano en el fan-out. |
 | `field_tipo_de_boletin` (lista) | **Alcance de audiencia**. Valores: `General`, `Condominio`, `Personalizado`. No se guarda como `type`. |
 | `field_enviar_a` (lista) | **Rol dentro del alcance**. Valores: `Propietarios`, `Ocupantes`, `Todos`. |
 | `field_condominio` (ER→condominio) | Condominio objetivo cuando alcance = `Condominio`. |
@@ -142,6 +142,14 @@ La app usa `data.target` + `data.id` para navegar. Es el mismo par que el inbox 
 2. **Diferido:** encolar en la cola `myapi_onesignal_push` un item por lote de external ids con el payload. El push HTTP (lento y con posible fallo de red) se procesa en `hook_cron` vía `hook_cron_queue_info()`, sin bloquear el guardado del nodo.
 
 `hook_cron_queue_info()` registra el worker `myapi_onesignal_queue_worker($item)` que llama a `myapi_onesignal_send()`. Un item que falle se reintenta en el siguiente cron (comportamiento estándar de la Queue API).
+
+**Operación (elegido):** en producción la cola se drena con un **cron dedicado** —
+`drush queue-run myapi_onesignal_push` cada minuto, ejecutado como `www-data`— en vez
+de depender del `drush cron` general. Aísla el push del resto de tareas del sitio y no
+requiere cambios de código. El nombre de la cola (`MYAPI_ONESIGNAL_QUEUE`) se define en
+`myapi.module` (siempre cargado) para que `hook_cron_queue_info()` registre el worker
+con el nombre correcto aunque el include aún no esté cargado. Ver el runbook completo en
+`docs/notifications-produccion.md`.
 
 ---
 
@@ -257,21 +265,23 @@ Cualquier método distinto del documentado en cada ruta → `405 method_not_allo
 
 ## Criterios de aceptación
 
-- [ ] `drush updb` crea `myapi_notifications`; el módulo se habilita sin error en un sitio limpio y en uno ya instalado (`myapi_update_7004`).
-- [ ] Crear un `boletin` **publicado** con `field_tipo_de_boletin = Condominio`, `field_condominio = X`, `field_enviar_a = Todos` inserta una fila por cada propietario/ocupante activo de las unidades de X, con `is_read = 0`, `type = 'bulletin'`, `title`/`body` del nodo y `deep_link_target='bulletin'`, `deep_link_id = nid`.
-- [ ] `field_enviar_a = Propietarios` inserta solo para propietarios; `= Ocupantes` solo para ocupantes (uniendo `field_ocupante` + `field_ocupantes`).
-- [ ] `field_tipo_de_boletin = General` alcanza a todas las unidades publicadas, filtrado por `field_enviar_a`.
-- [ ] `field_tipo_de_boletin = Personalizado` inserta solo para los usuarios de `field_personalizar` (rol Propietarios) y/o `field_ocupantes` (rol Ocupantes) según `field_enviar_a`, ignorando `field_condominio`.
-- [ ] Un usuario que sea a la vez propietario y ocupante (o esté en varias unidades del alcance) recibe **una sola** fila (dedupe).
-- [ ] Un boletín guardado como **borrador** (`status = 0`) no inserta filas ni encola push.
-- [ ] Con `myapi_onesignal_app_id`/`myapi_onesignal_rest_api_key` seteadas, se encola y el cron dispara `myapi_onesignal_send()` con `include_external_user_ids` = uids destinatarios y `data.target/id` correctos. Sin las variables, el inbox se llena igual y solo se loguea un warning (no hay push, no hay fatal).
-- [ ] `GET /api/v1/notifications` devuelve las notificaciones del usuario en `created DESC`, con `unread_count`, `pagination`, e `is_read` como booleano.
-- [ ] `?unread=1` devuelve solo no leídas; `?page`/`?limit` paginan; `limit` se clampa a `[1,50]`; `-1` devuelve todas sin paginar; valores inválidos caen a default sin 422.
-- [ ] `PUT /api/v1/notifications/%/read` marca la propia como leída (setea `read_at`), es idempotente, y devuelve `404 notification_not_found` para un id inexistente o de otro usuario.
-- [ ] `PUT /api/v1/notifications/read-all` marca todas las no leídas y devuelve `data.marked`.
-- [ ] Sin `Authorization` → `401 missing_authorization`; token inválido → `401 invalid_token`; método incorrecto en cada ruta → `405 method_not_allowed`.
-- [ ] Un usuario nunca ve ni marca notificaciones de otro `uid`.
-- [ ] `docs/notification.md` documenta los 3 endpoints. `drush cc all` sin errores.
+> Leyenda: `[x]` = verificado por **revisión de código estático** (lint + tests unitarios 16/16 + trazado del flujo). `[ ]` = requiere un **Drupal en marcha** para observar el efecto (creación real de tabla, cron disparando el HTTP a OneSignal). El código de esos ítems está implementado y trazado; falta la ejecución en el entorno.
+
+- [ ] `drush updb` crea `myapi_notifications`; el módulo se habilita sin error en un sitio limpio y en uno ya instalado (`myapi_update_7004`). — *Código correcto (schema + `myapi_update_7004`); requiere `drush updb`.*
+- [x] Crear un `boletin` **publicado** con `field_tipo_de_boletin = Condominio`, `field_condominio = X`, `field_enviar_a = Todos` inserta una fila por cada propietario/ocupante activo de las unidades de X, con `is_read = 0`, `type = 'bulletin'`, `title`/`body` del nodo y `deep_link_target='bulletin'`, `deep_link_id = nid`. — *Flujo `hook_node_insert → create_from_boletin → recipient_uids(Condominio,todos) → create()` trazado; valores fijados por `create_from_boletin()`.*
+- [x] `field_enviar_a = Propietarios` inserta solo para propietarios; `= Ocupantes` solo para ocupantes (uniendo `field_ocupante` + `field_ocupantes`). — *`myapi_unit_member_uids()`.*
+- [x] `field_tipo_de_boletin = General` alcanza a todas las unidades publicadas, filtrado por `field_enviar_a`. — *`recipient_uids` rama General (`node.type=vivienda, status=1`).*
+- [x] `field_tipo_de_boletin = Personalizado` inserta solo para los usuarios de `field_personalizar` (rol Propietarios) y/o `field_ocupantes` (rol Ocupantes) según `field_enviar_a`, ignorando `field_condominio`. — *Rama Personalizado.*
+- [x] Un usuario que sea a la vez propietario y ocupante (o esté en varias unidades del alcance) recibe **una sola** fila (dedupe). — *`array_unique` en `recipient_uids` y en `create()`.*
+- [x] Un boletín guardado como **borrador** (`status = 0`) no inserta filas ni encola push. — *Guard `status != 1` en `hook_node_insert`.*
+- [ ] Con `myapi_onesignal_app_id`/`myapi_onesignal_rest_api_key` seteadas, se encola y el cron dispara `myapi_onesignal_send()` con `include_external_user_ids` = uids destinatarios y `data.target/id` correctos. Sin las variables, el inbox se llena igual y solo se loguea un warning (no hay push, no hay fatal). — *Encolado y degradación sin credenciales verificados en código; el disparo real por cron requiere `drush cron`.*
+- [x] `GET /api/v1/notifications` devuelve las notificaciones del usuario en `created DESC`, con `unread_count`, `pagination`, e `is_read` como booleano. — *`myapi_notification_list()` + `build_item()`.*
+- [x] `?unread=1` devuelve solo no leídas; `?page`/`?limit` paginan; `limit` se clampa a `[1,50]`; `-1` devuelve todas sin paginar; valores inválidos caen a default sin 422. — *Parse laxo en `list()` (mismo patrón que recibos).*
+- [x] `PUT /api/v1/notifications/%/read` marca la propia como leída (setea `read_at`), es idempotente, y devuelve `404 notification_not_found` para un id inexistente o de otro usuario. — *`mark_read()`: `WHERE id AND uid`, guard `!is_read`.*
+- [x] `PUT /api/v1/notifications/read-all` marca todas las no leídas y devuelve `data.marked`. — *`mark_all_read()`.*
+- [x] Sin `Authorization` → `401 missing_authorization`; token inválido → `401 invalid_token`; método incorrecto en cada ruta → `405 method_not_allowed`. — *`myapi_auth_require_access_token()` + dispatchers (confirmado).* 
+- [x] Un usuario nunca ve ni marca notificaciones de otro `uid`. — *Toda query filtra `condition('uid', $uid)`.*
+- [x] `docs/notification.md` documenta los 3 endpoints. `drush cc all` sin errores. — *Doc creado; `drush cc all` (recarga de rutas) requiere entorno.*
 
 ---
 
@@ -284,11 +294,13 @@ Cualquier método distinto del documentado en cada ruta → `405 method_not_allo
 | Targeting | External User ID (`OneSignal.login(uid)`) | Guardar `player_id` en tabla `myapi_devices` + endpoint `/devices` | OneSignal gestiona el mapeo dispositivo→usuario; se ahorra tabla, endpoint y sincronización de tokens obsoletos. |
 | Disparo | `hook_node_insert` sobre `boletin` publicado | Endpoint `POST /api/v1/notifications` | El admin crea boletines desde el backend de Drupal; mismo patrón que `hook_node_presave` de `pagos`. |
 | Envío push | Encolado (Queue API + cron) | Llamada HTTP síncrona dentro del hook | No bloquear el guardado del nodo ni fallar el `node_save` si OneSignal tarda/cae; el push es best-effort. |
+| Disparo del envío (operación) | **Cron dedicado a la cola** (`drush queue-run myapi_onesignal_push` cada minuto, como `www-data`) | (a) `drush cron` general; (b) envío no bloqueante con `drupal_register_shutdown_function` + `fastcgi_finish_request` (sin cron, sin reintento) | El cron dedicado procesa solo la cola de push (aislado, ligero), conserva el reintento de la Queue API y **no requiere cambios de código**. El envío en shutdown eliminaría el cron pero pierde el reintento. Detalle operativo en `docs/notifications-produccion.md`. |
 | `type` de la notificación | Constante `'bulletin'` | Usar `field_tipo_de_boletin` (General/Condominio/Personalizado) | Ese campo resuelve **audiencia**, no la categoría 4.2.7; un boletín siempre es de tipo "bulletin". |
 | Fuente de verdad | Inbox (DB); push best-effort | Depender del push para "recibir" | El push puede perderse; el requisito pide un inbox local consultable. |
 | Alcance de la entrega | Infra + solo disparador `boletin` | Los 3 disparadores (boletin, alícuota, pago) juntos | Acotar; el helper `myapi_notification_create()` queda listo para reusar. |
 | Acceso denegado en `/read` | `404 notification_not_found` uniforme | Distinguir 403 (ajena) de 404 (inexistente) | No revela si un id de otro usuario existe (mismo criterio que `unit_access_denied`). |
 | Config de credenciales | Variables Drupal (`variable_get`) seteadas en `settings.php`/`drush` | Hardcodear o campo en un nodo de config | Secreto fuera del repo; sin acoplar a un content type. |
+| Formato de `body` | Normalizar `field_mensaje` a **texto plano** en el fan-out | Guardar HTML crudo; o HTML saneado + render con `flutter_html` en la app | Un solo valor sirve al inbox y al push; el push no admite HTML. El formato rico (campo `body_html` saneado) queda para un spec posterior si producto lo pide. |
 
 ---
 
