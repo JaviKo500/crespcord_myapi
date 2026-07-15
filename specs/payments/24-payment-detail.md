@@ -1,6 +1,6 @@
 # 24 — Detalle de un pago (`GET /api/v1/payments/%`)
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-07-14
 - **Dependencias:**
   - `05-middleware-access-token-logout` (Implemented) — `myapi_auth_require_access_token()`.
@@ -121,22 +121,22 @@ Sin `message` (respuesta de solo lectura).
 ## Criterios de aceptación
 
 **Éxito**
-- [ ] `GET /api/v1/payments/{id}` con token válido y pago propio (propietario u ocupante de la vivienda) en cualquier estado distinto de `"Nuevo"` devuelve `200` con `{ "success": true, "data": { "payment": {...} } }`, sin `message`.
-- [ ] La respuesta incluye exactamente las mismas claves que `myapi_payment_build_created_item()`: `id`, `title`, `unit_id`, `payment_date`, `status`, `payment_method`, `reference`, `amount`, `bank_id`, `bank_name`, `file_id`, `file_name`, `detail`.
-- [ ] Un pago con archivo adjunto y banco devuelve `file_id`/`file_name` y `bank_id`/`bank_name` no nulos; uno en Efectivo sin banco devuelve `bank_id`/`bank_name` en `null` juntos; uno sin archivo devuelve `file_id`/`file_name` en `null` juntos.
+- [x] `GET /api/v1/payments/{id}` con token válido y pago propio (propietario u ocupante de la vivienda) en cualquier estado distinto de `"Nuevo"` devuelve `200` con `{ "success": true, "data": { "payment": {...} } }`, sin `message`.
+- [x] La respuesta incluye exactamente las mismas claves que `myapi_payment_build_created_item()`: `id`, `title`, `unit_id`, `payment_date`, `status`, `payment_method`, `reference`, `amount`, `bank_id`, `bank_name`, `file_id`, `file_name`, `detail`.
+- [x] Un pago con archivo adjunto y banco devuelve `file_id`/`file_name` y `bank_id`/`bank_name` no nulos; uno en Efectivo sin banco devuelve `bank_id`/`bank_name` en `null` juntos; uno sin archivo devuelve `file_id`/`file_name` en `null` juntos.
 
 **Estado y existencia**
-- [ ] `payment_id` inexistente, o de un nodo que no es tipo `pagos` → `404 payment_not_found`.
-- [ ] Un pago en estado `"Nuevo"` (o sin fila de estado) → `404 payment_not_found`, indistinguible de uno inexistente.
+- [x] `payment_id` inexistente, o de un nodo que no es tipo `pagos` → `404 payment_not_found`.
+- [x] Un pago en estado `"Nuevo"` (o sin fila de estado) → `404 payment_not_found`, indistinguible de uno inexistente.
 
 **Autenticación y acceso**
-- [ ] Sin header `Authorization` → `401 missing_authorization`; con token inválido/expirado → `401 invalid_token`.
-- [ ] `payment_id` de un pago cuya vivienda el usuario autenticado **no** posee ni ocupa → `403 unit_access_denied`.
+- [x] Sin header `Authorization` → `401 missing_authorization`; con token inválido/expirado → `401 invalid_token`.
+- [x] `payment_id` de un pago cuya vivienda el usuario autenticado **no** posee ni ocupa → `403 unit_access_denied`.
 
 **Método y no regresión**
-- [ ] Cualquier método distinto de `GET` sobre `/api/v1/payments/{id}` (`POST`, `PUT`, `DELETE`) → `405 method_not_allowed`.
-- [ ] `GET /api/v1/units/%/payments` (spec 14), `POST /api/v1/payments` (spec 20) y `PUT /api/v1/payments/%/cancel` (spec 23) siguen funcionando idénticos; no se modifica ninguna de sus rutas ni lógica.
-- [ ] `docs/payment.md` incluye la sección `GET /api/v1/payments/%` completa; `drush cc all` no reporta errores.
+- [x] Cualquier método distinto de `GET` sobre `/api/v1/payments/{id}` (`POST`, `PUT`, `DELETE`) → `405 method_not_allowed`.
+- [x] `GET /api/v1/units/%/payments` (spec 14), `POST /api/v1/payments` (spec 20) y `PUT /api/v1/payments/%/cancel` (spec 23) siguen funcionando idénticos; no se modifica ninguna de sus rutas ni lógica.
+- [x] `docs/payment.md` incluye la sección `GET /api/v1/payments/%` completa; `drush cc all` no reporta errores.
 
 ---
 
