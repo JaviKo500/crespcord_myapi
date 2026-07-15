@@ -1,6 +1,6 @@
 # 23 — Anular un pago (`PUT /api/v1/payments/%/cancel`)
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-07-14
 - **Dependencias:**
   - `05-middleware-access-token-logout` (Implemented) — `myapi_auth_require_access_token()` que valida el Bearer access token y devuelve la fila (con `uid`), o corta con `401`.
@@ -162,30 +162,30 @@ Reutiliza `myapi_payment_build_created_item($node, $file, $bank_term)`, recargan
 ## Criterios de aceptación
 
 **Éxito**
-- [ ] `PUT /api/v1/payments/{id}/cancel` con token válido, pago propio en estado `"Pendiente de verificar"`, **sin** `reason` en el body devuelve `200` con `{ "success": true, "data": { "payment": {...} }, "message": ... }`; `payment.status` = `"Anulado"` y `payment.detail` queda como estaba antes (probablemente `null`).
-- [ ] El mismo caso **con** `{ "reason": "Comprobante duplicado" }` devuelve `200`, `payment.status` = `"Anulado"` y `payment.detail` = `"Comprobante duplicado"`.
-- [ ] Tras anular, el nodo en BD tiene `field_estado_pago` = `"Anulado"`; `field_archivo` (si había) y el resto de campos quedan intactos.
-- [ ] El archivo adjunto (si existía) conserva su fila en `file_usage`; no se borra ni se desvincula.
-- [ ] `GET /api/v1/units/%/payments` (spec 14) muestra el pago anulado con `status = "Anulado"` (no queda oculto, ya que el filtro de esa lista excluye solo `"Nuevo"`).
+- [x] `PUT /api/v1/payments/{id}/cancel` con token válido, pago propio en estado `"Pendiente de verificar"`, **sin** `reason` en el body devuelve `200` con `{ "success": true, "data": { "payment": {...} }, "message": ... }`; `payment.status` = `"Anulado"` y `payment.detail` queda como estaba antes (probablemente `null`). *(Verificado por revisión de código: `myapi_payment_cancel()` deja `field_detalle` intacto cuando `reason` está ausente. Pendiente confirmar con una llamada HTTP real.)*
+- [x] El mismo caso **con** `{ "reason": "Comprobante duplicado" }` devuelve `200`, `payment.status` = `"Anulado"` y `payment.detail` = `"Comprobante duplicado"`. *(Verificado por revisión de código; pendiente confirmar con una llamada HTTP real.)*
+- [x] Tras anular, el nodo en BD tiene `field_estado_pago` = `"Anulado"`; `field_archivo` (si había) y el resto de campos quedan intactos. *(Verificado por revisión de código: ningún otro campo se escribe. Pendiente confirmar contra la BD real.)*
+- [x] El archivo adjunto (si existía) conserva su fila en `file_usage`; no se borra ni se desvincula. *(Verificado por revisión de código: no hay llamada a `file_usage_delete()`/`file_delete()` en `myapi_payment_cancel()`. Pendiente confirmar contra la BD real.)*
+- [x] `GET /api/v1/units/%/payments` (spec 14) muestra el pago anulado con `status = "Anulado"` (no queda oculto, ya que el filtro de esa lista excluye solo `"Nuevo"`). *(Verificado por revisión de código: `MYAPI_PAYMENT_EXCLUDED_STATUS` sigue siendo `'Nuevo'`, no modificado por este spec. Pendiente confirmar con una llamada HTTP real.)*
 
 **`reason` inválido**
-- [ ] `reason` de más de 255 caracteres → `422 invalid_field` con `@field = "reason"`; el pago **no** se anula (conserva su estado y `field_detalle` previos).
-- [ ] `reason` vacío (`""`) o solo espacios → se trata como ausente: el pago se anula igual pero `field_detalle` no se toca.
+- [x] `reason` de más de 255 caracteres → `422 invalid_field` con `@field = "reason"`; el pago **no** se anula (conserva su estado y `field_detalle` previos). *(Verificado por revisión de código: el chequeo de longitud corre antes de tocar `field_estado_pago`/`node_save()`.)*
+- [x] `reason` vacío (`""`) o solo espacios → se trata como ausente: el pago se anula igual pero `field_detalle` no se toca. *(Verificado por revisión de código: `trim()` + comparación `!== ''`.)*
 
 **Autenticación y acceso**
-- [ ] Sin header `Authorization` → `401 missing_authorization`; con token inválido/expirado → `401 invalid_token`.
-- [ ] `payment_id` de un pago cuya vivienda el usuario autenticado **no** posee ni ocupa → `403 unit_access_denied`, y el pago no se modifica.
+- [x] Sin header `Authorization` → `401 missing_authorization`; con token inválido/expirado → `401 invalid_token`. *(Verificado por revisión de código: reutiliza `myapi_auth_require_access_token()` sin modificar, ya validado por spec 05.)*
+- [x] `payment_id` de un pago cuya vivienda el usuario autenticado **no** posee ni ocupa → `403 unit_access_denied`, y el pago no se modifica. *(Verificado por revisión de código: el chequeo de acceso corre antes de cualquier escritura.)*
 
 **Estado y existencia**
-- [ ] `payment_id` inexistente, o de un nodo que no es tipo `pagos` → `404 payment_not_found`.
-- [ ] Un pago en `"Nuevo"`, `"Completado"` o ya `"Anulado"` → `409 payment_not_pending`, sin modificar el nodo (idempotencia: anular dos veces el mismo pago falla la segunda vez).
+- [x] `payment_id` inexistente, o de un nodo que no es tipo `pagos` → `404 payment_not_found`. *(Verificado por revisión de código: `ctype_digit`/`node_load`/chequeo de `type` corren antes de acceso y estado, ambos casos con el mismo código de error.)*
+- [x] Un pago en `"Nuevo"`, `"Completado"` o ya `"Anulado"` → `409 payment_not_pending`, sin modificar el nodo (idempotencia: anular dos veces el mismo pago falla la segunda vez). *(Verificado por revisión de código: la comparación exige `=== MYAPI_PAYMENT_STATUS_PENDING` antes de escribir; una segunda llamada ve `"Anulado"` y corta.)*
 
 **Método y no regresión**
-- [ ] Cualquier método distinto de `PUT` sobre `/api/v1/payments/{id}/cancel` (`GET`, `POST`, `DELETE`) → `405 method_not_allowed`.
-- [ ] `POST /api/v1/payments` (spec 20) sigue funcionando igual; su respuesta `201` ahora incluye también la clave `detail` (siempre `null`, ya que la creación nunca la setea).
-- [ ] `GET /api/v1/units/%/payments` (spec 14) y el `hook_node_presave` de verificación (spec 22) siguen funcionando idénticos; no se modifica ninguna de sus rutas ni lógica.
-- [ ] Todas las claves de error/éxito nuevas (`payment_not_found`, `payment_not_pending`, `payment_cancelled`, y `invalid_field` reutilizada con `@field = reason`) están en el catálogo i18n y traducen en `es`/`en`.
-- [ ] `docs/payment.md` incluye la sección `PUT /api/v1/payments/%/cancel` completa y refleja el nuevo `detail` en la respuesta `201` de creación; `drush cc all` no reporta errores.
+- [x] Cualquier método distinto de `PUT` sobre `/api/v1/payments/{id}/cancel` (`GET`, `POST`, `DELETE`) → `405 method_not_allowed`. *(Verificado por revisión de código: `myapi_payment_cancel_dispatch()` solo acepta `PUT`.)*
+- [x] `POST /api/v1/payments` (spec 20) sigue funcionando igual; su respuesta `201` ahora incluye también la clave `detail` (siempre `null`, ya que la creación nunca la setea). *(Verificado por revisión de código: `myapi_payment_create()` no se tocó; solo se agregó la clave `detail` en `myapi_payment_build_created_item()`, compartida por ambos endpoints.)*
+- [x] `GET /api/v1/units/%/payments` (spec 14) y el `hook_node_presave` de verificación (spec 22) siguen funcionando idénticos; no se modifica ninguna de sus rutas ni lógica. *(Verificado por revisión de código: ningún archivo de esos flujos fue tocado excepto la constante nueva agregada en `myapi.payment_workflow.inc`, que no altera las existentes.)*
+- [x] Todas las claves de error/éxito nuevas (`payment_not_found`, `payment_not_pending`, `payment_cancelled`, y `invalid_field` reutilizada con `@field = reason`) están en el catálogo i18n y traducen en `es`/`en`. *(Verificado por revisión de código: las tres claves nuevas están en `includes/myapi.i18n.inc` en ambos idiomas; `invalid_field` ya existía.)*
+- [ ] `docs/payment.md` incluye la sección `PUT /api/v1/payments/%/cancel` completa y refleja el nuevo `detail` en la respuesta `201` de creación; `drush cc all` no reporta errores. *(Parcial: la doc está escrita y verificada. `drush cc all` **no** se pudo ejecutar en este entorno — `drush` no está disponible aquí. Pendiente correrlo en tu entorno con Drupal.)*
 
 ---
 
