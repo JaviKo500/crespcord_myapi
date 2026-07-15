@@ -16,6 +16,7 @@ module_load_include('inc', 'myapi', 'includes/myapi.i18n');
 module_load_include('inc', 'myapi', 'includes/myapi.token');
 module_load_include('inc', 'myapi', 'includes/myapi.auth');
 module_load_include('inc', 'myapi', 'includes/myapi.unit_access');
+module_load_include('inc', 'myapi', 'includes/myapi.payment_workflow');
 
 /**
  * Payments in this 'field_estado_pago' state are hidden by the endpoint.
@@ -57,6 +58,111 @@ function myapi_payment_create_dispatch() {
   else {
     myapi_error('method_not_allowed', 405);
   }
+}
+
+/**
+ * Dispatcher for /api/v1/payments/%/cancel.
+ *
+ * Routes by HTTP method. Only PUT is supported (cancel a pending payment); any
+ * other method returns 405. Authentication and the rest of the validations are
+ * resolved inside myapi_payment_cancel(), not here.
+ *
+ * @param int $payment_id  The 'pagos' nid from the route.
+ */
+function myapi_payment_cancel_dispatch($payment_id) {
+  $method = myapi_request_method();
+  if ($method === 'PUT') {
+    myapi_payment_cancel($payment_id);
+  }
+  else {
+    myapi_error('method_not_allowed', 405);
+  }
+}
+
+/**
+ * Handles PUT /api/v1/payments/%/cancel.
+ *
+ * Cancels a payment that belongs to the authenticated user's unit (owner or
+ * occupant) by rewriting field_estado_pago to "Anulado", but only when its
+ * current status is exactly "Pendiente de verificar". Every check aborts with
+ * its own error before anything is modified. An optional 'reason' in the JSON
+ * body is sanitized and stored in field_detalle when present and non-empty
+ * after trim(); otherwise field_detalle is left untouched. On success responds
+ * 200 with the updated payment and a translated message.
+ *
+ * See the ordered plan in specs/payments/23-anular-pago.md, step 4.
+ *
+ * @param mixed $payment_id  The 'pagos' nid from the route.
+ */
+function myapi_payment_cancel($payment_id) {
+  // 1. Authentication: valid Bearer access token, or 401.
+  $row = myapi_auth_require_access_token();
+  $uid = $row->uid;
+
+  // 2-3. payment_id must be a positive integer and reference an existing
+  // 'pagos' node; both "invalid id" and "not found" map to the same 404 so the
+  // client cannot distinguish them.
+  if (!ctype_digit((string) $payment_id) || (int) $payment_id <= 0) {
+    myapi_error('payment_not_found', 404);
+  }
+  $node = node_load((int) $payment_id);
+  if (!$node || $node->type !== 'pagos') {
+    myapi_error('payment_not_found', 404);
+  }
+
+  // 4. Access: the authenticated user must own or occupy the payment's unit.
+  $vivienda_nid = isset($node->field_vivienda[LANGUAGE_NONE][0]['target_id'])
+    ? $node->field_vivienda[LANGUAGE_NONE][0]['target_id']
+    : NULL;
+  if ($vivienda_nid === NULL || !in_array($vivienda_nid, myapi_unit_related_nids($uid))) {
+    myapi_error('unit_access_denied', 403);
+  }
+
+  // 5. Status: only a payment currently "Pendiente de verificar" may be
+  // cancelled; any other status (including an already-cancelled payment) is a
+  // 409, with no modification to the node.
+  $estado = myapi_payment_field_value($node, 'field_estado_pago');
+  if ($estado !== MYAPI_PAYMENT_STATUS_PENDING) {
+    myapi_error('payment_not_pending', 409);
+  }
+
+  // 6. Optional 'reason': read from the JSON body, trimmed. Empty or absent is
+  // treated as "no reason" (field_detalle is left untouched); otherwise it must
+  // be <= 255 chars (same limit as field_detalle_value) and is sanitized.
+  $body = myapi_request_body();
+  $reason_raw = isset($body['reason']) && is_string($body['reason']) ? trim($body['reason']) : NULL;
+  $reason = NULL;
+  if ($reason_raw !== NULL && $reason_raw !== '') {
+    if (strlen($reason_raw) > 255) {
+      myapi_error('invalid_field', 422, ['@field' => 'reason']);
+    }
+    $reason = check_plain($reason_raw);
+  }
+
+  // 7. Apply the cancellation.
+  $node->field_estado_pago[LANGUAGE_NONE][0]['value'] = MYAPI_PAYMENT_STATUS_CANCELLED;
+  if ($reason !== NULL) {
+    $node->field_detalle[LANGUAGE_NONE][0]['value'] = $reason;
+  }
+  node_save($node);
+
+  // 8. Reload the attachment and bank term for the response, same pattern as
+  // myapi_payment_create().
+  $file = NULL;
+  if (isset($node->field_archivo[LANGUAGE_NONE][0]['fid'])) {
+    $file = file_load($node->field_archivo[LANGUAGE_NONE][0]['fid']);
+  }
+  $term = NULL;
+  if (isset($node->field_banco[LANGUAGE_NONE][0]['tid'])) {
+    $term = taxonomy_term_load($node->field_banco[LANGUAGE_NONE][0]['tid']);
+  }
+
+  // 9. Respond 200 with the updated payment.
+  myapi_respond(
+    ['payment' => myapi_payment_build_created_item($node, $file, $term)],
+    200,
+    'payment_cancelled'
+  );
 }
 
 /**
@@ -411,6 +517,9 @@ function myapi_payment_build_created_item($node, $file, $bank_term = NULL) {
     'bank_name'      => $bank_term ? check_plain($bank_term->name) : NULL,
     'file_id'        => $file ? (int) $file->fid : NULL,
     'file_name'      => $file ? drupal_basename($file->uri) : NULL,
+    'detail'         => isset($node->field_detalle[LANGUAGE_NONE][0]['value'])
+      ? $node->field_detalle[LANGUAGE_NONE][0]['value']
+      : NULL,
   ];
 }
 
