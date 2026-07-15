@@ -138,6 +138,88 @@ function myapi_schema() {
     ],
   ];
 
+  $schema['myapi_notifications'] = [
+    'description' => 'Per-user notification inbox (fan-out: one row per recipient per source).',
+    'fields' => [
+      'id' => [
+        'description' => 'Primary key.',
+        'type'        => 'serial',
+        'unsigned'    => TRUE,
+        'not null'    => TRUE,
+      ],
+      'uid' => [
+        'description' => 'Logical FK to dr_users.uid. Recipient.',
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'not null'    => TRUE,
+      ],
+      'source_type' => [
+        'description' => "Origin of the notification. Always 'boletin' in this spec.",
+        'type'        => 'varchar',
+        'length'      => 32,
+        'not null'    => TRUE,
+      ],
+      'source_nid' => [
+        'description' => 'nid of the origin node (the boletin). For deep-link and idempotency.',
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'not null'    => FALSE,
+      ],
+      'type' => [
+        'description' => "Notification category (4.2.7). Always 'bulletin' in this spec.",
+        'type'        => 'varchar',
+        'length'      => 32,
+        'not null'    => TRUE,
+      ],
+      'title' => [
+        'description' => 'node.title of the boletin (Asunto).',
+        'type'        => 'varchar',
+        'length'      => 255,
+        'not null'    => TRUE,
+      ],
+      'body' => [
+        'description' => 'field_mensaje (long text), stored as-is.',
+        'type'        => 'text',
+        'not null'    => FALSE,
+      ],
+      'deep_link_target' => [
+        'description' => "App section to open. 'bulletin' in this spec.",
+        'type'        => 'varchar',
+        'length'      => 64,
+        'not null'    => FALSE,
+      ],
+      'deep_link_id' => [
+        'description' => 'Id for that section. Equals source_nid in this spec.',
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'not null'    => FALSE,
+      ],
+      'is_read' => [
+        'description' => '0 = unread, 1 = read.',
+        'type'        => 'int',
+        'size'        => 'tiny',
+        'not null'    => TRUE,
+        'default'     => 0,
+      ],
+      'created' => [
+        'description' => 'Unix timestamp when the row was created (fan-out).',
+        'type'        => 'int',
+        'not null'    => TRUE,
+      ],
+      'read_at' => [
+        'description' => 'Unix timestamp when marked read; NULL while unread.',
+        'type'        => 'int',
+        'not null'    => FALSE,
+      ],
+    ],
+    'primary key' => ['id'],
+    'indexes' => [
+      'uid'         => ['uid'],
+      'uid_is_read' => ['uid', 'is_read'],
+      'source'      => ['source_type', 'source_nid'],
+    ],
+  ];
+
   return $schema;
 }
 
@@ -205,4 +287,15 @@ function myapi_update_7002() {
  */
 function myapi_update_7003() {
   myapi_mail_system_register();
+}
+
+/**
+ * Creates the myapi_notifications table on sites where the module is already
+ * enabled.
+ */
+function myapi_update_7004() {
+  if (!db_table_exists('myapi_notifications')) {
+    $schema = drupal_get_schema_unprocessed('myapi', 'myapi_notifications');
+    db_create_table('myapi_notifications', $schema);
+  }
 }
