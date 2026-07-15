@@ -80,6 +80,25 @@ function myapi_payment_cancel_dispatch($payment_id) {
 }
 
 /**
+ * Dispatcher for /api/v1/payments/%.
+ *
+ * Routes by HTTP method. Only GET is supported (read a payment's detail); any
+ * other method returns 405. Authentication and the rest of the validations are
+ * resolved inside myapi_payment_detail(), not here.
+ *
+ * @param int $payment_id  The 'pagos' nid from the route.
+ */
+function myapi_payment_detail_dispatch($payment_id) {
+  $method = myapi_request_method();
+  if ($method === 'GET') {
+    myapi_payment_detail($payment_id);
+  }
+  else {
+    myapi_error('method_not_allowed', 405);
+  }
+}
+
+/**
  * Handles PUT /api/v1/payments/%/cancel.
  *
  * Cancels a payment that belongs to the authenticated user's unit (owner or
@@ -163,6 +182,68 @@ function myapi_payment_cancel($payment_id) {
     200,
     'payment_cancelled'
   );
+}
+
+/**
+ * Handles GET /api/v1/payments/%.
+ *
+ * Returns the full detail of a payment that belongs to the authenticated
+ * user's unit (owner or occupant), provided its estado is not the excluded
+ * one. Existence, type, and estado are all checked before access, so a
+ * payment hidden by estado responds identically to one that does not exist;
+ * a payment visible by estado but belonging to another unit responds with a
+ * 403. On success responds 200 with no message, reusing the same mapping and
+ * reload pattern as myapi_payment_cancel().
+ *
+ * See the ordered plan in specs/payments/24-payment-detail.md, step 3.
+ *
+ * @param mixed $payment_id  The 'pagos' nid from the route.
+ */
+function myapi_payment_detail($payment_id) {
+  // 1. Authentication: valid Bearer access token, or 401.
+  $row = myapi_auth_require_access_token();
+  $uid = $row->uid;
+
+  // 2-3. payment_id must be a positive integer and reference an existing
+  // 'pagos' node; both "invalid id" and "not found" map to the same 404 so the
+  // client cannot distinguish them.
+  if (!ctype_digit((string) $payment_id) || (int) $payment_id <= 0) {
+    myapi_error('payment_not_found', 404);
+  }
+  $node = node_load((int) $payment_id);
+  if (!$node || $node->type !== 'pagos') {
+    myapi_error('payment_not_found', 404);
+  }
+
+  // 4. Estado: a payment in the excluded state (or with no estado row) is
+  // hidden, same criterion and code as "does not exist". Checked before
+  // access, so estado-based visibility is resolved first.
+  $estado = myapi_payment_field_value($node, 'field_estado_pago');
+  if ($estado === MYAPI_PAYMENT_EXCLUDED_STATUS) {
+    myapi_error('payment_not_found', 404);
+  }
+
+  // 5. Access: the authenticated user must own or occupy the payment's unit.
+  $vivienda_nid = isset($node->field_vivienda[LANGUAGE_NONE][0]['target_id'])
+    ? $node->field_vivienda[LANGUAGE_NONE][0]['target_id']
+    : NULL;
+  if ($vivienda_nid === NULL || !in_array($vivienda_nid, myapi_unit_related_nids($uid))) {
+    myapi_error('unit_access_denied', 403);
+  }
+
+  // 6. Reload the attachment and bank term for the response, same pattern as
+  // myapi_payment_cancel().
+  $file = NULL;
+  if (isset($node->field_archivo[LANGUAGE_NONE][0]['fid'])) {
+    $file = file_load($node->field_archivo[LANGUAGE_NONE][0]['fid']);
+  }
+  $term = NULL;
+  if (isset($node->field_banco[LANGUAGE_NONE][0]['tid'])) {
+    $term = taxonomy_term_load($node->field_banco[LANGUAGE_NONE][0]['tid']);
+  }
+
+  // 7. Respond 200 with the payment (no message; read-only endpoint).
+  myapi_respond(['payment' => myapi_payment_build_created_item($node, $file, $term)], 200);
 }
 
 /**
