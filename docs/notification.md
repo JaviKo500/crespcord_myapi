@@ -10,6 +10,13 @@ plain `SELECT ... WHERE uid = ?`. In this release the only source is a published
 inserts a row for each, and enqueues a push. Every endpoint is authenticated and
 scoped to the caller — a user never sees or touches another user's rows.
 
+**Body is plain text.** `field_mensaje` may come from a WYSIWYG, so it is
+flattened to plain text at fan-out time (`myapi_notification_plain_text()`:
+block breaks → newlines, `strip_tags`, entity decode) before it is stored. The
+same value feeds both the inbox `body` and the push `contents`, and a push
+banner cannot render HTML. Rich formatting (a separate sanitized `body_html`) is
+left for a future spec.
+
 **Push is best-effort, the inbox is the source of truth.** The rows are written
 synchronously; the push is deferred to a cron queue (`myapi_onesignal_push`). If
 OneSignal is unconfigured or fails, the notification is still in the inbox — only

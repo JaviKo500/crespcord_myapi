@@ -52,6 +52,36 @@ function myapi_notification_field_value($node, $field) {
 }
 
 /**
+ * Reduces a rich-text (possibly HTML) value to clean plain text.
+ *
+ * field_mensaje may come from a WYSIWYG, so it can carry markup. The inbox and
+ * the push both need plain text (an HTML push banner would show literal tags),
+ * so the notification is stored already flattened. Block-level breaks are turned
+ * into newlines first so basic structure survives, then tags are stripped and
+ * entities decoded.
+ *
+ * @param string|null $value  Raw field value.
+ *
+ * @return string|null  Plain-text version, or NULL when the input is NULL.
+ */
+function myapi_notification_plain_text($value) {
+  if ($value === NULL || $value === '') {
+    return $value;
+  }
+
+  $text = preg_replace('#<\s*br\s*/?\s*>#i', "\n", $value);
+  $text = preg_replace('#</\s*(p|div|li|h[1-6]|tr|ul|ol|table)\s*>#i', "\n", $text);
+  $text = strip_tags($text);
+  $text = html_entity_decode($text, ENT_QUOTES, 'UTF-8');
+
+  // Tidy whitespace: drop trailing spaces on lines and collapse blank runs.
+  $text = preg_replace("/[ \t]+\n/", "\n", $text);
+  $text = preg_replace("/\n{3,}/", "\n\n", $text);
+
+  return trim($text);
+}
+
+/**
  * Reads the first target_id of an entity-reference field on a node.
  *
  * @param object $node   The node to read from.
@@ -283,7 +313,7 @@ function myapi_notification_create_from_boletin($node) {
     'source_nid'       => (int) $node->nid,
     'type'             => MYAPI_NOTIFICATION_TYPE_BULLETIN,
     'title'            => $node->title,
-    'body'             => myapi_notification_field_value($node, 'field_mensaje'),
+    'body'             => myapi_notification_plain_text(myapi_notification_field_value($node, 'field_mensaje')),
     'deep_link_target' => MYAPI_NOTIFICATION_DEEP_LINK_BULLETIN,
     'deep_link_id'     => (int) $node->nid,
     'uids'             => $uids,
