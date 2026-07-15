@@ -115,6 +115,9 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'password_reset_page_req_upper'          => 'One uppercase letter',
       'password_reset_page_req_number'         => 'One number',
       'password_reset_page_req_symbol'         => 'One symbol',
+      'notification_not_found'    => 'Notification not found.',
+      'notification_marked_read'  => 'Notification marked as read.',
+      'notifications_marked_read' => 'Notifications marked as read.',
     ],
     'es' => [
       'invalid_credentials'    => 'Usuario o contraseña incorrectos.',
@@ -162,6 +165,9 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'password_reset_page_req_upper'          => 'Una letra mayúscula',
       'password_reset_page_req_number'         => 'Un número',
       'password_reset_page_req_symbol'         => 'Un símbolo',
+      'notification_not_found'    => 'La notificación no existe.',
+      'notification_marked_read'  => 'Notificación marcada como leída.',
+      'notifications_marked_read' => 'Notificaciones marcadas como leídas.',
     ],
   ];
 

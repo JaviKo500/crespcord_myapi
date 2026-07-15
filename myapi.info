@@ -25,3 +25,6 @@ files[] = resources/condominium.resource.inc
 files[] = resources/bank.resource.inc
 files[] = resources/payment_method.resource.inc
 files[] = includes/myapi.payment_workflow.inc
+files[] = includes/myapi.notification.inc
+files[] = includes/myapi.onesignal.inc
+files[] = resources/notification.resource.inc

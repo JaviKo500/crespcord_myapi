@@ -148,6 +148,30 @@ function myapi_menu() {
     'file'             => 'resources/payment_method.resource.inc',
   ];
 
+  $items['api/v1/notifications'] = [
+    'page callback'    => 'myapi_notification_dispatch',
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/notification.resource.inc',
+  ];
+
+  // The exact 'read-all' path must be registered alongside the '%' wildcard;
+  // Drupal's router prefers the literal path, so both can coexist.
+  $items['api/v1/notifications/read-all'] = [
+    'page callback'    => 'myapi_notification_read_all_dispatch',
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/notification.resource.inc',
+  ];
+
+  $items['api/v1/notifications/%'] = [
+    'page callback'    => 'myapi_notification_read_dispatch',
+    'page arguments'   => [3],
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/notification.resource.inc',
+  ];
+
   return $items;
 }
 
@@ -177,4 +201,42 @@ function myapi_node_presave($node) {
   if (myapi_payment_is_verification_transition($node)) {
     myapi_payment_apply_verification($node);
   }
+}
+
+/**
+ * Implements hook_node_insert().
+ *
+ * Glue only: ignores everything that is not a published 'boletin' node and
+ * delegates the notification fan-out + push enqueue to
+ * includes/myapi.notification.inc. A bulletin saved as a draft (status 0) does
+ * not notify anyone; editing or publishing it later does not fire either (only
+ * insert of a published node). Same style as hook_node_presave above.
+ */
+function myapi_node_insert($node) {
+  if ($node->type !== 'boletin' || $node->status != 1) {
+    return;
+  }
+  module_load_include('inc', 'myapi', 'includes/myapi.notification');
+  myapi_notification_create_from_boletin($node);
+}
+
+/**
+ * Implements hook_cron_queue_info().
+ *
+ * Registers the worker that drains the OneSignal push queue. This hook is
+ * invoked by drupal_cron_run() right before it processes the queues in the same
+ * request, so loading the include here guarantees the worker function is
+ * defined when the queue is drained. A failing item is retried on the next cron
+ * (standard Queue API behaviour).
+ */
+function myapi_cron_queue_info() {
+  module_load_include('inc', 'myapi', 'includes/myapi.notification');
+  module_load_include('inc', 'myapi', 'includes/myapi.onesignal');
+
+  $queues = [];
+  $queues[MYAPI_ONESIGNAL_QUEUE] = [
+    'worker callback' => 'myapi_onesignal_queue_worker',
+    'time'            => 60,
+  ];
+  return $queues;
 }
