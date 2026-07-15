@@ -247,7 +247,8 @@ The server also sets: `node->type = pagos`, `node->title = "Pago {reference} -
       "bank_id": 7,
       "bank_name": "Banco Pichincha",
       "file_id": 55,
-      "file_name": "000123.pdf"
+      "file_name": "000123.pdf",
+      "detail": null
     }
   },
   "message": "Pago registrado correctamente."
@@ -259,6 +260,11 @@ the stored filename (`drupal_basename` of the `private://…` URI, including any
 rename suffix Drupal added on a name collision); neither the URI nor a public
 URL is exposed. The `fid` is exposed so a future authenticated download endpoint
 can serve the receipt.
+
+`detail` (`field_detalle`) is always `null` on creation — this endpoint never
+accepts or sets it. It is included here for shape consistency with
+`GET /api/v1/units/{unit_id}/payments` and with the response of
+`PUT /api/v1/payments/{id}/cancel`, which is the only endpoint that writes it.
 
 `bank_id` and `bank_name` are `null` **together** when the payment has no bank
 (e.g. a cash payment sent without `bank_id`). `bank_name` is the `bancos` term
@@ -307,4 +313,101 @@ curl -i -X POST https://host/api/v1/payments \
   -F 'amount=20.00' \
   -F 'payment_method=Efectivo'
 # 201 → payment.bank_id and payment.bank_name are null
+```
+
+---
+
+## PUT /api/v1/payments/{id}/cancel
+
+Cancels a payment belonging to the authenticated user's unit (owner or
+occupant) by rewriting `field_estado_pago` to `"Anulado"`, but **only** when
+its current status is exactly `"Pendiente de verificar"`. Any other status
+(including an already-cancelled payment) returns `409 payment_not_pending`
+without modifying the node. The node, its attached file (`field_archivo`) and
+`file_usage` are always preserved — this is a soft-cancel, not a delete.
+
+Out of scope of this endpoint: reverting unit/condominium balances (they are
+never moved while a payment is `"Pendiente de verificar"`, per
+`22-verificar-pago-actualizar-saldos`), cancelling `rules_scheduler` tasks
+(only cancelled on successful verification), deleting the node or the
+attachment, and reactivating a cancelled payment (no undo endpoint).
+
+**Authentication:** required (Bearer access token). The authenticated user
+must be the **owner or occupant** of the payment's unit (same rule as
+`GET /api/v1/units/{unit_id}/payments` and `POST /api/v1/payments`).
+
+**Headers**
+| Header | Value |
+|--------|-------|
+| Authorization | Bearer `<access_token>` |
+| Content-Type | `application/json` |
+
+**Request body (optional)**
+```json
+{ "reason": "Comprobante duplicado" }
+```
+
+| Field | Required | Type | Rule |
+|-------|----------|------|------|
+| `reason` | no | string | If present: `trim()`-ed first. Empty after trim (or `null`/absent) is treated as "no reason" — `field_detalle` is left untouched. Otherwise: ≤ 255 chars (same limit as `field_detalle_value`) and `check_plain`-sanitized. Over 255 chars → `422 invalid_field` with `@field = "reason"`, and the payment is **not** cancelled. |
+
+**Success response (200)**
+```json
+{
+  "success": true,
+  "data": {
+    "payment": {
+      "id": 87,
+      "title": "Pago 000123 - 2026-07-09",
+      "unit_id": 12,
+      "payment_date": "2026-07-09T14:30:00",
+      "status": "Anulado",
+      "payment_method": "Transferencia",
+      "reference": "000123",
+      "amount": 45.90,
+      "bank_id": 7,
+      "bank_name": "Banco Pichincha",
+      "file_id": 55,
+      "file_name": "000123.pdf",
+      "detail": "Comprobante duplicado"
+    }
+  },
+  "message": "Pago anulado correctamente."
+}
+```
+
+`detail` is `null` when `reason` was absent/empty, otherwise it holds the
+sanitized `reason`. Every other key follows the same rules as the `201`
+response of `POST /api/v1/payments`; `status` is always `"Anulado"` on
+success.
+
+**Possible errors**
+| Code | `error_code` | When |
+|------|--------------|------|
+| 401  | `missing_authorization` | `Authorization` header absent or not a `Bearer <token>`. |
+| 401  | `invalid_token` | Access token invalid, revoked, expired, or its user is missing/blocked. |
+| 403  | `unit_access_denied` | The authenticated user does not own or occupy the unit referenced by the payment (or the payment has no unit at all). The payment is not modified. |
+| 404  | `payment_not_found` | `id` is not a positive integer, does not correspond to any node, or the node is not of type `pagos`. Both cases return the same error — the response never reveals which. |
+| 405  | `method_not_allowed` | Any HTTP method other than `PUT`. |
+| 409  | `payment_not_pending` | The payment's current `field_estado_pago` is not exactly `"Pendiente de verificar"` (e.g. `"Nuevo"`, `"Completado"`, or already `"Anulado"`). The node is not modified — cancelling the same payment twice fails on the second call. |
+| 422  | `invalid_field` | `reason` exceeds 255 characters (`@field = "reason"`). The payment is not cancelled. |
+
+Validation order: authentication (401) → payment existence/type (404) → unit
+access (403) → current status (409) → `reason` (422) → apply the cancellation.
+Each check aborts before anything is modified. See [i18n.md](i18n.md) for the
+translated `error`/`message` text.
+
+**Example (with reason):**
+```bash
+curl -i -X PUT https://host/api/v1/payments/87/cancel \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"reason":"Comprobante duplicado"}'
+```
+
+**Example (no reason):**
+```bash
+curl -i -X PUT https://host/api/v1/payments/87/cancel \
+  -H 'Authorization: Bearer <access_token>'
+# 200 → payment.status = "Anulado", payment.detail unchanged (likely null)
 ```
