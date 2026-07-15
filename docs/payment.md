@@ -411,3 +411,80 @@ curl -i -X PUT https://host/api/v1/payments/87/cancel \
   -H 'Authorization: Bearer <access_token>'
 # 200 → payment.status = "Anulado", payment.detail unchanged (likely null)
 ```
+
+---
+
+## GET /api/v1/payments/{id}
+
+Returns the full detail of a single payment belonging to the authenticated
+user's unit (owner or occupant), provided its `field_estado_pago` is not
+`"Nuevo"` — same visibility criterion as
+`GET /api/v1/units/{unit_id}/payments`. Read-only: no `PUT`/`DELETE` other than
+`PUT /api/v1/payments/{id}/cancel`.
+
+Out of scope of this endpoint: modifying the payment, showing payments in
+state `"Nuevo"` (treated as not found, same as an unknown `id`), and
+downloading the attached file (`file_id`/`file_name` are exposed, but there is
+no download endpoint).
+
+**Authentication:** required (Bearer access token). The authenticated user
+must be the **owner or occupant** of the payment's unit (same rule as
+`GET /api/v1/units/{unit_id}/payments`, `POST /api/v1/payments` and
+`PUT /api/v1/payments/{id}/cancel`).
+
+**Headers**
+| Header | Value |
+|--------|-------|
+| Authorization | Bearer `<access_token>` |
+
+No request body or query parameters.
+
+**Success response (200)**
+```json
+{
+  "success": true,
+  "data": {
+    "payment": {
+      "id": 87,
+      "title": "Pago 000123 - 2026-07-09",
+      "unit_id": 12,
+      "payment_date": "2026-07-09T14:30:00",
+      "status": "Pendiente de verificar",
+      "payment_method": "Transferencia",
+      "reference": "000123",
+      "amount": 45.90,
+      "bank_id": 7,
+      "bank_name": "Banco Pichincha",
+      "file_id": 55,
+      "file_name": "000123.pdf",
+      "detail": null
+    }
+  }
+}
+```
+
+No `message` on success — this is a read-only endpoint. The response reuses
+the same 13-key shape as `POST /api/v1/payments` and
+`PUT /api/v1/payments/{id}/cancel` (it includes `file_name`, unlike the
+12-key shape of `GET /api/v1/units/{unit_id}/payments`), following the same
+`null` rules for `bank_id`/`bank_name` and `file_id`/`file_name`.
+
+**Possible errors**
+| Code | `error_code` | When |
+|------|--------------|------|
+| 401  | `missing_authorization` | `Authorization` header absent or not a `Bearer <token>`. |
+| 401  | `invalid_token` | Access token invalid, revoked, expired, or its user is missing/blocked. |
+| 403  | `unit_access_denied` | The authenticated user does not own or occupy the unit referenced by the payment. |
+| 404  | `payment_not_found` | `id` is not a positive integer, does not correspond to any node, the node is not of type `pagos`, **or the payment's `field_estado_pago` is `"Nuevo"`** (or has no estado row at all). All four cases return the same error — the response never reveals which, nor whether a payment in state `"Nuevo"` exists. |
+| 405  | `method_not_allowed` | Any HTTP method other than `GET`. |
+
+Validation order: authentication (401) → payment existence/type (404) →
+estado/visibility (404) → unit access (403). Visibility by estado is resolved
+**before** access, so a payment hidden by state never leaks its existence
+through a `403`. See [i18n.md](i18n.md) for the translated `error` text.
+
+**Example:**
+```bash
+curl -i -X GET https://host/api/v1/payments/87 \
+  -H 'Authorization: Bearer <access_token>'
+```
