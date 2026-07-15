@@ -33,8 +33,14 @@ define('MYAPI_NOTIFICATION_DEEP_LINK_BULLETIN', 'bulletin');
 
 /**
  * Name of the cron queue that carries OneSignal push batches.
+ *
+ * Also defined in myapi.module (always loaded) so hook_cron_queue_info() can
+ * register the worker without depending on this include being loaded first;
+ * guarded here to avoid a redefinition notice.
  */
-define('MYAPI_ONESIGNAL_QUEUE', 'myapi_onesignal_push');
+if (!defined('MYAPI_ONESIGNAL_QUEUE')) {
+  define('MYAPI_ONESIGNAL_QUEUE', 'myapi_onesignal_push');
+}
 
 /**
  * Reads the first value of a single-value Field API field on a node.

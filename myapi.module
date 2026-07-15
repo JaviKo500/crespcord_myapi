@@ -9,6 +9,15 @@
 // response and request helpers, so load them globally on every request.
 module_load_include('inc', 'myapi', 'includes/myapi.i18n');
 
+// OneSignal push queue name. Defined here in the always-loaded .module (not only
+// in includes/myapi.notification.inc) because hook_cron_queue_info() references
+// it to register the worker: during cron that hook can run before its include
+// is loaded, and an undefined constant would register the worker under the wrong
+// queue name, so items enqueued as 'myapi_onesignal_push' would never drain.
+if (!defined('MYAPI_ONESIGNAL_QUEUE')) {
+  define('MYAPI_ONESIGNAL_QUEUE', 'myapi_onesignal_push');
+}
+
 /**
  * Implements hook_menu().
  */
@@ -230,7 +239,10 @@ function myapi_node_insert($node) {
  * (standard Queue API behaviour).
  */
 function myapi_cron_queue_info() {
-  module_load_include('inc', 'myapi', 'includes/myapi.notification');
+  // Load the include so the worker callback is defined when drupal_cron_run()
+  // drains the queue later in this same request. The queue name comes from the
+  // constant defined at the top of this file, so it never depends on the load
+  // above succeeding.
   module_load_include('inc', 'myapi', 'includes/myapi.onesignal');
 
   $queues = [];
