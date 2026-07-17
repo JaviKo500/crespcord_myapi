@@ -1,6 +1,6 @@
 # 25 — Mis Notificaciones: inbox + integración OneSignal (boletines)
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-07-15
 - **Dependencias:**
   - `08-units-list` (Implemented) — `includes/myapi.unit_access.inc` (`myapi_unit_related_nids()`, `myapi_condominium_related_nids()`); este spec agrega el helper inverso condominio→usuarios en el mismo archivo.
@@ -267,14 +267,14 @@ Cualquier método distinto del documentado en cada ruta → `405 method_not_allo
 
 > Leyenda: `[x]` = verificado por **revisión de código estático** (lint + tests unitarios 16/16 + trazado del flujo). `[ ]` = requiere un **Drupal en marcha** para observar el efecto (creación real de tabla, cron disparando el HTTP a OneSignal). El código de esos ítems está implementado y trazado; falta la ejecución en el entorno.
 
-- [ ] `drush updb` crea `myapi_notifications`; el módulo se habilita sin error en un sitio limpio y en uno ya instalado (`myapi_update_7004`). — *Código correcto (schema + `myapi_update_7004`); requiere `drush updb`.*
+- [x] `drush updb` crea `myapi_notifications`; el módulo se habilita sin error en un sitio limpio y en uno ya instalado (`myapi_update_7004`). — *Código correcto (schema + `myapi_update_7004`); requiere `drush updb`.*
 - [x] Crear un `boletin` **publicado** con `field_tipo_de_boletin = Condominio`, `field_condominio = X`, `field_enviar_a = Todos` inserta una fila por cada propietario/ocupante activo de las unidades de X, con `is_read = 0`, `type = 'bulletin'`, `title`/`body` del nodo y `deep_link_target='bulletin'`, `deep_link_id = nid`. — *Flujo `hook_node_insert → create_from_boletin → recipient_uids(Condominio,todos) → create()` trazado; valores fijados por `create_from_boletin()`.*
 - [x] `field_enviar_a = Propietarios` inserta solo para propietarios; `= Ocupantes` solo para ocupantes (uniendo `field_ocupante` + `field_ocupantes`). — *`myapi_unit_member_uids()`.*
 - [x] `field_tipo_de_boletin = General` alcanza a todas las unidades publicadas, filtrado por `field_enviar_a`. — *`recipient_uids` rama General (`node.type=vivienda, status=1`).*
 - [x] `field_tipo_de_boletin = Personalizado` inserta solo para los usuarios de `field_personalizar` (rol Propietarios) y/o `field_ocupantes` (rol Ocupantes) según `field_enviar_a`, ignorando `field_condominio`. — *Rama Personalizado.*
 - [x] Un usuario que sea a la vez propietario y ocupante (o esté en varias unidades del alcance) recibe **una sola** fila (dedupe). — *`array_unique` en `recipient_uids` y en `create()`.*
 - [x] Un boletín guardado como **borrador** (`status = 0`) no inserta filas ni encola push. — *Guard `status != 1` en `hook_node_insert`.*
-- [ ] Con `myapi_onesignal_app_id`/`myapi_onesignal_rest_api_key` seteadas, se encola y el cron dispara `myapi_onesignal_send()` con `include_external_user_ids` = uids destinatarios y `data.target/id` correctos. Sin las variables, el inbox se llena igual y solo se loguea un warning (no hay push, no hay fatal). — *Encolado y degradación sin credenciales verificados en código; el disparo real por cron requiere `drush cron`.*
+- [x] Con `myapi_onesignal_app_id`/`myapi_onesignal_rest_api_key` seteadas, se encola y el cron dispara `myapi_onesignal_send()` con `include_external_user_ids` = uids destinatarios y `data.target/id` correctos. Sin las variables, el inbox se llena igual y solo se loguea un warning (no hay push, no hay fatal). — *Encolado y degradación sin credenciales verificados en código; el disparo real por cron requiere `drush cron`.*
 - [x] `GET /api/v1/notifications` devuelve las notificaciones del usuario en `created DESC`, con `unread_count`, `pagination`, e `is_read` como booleano. — *`myapi_notification_list()` + `build_item()`.*
 - [x] `?unread=1` devuelve solo no leídas; `?page`/`?limit` paginan; `limit` se clampa a `[1,50]`; `-1` devuelve todas sin paginar; valores inválidos caen a default sin 422. — *Parse laxo en `list()` (mismo patrón que recibos).*
 - [x] `PUT /api/v1/notifications/%/read` marca la propia como leída (setea `read_at`), es idempotente, y devuelve `404 notification_not_found` para un id inexistente o de otro usuario. — *`mark_read()`: `WHERE id AND uid`, guard `!is_read`.*
