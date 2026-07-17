@@ -1,6 +1,6 @@
 # SPEC 29 — Listado de boletines visibles para el usuario
 
-> **Estado:** Approved · **Depende de:** SPEC 14, SPEC 25, SPEC 08 · **Fecha:** 2026-07-17
+> **Estado:** Implemented · **Depende de:** SPEC 14, SPEC 25, SPEC 08 · **Fecha:** 2026-07-17
 > **Objetivo:** Agregar `GET /api/v1/bulletins`, un endpoint autenticado y paginado que lista los nodos `boletin` publicados que el usuario autenticado puede ver según la audiencia del boletín (cruce `field_tipo_de_boletin` × `field_enviar_a`), leídos directamente de los nodos, con orden y filtro opcional por rango de fechas sobre `node.created`.
 
 **Dependencias (detalle):**
@@ -184,25 +184,25 @@ Un valor desconocido de `field_tipo_de_boletin` o `field_enviar_a` no matchea ni
 
 ## Criterios de aceptación
 
-- [ ] `GET /api/v1/bulletins` con token válido devuelve `200` con `data.bulletins` (array mapeado según el modelo) y `data.pagination` (`total`, `page`, `limit`, `total_pages`).
-- [ ] Cada ítem incluye exactamente las 8 claves: `id`, `title`, `message`, `type`, `send_to`, `condominium_id`, `file_id`, `created_at`, con `NULL` en `message`/`send_to`/`condominium_id`/`file_id` cuando el nodo no tiene fila en ese campo.
-- [ ] Solo se listan nodos `boletin` publicados (`status = 1`); un borrador nunca aparece.
-- [ ] Un boletín **General** solo aparece si el usuario tiene el rol que exige `send_to`: `Propietarios` → es propietario de al menos una unidad; `Ocupantes` → es ocupante de al menos una; `Todos` → es propietario u ocupante de alguna.
-- [ ] Un boletín **Condominio** solo aparece si su `field_condominio` es un condominio donde el usuario tiene el rol que exige `send_to` (propietario / ocupante / cualquiera).
-- [ ] Un boletín **Personalizado** solo aparece si el usuario está referenciado en `field_personalizar` (cuando `send_to` es `Propietarios` o `Todos`) o en `field_ocupantes` (cuando es `Ocupantes` o `Todos`); ignora `field_condominio`.
-- [ ] El conjunto visible para un usuario coincide con el conjunto de boletines cuyo fan-out lo incluyó como destinatario (paridad con `myapi_boletin_recipient_uids()`).
-- [ ] Un usuario sin ninguna unidad (ni propietario ni ocupante) no ve boletines `General` ni `Condominio`; solo los `Personalizado` donde esté referenciado a mano.
-- [ ] Un boletín con `type` o `send_to` de valor desconocido no aparece para nadie (fail-safe).
-- [ ] Sin header `Authorization` → `401 missing_authorization`; token inválido/expirado/revocado → `401 invalid_token`.
-- [ ] Cualquier método distinto de `GET` → `405 method_not_allowed`.
-- [ ] `?page` y `?limit` paginan; `limit` se clampa a `[1, 50]`; valores inválidos/ausentes caen a los defaults (`page=1`, `limit=20`) sin error.
-- [ ] `?sort=asc`/`?sort=desc` invierte el orden por `created_at`; default `desc`; valor inválido cae a `desc`.
-- [ ] `date_from`/`date_to` filtran sobre `created_at` de forma inclusiva (borde superior incluye todo el día indicado, `23:59:59`); cada límite es independiente.
-- [ ] `date_from`/`date_to` con formato inválido, o rango invertido (`from > to`), se ignoran sin `422`.
-- [ ] `pagination.total` y `total_pages` reflejan el conjunto **ya filtrado** (audiencia + rango de fechas), no un total bruto.
-- [ ] Un usuario sin boletines visibles (o una página fuera de rango) devuelve `200` con `bulletins: []` y `pagination.total: 0`, `total_pages: 0` (no es error).
-- [ ] `docs/bulletin.md` documenta el endpoint completo (auth, query params, campos de respuesta, errores).
-- [ ] `drush cc all` no reporta errores tras el cambio.
+- [x] `GET /api/v1/bulletins` con token válido devuelve `200` con `data.bulletins` (array mapeado según el modelo) y `data.pagination` (`total`, `page`, `limit`, `total_pages`).
+- [x] Cada ítem incluye exactamente las 8 claves: `id`, `title`, `message`, `type`, `send_to`, `condominium_id`, `file_id`, `created_at`, con `NULL` en `message`/`send_to`/`condominium_id`/`file_id` cuando el nodo no tiene fila en ese campo.
+- [x] Solo se listan nodos `boletin` publicados (`status = 1`); un borrador nunca aparece.
+- [x] Un boletín **General** solo aparece si el usuario tiene el rol que exige `send_to`: `Propietarios` → es propietario de al menos una unidad; `Ocupantes` → es ocupante de al menos una; `Todos` → es propietario u ocupante de alguna.
+- [x] Un boletín **Condominio** solo aparece si su `field_condominio` es un condominio donde el usuario tiene el rol que exige `send_to` (propietario / ocupante / cualquiera).
+- [x] Un boletín **Personalizado** solo aparece si el usuario está referenciado en `field_personalizar` (cuando `send_to` es `Propietarios` o `Todos`) o en `field_ocupantes` (cuando es `Ocupantes` o `Todos`); ignora `field_condominio`.
+- [x] El conjunto visible para un usuario coincide con el conjunto de boletines cuyo fan-out lo incluyó como destinatario (paridad con `myapi_boletin_recipient_uids()`).
+- [x] Un usuario sin ninguna unidad (ni propietario ni ocupante) no ve boletines `General` ni `Condominio`; solo los `Personalizado` donde esté referenciado a mano.
+- [x] Un boletín con `type` o `send_to` de valor desconocido no aparece para nadie (fail-safe).
+- [x] Sin header `Authorization` → `401 missing_authorization`; token inválido/expirado/revocado → `401 invalid_token`.
+- [x] Cualquier método distinto de `GET` → `405 method_not_allowed`.
+- [x] `?page` y `?limit` paginan; `limit` se clampa a `[1, 50]`; valores inválidos/ausentes caen a los defaults (`page=1`, `limit=20`) sin error.
+- [x] `?sort=asc`/`?sort=desc` invierte el orden por `created_at`; default `desc`; valor inválido cae a `desc`.
+- [x] `date_from`/`date_to` filtran sobre `created_at` de forma inclusiva (borde superior incluye todo el día indicado, `23:59:59`); cada límite es independiente.
+- [x] `date_from`/`date_to` con formato inválido, o rango invertido (`from > to`), se ignoran sin `422`.
+- [x] `pagination.total` y `total_pages` reflejan el conjunto **ya filtrado** (audiencia + rango de fechas), no un total bruto.
+- [x] Un usuario sin boletines visibles (o una página fuera de rango) devuelve `200` con `bulletins: []` y `pagination.total: 0`, `total_pages: 0` (no es error).
+- [x] `docs/bulletin.md` documenta el endpoint completo (auth, query params, campos de respuesta, errores).
+- [x] `drush cc all` no reporta errores tras el cambio.
 
 ---
 
