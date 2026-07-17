@@ -187,6 +187,44 @@ or a `Personalizado` bulletin with no referenced users all resolve to an empty
 recipient set — no rows inserted, no push enqueued, a `watchdog` warning logged.
 Never an accidental fan-out to everyone.
 
+## Fee-issued trigger (recibo / alicuota_extra)
+
+When a `recibo` or `alicuota_extra` node **transitions to `field_estado =
+"Enviado"` while being edited** (`hook_node_update`), the occupants of its unit
+are notified. Only the transition on edit fires: a node created directly in
+`"Enviado"` does not, and re-saving a node that was already `"Enviado"` does not
+re-notify (the trigger compares the previous stored status against the incoming
+one — see `myapi_fee_is_sent_transition()`).
+
+**Recipient:** the occupant(s) of the unit referenced by `field_vivienda`,
+resolved via `myapi_unit_member_uids([$unit_id], 'ocupantes')` — never the
+owners nor the node author. If the unit has no resoluble occupant, or the node
+has no `field_vivienda`, the recipient set is empty and nothing is created
+(no-op, no error).
+
+| `$node->type` | `source_type` | `type` | `title` | `body` |
+|---|---|---|---|---|
+| `recibo` | `receipt` | `receipt_sent` | `Nueva alícuota generada` | `Nueva alícuota registrada para {unit}\nValor total: {total}` |
+| `alicuota_extra` | `extra_fee` | `extra_fee_sent` | `Nueva alícuota extra generada` | `Nueva alícuota extra registrada para {unit}\nValor total: {value}` |
+
+Where `{unit}` is the referenced unit node's `title` (empty string if it cannot
+be resolved), and `{total}`/`{value}` is `field_total_mes` (recibo) or
+`field_valor_extra` (alicuota_extra) formatted with `number_format(…, 2)` — a
+missing value yields `"0.00"`. Text is fixed Spanish, not translated via
+`myapi_t()` (no `Accept-Language` inside a `node_save` hook).
+
+**Deep link:** `deep_link.target` = the `source_type` (`receipt` / `extra_fee`)
+and `deep_link.id` = the fee node's nid (same shape as the payment trigger).
+The context columns are also populated: `deep_link.unit` = the unit nid
+(`field_vivienda`) and `deep_link.condominium` = the condominium nid
+(`field_condominio` of the unit, or `NULL` if it cannot be resolved).
+
+**Idempotency:** the notification is emitted at most once per node per request.
+A fee node can be re-saved within the same request (e.g. a Rule recalculating
+balances reuses the same `$node` object, so `$node->original` keeps its stale
+pre-transition status); a `drupal_static` guard in `myapi_fee_notify_issued()`
+prevents the duplicate row.
+
 ## OneSignal configuration
 
 Set as Drupal variables (in `settings.php` via `$conf[...]` or with
