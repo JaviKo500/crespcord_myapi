@@ -215,18 +215,50 @@ function myapi_node_presave($node) {
 /**
  * Implements hook_node_insert().
  *
- * Glue only: ignores everything that is not a published 'boletin' node and
- * delegates the notification fan-out + push enqueue to
- * includes/myapi.notification.inc. A bulletin saved as a draft (status 0) does
- * not notify anyone; editing or publishing it later does not fire either (only
- * insert of a published node). Same style as hook_node_presave above.
+ * Glue only. Two independent branches:
+ * - 'pagos' created directly with field_estado_pago = "Completado": delegates
+ *   to myapi_payment_notify_approved() in includes/myapi.payment_workflow.inc
+ *   (the verification-transition case is already covered by
+ *   myapi_node_presave() above; this branch only covers direct creation,
+ *   where $node->nid did not exist yet in presave).
+ * - Published 'boletin' node: delegates the notification fan-out + push
+ *   enqueue to includes/myapi.notification.inc. A bulletin saved as a draft
+ *   (status 0) does not notify anyone; editing or publishing it later does
+ *   not fire either (only insert of a published node).
  */
 function myapi_node_insert($node) {
+  if ($node->type === 'pagos') {
+    module_load_include('inc', 'myapi', 'includes/myapi.payment_workflow');
+    if (myapi_payment_field_value($node, 'field_estado_pago') === MYAPI_PAYMENT_STATUS_COMPLETED) {
+      myapi_payment_notify_approved($node);
+    }
+    return;
+  }
   if ($node->type !== 'boletin' || $node->status != 1) {
     return;
   }
   module_load_include('inc', 'myapi', 'includes/myapi.notification');
   myapi_notification_create_from_boletin($node);
+}
+
+/**
+ * Implements hook_node_update().
+ *
+ * Glue only: ignores everything that is not a 'pagos' node and delegates to
+ * myapi_payment_is_rule_completion() / myapi_payment_notify_approved() in
+ * includes/myapi.payment_workflow.inc. Covers the "Nuevo" -> "Completado"
+ * transition produced by the legacy Rule 'rules_actualizar_saldo_pago' when it
+ * auto-saves a 'pagos' node created directly in "Nuevo" (the Rule already did
+ * the balance work; this hook only notifies).
+ */
+function myapi_node_update($node) {
+  if ($node->type !== 'pagos') {
+    return;
+  }
+  module_load_include('inc', 'myapi', 'includes/myapi.payment_workflow');
+  if (myapi_payment_is_rule_completion($node)) {
+    myapi_payment_notify_approved($node);
+  }
 }
 
 /**

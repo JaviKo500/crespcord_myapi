@@ -32,6 +32,21 @@ define('MYAPI_NOTIFICATION_TYPE_BULLETIN', 'bulletin');
 define('MYAPI_NOTIFICATION_DEEP_LINK_BULLETIN', 'bulletin');
 
 /**
+ * source_type value for notifications originated by a 'pagos' node.
+ */
+define('MYAPI_NOTIFICATION_SOURCE_PAYMENT', 'payment');
+
+/**
+ * Notification category (4.2.7) for a payment reaching "Completado".
+ */
+define('MYAPI_NOTIFICATION_TYPE_PAYMENT_APPROVED', 'payment_approved');
+
+/**
+ * App section the payment deep-link points to.
+ */
+define('MYAPI_NOTIFICATION_DEEP_LINK_PAYMENT', 'payment');
+
+/**
  * Name of the cron queue that carries OneSignal push batches.
  *
  * Also defined in myapi.module (always loaded) so hook_cron_queue_info() can

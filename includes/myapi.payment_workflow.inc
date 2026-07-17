@@ -81,6 +81,34 @@ function myapi_payment_is_verification_transition($node) {
 }
 
 /**
+ * Detects the "Nuevo" -> "Completado" transition produced by the legacy Rule
+ * 'rules_actualizar_saldo_pago'.
+ *
+ * That Rule reacts to the insert of a 'pagos' node already carrying
+ * "Nuevo" (created directly in that status, typically from the Drupal admin),
+ * applies the same balance changes as myapi_payment_apply_verification() and
+ * sets field_estado_pago to "Completado" via a Rules data_set action. Rules'
+ * auto-save then persists that change with a second node_save() (an update),
+ * which is the point this function detects: it does not repeat the balance
+ * work, only observes the transition already committed by the Rule.
+ *
+ * @param object $node  The 'pagos' node being saved.
+ *
+ * @return bool  TRUE only for the "Nuevo" -> "Completado" update.
+ */
+function myapi_payment_is_rule_completion($node) {
+  if (!isset($node->original)) {
+    return FALSE;
+  }
+
+  $previous = myapi_payment_field_value($node->original, 'field_estado_pago');
+  $incoming = myapi_payment_field_value($node, 'field_estado_pago');
+
+  return $previous === MYAPI_PAYMENT_STATUS_TRIGGER
+    && $incoming === MYAPI_PAYMENT_STATUS_COMPLETED;
+}
+
+/**
  * Applies the verification workflow to a 'pagos' node in presave.
  *
  * Validates the preconditions and, only if they all pass, discounts the amount
@@ -139,6 +167,9 @@ function myapi_payment_apply_verification($node) {
 
   // Cancel the pending reminder/penalty tasks scheduled for this unit.
   myapi_payment_cancel_scheduled_tasks($vivienda_nid);
+
+  // Notify the payment's author that it was approved.
+  myapi_payment_notify_approved($node);
 }
 
 /**
@@ -166,4 +197,81 @@ function myapi_payment_cancel_scheduled_tasks($vivienda_nid) {
       ->condition('identifier', $identifier)
       ->execute();
   }
+}
+
+/**
+ * Notifies the author of a 'pagos' node that their payment was approved.
+ *
+ * Called both from the end of myapi_payment_apply_verification() (the payment
+ * already has $node->nid because it is an update) and from a dedicated branch
+ * in hook_node_insert() for a node created directly in "Completado" (see
+ * myapi.module). Missing field_referencia/field_valor/field_vivienda do not
+ * block the notification: it is built with whatever the node has (empty
+ * reference, "0.00" amount, NULL unit_id/condominium_id).
+ *
+ * @param object $node  The 'pagos' node whose status just reached
+ *                       MYAPI_PAYMENT_STATUS_COMPLETED.
+ */
+function myapi_payment_notify_approved($node) {
+  module_load_include('inc', 'myapi', 'includes/myapi.notification');
+
+  $reference = myapi_payment_field_value($node, 'field_referencia');
+  $reference = $reference !== NULL ? $reference : '';
+  $amount = number_format((float) myapi_payment_field_value($node, 'field_valor'), 2);
+
+  $unit_id = isset($node->field_vivienda[LANGUAGE_NONE][0]['target_id'])
+    ? (int) $node->field_vivienda[LANGUAGE_NONE][0]['target_id']
+    : NULL;
+
+  $condominium_id = NULL;
+  if ($unit_id !== NULL) {
+    $vivienda = node_load($unit_id);
+    if ($vivienda && isset($vivienda->field_condominio[LANGUAGE_NONE][0]['target_id'])) {
+      $condominium_id = (int) $vivienda->field_condominio[LANGUAGE_NONE][0]['target_id'];
+    }
+  }
+
+  myapi_notification_create([
+    'source_type'      => MYAPI_NOTIFICATION_SOURCE_PAYMENT,
+    'source_nid'       => (int) $node->nid,
+    'type'             => MYAPI_NOTIFICATION_TYPE_PAYMENT_APPROVED,
+    'title'            => 'Pago aprobado — Ref. ' . $reference,
+    'body'             => 'Tu pago de ' . $amount . " ha sido aprobado.\nReferencia: " . $reference . "\nGracias.",
+    'deep_link_target' => MYAPI_NOTIFICATION_DEEP_LINK_PAYMENT,
+    'deep_link_id'     => (int) $node->nid,
+    'condominium_id'   => $condominium_id,
+    'unit_id'          => $unit_id,
+    'uids'             => myapi_payment_notify_recipients($node, $unit_id),
+  ]);
+}
+
+/**
+ * Resolves the recipient uid(s) of the "payment approved" notification.
+ *
+ * Normally the payment's own author (node->uid) is the recipient, since that
+ * is the resident who registered it via the app. When the author has the
+ * "administrator" Drupal role, the payment was created/completed on their
+ * behalf from the Drupal back office, so node->uid is the admin, not the
+ * actual payer: in that case the unit's occupant(s) are notified instead.
+ * Falls back to node->uid if the unit has no resolvable occupant, so the
+ * notification is never lost.
+ *
+ * @param object   $node     The 'pagos' node.
+ * @param int|null $unit_id  The resolved 'vivienda' nid, or NULL.
+ *
+ * @return array  List of recipient uids.
+ */
+function myapi_payment_notify_recipients($node, $unit_id) {
+  $author = user_load($node->uid);
+  if ($author && !empty($author->roles) && in_array('administrator', $author->roles)) {
+    if ($unit_id !== NULL) {
+      module_load_include('inc', 'myapi', 'includes/myapi.unit_access');
+      $occupant_uids = myapi_unit_member_uids([$unit_id], 'ocupantes');
+      if (!empty($occupant_uids)) {
+        return $occupant_uids;
+      }
+    }
+  }
+
+  return [(int) $node->uid];
 }
