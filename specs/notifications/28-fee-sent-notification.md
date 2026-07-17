@@ -1,6 +1,6 @@
 # 28 — Notificación de alícuota enviada (recibo y alícuota extra)
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-07-17
 - **Dependencias:**
   - `25-notifications-inbox-boletin` (Implemented) — tabla `myapi_notifications`,
@@ -14,7 +14,7 @@
   - `09-units-owner-occupant` (Implemented) — `myapi_unit_member_uids()` en
     `includes/myapi.unit_access.inc`, usado para resolver los ocupantes de la vivienda.
   - `11-unit-receipts-list` / `13-unit-extra-fees-list` (Implemented) — definen el
-    mapeo de campos de `recibo` (`field_alicuota_total`, `field_estado`,
+    mapeo de campos de `recibo` (`field_total_mes`, `field_estado`,
     `field_vivienda`) y `alicuota_extra` (`field_valor_extra`, `field_estado`,
     `field_vivienda`) que este spec lee.
 - **Objetivo:** Cuando un nodo `recibo` o `alicuota_extra` transita a
@@ -22,7 +22,7 @@
   a los ocupantes de la vivienda (`field_vivienda`) con el asunto
   `"Nueva alícuota[ extra] generada"` y el cuerpo
   `"Nueva alícuota[ extra] registrada para {nombre de la vivienda}\nValor total: {valor}"`,
-  usando `field_alicuota_total` (recibo) o `field_valor_extra` (alícuota extra),
+  usando `field_total_mes` (recibo) o `field_valor_extra` (alícuota extra),
   formateado a 2 decimales, y completando `unit_id`/`condominium_id` de contexto.
 
 ---
@@ -52,7 +52,8 @@
 - **`myapi.info`** (modificar) — agregar `files[] = includes/myapi.fee_notification.inc`.
 - **`docs/notification.md`** (modificar) — documentar el nuevo `type`
   (`receipt_sent` / `extra_fee_sent`), su `title`/`body`, el destinatario (ocupantes
-  de la vivienda) y que `deep_link.target`/`id` quedan en `NULL`.
+  de la vivienda) y que `deep_link.target` = `source_type` / `deep_link.id` = nid
+  del nodo, además de `deep_link.unit`/`condominium`.
 
 ### Fuera de este spec
 
@@ -64,9 +65,10 @@
   `myapi_unit_member_uids($unit_id, 'ocupantes')` devuelve vacío, la lista de uids
   queda vacía y `myapi_notification_create()` es un no-op: no se crea notificación.
   No se cae de respaldo a propietarios ni al autor del nodo.
-- **Deep link a un detalle de recibo/alícuota extra.** No existe endpoint de
-  detalle para estos tipos (spec 11/13 son solo listas por unidad); `deep_link`
-  queda en `NULL`. Si más adelante se agrega navegación, va en otro spec.
+- **Endpoint de detalle de recibo/alícuota extra.** No existe endpoint de
+  detalle para estos tipos (spec 11/13 son solo listas por unidad). El
+  `deep_link.target`/`id` guarda la identidad del nodo origen (`source_type` +
+  nid), pero la navegación a una pantalla de detalle por nodo va en otro spec.
 - **Traducir el asunto/cuerpo vía catálogo i18n.** Texto fijo en español, no pasa
   por `myapi_t()` (mismo criterio que boletín y pago).
 - **Notificar otras transiciones de estado** (a borrador, anulación, etc.) o
@@ -104,7 +106,7 @@ No se define constante de `deep_link` porque este trigger no lleva deep link.
 
 | `$node->type`    | `source_type`  | `type`            | Campo de valor        | Palabra insertada |
 |------------------|----------------|-------------------|-----------------------|-------------------|
-| `recibo`         | `receipt`      | `receipt_sent`    | `field_alicuota_total`| (ninguna)         |
+| `recibo`         | `receipt`      | `receipt_sent`    | `field_total_mes`     | (ninguna)         |
 | `alicuota_extra` | `extra_fee`    | `extra_fee_sent`  | `field_valor_extra`   | `extra `          |
 
 ### Textos generados
@@ -129,8 +131,8 @@ Donde:
 | `type`            | `receipt_sent` / `extra_fee_sent` |
 | `title`           | ver arriba |
 | `body`            | ver arriba |
-| `deep_link_target`| `NULL` |
-| `deep_link_id`    | `NULL` |
+| `deep_link_target`| `receipt` / `extra_fee` según el tipo (= `source_type`) |
+| `deep_link_id`    | `(int) $node->nid` |
 | `condominium_id`  | nid del condominio de la vivienda, o `NULL` si no se resuelve |
 | `unit_id`         | nid de la vivienda (`field_vivienda`), o `NULL` si no está presente |
 | `uids`            | `myapi_unit_member_uids([$unit_id], 'ocupantes')` (o `[]` si `$unit_id` es `NULL`) |
@@ -169,7 +171,7 @@ function myapi_fee_is_sent_transition($node) {
 
 ### Ejemplo de mensaje generado
 
-`recibo` con vivienda "Casa 12" y `field_alicuota_total = 150`:
+`recibo` con vivienda "Casa 12" y `field_total_mes = 150`:
 
 ```json
 {
@@ -221,7 +223,7 @@ function myapi_fee_is_sent_transition($node) {
        'recibo' => [
          'source' => MYAPI_NOTIFICATION_SOURCE_RECEIPT,
          'type'   => MYAPI_NOTIFICATION_TYPE_RECEIPT_SENT,
-         'field'  => 'field_alicuota_total',
+         'field'  => 'field_total_mes',
          'word'   => '',
        ],
        'alicuota_extra' => [
@@ -304,8 +306,8 @@ function myapi_fee_is_sent_transition($node) {
 6. **Documentar en `docs/notification.md`** — agregar los `type` `receipt_sent` /
    `extra_fee_sent`: cuándo disparan (transición a `"Enviado"` al editar un
    `recibo`/`alicuota_extra`), destinatario (ocupantes de la vivienda),
-   `title`/`body` de cada uno, y que `deep_link.target`/`id` son `NULL` mientras
-   `deep_link.unit`/`condominium` sí se pueblan.
+   `title`/`body` de cada uno, y que `deep_link.target` = `source_type` /
+   `deep_link.id` = nid del nodo, además de `deep_link.unit`/`condominium`.
 
 7. **Aplicar y verificar** — `drush cc all`. Probar ambos tipos:
    - `recibo`: crear en `"Borrador"`, editar a `"Enviado"` → 1 notificación
@@ -314,65 +316,72 @@ function myapi_fee_is_sent_transition($node) {
    - `alicuota_extra`: mismo flujo → `extra_fee_sent`, textos con "extra" y
      `field_valor_extra`.
    Confirmar en BD y vía `GET /api/v1/notifications` (spec 25/26) que la fila
-   trae `deep_link.unit`/`condominium` pobladas y `deep_link.target`/`id` en `NULL`.
+   trae `deep_link.unit`/`condominium` pobladas y `deep_link.target` =
+   `source_type` / `deep_link.id` = nid del nodo. Confirmar además que un
+   `recibo` re-guardado en el mismo request (Rule de recálculo) genera **una
+   sola** notificación por ocupante (guard `drupal_static`).
 
 ---
 
 ## Criterios de aceptación
 
 **Disparo correcto**
-- [ ] Editar un `recibo` cuyo `field_estado` pasa de un valor distinto de
+- [x] Editar un `recibo` cuyo `field_estado` pasa de un valor distinto de
   `"Enviado"` (borrador, otro estado, o sin `field_estado`) a `"Enviado"` genera
   una fila nueva en `myapi_notifications` por cada ocupante de la vivienda.
-- [ ] Editar un `alicuota_extra` con la misma transición genera una fila nueva
+- [x] Editar un `alicuota_extra` con la misma transición genera una fila nueva
   por cada ocupante.
-- [ ] Para `recibo`: `type = "receipt_sent"`, `source_type = "receipt"`,
+- [x] Para `recibo`: `type = "receipt_sent"`, `source_type = "receipt"`,
   `title = "Nueva alícuota generada"`,
   `body = "Nueva alícuota registrada para {nombre vivienda}\nValor total: {total}"`
-  con `{total}` = `field_alicuota_total` a 2 decimales.
-- [ ] Para `alicuota_extra`: `type = "extra_fee_sent"`, `source_type = "extra_fee"`,
+  con `{total}` = `field_total_mes` a 2 decimales.
+- [x] Para `alicuota_extra`: `type = "extra_fee_sent"`, `source_type = "extra_fee"`,
   `title = "Nueva alícuota extra generada"`,
   `body = "Nueva alícuota extra registrada para {nombre vivienda}\nValor total: {valor}"`
   con `{valor}` = `field_valor_extra` a 2 decimales.
-- [ ] `source_nid` = nid del nodo; `unit_id` = nid de `field_vivienda`;
+- [x] `source_nid` = nid del nodo; `unit_id` = nid de `field_vivienda`;
   `condominium_id` = nid del condominio de la vivienda cuando se resuelve.
-- [ ] `deep_link.target` y `deep_link.id` de la fila quedan en `NULL`.
+- [x] `deep_link.target` = `source_type` (`receipt`/`extra_fee`) y `deep_link.id`
+  = nid del nodo.
 
 **Destinatario**
-- [ ] El destinatario es el/los ocupante(s) de la vivienda
+- [x] El destinatario es el/los ocupante(s) de la vivienda
   (`field_ocupante`/`field_ocupantes`), nunca los propietarios ni el autor del nodo.
-- [ ] Si la vivienda no tiene ningún ocupante resoluble, no se crea ninguna
+- [x] Si la vivienda no tiene ningún ocupante resoluble, no se crea ninguna
   notificación (no-op), sin error.
-- [ ] Si el nodo no tiene `field_vivienda`, no se crea ninguna notificación
+- [x] Si el nodo no tiene `field_vivienda`, no se crea ninguna notificación
   (no-op), sin error.
 
 **No dispara / idempotencia**
-- [ ] Crear un `recibo`/`alicuota_extra` directamente en `"Enviado"` (sin edición
+- [x] Crear un `recibo`/`alicuota_extra` directamente en `"Enviado"` (sin edición
   posterior) **no** genera notificación (solo se cubre la transición al editar).
-- [ ] Editar un `recibo`/`alicuota_extra` que ya estaba en `"Enviado"` sin cambiar
+- [x] Editar un `recibo`/`alicuota_extra` que ya estaba en `"Enviado"` sin cambiar
   el estado **no** genera una notificación nueva.
-- [ ] Editar un nodo hacia un estado distinto de `"Enviado"` **no** genera
+- [x] Un `recibo`/`alicuota_extra` re-guardado dentro del mismo request (p. ej.
+  una Rule de recálculo con `$node->original` obsoleto) genera **una sola**
+  notificación por ocupante, no dos (guard `drupal_static` por nid).
+- [x] Editar un nodo hacia un estado distinto de `"Enviado"` **no** genera
   notificación.
-- [ ] Editar un `pagos` sigue comportándose igual que en spec 27 (la rama de
+- [x] Editar un `pagos` sigue comportándose igual que en spec 27 (la rama de
   `pagos` en `myapi_node_update()` no cambia).
 
 **Campos faltantes**
-- [ ] Un `recibo`/`alicuota_extra` sin el campo de valor
-  (`field_alicuota_total`/`field_valor_extra`) genera la notificación con
+- [x] Un `recibo`/`alicuota_extra` sin el campo de valor
+  (`field_total_mes`/`field_valor_extra`) genera la notificación con
   `"Valor total: 0.00"`, sin error.
-- [ ] Una vivienda sin `title` resoluble (o `node_load` que devuelve `FALSE`)
+- [x] Una vivienda sin `title` resoluble (o `node_load` que devuelve `FALSE`)
   genera la notificación con el nombre vacío (`"...registrada para \nValor total:..."`),
   sin error — siempre que haya al menos un ocupante.
 
 **No regresión / infra**
-- [ ] Las notificaciones de boletín (spec 25/26) y de pago (spec 27) siguen
+- [x] Las notificaciones de boletín (spec 25/26) y de pago (spec 27) siguen
   funcionando idénticas.
-- [ ] `GET /api/v1/notifications` (spec 25) devuelve la notificación de alícuota
-  con `deep_link.unit`/`deep_link.condominium` pobladas y `deep_link.target`/`id`
-  en `NULL`.
-- [ ] `myapi.info` lista `includes/myapi.fee_notification.inc` y `drush cc all`
+- [x] `GET /api/v1/notifications` (spec 25) devuelve la notificación de alícuota
+  con `deep_link.unit`/`deep_link.condominium` pobladas y `deep_link.target` =
+  `source_type` / `deep_link.id` = nid del nodo.
+- [x] `myapi.info` lista `includes/myapi.fee_notification.inc` y `drush cc all`
   no reporta errores.
-- [ ] `docs/notification.md` documenta los `type` `receipt_sent` / `extra_fee_sent`.
+- [x] `docs/notification.md` documenta los `type` `receipt_sent` / `extra_fee_sent`.
 
 ---
 
@@ -383,7 +392,7 @@ function myapi_fee_is_sent_transition($node) {
 | Momento del disparo | Solo la transición a `"Enviado"` al **editar** el nodo (`hook_node_update`, comparando `$node->original` contra el valor entrante) | (1) Notificar también al crear el nodo directo en `"Enviado"` (`hook_node_insert`); (2) cualquier transición hacia `"Enviado"` incluida la creación | Elección del usuario: "se debe enviar cuando se pasa a estado Enviado". El flujo real es crear el recibo/alícuota extra en borrador y luego pasarlo a `"Enviado"`; la creación directa no se considera en este spec. |
 | Destinatario | Solo ocupantes de la vivienda (`myapi_unit_member_uids($unit_id, 'ocupantes')`) | (1) Propietarios; (2) propietarios + ocupantes (`'todos'`); (3) autor del nodo | Elección del usuario. La alícuota la genera el administrador, así que el autor del nodo no es un residente útil; se notifica a quien ocupa la vivienda. |
 | Sin ocupantes → sin fallback | No crear notificación (lista de uids vacía → no-op de `myapi_notification_create()`) | Caer de respaldo a propietarios o al autor del nodo | Coherente con "solo ocupantes": si no hay ocupante, no hay a quién notificar; no se inventa un destinatario. Documentado como borde conocido (ver Riesgos). |
-| Deep link | Ninguno: `deep_link_target`/`deep_link_id` en `NULL`; solo `unit_id`/`condominium_id` de contexto | Apuntar a un detalle de recibo/alícuota extra, o a la lista de la vivienda | No existe endpoint de detalle para `recibo`/`alicuota_extra` (spec 11/13 son listas por unidad); no se inventa un target de navegación sin destino real. |
+| Deep link | `deep_link_target` = `source_type` (`receipt`/`extra_fee`) y `deep_link_id` = nid del nodo (mismo patrón que spec 27); más `unit_id`/`condominium_id` de contexto | (1) Dejarlo en `NULL` por no existir endpoint de detalle; (2) apuntar a la lista de la vivienda con el nid de la vivienda | Decisión del usuario durante la implementación: identifica el nodo origen igual que la notificación de pago aprobado, aunque el detalle por nodo aún no exista. |
 | Alcance: un spec para ambos tipos | Una función parametrizada por `$node->type` (`recibo`/`alicuota_extra`) en un único include y doc | Dos specs/archivos separados | Es el mismo feature: los textos solo difieren en la palabra "extra" y el campo de valor; separar duplicaría lógica sin beneficio. |
 | Formato de `{valor}` | `number_format($valor, 2)` sin símbolo de moneda | Valor crudo del campo / con símbolo `$` | Elección del usuario (mismo criterio que spec 27): consistente con cómo la API expone importes, sin asumir moneda. |
 | Nombre de la vivienda | `title` del nodo `vivienda` referenciado (`node_load($unit_id)->title`) | Un campo específico de la vivienda | El pedido dice "nombre de la vivienda"; el título del nodo es el nombre natural y no requiere asumir un campo extra. |
@@ -399,7 +408,7 @@ function myapi_fee_is_sent_transition($node) {
 | **Vivienda sin ocupantes → notificación silenciosamente ausente.** Si la vivienda no tiene `field_ocupante`/`field_ocupantes`, nadie recibe la alícuota y no queda rastro de error. | Comportamiento aceptado explícitamente (ver Decisiones). Si más adelante se quiere garantizar entrega, se agrega un fallback a propietarios en su propio spec; hoy es un no-op consciente, no un fallo. |
 | **Nombre de campo de estado (`field_estado`).** La detección de la transición depende de que el estado viva en `field_estado` con el valor exacto `"Enviado"` para ambos tipos. Un rename del campo o un cambio del texto del estado rompe el disparo sin aviso. | El valor `"Enviado"` y el campo `field_estado` son los que ya usan los endpoints de spec 11/13 (mismo supuesto de acceso directo a Field API); si cambian, es un ajuste de una constante (`MYAPI_FEE_STATUS_SENT`) y del lector. |
 | **Cambio de forma en `myapi_node_update()`.** Se agrega la rama de `recibo`/`alicuota_extra` junto a la de `pagos`; un error de anidamiento podría afectar el disparo de pago aprobado (spec 27). | La rama de `pagos` conserva su `return` explícito y queda intacta; la rama nueva es independiente y se cubre con el criterio de no regresión (editar un `pagos` sigue igual). |
-| **Doble notificación si un mismo save produce dos updates.** Si otro mecanismo (p. ej. una Rule) re-guardara el nodo tras pasarlo a `"Enviado"`, `myapi_fee_is_sent_transition()` daría `FALSE` en el segundo update (previo ya `"Enviado"`), pero un flujo que llevara el estado fuera y de vuelta a `"Enviado"` sí volvería a notificar. | La condición `previo !== "Enviado" && entrante === "Enviado"` evita el doble disparo del re-save inmediato (el patrón más común). Otras idas y vueltas de estado no forman parte del flujo normal; no se agrega deduplicación extra (mismo criterio que spec 27). |
+| **Doble notificación si un mismo save produce dos updates.** En la práctica se observó: al pasar un `recibo` a `"Enviado"`, otro mecanismo (una Rule de recálculo) re-guarda el mismo objeto `$node` dentro del request. Como `node_save()` no re-carga `$node->original` cuando ya está seteado, el segundo update ve el `original` obsoleto (previo aún `"Borrador"`) y `myapi_fee_is_sent_transition()` vuelve a dar `TRUE` → segunda notificación con el mismo `uid`. | La condición de transición no basta ante un re-save con `original` obsoleto. Se agrega un guard `drupal_static` por nid en `myapi_fee_notify_issued()` que garantiza **una sola notificación por nodo por request**, sin depender de la frescura de `$node->original`. |
 | **`node_load()` por notificación.** `myapi_fee_notify_issued()` hace un `node_load()` de la vivienda más las queries de `myapi_unit_member_uids()`. | Costo aceptable: se ejecuta una vez por transición de estado de un recibo/alícuota, no en un listado ni en un loop masivo (mismo orden de magnitud que spec 27). |
 | **Acoplamiento entre `myapi.fee_notification.inc` y `myapi.notification.inc`/`myapi.unit_access.inc`.** El include nuevo carga dos includes de otros dominios vía `module_load_include()`. | Es reutilización explícita, no duplicación de lógica; mismo patrón ya aceptado en spec 27 (`payment_workflow` carga `notification`). |
 </content>
