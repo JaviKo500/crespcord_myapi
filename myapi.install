@@ -194,6 +194,18 @@ function myapi_schema() {
         'unsigned'    => TRUE,
         'not null'    => FALSE,
       ],
+      'condominium_id' => [
+        'description' => 'Logical FK to the condominium node (nid). NULL for notifications with no single condominium context (e.g. boletin fan-out).',
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'not null'    => FALSE,
+      ],
+      'unit_id' => [
+        'description' => 'Logical FK to the unit (vivienda) node (nid). NULL for notifications with no single unit context (e.g. boletin fan-out).',
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'not null'    => FALSE,
+      ],
       'is_read' => [
         'description' => '0 = unread, 1 = read.',
         'type'        => 'int',
@@ -297,5 +309,28 @@ function myapi_update_7004() {
   if (!db_table_exists('myapi_notifications')) {
     $schema = drupal_get_schema_unprocessed('myapi', 'myapi_notifications');
     db_create_table('myapi_notifications', $schema);
+  }
+}
+
+/**
+ * Adds condominium_id and unit_id to myapi_notifications on sites where the
+ * table already exists.
+ */
+function myapi_update_7005() {
+  if (!db_field_exists('myapi_notifications', 'condominium_id')) {
+    db_add_field('myapi_notifications', 'condominium_id', [
+      'description' => 'Logical FK to the condominium node (nid). NULL for notifications with no single condominium context (e.g. boletin fan-out).',
+      'type'        => 'int',
+      'unsigned'    => TRUE,
+      'not null'    => FALSE,
+    ]);
+  }
+  if (!db_field_exists('myapi_notifications', 'unit_id')) {
+    db_add_field('myapi_notifications', 'unit_id', [
+      'description' => 'Logical FK to the unit (vivienda) node (nid). NULL for notifications with no single unit context (e.g. boletin fan-out).',
+      'type'        => 'int',
+      'unsigned'    => TRUE,
+      'not null'    => FALSE,
+    ]);
   }
 }

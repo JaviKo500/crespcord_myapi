@@ -106,7 +106,7 @@ function myapi_notification_list() {
     : ($total > 0 ? (int) ceil($total / $limit) : 0);
 
   $query = db_select('myapi_notifications', 'n')
-    ->fields('n', ['id', 'type', 'title', 'body', 'deep_link_target', 'deep_link_id', 'is_read', 'created', 'read_at'])
+    ->fields('n', ['id', 'type', 'title', 'body', 'deep_link_target', 'deep_link_id', 'condominium_id', 'unit_id', 'is_read', 'created', 'read_at'])
     ->condition('uid', $uid);
   if ($unread_only) {
     $query->condition('is_read', 0);
@@ -146,7 +146,7 @@ function myapi_notification_mark_read($id) {
   $id = (int) $id;
 
   $notification = db_select('myapi_notifications', 'n')
-    ->fields('n', ['id', 'type', 'title', 'body', 'deep_link_target', 'deep_link_id', 'is_read', 'created', 'read_at'])
+    ->fields('n', ['id', 'type', 'title', 'body', 'deep_link_target', 'deep_link_id', 'condominium_id', 'unit_id', 'is_read', 'created', 'read_at'])
     ->condition('id', $id)
     ->condition('uid', $uid)
     ->execute()
@@ -203,8 +203,10 @@ function myapi_notification_build_item($row) {
     'title'      => $row->title,
     'body'       => $row->body,
     'deep_link'  => [
-      'target' => $row->deep_link_target,
-      'id'     => $row->deep_link_id !== NULL ? (int) $row->deep_link_id : NULL,
+      'target'      => $row->deep_link_target,
+      'id'          => $row->deep_link_id !== NULL ? (int) $row->deep_link_id : NULL,
+      'unit'        => $row->unit_id !== NULL ? (int) $row->unit_id : NULL,
+      'condominium' => $row->condominium_id !== NULL ? (int) $row->condominium_id : NULL,
     ],
     'is_read'    => (bool) $row->is_read,
     'created_at' => (int) $row->created,

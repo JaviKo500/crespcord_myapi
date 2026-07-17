@@ -242,7 +242,8 @@ function myapi_boletin_recipient_uids($node) {
  * caller. With no recipients nothing is inserted or enqueued.
  *
  * @param array $params  Keys: 'source_type', 'source_nid', 'type', 'title',
- *                       'body', 'deep_link_target', 'deep_link_id', 'uids'.
+ *                       'body', 'deep_link_target', 'deep_link_id', 'uids',
+ *                       'condominium_id' (optional), 'unit_id' (optional).
  *
  * @return int  Number of rows inserted (recipients).
  */
@@ -259,10 +260,13 @@ function myapi_notification_create(array $params) {
   $body = isset($params['body']) ? $params['body'] : NULL;
   $deep_link_target = isset($params['deep_link_target']) ? $params['deep_link_target'] : NULL;
   $deep_link_id = isset($params['deep_link_id']) ? $params['deep_link_id'] : NULL;
+  $condominium_id = isset($params['condominium_id']) ? (int) $params['condominium_id'] : NULL;
+  $unit_id = isset($params['unit_id']) ? (int) $params['unit_id'] : NULL;
 
   $insert = db_insert('myapi_notifications')->fields([
     'uid', 'source_type', 'source_nid', 'type', 'title', 'body',
-    'deep_link_target', 'deep_link_id', 'is_read', 'created', 'read_at',
+    'deep_link_target', 'deep_link_id', 'condominium_id', 'unit_id',
+    'is_read', 'created', 'read_at',
   ]);
   foreach ($uids as $uid) {
     $insert->values([
@@ -274,6 +278,8 @@ function myapi_notification_create(array $params) {
       'body'             => $body,
       'deep_link_target' => $deep_link_target,
       'deep_link_id'     => $deep_link_id,
+      'condominium_id'   => $condominium_id,
+      'unit_id'          => $unit_id,
       'is_read'          => 0,
       'created'          => $now,
       'read_at'          => NULL,
@@ -283,9 +289,11 @@ function myapi_notification_create(array $params) {
 
   // Deferred push: one queue item per batch of external ids.
   $data = [
-    'target'            => $deep_link_target,
-    'id'                => $deep_link_id,
-    'notification_type' => $params['type'],
+    'target'             => $deep_link_target,
+    'id'                 => $deep_link_id,
+    'unit'               => $unit_id,
+    'condominium'        => $condominium_id,
+    'notification_type'  => $params['type'],
   ];
   $queue = DrupalQueue::get(MYAPI_ONESIGNAL_QUEUE);
   foreach (array_chunk($uids, MYAPI_ONESIGNAL_MAX_EXTERNAL_IDS) as $chunk) {
