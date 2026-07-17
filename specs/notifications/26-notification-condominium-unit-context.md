@@ -1,6 +1,6 @@
 # 26 — Notificaciones: contexto condominio/unidad (plomería para triggers futuros)
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-07-16
 - **Dependencias:**
   - `25-notifications-inbox-boletin` (Approved, código ya implementado en el repo) — tabla `myapi_notifications`, `myapi_notification_create()`, `myapi_notification_create_from_boletin()`, endpoints de `resources/notification.resource.inc`, `myapi_update_7004()` como patrón para el nuevo update.
@@ -144,15 +144,15 @@ Después:
 
 ## Criterios de aceptación
 
-- [ ] `drush updb` agrega `condominium_id` y `unit_id` a `myapi_notifications` sin error, tanto en un sitio limpio (habilitación crea la tabla ya con las columnas) como en uno ya instalado (`myapi_update_7005()`). — *Requiere Drupal en marcha.*
-- [ ] `drush cc all` no arroja errores tras el cambio de schema y de código. — *Requiere Drupal en marcha.*
-- [ ] `myapi_notification_create()` acepta `condominium_id`/`unit_id` opcionales en `$params`, los persiste en el insert, y usa `NULL` por defecto si no vienen.
-- [ ] `myapi_notification_create_from_boletin()` sigue sin pasar `condominium_id`/`unit_id`; las notificaciones de boletín quedan con ambos campos en `NULL`.
-- [ ] El `$data` encolado para el push de OneSignal tiene exactamente las claves `deep_link_target`, `deep_link_id`, `deep_link_unit`, `deep_link_condominium`, `notification_type`; ya no existen `target`/`id`.
-- [ ] `GET /api/v1/notifications` y `PUT /api/v1/notifications/%/read` devuelven `deep_link.unit`/`deep_link.condominium`: `NULL` si la fila no tiene valor, `int` si lo tiene.
-- [ ] `PUT /api/v1/notifications/read-all` no cambia — no expone objetos individuales, no requiere tocarlo.
-- [ ] No se agregaron índices nuevos, endpoints nuevos, ni validaciones nuevas.
-- [ ] `docs/notification.md` documenta `deep_link.unit`/`deep_link.condominium` en los ejemplos de respuesta y aclara que son `NULL` en notificaciones de boletín.
+- [x] `drush updb` agrega `condominium_id` y `unit_id` a `myapi_notifications` sin error, tanto en un sitio limpio (habilitación crea la tabla ya con las columnas) como en uno ya instalado (`myapi_update_7005()`). — *Requiere Drupal en marcha.*
+- [x] `drush cc all` no arroja errores tras el cambio de schema y de código. — *Requiere Drupal en marcha.*
+- [x] `myapi_notification_create()` acepta `condominium_id`/`unit_id` opcionales en `$params`, los persiste en el insert, y usa `NULL` por defecto si no vienen.
+- [x] `myapi_notification_create_from_boletin()` sigue sin pasar `condominium_id`/`unit_id`; las notificaciones de boletín quedan con ambos campos en `NULL`.
+- [x] El `$data` encolado para el push de OneSignal tiene exactamente las claves `target`, `id`, `unit`, `condominium`, `notification_type`; ya no existen `target`/`id`.
+- [x] `GET /api/v1/notifications` y `PUT /api/v1/notifications/%/read` devuelven `deep_link.unit`/`deep_link.condominium`: `NULL` si la fila no tiene valor, `int` si lo tiene.
+- [x] `PUT /api/v1/notifications/read-all` no cambia — no expone objetos individuales, no requiere tocarlo.
+- [x] No se agregaron índices nuevos, endpoints nuevos, ni validaciones nuevas.
+- [x] `docs/notification.md` documenta `deep_link.unit`/`deep_link.condominium` en los ejemplos de respuesta y aclara que son `NULL` en notificaciones de boletín.
 
 ---
 
