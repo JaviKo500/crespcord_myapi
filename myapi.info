@@ -29,3 +29,4 @@ files[] = includes/myapi.notification.inc
 files[] = includes/myapi.onesignal.inc
 files[] = resources/notification.resource.inc
 files[] = includes/myapi.fee_notification.inc
+files[] = resources/bulletin.resource.inc

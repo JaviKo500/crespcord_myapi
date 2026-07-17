@@ -181,6 +181,13 @@ function myapi_menu() {
     'file'             => 'resources/notification.resource.inc',
   ];
 
+  $items['api/v1/bulletins'] = [
+    'page callback'    => 'myapi_bulletin_dispatch',
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/bulletin.resource.inc',
+  ];
+
   return $items;
 }
 

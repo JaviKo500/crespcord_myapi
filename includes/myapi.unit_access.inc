@@ -151,3 +151,85 @@ function myapi_condominium_member_uids(array $condo_nids, $role) {
 
   return myapi_unit_member_uids($unit_nids, $role);
 }
+
+/**
+ * Returns the nids of 'vivienda' nodes a user owns (field_propietario = uid).
+ *
+ * Reader-role resolver for the bulletin visibility query: given the reader,
+ * resolve the units where they are the owner. Counterpart of
+ * myapi_user_occupied_unit_nids() for the occupant side.
+ *
+ * @param int $uid  User id to look up.
+ *
+ * @return array  Unique list of 'vivienda' nids owned by the user.
+ */
+function myapi_user_owned_unit_nids($uid) {
+  $owner_nids = db_select('field_data_field_propietario', 'p')
+    ->fields('p', ['entity_id'])
+    ->condition('field_propietario_target_id', $uid)
+    ->condition('entity_type', 'node')
+    ->condition('deleted', 0)
+    ->execute()
+    ->fetchCol();
+
+  return array_values(array_unique($owner_nids));
+}
+
+/**
+ * Returns the nids of 'vivienda' nodes a user occupies, from both the legacy
+ * single-value field (field_ocupante) and the current multi-value field
+ * (field_ocupantes), merged and deduped.
+ *
+ * Reader-role resolver for the bulletin visibility query. Counterpart of
+ * myapi_user_owned_unit_nids() for the owner side.
+ *
+ * @param int $uid  User id to look up.
+ *
+ * @return array  Unique list of 'vivienda' nids occupied by the user.
+ */
+function myapi_user_occupied_unit_nids($uid) {
+  $occupant_nids = db_select('field_data_field_ocupante', 'o')
+    ->fields('o', ['entity_id'])
+    ->condition('field_ocupante_target_id', $uid)
+    ->condition('entity_type', 'node')
+    ->condition('deleted', 0)
+    ->execute()
+    ->fetchCol();
+
+  $occupants_nids = db_select('field_data_field_ocupantes', 'os')
+    ->fields('os', ['entity_id'])
+    ->condition('field_ocupantes_target_id', $uid)
+    ->condition('entity_type', 'node')
+    ->condition('deleted', 0)
+    ->execute()
+    ->fetchCol();
+
+  return array_values(array_unique(array_merge($occupant_nids, $occupants_nids)));
+}
+
+/**
+ * Returns the unique 'condominio' nids referenced by a set of 'vivienda' nodes
+ * through field_condominio.
+ *
+ * Reader-role resolver for the bulletin visibility query: maps the reader's
+ * owned/occupied units to the condominiums they belong to.
+ *
+ * @param array $unit_nids  'vivienda' nids to look up.
+ *
+ * @return array  Unique list of 'condominio' nids (empty if $unit_nids is empty).
+ */
+function myapi_units_condominium_nids(array $unit_nids) {
+  if (empty($unit_nids)) {
+    return [];
+  }
+
+  $condo_nids = db_select('field_data_field_condominio', 'fc')
+    ->fields('fc', ['field_condominio_target_id'])
+    ->condition('entity_id', $unit_nids, 'IN')
+    ->condition('entity_type', 'node')
+    ->condition('deleted', 0)
+    ->execute()
+    ->fetchCol();
+
+  return array_values(array_unique($condo_nids));
+}
