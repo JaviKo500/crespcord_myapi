@@ -61,7 +61,7 @@ Paginated list of the authenticated user's notifications, ordered `created DESC`
         "type": "bulletin",
         "title": "Corte de agua programado",
         "body": "El sábado de 8:00 a 12:00 se suspende el servicio...",
-        "deep_link": { "target": "bulletin", "id": 812 },
+        "deep_link": { "target": "bulletin", "id": 812, "unit": null, "condominium": null },
         "is_read": false,
         "created_at": 1752566400,
         "read_at": null
@@ -78,6 +78,10 @@ Paginated list of the authenticated user's notifications, ordered `created DESC`
 - `deep_link.target` + `deep_link.id` are the same pair the push carries in its
   `data` payload, so opening from the list or from the push lands on the same
   screen.
+- `deep_link.unit` / `deep_link.condominium` are plumbing for future triggers
+  (approved payment, new alicuota) that will tie a notification to a specific
+  unit and condominium. They are `NULL` for `bulletin` notifications, which do
+  not originate from a single unit/condominium.
 
 **Possible errors**
 | Code | When |
@@ -111,7 +115,7 @@ matches nothing, and returns `404`.
     "type": "bulletin",
     "title": "Corte de agua programado",
     "body": "El sábado de 8:00 a 12:00 se suspende el servicio...",
-    "deep_link": { "target": "bulletin", "id": 812 },
+    "deep_link": { "target": "bulletin", "id": 812, "unit": null, "condominium": null },
     "is_read": true,
     "created_at": 1752566400,
     "read_at": 1752570000
@@ -195,7 +199,9 @@ Set as Drupal variables (in `settings.php` via `$conf[...]` or with
 
 If either is missing, the fan-out to the inbox still happens; only the push is
 skipped, with a `watchdog(WATCHDOG_WARNING)`. The push `data` payload is
-`{ "target": "bulletin", "id": <nid>, "notification_type": "bulletin" }`.
+`{ "target": "bulletin", "id": <nid>, "unit": null, "condominium": null, "notification_type": "bulletin" }`.
+`unit`/`condominium` mirror `deep_link.unit`/`deep_link.condominium` and are
+`NULL` for `bulletin` notifications.
 External ids are chunked to OneSignal's 2000-per-request limit. A transport
 failure re-queues the batch for the next cron (standard Queue API behaviour),
 which may deliver a push twice — the inbox is never duplicated.
