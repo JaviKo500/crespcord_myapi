@@ -1,6 +1,6 @@
 # 30 — Notificación de pago anulado
 
-- **Estado:** Draft
+- **Estado:** Appoved
 - **Fecha:** 2026-07-17
 - **Dependencias:**
   - `23-anular-pago` (Implemented) — endpoint `PUT /api/v1/payments/%/cancel` que reescribe `field_estado_pago` a `"Anulado"` vía `node_save()`, y constante `MYAPI_PAYMENT_STATUS_CANCELLED` en `includes/myapi.payment_workflow.inc`. Este spec **modifica** ese endpoint para que marque el nodo y **no** dispare notificación (la anulación del propio residente no se notifica a sí mismo).
