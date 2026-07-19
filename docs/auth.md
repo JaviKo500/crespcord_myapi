@@ -34,6 +34,10 @@ both tokens together with the basic user data.
       "uid": 123,
       "name": "javier",
       "mail": "correo@correo.com",
+      "first_name": "Javier",
+      "last_name": "Contreras",
+      "dni": "12345678",
+      "phone": "04121234567",
       "picture": null,
       "roles": [
         { "name": "administrator", "uid": 3 },
@@ -50,6 +54,9 @@ Notes:
 - `expires_in` reflects the **current** value of the `myapi_token_access_ttl`
   Drupal variable (default `1800`), configurable with
   `drush vset myapi_token_access_ttl <seconds>` — no code change or reinstall.
+- `first_name`, `last_name`, `dni` and `phone` come from the user's profile
+  fields (`field_nombre`, `field_apellidos`, `field_cedula`, `field_telefono`
+  respectively). Any of them is `null` when the field has no value set.
 - `picture` is always `null` in this version (fid → URL resolution is out of
   scope).
 - Each `roles` entry is `{ name, uid }` where `name` is `dr_role.name` and
@@ -123,6 +130,10 @@ invalidated so it cannot be reused.
       "uid": 123,
       "name": "javier",
       "mail": "correo@correo.com",
+      "first_name": "Javier",
+      "last_name": "Contreras",
+      "dni": "12345678",
+      "phone": "04121234567",
       "picture": null,
       "roles": [
         { "name": "administrator", "uid": 3 }
@@ -137,6 +148,9 @@ Notes:
   rotation). The old token is marked `revoked = 1` in `my_api_tokens`.
 - `expires_in` is the TTL of the **new access token** in seconds (same variable
   as login: `myapi_token_access_ttl`, default `1800`).
+- `first_name`, `last_name`, `dni` and `phone` come from the user's profile
+  fields; see the notes under `POST /api/v1/auth/login`. Any of them is `null`
+  when the field has no value set.
 - `picture` is always `null` in this version.
 - Each `roles` entry is `{ name, uid }` where `uid` is the role id (`rid`).
 

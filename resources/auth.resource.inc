@@ -11,6 +11,7 @@ module_load_include('inc', 'myapi', 'includes/myapi.i18n');
 module_load_include('inc', 'myapi', 'includes/myapi.token');
 module_load_include('inc', 'myapi', 'includes/myapi.auth');
 module_load_include('inc', 'myapi', 'includes/myapi.flood');
+module_load_include('inc', 'myapi', 'includes/myapi.user');
 
 /**
  * Dispatcher for /api/v1/auth/login.
@@ -67,6 +68,26 @@ function myapi_auth_login() {
   $refresh = myapi_token_generate_refresh();
   myapi_token_persist($account->uid, $access, $refresh);
 
+  myapi_respond([
+    'access_token'  => $access,
+    'refresh_token' => $refresh,
+    'expires_in'    => myapi_token_access_ttl(),
+    'user'          => myapi_auth_build_user_payload($account),
+  ], 200);
+}
+
+/**
+ * Builds the "user" sub-object returned by login and refresh.
+ *
+ * Combines account properties, mapped roles, and profile fields (first name,
+ * last name, DNI, phone) read via myapi_user_fetch_profile_fields(). Shared
+ * by both endpoints so their "user" payload never drifts apart.
+ *
+ * @param object $account  Loaded user account.
+ *
+ * @return array  The "user" sub-object.
+ */
+function myapi_auth_build_user_payload($account) {
   // Map $account->roles (rid => name) to a list of {name, uid} objects, where
   // uid is the role id (rid) per the client requirement.
   $roles = [];
@@ -74,20 +95,19 @@ function myapi_auth_login() {
     $roles[] = ['name' => $name, 'uid' => (int) $rid];
   }
 
-  $user = [
-    'uid'     => (int) $account->uid,
-    'name'    => $account->name,
-    'mail'    => $account->mail,
-    'picture' => NULL,
-    'roles'   => $roles,
-  ];
+  $profile = myapi_user_fetch_profile_fields($account->uid);
 
-  myapi_respond([
-    'access_token'  => $access,
-    'refresh_token' => $refresh,
-    'expires_in'    => myapi_token_access_ttl(),
-    'user'          => $user,
-  ], 200);
+  return [
+    'uid'        => (int) $account->uid,
+    'name'       => $account->name,
+    'mail'       => $account->mail,
+    'first_name' => $profile['first_name'],
+    'last_name'  => $profile['last_name'],
+    'dni'        => $profile['dni'],
+    'phone'      => $profile['phone'],
+    'picture'    => NULL,
+    'roles'      => $roles,
+  ];
 }
 
 /**
@@ -203,24 +223,11 @@ function myapi_auth_refresh() {
   $refresh = myapi_token_generate_refresh();
   myapi_token_persist($account->uid, $access, $refresh);
 
-  $roles = [];
-  foreach ($account->roles as $rid => $name) {
-    $roles[] = ['name' => $name, 'uid' => (int) $rid];
-  }
-
-  $user = [
-    'uid'     => (int) $account->uid,
-    'name'    => $account->name,
-    'mail'    => $account->mail,
-    'picture' => NULL,
-    'roles'   => $roles,
-  ];
-
   myapi_respond([
     'access_token'  => $access,
     'refresh_token' => $refresh,
     'expires_in'    => myapi_token_access_ttl(),
-    'user'          => $user,
+    'user'          => myapi_auth_build_user_payload($account),
   ], 200);
 }
 
