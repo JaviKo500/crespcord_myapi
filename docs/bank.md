@@ -2,8 +2,9 @@
 
 Returns the full list of banks: the terms of the `bancos` taxonomy vocabulary,
 each mapped to its `id`, `name` and `description`. Read-only collection: no
-per-bank detail endpoint and no create/update/delete. The list is ordered by
-`id`, ascending by default (see the `sort` query parameter).
+per-bank detail endpoint and no create/update/delete. The list is ordered
+alphabetically by `name`, ascending by default (see the `sort` query
+parameter).
 
 **Authentication:** required (Bearer access token)
 
@@ -19,7 +20,7 @@ data (e.g. account numbers), so the endpoint is not public.
 **Query parameters**
 | Param | Values | Default | Notes |
 |-------|--------|---------|-------|
-| `sort` | `asc` \| `desc` | `asc` | Sort order by `id`. `asc` = lowest id first, `desc` = highest id first. Any other value (absent, empty, uppercase `ASC`, another field name) is silently ignored and falls back to `asc` — no `422`. |
+| `sort` | `asc` \| `desc` | `asc` | Sort order by `name` (case-insensitive). `asc` = A→Z, `desc` = Z→A. Any other value (absent, empty, uppercase `ASC`, another field name) is silently ignored and falls back to `asc` — no `422`. |
 
 **Success response (200)**
 ```json

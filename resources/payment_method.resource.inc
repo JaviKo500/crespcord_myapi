@@ -36,10 +36,10 @@ function myapi_payment_method_dispatch() {
  *
  * Requires a valid Bearer access token (any authenticated user). Returns the
  * terms of the `metodos_pago` taxonomy vocabulary, each enriched with
- * `field_tipo_pago` (exposed as `type_method`), ordered by `id`, ascending by
- * default or descending with ?sort=desc. Terms without a `type_method` value
- * are excluded. If the vocabulary does not exist (or has no usable terms),
- * responds 200 with an empty list.
+ * `field_tipo_pago` (exposed as `type_method`), ordered alphabetically by
+ * `name`, ascending by default or descending with ?sort=desc. Terms without a
+ * `type_method` value are excluded. If the vocabulary does not exist (or has
+ * no usable terms), responds 200 with an empty list.
  */
 function myapi_payment_method_list() {
   // Authentication only: any user with a valid access token may list the
@@ -47,7 +47,7 @@ function myapi_payment_method_list() {
   // per-user).
   myapi_auth_require_access_token();
 
-  // Sort direction over `id`. Any value other than 'asc'/'desc' (absent,
+  // Sort direction over `name`. Any value other than 'asc'/'desc' (absent,
   // empty, uppercase, another field) is silently ignored and defaults to
   // 'asc', the same lax rule used by the bank/payment/expense resources.
   $sort = (isset($_GET['sort']) && in_array($_GET['sort'], ['asc', 'desc'], TRUE))
@@ -78,10 +78,11 @@ function myapi_payment_method_list() {
   $items = array_map('myapi_payment_method_build_item', $terms);
   $items = array_values(array_filter($items));
 
-  // Order by `id`, regardless of the natural order of taxonomy_get_tree() or
-  // the tid-keyed order of entity_load().
+  // Order alphabetically by `name`, regardless of the natural order of
+  // taxonomy_get_tree() or the tid-keyed order of entity_load().
   usort($items, function ($a, $b) use ($sort) {
-    return $sort === 'desc' ? ($b['id'] - $a['id']) : ($a['id'] - $b['id']);
+    $cmp = strcasecmp($a['name'], $b['name']);
+    return $sort === 'desc' ? -$cmp : $cmp;
   });
 
   myapi_respond(['payment_methods' => $items], 200);
