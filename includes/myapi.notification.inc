@@ -42,6 +42,11 @@ define('MYAPI_NOTIFICATION_SOURCE_PAYMENT', 'payment');
 define('MYAPI_NOTIFICATION_TYPE_PAYMENT_APPROVED', 'payment_approved');
 
 /**
+ * Notification category (4.2.7) for a payment reaching "Anulado".
+ */
+define('MYAPI_NOTIFICATION_TYPE_PAYMENT_CANCELLED', 'payment_cancelled');
+
+/**
  * App section the payment deep-link points to.
  */
 define('MYAPI_NOTIFICATION_DEEP_LINK_PAYMENT', 'payment');

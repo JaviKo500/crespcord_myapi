@@ -257,7 +257,9 @@ function myapi_node_insert($node) {
  *   Covers the "Nuevo" -> "Completado" transition produced by the legacy Rule
  *   'rules_actualizar_saldo_pago' when it auto-saves a 'pagos' node created
  *   directly in "Nuevo" (the Rule already did the balance work; this hook only
- *   notifies).
+ *   notifies). Also delegates to myapi_payment_is_cancellation_transition() /
+ *   myapi_payment_notify_cancelled() for a back-office "* -> Anulado" update
+ *   (the opt-out save from PUT /api/v1/payments/%/cancel never matches it).
  * - 'recibo' / 'alicuota_extra': delegates to myapi_fee_is_sent_transition() /
  *   myapi_fee_notify_issued() in includes/myapi.fee_notification.inc, notifying
  *   the unit occupants when the fee transitions to "Enviado" on edit.
@@ -267,6 +269,9 @@ function myapi_node_update($node) {
     module_load_include('inc', 'myapi', 'includes/myapi.payment_workflow');
     if (myapi_payment_is_rule_completion($node)) {
       myapi_payment_notify_approved($node);
+    }
+    elseif (myapi_payment_is_cancellation_transition($node)) {
+      myapi_payment_notify_cancelled($node);
     }
     return;
   }

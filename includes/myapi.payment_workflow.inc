@@ -109,6 +109,37 @@ function myapi_payment_is_rule_completion($node) {
 }
 
 /**
+ * Detects an update that moves a 'pagos' node into "Anulado" from the Drupal
+ * back office.
+ *
+ * Fires on any update whose incoming field_estado_pago is "Anulado" and whose
+ * previous value was not already "Anulado" (any prior status qualifies; this
+ * only guards against re-firing on an update that leaves the payment
+ * cancelled). The endpoint at PUT /api/v1/payments/%/cancel (spec 23) sets
+ * $node->myapi_skip_cancel_notification before its own node_save() so that its
+ * own cancellation never fires here.
+ *
+ * @param object $node  The 'pagos' node being saved.
+ *
+ * @return bool  TRUE only for a back-office "* -> Anulado" update, excluding
+ *               opt-out saves.
+ */
+function myapi_payment_is_cancellation_transition($node) {
+  if (!empty($node->myapi_skip_cancel_notification)) {
+    return FALSE;
+  }
+  if (!isset($node->original)) {
+    return FALSE;
+  }
+
+  $previous = myapi_payment_field_value($node->original, 'field_estado_pago');
+  $incoming = myapi_payment_field_value($node, 'field_estado_pago');
+
+  return $incoming === MYAPI_PAYMENT_STATUS_CANCELLED
+    && $previous !== MYAPI_PAYMENT_STATUS_CANCELLED;
+}
+
+/**
  * Applies the verification workflow to a 'pagos' node in presave.
  *
  * Validates the preconditions and, only if they all pass, discounts the amount
@@ -237,6 +268,63 @@ function myapi_payment_notify_approved($node) {
     'type'             => MYAPI_NOTIFICATION_TYPE_PAYMENT_APPROVED,
     'title'            => 'Pago aprobado — Ref. ' . $reference,
     'body'             => 'Tu pago de ' . $amount . " ha sido aprobado.\nReferencia: " . $reference . "\nGracias.",
+    'deep_link_target' => MYAPI_NOTIFICATION_DEEP_LINK_PAYMENT,
+    'deep_link_id'     => (int) $node->nid,
+    'condominium_id'   => $condominium_id,
+    'unit_id'          => $unit_id,
+    'uids'             => myapi_payment_notify_recipients($node, $unit_id),
+  ]);
+}
+
+/**
+ * Notifies the recipient of a 'pagos' node that their payment was cancelled.
+ *
+ * Called from the "Anulado" branch of hook_node_update() (see myapi.module)
+ * when the transition was made from the Drupal back office, never for the
+ * opt-out save performed by PUT /api/v1/payments/%/cancel (spec 23). Reuses
+ * myapi_payment_notify_recipients() unmodified, so the recipient resolution
+ * (author, or occupant when the author is an administrator) is identical to
+ * the "payment approved" notification. Missing field_referencia/field_valor/
+ * field_vivienda do not block the notification: it is built with whatever the
+ * node has (empty reference, "0.00" amount, NULL unit_id/condominium_id).
+ *
+ * @param object $node  The 'pagos' node whose status just reached
+ *                       MYAPI_PAYMENT_STATUS_CANCELLED.
+ */
+function myapi_payment_notify_cancelled($node) {
+  module_load_include('inc', 'myapi', 'includes/myapi.notification');
+
+  $reference = myapi_payment_field_value($node, 'field_referencia');
+  $reference = $reference !== NULL ? $reference : '';
+  $amount = number_format((float) myapi_payment_field_value($node, 'field_valor'), 2);
+
+  $reason = myapi_payment_field_value($node, 'field_detalle');
+  $reason = ($reason !== NULL && trim($reason) !== '') ? trim($reason) : NULL;
+
+  $body = 'Tu pago de ' . $amount . ' ha sido anulado.';
+  if ($reason !== NULL) {
+    $body .= "\nMotivo: " . $reason;
+  }
+  $body .= "\nReferencia: " . $reference;
+
+  $unit_id = isset($node->field_vivienda[LANGUAGE_NONE][0]['target_id'])
+    ? (int) $node->field_vivienda[LANGUAGE_NONE][0]['target_id']
+    : NULL;
+
+  $condominium_id = NULL;
+  if ($unit_id !== NULL) {
+    $vivienda = node_load($unit_id);
+    if ($vivienda && isset($vivienda->field_condominio[LANGUAGE_NONE][0]['target_id'])) {
+      $condominium_id = (int) $vivienda->field_condominio[LANGUAGE_NONE][0]['target_id'];
+    }
+  }
+
+  myapi_notification_create([
+    'source_type'      => MYAPI_NOTIFICATION_SOURCE_PAYMENT,
+    'source_nid'       => (int) $node->nid,
+    'type'             => MYAPI_NOTIFICATION_TYPE_PAYMENT_CANCELLED,
+    'title'            => 'Pago anulado — Ref. ' . $reference,
+    'body'             => $body,
     'deep_link_target' => MYAPI_NOTIFICATION_DEEP_LINK_PAYMENT,
     'deep_link_id'     => (int) $node->nid,
     'condominium_id'   => $condominium_id,

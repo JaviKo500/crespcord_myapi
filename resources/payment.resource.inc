@@ -163,6 +163,10 @@ function myapi_payment_cancel($payment_id) {
   if ($reason !== NULL) {
     $node->field_detalle[LANGUAGE_NONE][0]['value'] = $reason;
   }
+  // Opt-out: the resident cancelling their own payment does not need to be
+  // notified of it (spec 30). myapi_payment_is_cancellation_transition() reads
+  // this flag in hook_node_update() and skips the notification when set.
+  $node->myapi_skip_cancel_notification = TRUE;
   node_save($node);
 
   // 8. Reload the attachment and bank term for the response, same pattern as
