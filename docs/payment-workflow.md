@@ -107,6 +107,57 @@ reference, `"0.00"` amount, `NULL` unit/condominium).
 Text is fixed in Spanish, not translated via `myapi_t()` — same criterion as
 the bulletin notification body.
 
+## Notification on cancellation
+
+When a `pagos` node is **updated** and `field_estado_pago` moves to
+`"Anulado"` from any other status, `myapi_payment_notify_cancelled($node)`
+(in `includes/myapi.payment_workflow.inc`) notifies the payment's recipient
+via `myapi_notification_create()`. Detected by
+`myapi_payment_is_cancellation_transition($node)`, hooked in the `pagos`
+branch of `hook_node_update()` (`myapi.module`), as an `elseif` sibling of the
+approval transition above.
+
+| Source | Read | Value required to fire |
+|--------|------|------------------------|
+| `$node->original->field_estado_pago` | previous status (in DB) | anything other than `"Anulado"` |
+| `$node->field_estado_pago` | incoming status | `"Anulado"` |
+
+- Only fires on **update** (`$node->original` must be set); a node inserted
+  directly in `"Anulado"` never notifies.
+- Any prior status qualifies (`"Pendiente de verificar"`, `"Completado"`,
+  etc.) as long as it is not already `"Anulado"` — this only guards against
+  re-firing on an update that leaves the payment cancelled (e.g. editing an
+  already-cancelled payment without touching its status).
+
+### Opt-out for `PUT /api/v1/payments/%/cancel`
+
+`myapi_payment_cancel()` (spec 23, `resources/payment.resource.inc`) sets
+`$node->myapi_skip_cancel_notification = TRUE;` before its own `node_save()`.
+`myapi_payment_is_cancellation_transition()` checks this flag first and
+returns `FALSE` when it is set, so the resident cancelling their own payment
+through the endpoint is never notified of it — the notification only fires
+for a cancellation made from the Drupal back office (by an administrator, on
+someone else's payment).
+
+### Recipient, message and metadata
+
+| Field | Value |
+|-------|-------|
+| Recipient (`uids`) | `myapi_payment_notify_recipients($node, $unit_id)` — same resolution as the approval notification: the payment's author (`node->uid`), unless the author has the `administrator` role, in which case the unit's occupant(s) are notified instead (falling back to the author if none resolve). |
+| `title` | `"Pago anulado — Ref. {reference}"` |
+| `body` (with `field_detalle`) | `"Tu pago de {amount} ha sido anulado.\nMotivo: {detalle}\nReferencia: {reference}"` |
+| `body` (without `field_detalle`) | `"Tu pago de {amount} ha sido anulado.\nReferencia: {reference}"` (no `Motivo:` line when `field_detalle` is `NULL` or empty after `trim()`) |
+| `{amount}` | Formatted to 2 decimals (`number_format`); `"0.00"` if `field_valor` is missing. |
+| `type` / `source_type` / `deep_link.target` | `"payment_cancelled"` / `"payment"` / `"payment"` (`deep_link.id` = the payment's nid). |
+| `unit_id` / `condominium_id` | Resolved from `field_vivienda` (and that unit's `field_condominio`) when present; `NULL` otherwise. Best-effort context, not a precondition — the same resolution block as the approval notification, duplicated rather than shared. |
+
+Missing `field_referencia`/`field_valor`/`field_vivienda` do not block the
+notification: it is built with whatever the node has (empty reference,
+`"0.00"` amount, `NULL` unit/condominium).
+
+Text is fixed in Spanish, not translated via `myapi_t()` — same criterion as
+the approval notification and the bulletin notification body.
+
 ## Out of scope
 
 - A REST verification endpoint (`PUT /api/v1/payments/%/verify`).
