@@ -1,6 +1,6 @@
 # 30 — Notificación de pago anulado
 
-- **Estado:** Appoved
+- **Estado:** Implemented
 - **Fecha:** 2026-07-17
 - **Dependencias:**
   - `23-anular-pago` (Implemented) — endpoint `PUT /api/v1/payments/%/cancel` que reescribe `field_estado_pago` a `"Anulado"` vía `node_save()`, y constante `MYAPI_PAYMENT_STATUS_CANCELLED` en `includes/myapi.payment_workflow.inc`. Este spec **modifica** ese endpoint para que marque el nodo y **no** dispare notificación (la anulación del propio residente no se notifica a sí mismo).
@@ -202,33 +202,33 @@ Referencia: {reference}
 ## Criterios de aceptación
 
 **Disparo correcto (back office)**
-- [ ] Editar desde el back office un pago de `"Pendiente de verificar"` a `"Anulado"` genera una fila nueva en `myapi_notifications` con `type = "payment_cancelled"`.
-- [ ] Editar desde el back office un pago de `"Completado"` (u otro estado ≠ `"Anulado"`) a `"Anulado"` también genera la notificación (cualquier estado previo dispara).
-- [ ] El `title` es exactamente `"Pago anulado — Ref. {reference}"` con la referencia real.
-- [ ] Con `field_detalle` presente, el `body` es exactamente `"Tu pago de {amount} ha sido anulado.\nMotivo: {detalle}\nReferencia: {reference}"`.
-- [ ] Sin `field_detalle`, el `body` es exactamente `"Tu pago de {amount} ha sido anulado.\nReferencia: {reference}"` (sin línea de motivo).
-- [ ] `{amount}` va formateado a 2 decimales (ej. `"45.90"`).
-- [ ] `source_type = "payment"`, `source_nid` = nid del pago, `deep_link.target = "payment"`, `deep_link.id` = nid del pago.
-- [ ] `unit_id`/`condominium_id` quedan poblados con el nid de la vivienda y del condominio cuando se pueden resolver.
+- [x] Editar desde el back office un pago de `"Pendiente de verificar"` a `"Anulado"` genera una fila nueva en `myapi_notifications` con `type = "payment_cancelled"`.
+- [x] Editar desde el back office un pago de `"Completado"` (u otro estado ≠ `"Anulado"`) a `"Anulado"` también genera la notificación (cualquier estado previo dispara).
+- [x] El `title` es exactamente `"Pago anulado — Ref. {reference}"` con la referencia real.
+- [x] Con `field_detalle` presente, el `body` es exactamente `"Tu pago de {amount} ha sido anulado.\nMotivo: {detalle}\nReferencia: {reference}"`.
+- [x] Sin `field_detalle`, el `body` es exactamente `"Tu pago de {amount} ha sido anulado.\nReferencia: {reference}"` (sin línea de motivo).
+- [x] `{amount}` va formateado a 2 decimales (ej. `"45.90"`).
+- [x] `source_type = "payment"`, `source_nid` = nid del pago, `deep_link.target = "payment"`, `deep_link.id` = nid del pago.
+- [x] `unit_id`/`condominium_id` quedan poblados con el nid de la vivienda y del condominio cuando se pueden resolver.
 
 **Destinatario (reutiliza spec 27)**
-- [ ] Si el autor del pago (`node->uid`) **no** tiene rol `administrator`, el destinatario es ese `uid`.
-- [ ] Si el autor tiene rol `administrator` y la vivienda tiene ocupante(s) resoluble(s), el destinatario es el/los ocupante(s), no el admin.
-- [ ] Si el autor es `administrator` pero la vivienda no tiene ocupante resoluble (o no hay `field_vivienda`), cae de vuelta al `uid` autor.
+- [x] Si el autor del pago (`node->uid`) **no** tiene rol `administrator`, el destinatario es ese `uid`.
+- [x] Si el autor tiene rol `administrator` y la vivienda tiene ocupante(s) resoluble(s), el destinatario es el/los ocupante(s), no el admin.
+- [x] Si el autor es `administrator` pero la vivienda no tiene ocupante resoluble (o no hay `field_vivienda`), cae de vuelta al `uid` autor.
 
 **No dispara**
-- [ ] Anular vía `PUT /api/v1/payments/%/cancel` (spec 23) **no** genera notificación (bandera de opt-out).
-- [ ] Crear un nodo `pagos` directamente en `"Anulado"` **no** genera notificación (solo update, no insert).
-- [ ] Editar un pago ya `"Anulado"` (cambiando otros campos, sin tocar el estado) **no** genera notificación nueva.
-- [ ] Las transiciones que NO llegan a `"Anulado"` (verificación → `"Completado"`, etc.) no generan notificación de anulación.
+- [x] Anular vía `PUT /api/v1/payments/%/cancel` (spec 23) **no** genera notificación (bandera de opt-out).
+- [x] Crear un nodo `pagos` directamente en `"Anulado"` **no** genera notificación (solo update, no insert).
+- [x] Editar un pago ya `"Anulado"` (cambiando otros campos, sin tocar el estado) **no** genera notificación nueva.
+- [x] Las transiciones que NO llegan a `"Anulado"` (verificación → `"Completado"`, etc.) no generan notificación de anulación.
 
 **No regresión / infra**
-- [ ] La notificación de pago aprobado (spec 27) sigue funcionando idéntica; la rama `pagos` de `myapi_node_update()` sigue notificando aprobados sin cambios.
-- [ ] Las notificaciones de recibo/alícuota (spec 28) y de boletín (spec 25/26) siguen funcionando idénticas.
-- [ ] El endpoint de anular (spec 23) sigue devolviendo `200` con el pago anulado igual que antes; solo se le agregó la bandera.
-- [ ] `GET /api/v1/notifications` (spec 25) devuelve la notificación de anulación con `deep_link.unit`/`deep_link.condominium` pobladas cuando corresponde (spec 26).
-- [ ] `drush cc all` no reporta errores.
-- [ ] `docs/payment-workflow.md` documenta el nuevo comportamiento.
+- [x] La notificación de pago aprobado (spec 27) sigue funcionando idéntica; la rama `pagos` de `myapi_node_update()` sigue notificando aprobados sin cambios.
+- [x] Las notificaciones de recibo/alícuota (spec 28) y de boletín (spec 25/26) siguen funcionando idénticas.
+- [x] El endpoint de anular (spec 23) sigue devolviendo `200` con el pago anulado igual que antes; solo se le agregó la bandera.
+- [x] `GET /api/v1/notifications` (spec 25) devuelve la notificación de anulación con `deep_link.unit`/`deep_link.condominium` pobladas cuando corresponde (spec 26).
+- [x] `drush cc all` no reporta errores.
+- [x] `docs/payment-workflow.md` documenta el nuevo comportamiento.
 
 ---
 
