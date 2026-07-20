@@ -211,6 +211,34 @@ function myapi_bulletin_valid_date($value) {
 }
 
 /**
+ * Parses the optional 'condominium_id' filter from the query string.
+ *
+ * Reads $_GET['condominium_id'] and classifies it with three sentinels so the
+ * caller (myapi_bulletin_list()) can tell "absent" from "malformed" from a
+ * valid id, without extra parsing:
+ *   - NULL  : absent (unset or empty string) -> no filter, spec-29 behaviour.
+ *   - FALSE : present but malformed (not a positive integer) -> 422.
+ *   - int   : a positive integer node id (the condominium nid) -> gate + narrow.
+ *
+ * Pure function, no side effects: it only reads $_GET and returns a value.
+ * Existence of the condominium is NOT checked here (a non-existent id is treated
+ * exactly like a foreign one by the membership gate, see the spec).
+ *
+ * @return int|FALSE|NULL  int id when valid, FALSE when malformed, NULL when
+ *                         absent.
+ */
+function myapi_bulletin_parse_condominium_id() {
+  if (!isset($_GET['condominium_id']) || $_GET['condominium_id'] === '') {
+    return NULL;
+  }
+  $value = $_GET['condominium_id'];
+  if (!ctype_digit((string) $value) || (int) $value <= 0) {
+    return FALSE;
+  }
+  return (int) $value;
+}
+
+/**
  * Counts published 'boletin' nodes visible to the reader, unpaginated.
  *
  * Same base as myapi_bulletin_fetch(): published nodes of type 'boletin', with
@@ -388,6 +416,25 @@ function myapi_bulletin_list() {
     'is_occupant'     => $is_occupant,
     'is_member'       => $is_owner || $is_occupant,
   ];
+
+  // 2b. Optional condominium filter (spec 31). Parsed after the reader's sets
+  // are known and before counting, so the gate protects count/fetch. Absent ->
+  // no change (spec-29 behaviour); malformed -> 422; a valid id the reader does
+  // not belong to (foreign or non-existent) -> 403. When the reader belongs, the
+  // three condominium sets are narrowed to their intersection with {$condo}; the
+  // role flags are left untouched, so General/Personalizado stay unfiltered.
+  $condo = myapi_bulletin_parse_condominium_id();
+  if ($condo === FALSE) {
+    myapi_error('invalid_field', 422, ['@field' => 'condominium_id']);
+  }
+  if ($condo !== NULL) {
+    if (!in_array($condo, $sets['member_condos'])) {
+      myapi_error('condominium_access_denied', 403);
+    }
+    $sets['owner_condos']    = in_array($condo, $sets['owner_condos']) ? [$condo] : [];
+    $sets['occupant_condos'] = in_array($condo, $sets['occupant_condos']) ? [$condo] : [];
+    $sets['member_condos']   = [$condo];
+  }
 
   // 3. Pagination/sort: invalid or absent values fall back to their defaults
   // silently (no 422), same as payments.
