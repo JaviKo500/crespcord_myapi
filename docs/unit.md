@@ -21,6 +21,7 @@ volume per user is a handful of units).
       {
         "id": 12,
         "name": "Edificio El Sáuco",
+        "payment_information": "Banco Pichincha\nCta. Corriente 2100XXXXXX\nRUC 179XXXXXX001",
         "units": [
           {
             "id": 45,
@@ -89,6 +90,11 @@ Notes:
   field on the `vivienda` bundle, so there is one balance per unit.
 - `category` is `taxonomy_term_data.name` exactly as stored, with no
   slug/lowercase transformation.
+- `payment_information` is the condominium's `field_informacion_pago_value`
+  exposed exactly as stored (raw, unfiltered text — the field's text format is
+  ignored), `null` when the condominium has no row in
+  `field_data_field_informacion_pago`. It is a property of the condominium, not
+  of the unit, so it appears once per condominium alongside `name`.
 - Units are grouped by condominium; each condominium appears once in
   `properties` with all of the authenticated user's units in that
   condominium nested under `units`.
@@ -105,6 +111,7 @@ will silently break this endpoint without a Drupal update warning:
 | Table | Relevant columns | Use |
 |---|---|---|
 | `node` | `nid`, `type`, `title`, `status` | `vivienda` (unit) and `condominio` (property) nodes. |
+| `field_data_field_informacion_pago` | `entity_id`, `field_informacion_pago_value` | Condominium payment information (`payment_information`, single-value text). |
 | `field_data_field_condominio` | `entity_id`, `field_condominio_target_id` | Unit → condominium relation. |
 | `field_data_field_nombre_vivienda` | `entity_id`, `field_nombre_vivienda_value` | Unit name. |
 | `field_data_field_categoria` | `entity_id`, `field_categoria_tid` | Unit category (taxonomy reference). |

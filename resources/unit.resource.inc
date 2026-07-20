@@ -47,7 +47,7 @@ function myapi_unit_list() {
   $condominio_nids = array_values(array_unique(array_filter(array_map(function ($unit) {
     return $unit->condominio_nid;
   }, $units))));
-  $condominium_titles = myapi_unit_fetch_condominium_titles($condominio_nids);
+  $condominiums = myapi_unit_fetch_condominiums($condominio_nids);
 
   $occupant_uids = myapi_unit_fetch_occupant_uids($nids);
 
@@ -57,7 +57,7 @@ function myapi_unit_list() {
   $user_uids = array_values(array_unique(array_filter(array_merge($owner_uids, array_values($occupant_uids)))));
   $user_names = myapi_unit_fetch_user_names($user_uids);
 
-  $properties = myapi_unit_build_properties($units, $condominium_titles, $occupant_uids, $user_names);
+  $properties = myapi_unit_build_properties($units, $condominiums, $occupant_uids, $user_names);
 
   myapi_respond(['properties' => $properties], 200);
 }
@@ -66,32 +66,35 @@ function myapi_unit_list() {
  * Groups units by condominium and resolves owner/occupant names, into the
  * response shape documented for GET /api/v1/units.
  *
- * Units whose condominio_nid has no entry in $condominium_titles (parent
+ * Units whose condominio_nid has no entry in $condominiums (parent
  * condominium missing or unpublished) are dropped from the response.
  *
- * @param array $units              Rows from myapi_unit_fetch_units().
- * @param array $condominium_titles Map of condominio_nid => title.
- * @param array $occupant_uids      Map of nid => occupant_uid, from
- *                                  myapi_unit_fetch_occupant_uids().
- * @param array $user_names         Map of uid => name, from
- *                                  myapi_unit_fetch_user_names().
+ * @param array $units         Rows from myapi_unit_fetch_units().
+ * @param array $condominiums  Map of condominio_nid => object with 'title' and
+ *                             'payment_information', from
+ *                             myapi_unit_fetch_condominiums().
+ * @param array $occupant_uids Map of nid => occupant_uid, from
+ *                             myapi_unit_fetch_occupant_uids().
+ * @param array $user_names    Map of uid => name, from
+ *                             myapi_unit_fetch_user_names().
  *
- * @return array  List of ['id', 'name', 'units' => [['id', 'name', 'category', 'area_m2', 'owner_uid', 'owner_name', 'occupant_uid', 'occupant_name', 'current_balance'], ...]].
+ * @return array  List of ['id', 'name', 'payment_information', 'units' => [['id', 'name', 'category', 'area_m2', 'owner_uid', 'owner_name', 'occupant_uid', 'occupant_name', 'current_balance'], ...]].
  */
-function myapi_unit_build_properties($units, $condominium_titles, $occupant_uids, $user_names) {
+function myapi_unit_build_properties($units, $condominiums, $occupant_uids, $user_names) {
   $properties_by_condominio = [];
 
   foreach ($units as $unit) {
     $condominio_nid = $unit->condominio_nid;
-    if ($condominio_nid === NULL || !isset($condominium_titles[$condominio_nid])) {
+    if ($condominio_nid === NULL || !isset($condominiums[$condominio_nid])) {
       continue;
     }
 
     if (!isset($properties_by_condominio[$condominio_nid])) {
       $properties_by_condominio[$condominio_nid] = [
-        'id'    => (int) $condominio_nid,
-        'name'  => $condominium_titles[$condominio_nid],
-        'units' => [],
+        'id'                  => (int) $condominio_nid,
+        'name'                => $condominiums[$condominio_nid]->title,
+        'payment_information' => $condominiums[$condominio_nid]->payment_information,
+        'units'               => [],
       ];
     }
 
@@ -161,7 +164,8 @@ function myapi_unit_fetch_units($nids) {
 }
 
 /**
- * Fetches published 'condominio' titles for a set of nids.
+ * Fetches published 'condominio' data (title and payment information) for a
+ * set of nids.
  *
  * Nids not present in the returned map either do not exist or are
  * unpublished; callers use this to drop units whose condominium is not
@@ -169,26 +173,32 @@ function myapi_unit_fetch_units($nids) {
  *
  * @param array $nids  'condominio' nids to fetch.
  *
- * @return array  Map of nid => title, only for published condominiums.
+ * @return array  Map of nid => object with 'title' and 'payment_information'
+ *                (the raw field_informacion_pago value, NULL when unset), only
+ *                for published condominiums.
  */
-function myapi_unit_fetch_condominium_titles($nids) {
+function myapi_unit_fetch_condominiums($nids) {
   if (empty($nids)) {
     return [];
   }
 
-  $result = db_select('node', 'n')
+  $query = db_select('node', 'n')
     ->fields('n', ['nid', 'title'])
     ->condition('n.type', 'condominio')
     ->condition('n.status', 1)
-    ->condition('n.nid', $nids, 'IN')
-    ->execute();
+    ->condition('n.nid', $nids, 'IN');
 
-  $titles = [];
+  $query->leftJoin('field_data_field_informacion_pago', 'fip', "fip.entity_id = n.nid AND fip.entity_type = 'node' AND fip.deleted = 0");
+  $query->addField('fip', 'field_informacion_pago_value', 'payment_information');
+
+  $result = $query->execute();
+
+  $condominiums = [];
   foreach ($result as $condominium) {
-    $titles[$condominium->nid] = $condominium->title;
+    $condominiums[$condominium->nid] = $condominium;
   }
 
-  return $titles;
+  return $condominiums;
 }
 
 /**
