@@ -61,9 +61,12 @@ function myapi_notification_read_all_dispatch() {
  * Paginated list of the authenticated user's notifications, ordered
  * created DESC. Query params follow the lax criterion of the receipts endpoint:
  * invalid values fall back to the default, never a 422.
- *   - page   default 1.
- *   - limit  default 20, clamped to [1, 50]; -1 returns all, unpaginated.
- *   - unread '1' returns only unread; anything else (or absent) returns all.
+ *   - page        default 1.
+ *   - limit       default 20, clamped to [1, 50]; -1 returns all, unpaginated.
+ *   - unread      '1' returns only unread; anything else (or absent) returns all.
+ *   - condominium optional condominium scope (see myapi_notification_apply_scope).
+ *                 Absent/invalid => no scope filter, the full inbox (back-compat).
+ *   - unit        optional unit scope; only honoured when condominium is present.
  */
 function myapi_notification_list() {
   $auth = myapi_auth_require_access_token();
@@ -85,21 +88,31 @@ function myapi_notification_list() {
 
   $unread_only = isset($_GET['unread']) && $_GET['unread'] === '1';
 
+  // Condominium/unit scope: both lax. Only a positive integer counts; anything
+  // else is treated as absent. Unit is meaningless without a condominium, so it
+  // is ignored when condominium is absent.
+  $condominium = isset($_GET['condominium']) && ctype_digit((string) $_GET['condominium']) && (int) $_GET['condominium'] > 0
+    ? (int) $_GET['condominium']
+    : NULL;
+  $unit = $condominium !== NULL && isset($_GET['unit']) && ctype_digit((string) $_GET['unit']) && (int) $_GET['unit'] > 0
+    ? (int) $_GET['unit']
+    : NULL;
+
   // Total of the current (possibly filtered) set, for pagination.
   $count_query = db_select('myapi_notifications', 'n')->condition('uid', $uid);
   if ($unread_only) {
     $count_query->condition('is_read', 0);
   }
+  myapi_notification_apply_scope($count_query, $condominium, $unit);
   $total = (int) $count_query->countQuery()->execute()->fetchField();
 
-  // Unread badge count: always the user's total unread, ignoring the filter
-  // and pagination.
-  $unread_count = (int) db_select('myapi_notifications', 'n')
+  // Unread badge count: the user's total unread within the current scope
+  // (ignoring the unread filter and pagination, but honouring condominium/unit).
+  $unread_query = db_select('myapi_notifications', 'n')
     ->condition('uid', $uid)
-    ->condition('is_read', 0)
-    ->countQuery()
-    ->execute()
-    ->fetchField();
+    ->condition('is_read', 0);
+  myapi_notification_apply_scope($unread_query, $condominium, $unit);
+  $unread_count = (int) $unread_query->countQuery()->execute()->fetchField();
 
   $total_pages = $limit === -1
     ? ($total > 0 ? 1 : 0)
@@ -111,6 +124,7 @@ function myapi_notification_list() {
   if ($unread_only) {
     $query->condition('is_read', 0);
   }
+  myapi_notification_apply_scope($query, $condominium, $unit);
   $query->orderBy('created', 'DESC');
   // Stable tie-breaker for rows sharing the same created timestamp (fan-out).
   $query->orderBy('id', 'DESC');
@@ -187,6 +201,48 @@ function myapi_notification_mark_all_read() {
     ->execute();
 
   myapi_respond(['marked' => (int) $marked], 200, 'notifications_marked_read');
+}
+
+/**
+ * Applies the condominium/unit scope filter to a notifications query.
+ *
+ * Shared by the data, total and unread-count queries so the three always agree.
+ * The visibility rules (a notification with no context is broader, not hidden):
+ *   - A row with condominium_id NULL is always visible (global notification),
+ *     regardless of the requested scope.
+ *   - Otherwise the row must match the requested condominium, and either have no
+ *     unit (unit_id NULL, visible to the whole condominium) or match the
+ *     requested unit.
+ *   - When no unit is requested, the unit constraint is dropped: every unit of
+ *     the requested condominium (and the condominium-wide rows) is visible.
+ *
+ * A NULL $condominium means no scope was requested: the query is left untouched
+ * and the full inbox is returned (back-compatible with callers that never send
+ * the parameter).
+ *
+ * @param SelectQuery $query        The query to constrain (modified in place).
+ * @param int|null    $condominium  Requested condominium nid, or NULL for none.
+ * @param int|null    $unit         Requested unit nid, or NULL for none.
+ */
+function myapi_notification_apply_scope($query, $condominium, $unit) {
+  if ($condominium === NULL) {
+    return;
+  }
+
+  $in_condominium = db_and()->condition('condominium_id', $condominium);
+  if ($unit !== NULL) {
+    $in_condominium->condition(
+      db_or()
+        ->condition('unit_id', NULL, 'IS NULL')
+        ->condition('unit_id', $unit)
+    );
+  }
+
+  $query->condition(
+    db_or()
+      ->condition('condominium_id', NULL, 'IS NULL')
+      ->condition($in_condominium)
+  );
 }
 
 /**

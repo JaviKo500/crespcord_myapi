@@ -59,6 +59,31 @@ Paginated list of the authenticated user's notifications, ordered `created DESC`
 | `page` | `1` | 1-based. Any non-positive-integer value falls back to the default silently (no `422`). |
 | `limit` | `20` | Clamped to `[1, 50]`. Any non-positive-integer or out-of-range value falls back to the default/clamp silently. Special value `-1` disables pagination: every notification is returned in one response, `page` is forced to `1`, and `total_pages` is `1` (or `0` when `total` is `0`). |
 | `unread` | absent = all | `1` returns only unread notifications. Any other value (or absent) returns all. |
+| `condominium` | absent = full inbox | Positive-integer condominium nid to scope the inbox to. Any non-positive-integer value falls back to "no scope" silently (no `422`). See the scope rules below. |
+| `unit` | absent | Positive-integer unit (vivienda) nid. Only honoured when `condominium` is present and valid; ignored otherwise. |
+
+**Condominium/unit scope**
+
+When `condominium` is present, the inbox is filtered to what the user should see
+from that condominium/unit context, following these rules:
+
+- A notification with **no condominium** (`condominium IS NULL`, e.g. a `General`
+  or `Personalizado` bulletin fan-out) is **always visible**, regardless of the
+  requested scope.
+- Otherwise the notification must belong to the requested `condominium`, and
+  either have **no unit** (`unit IS NULL`, condominium-wide) **or** match the
+  requested `unit`.
+- When `unit` is absent, the unit constraint is dropped: every notification of
+  the requested condominium (plus the always-visible no-condominium ones) is
+  returned.
+
+`GET /api/v1/notifications?condominium=333&unit=123` therefore returns: all
+no-condominium notifications, plus condominium `333`'s notifications that are
+either condominium-wide or for unit `123`. Omitting both parameters returns the
+full inbox unchanged (back-compatible).
+
+`unread_count` and `pagination.total` both reflect the same scope, so the badge
+matches the filtered list the user is looking at.
 
 **Success response (200)**
 ```json
@@ -83,8 +108,9 @@ Paginated list of the authenticated user's notifications, ordered `created DESC`
 }
 ```
 
-- `unread_count` is the user's **total** unread count, independent of the
-  `unread` filter and of pagination — it is meant for the app badge.
+- `unread_count` is the user's unread count for the **current scope**
+  (`condominium`/`unit`), independent of the `unread` filter and of pagination —
+  it is meant for the app badge. With no scope requested it is the total unread.
 - `deep_link.target` + `deep_link.id` are the same pair the push carries in its
   `data` payload, so opening from the list or from the push lands on the same
   screen.
