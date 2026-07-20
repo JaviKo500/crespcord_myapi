@@ -342,6 +342,17 @@ function myapi_notification_create_from_boletin($node) {
     return 0;
   }
 
+  // For a 'Condominio' bulletin every recipient belongs to the same condominium,
+  // so the single per-batch condominium_id is exact. 'General' and 'Personalizado'
+  // span several (or unrelated) condominiums, so it stays NULL for those.
+  $condominium_id = NULL;
+  if (myapi_notification_field_value($node, 'field_tipo_de_boletin') === 'Condominio') {
+    $condo_nid = myapi_notification_field_target_id($node, 'field_condominio');
+    if ($condo_nid) {
+      $condominium_id = (int) $condo_nid;
+    }
+  }
+
   return myapi_notification_create([
     'source_type'      => MYAPI_NOTIFICATION_SOURCE_BOLETIN,
     'source_nid'       => (int) $node->nid,
@@ -350,6 +361,7 @@ function myapi_notification_create_from_boletin($node) {
     'body'             => myapi_notification_plain_text(myapi_notification_field_value($node, 'field_mensaje')),
     'deep_link_target' => MYAPI_NOTIFICATION_DEEP_LINK_BULLETIN,
     'deep_link_id'     => (int) $node->nid,
+    'condominium_id'   => $condominium_id,
     'uids'             => $uids,
   ]);
 }

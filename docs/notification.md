@@ -78,10 +78,12 @@ Paginated list of the authenticated user's notifications, ordered `created DESC`
 - `deep_link.target` + `deep_link.id` are the same pair the push carries in its
   `data` payload, so opening from the list or from the push lands on the same
   screen.
-- `deep_link.unit` / `deep_link.condominium` are plumbing for future triggers
-  (approved payment, new alicuota) that will tie a notification to a specific
-  unit and condominium. They are `NULL` for `bulletin` notifications, which do
-  not originate from a single unit/condominium.
+- `deep_link.unit` / `deep_link.condominium` tie a notification to a specific
+  unit and condominium (used by triggers such as approved payment or new
+  alicuota). For `bulletin` notifications `unit` is always `NULL`, and
+  `condominium` is set only for `Condominio`-scope bulletins (every recipient
+  belongs to that one condominium); it stays `NULL` for `General` and
+  `Personalizado` bulletins, which span several or unrelated condominiums.
 
 **Possible errors**
 | Code | When |
@@ -237,9 +239,10 @@ Set as Drupal variables (in `settings.php` via `$conf[...]` or with
 
 If either is missing, the fan-out to the inbox still happens; only the push is
 skipped, with a `watchdog(WATCHDOG_WARNING)`. The push `data` payload is
-`{ "target": "bulletin", "id": <nid>, "unit": null, "condominium": null, "notification_type": "bulletin" }`.
-`unit`/`condominium` mirror `deep_link.unit`/`deep_link.condominium` and are
-`NULL` for `bulletin` notifications.
+`{ "target": "bulletin", "id": <nid>, "unit": null, "condominium": <nid|null>, "notification_type": "bulletin" }`.
+`unit`/`condominium` mirror `deep_link.unit`/`deep_link.condominium`: `unit` is
+always `NULL` for `bulletin` notifications and `condominium` carries the
+condominium nid only for `Condominio`-scope bulletins (`NULL` otherwise).
 External ids are chunked to OneSignal's 2000-per-request limit. A transport
 failure re-queues the batch for the next cron (standard Queue API behaviour),
 which may deliver a push twice — the inbox is never duplicated.
