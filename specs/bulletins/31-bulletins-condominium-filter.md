@@ -1,6 +1,6 @@
 # SPEC 31 — Filtro de boletines por condominio
 
-> **Estado:** Approved · **Depende de:** SPEC 29, SPEC 08 · **Fecha:** 2026-07-20
+> **Estado:** Implemented · **Depende de:** SPEC 29, SPEC 08 · **Fecha:** 2026-07-20
 > **Objetivo:** Agregar el query param opcional `condominium_id` a `GET /api/v1/bulletins` que, cuando se envía y el usuario pertenece a ese condominio, acota el resultado a los boletines **General** (visibles), los **Condominio** de ese condominio (visibles) y **todos** los **Personalizado** del usuario, reutilizando el contrato de paginación/orden/fechas del spec 29 y sin modificar la ruta ni la lógica de audiencia.
 
 **Dependencias (detalle):**
@@ -136,22 +136,22 @@ Nota: **no** hace falta tocar `myapi.module`, `myapi.info` ni `myapi.install` �
 
 ## Criterios de aceptación
 
-- [ ] Sin `condominium_id`, `GET /api/v1/bulletins` responde **byte-idéntico** al spec 29 (misma lista, misma paginación) — no hay regresión.
-- [ ] Con `condominium_id=C` válido y el usuario perteneciente a `C`, la respuesta incluye: todos los boletines **General** visibles para el usuario, los **Condominio** con `field_condominio = C` visibles según su rol en `C`, y **todos** los **Personalizado** donde el usuario está referenciado.
-- [ ] Con `condominium_id=C`, **ningún** boletín **Condominio** de un condominio distinto de `C` aparece en la respuesta.
-- [ ] Un boletín **Condominio** de `C` con `send_to=Propietarios` solo aparece si el usuario es **propietario** en `C`; con `send_to=Ocupantes` solo si es **ocupante** en `C`; con `send_to=Todos` si es propietario u ocupante en `C`.
-- [ ] Los boletines **General** que aparecen con el filtro son exactamente los mismos que aparecerían sin el filtro (el filtro no recorta generales).
-- [ ] Los boletines **Personalizado** que aparecen con el filtro son exactamente los mismos que sin el filtro (no se recortan por condominio).
-- [ ] `condominium_id` malformado (`abc`, `0`, `-3`, `1.5`) → `422` con `error_code = invalid_field` y mensaje que referencia `condominium_id`.
-- [ ] `condominium_id` de un condominio al que el usuario **no** pertenece → `403 condominium_access_denied`.
-- [ ] `condominium_id` de un condominio **inexistente** → `403 condominium_access_denied` (mismo trato que ajeno; no `404`).
-- [ ] `condominium_id` ausente o string vacío → sin filtro, sin error.
-- [ ] El filtro se combina correctamente con `date_from`/`date_to`, `page`, `limit` y `sort`; `pagination.total`/`total_pages` reflejan el conjunto ya filtrado por condominio.
-- [ ] Los errores `401` (sin token / token inválido) y `405` (método distinto de `GET`) siguen igual que en el spec 29, y se evalúan **antes** que el gate de condominio (auth primero).
-- [ ] La clave `condominium_access_denied` está en los catálogos EN y ES de `includes/myapi.i18n.inc` y `myapi_t()` la resuelve en ambos idiomas.
-- [ ] `myapi_bulletin_visibility_condition()`, `myapi_bulletin_count()` y `myapi_bulletin_fetch()` no fueron modificadas (verificable por diff).
-- [ ] `docs/bulletin.md` documenta el query param `condominium_id`, su semántica, el gate y los errores `422`/`403`.
-- [ ] `drush cc all` no reporta errores tras el cambio.
+- [x] Sin `condominium_id`, `GET /api/v1/bulletins` responde **byte-idéntico** al spec 29 (misma lista, misma paginación) — no hay regresión.
+- [x] Con `condominium_id=C` válido y el usuario perteneciente a `C`, la respuesta incluye: todos los boletines **General** visibles para el usuario, los **Condominio** con `field_condominio = C` visibles según su rol en `C`, y **todos** los **Personalizado** donde el usuario está referenciado.
+- [x] Con `condominium_id=C`, **ningún** boletín **Condominio** de un condominio distinto de `C` aparece en la respuesta.
+- [x] Un boletín **Condominio** de `C` con `send_to=Propietarios` solo aparece si el usuario es **propietario** en `C`; con `send_to=Ocupantes` solo si es **ocupante** en `C`; con `send_to=Todos` si es propietario u ocupante en `C`.
+- [x] Los boletines **General** que aparecen con el filtro son exactamente los mismos que aparecerían sin el filtro (el filtro no recorta generales).
+- [x] Los boletines **Personalizado** que aparecen con el filtro son exactamente los mismos que sin el filtro (no se recortan por condominio).
+- [x] `condominium_id` malformado (`abc`, `0`, `-3`, `1.5`) → `422` con `error_code = invalid_field` y mensaje que referencia `condominium_id`.
+- [x] `condominium_id` de un condominio al que el usuario **no** pertenece → `403 condominium_access_denied`.
+- [x] `condominium_id` de un condominio **inexistente** → `403 condominium_access_denied` (mismo trato que ajeno; no `404`).
+- [x] `condominium_id` ausente o string vacío → sin filtro, sin error.
+- [x] El filtro se combina correctamente con `date_from`/`date_to`, `page`, `limit` y `sort`; `pagination.total`/`total_pages` reflejan el conjunto ya filtrado por condominio.
+- [x] Los errores `401` (sin token / token inválido) y `405` (método distinto de `GET`) siguen igual que en el spec 29, y se evalúan **antes** que el gate de condominio (auth primero).
+- [x] La clave `condominium_access_denied` está en los catálogos EN y ES de `includes/myapi.i18n.inc` y `myapi_t()` la resuelve en ambos idiomas.
+- [x] `myapi_bulletin_visibility_condition()`, `myapi_bulletin_count()` y `myapi_bulletin_fetch()` no fueron modificadas (verificable por diff).
+- [x] `docs/bulletin.md` documenta el query param `condominium_id`, su semántica, el gate y los errores `422`/`403`.
+- [x] `drush cc all` no reporta errores tras el cambio.
 
 ---
 
