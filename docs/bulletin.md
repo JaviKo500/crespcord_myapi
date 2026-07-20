@@ -48,6 +48,8 @@ not a silent partial result.
         "send_to": "Todos",
         "condominium_id": 34,
         "file_id": 91,
+        "file_url": "https://mi-sitio/sites/default/files/adjuntos/corte-agua.pdf",
+        "file_mime": "application/pdf",
         "created_at": 1752566400
       }
     ],
@@ -69,18 +71,29 @@ Requesting a page beyond the last one also returns `200` with `bulletins: []`
 Notes:
 - Only published (`status = 1`) `boletin` nodes are returned. A draft never
   appears — the same criterion as the fan-out, which does not notify drafts.
-- Every bulletin includes exactly 8 keys: `id`, `title`, `message`, `type`,
-  `send_to`, `condominium_id`, `file_id`, `created_at` (see mapping table
-  below). `message`, `send_to`, `condominium_id` and `file_id` are `null` when
-  the node has no row in that field's storage table; `type` never is (inner
-  join). No other transformation is applied.
+- Every bulletin includes exactly 10 keys: `id`, `title`, `message`, `type`,
+  `send_to`, `condominium_id`, `file_id`, `file_url`, `file_mime`, `created_at`
+  (see mapping table below). `message`, `send_to`, `condominium_id`, `file_id`,
+  `file_url` and `file_mime` are `null` when the node has no row in that field's
+  storage table; `type` never is (inner join). No other transformation is
+  applied.
 - `message` is the **raw HTML** of `field_mensaje`, exposed verbatim. It is
   **not** sanitized or converted to plain text — safe rendering is the client's
   responsibility (the app renders rich format with `flutter_html`). Do not
   render it in an unsafe context.
-- `file_id` is only the managed-file id (`fid`) of `field_adjunto`; the file
-  itself is not served by this endpoint and no URL is resolved. The app fetches
-  the file separately.
+- `file_id` is the managed-file id (`fid`) of `field_adjunto`. The attachment
+  lives in the **public** filesystem, so the endpoint also resolves `file_url`
+  (a directly fetchable link, `file_create_url()`) and `file_mime` (the stored
+  `filemime`, e.g. `image/jpeg` or `application/pdf`). The app renders it
+  natively from `file_url` — `Image.network` for images, a PDF viewer for
+  documents — choosing by `file_mime`; no WebView or binary-download endpoint is
+  needed. `file_url`/`file_mime` are `null` when there is no attachment, and
+  also when `file_id` is set but its managed file no longer resolves (in that
+  edge case `file_id` still carries the stored fid).
+  > Because the file is public, anyone holding the URL can fetch it regardless
+  > of the bulletin's audience. This is acceptable for non-sensitive notices; an
+  > attachment carrying private data would instead need `private://` storage and
+  > an authenticated download endpoint.
 - `condominium_id` is the target nid of `field_condominio`; it is normally
   `null` except on bulletins of `type = "Condominio"`.
 - `total`/`total_pages` in `pagination` reflect the unpaginated count of the
@@ -206,6 +219,8 @@ binding keep the query scoped to bulletin nodes only.
 | `field_enviar_a_value` | `send_to` | string | `NULL` if no row |
 | `field_condominio_target_id` | `condominium_id` | int | `NULL` except on `Condominio` bulletins |
 | `field_adjunto_fid` | `file_id` | int | `NULL` if no attachment |
+| `file_managed.uri` (via `file_create_url()`) | `file_url` | string | `NULL` if no attachment or file unresolved |
+| `file_managed.filemime` | `file_mime` | string | `NULL` if no attachment or file unresolved |
 | `node.created` | `created_at` | int (unix ts) | never `NULL` |
 
 | Table | Relevant columns | Use |
@@ -217,7 +232,8 @@ binding keep the query scoped to bulletin nodes only.
 | `field_data_field_personalizar` | `entity_id`, `field_personalizar_target_id` | Reader membership in the `Personalizado` branch (owner role). `EXISTS` only, not exposed. |
 | `field_data_field_ocupantes` | `entity_id`, `field_ocupantes_target_id` | Reader membership in the `Personalizado` branch (occupant role). `EXISTS` only, not exposed. |
 | `field_data_field_mensaje` | `entity_id`, `field_mensaje_value` | `message`, raw HTML. Left join. |
-| `field_data_field_adjunto` | `entity_id`, `field_adjunto_fid` | `file_id`, managed-file reference. Left join; only the `fid` is exposed. |
+| `field_data_field_adjunto` | `entity_id`, `field_adjunto_fid` | `file_id`, managed-file reference. Left join; the `fid` is exposed and used to bulk-load the managed file. |
+| `file_managed` | `fid`, `uri`, `filemime` | Bulk-loaded once per page via `file_load_multiple()` to resolve `file_url` (public `file_create_url()`) and `file_mime`. |
 
 The reader's role sets are resolved with the helpers in
 `includes/myapi.unit_access.inc`: `myapi_user_owned_unit_nids()`,

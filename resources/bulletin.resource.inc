@@ -363,11 +363,21 @@ function myapi_bulletin_fetch($uid, $sets, $page, $limit, $sort, $from = NULL, $
  * responsible for safe rendering). 'send_to' and 'message' stay NULL when the
  * node has no row for that field ('type' never does, being an inner join).
  *
- * @param object $row  One row from myapi_bulletin_fetch().
+ * 'file_url' and 'file_mime' describe the field_adjunto attachment, which lives
+ * in the public filesystem, so the URL is a directly fetchable link the app
+ * renders natively (Image.network for images, a PDF viewer for documents). Both
+ * are NULL when the bulletin has no attachment, and also when 'file_id' is set
+ * but the managed file no longer resolves (missing from $files) — 'file_id'
+ * still carries the stored fid in that case.
  *
- * @return array  Response item with all 8 mapped keys.
+ * @param object      $row   One row from myapi_bulletin_fetch().
+ * @param object|null $file  The loaded managed file for $row->file_id, or NULL
+ *                           when the bulletin has no attachment (or it no longer
+ *                           resolves).
+ *
+ * @return array  Response item with all 10 mapped keys.
  */
-function myapi_bulletin_build_item($row) {
+function myapi_bulletin_build_item($row, $file = NULL) {
   return [
     'id'             => (int) $row->nid,
     'title'          => $row->title,
@@ -376,6 +386,8 @@ function myapi_bulletin_build_item($row) {
     'send_to'        => $row->send_to,
     'condominium_id' => $row->condominium_id !== NULL ? (int) $row->condominium_id : NULL,
     'file_id'        => $row->file_id !== NULL ? (int) $row->file_id : NULL,
+    'file_url'       => $file ? file_create_url($file->uri) : NULL,
+    'file_mime'      => $file ? $file->filemime : NULL,
     'created_at'     => (int) $row->created,
   ];
 }
@@ -459,9 +471,22 @@ function myapi_bulletin_list() {
   $total = myapi_bulletin_count($uid, $sets, $from, $to);
   $total_pages = $total > 0 ? (int) ceil($total / $limit) : 0;
 
-  // 6. Fetch the requested page and map each row to the response shape.
+  // 6. Fetch the requested page and map each row to the response shape. The
+  // attachments live in the public filesystem, so their managed files are
+  // bulk-loaded once (one query for the whole page, not one per row) and each
+  // row resolves its own file to expose file_url/file_mime.
   $rows = myapi_bulletin_fetch($uid, $sets, $page, $limit, $sort, $from, $to);
-  $bulletins = array_map('myapi_bulletin_build_item', $rows);
+  $fids = [];
+  foreach ($rows as $r) {
+    if ($r->file_id !== NULL) {
+      $fids[] = $r->file_id;
+    }
+  }
+  $files = $fids ? file_load_multiple($fids) : [];
+  $bulletins = array_map(function ($row) use ($files) {
+    $file = ($row->file_id !== NULL && isset($files[$row->file_id])) ? $files[$row->file_id] : NULL;
+    return myapi_bulletin_build_item($row, $file);
+  }, $rows);
 
   // 7. Respond 200 (read-only endpoint, no message).
   myapi_respond([
