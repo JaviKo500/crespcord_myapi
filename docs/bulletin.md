@@ -10,10 +10,12 @@ recipient. Read-only: no create/update/delete, no single-bulletin detail
 endpoint, and the attachment is exposed only as a `file_id` (the app resolves
 its URL separately).
 
-There is **no `403`** on this endpoint: the audience is applied inside the
-query, so the authenticated user simply receives their own visible set (an
-empty list when nothing matches). It is not a resource scoped to another
-entity, so there is no foreign resource to protect.
+The base list has **no `403`**: the audience is applied inside the query, so the
+authenticated user simply receives their own visible set (an empty list when
+nothing matches). The **only** case that returns `403` is the optional
+`condominium_id` filter (see **Condominium filter** below): asking to scope the
+list to a condominium the user does not belong to is an explicit access denial,
+not a silent partial result.
 
 **Authentication:** required (Bearer access token)
 
@@ -30,6 +32,7 @@ entity, so there is no foreign resource to protect.
 | `sort` | `desc` | `asc` or `desc`, applied to `created_at` (`node.created`). Any other value falls back to `desc`. |
 | `date_from` | absent = no lower bound | ISO `YYYY-MM-DD`. When valid, keeps only bulletins with `created_at >= date_from` at `00:00:00` (site-local). Any malformed or non-calendar value (e.g. `2026-13-40`, `01-06-2026`, `hoy`) is ignored silently (no `422`), as if absent. |
 | `date_to` | absent = no upper bound | ISO `YYYY-MM-DD`. When valid, keeps only bulletins with `created_at <= date_to` at `23:59:59` (site-local), so the whole day is included. Same silent-ignore rule as `date_from`. |
+| `condominium_id` | absent = no filter (spec-29 behaviour) | Positive integer (condominium `nid`). When present, narrows the result to this condominium (see **Condominium filter** below). Unlike `page`/`date_*`, a malformed value is **not** ignored: it returns `422`, and a condominium the user does not belong to returns `403`. |
 
 **Success response (200)**
 ```json
@@ -147,6 +150,44 @@ ends.
 Example: `GET /api/v1/bulletins?date_from=2026-07-01&date_to=2026-07-31` returns
 only bulletins created within July 2026 inclusive.
 
+**Condominium filter (`condominium_id`)**
+
+Optional query param that scopes the list to a single condominium `C` (its
+`nid`). It does **not** change the route, the audience rule, or the pagination
+contract — it narrows the reader's condominium sets before the query runs.
+
+- **Absent** (unset or empty string) — no filter; the endpoint responds exactly
+  as documented above (spec-29 behaviour, no regression).
+- **Membership gate.** The user must belong to `C` (own or occupy at least one
+  unit in it). A value the user does not belong to — whether a **foreign**
+  condominium or a **non-existent** one — returns `403 condominium_access_denied`
+  (both are treated the same, so the endpoint never reveals whether a
+  condominium exists). No extra existence query is run.
+- **What the filtered list contains** when `C` is valid and the user belongs:
+  - **`General`** — **all** the General bulletins the user would see without the
+    filter. General bulletins have no condominium, so they are never trimmed.
+  - **`Condominio`** — only those with `field_condominio = C`, and only when the
+    user's role in `C` matches `send_to` (`Propietarios` → owner of `C`,
+    `Ocupantes` → occupant of `C`, `Todos` → either). No `Condominio` bulletin of
+    any other condominium appears.
+  - **`Personalizado`** — **all** the user's Personalizado bulletins, unchanged;
+    they target the person, not the condominium, and are not trimmed by `C`.
+- **Malformed value** (`abc`, `0`, `-3`, `1.5`, etc. — not a positive integer) →
+  `422 invalid_field` with `@field = condominium_id`. Unlike `page`/`date_*`,
+  this is not ignored silently: the param is a gated filter, so a bad value is a
+  client error.
+- **Combines** with `date_from`/`date_to`, `page`, `limit` and `sort` with no
+  special casing; `total` / `total_pages` reflect the set already narrowed to
+  `C`.
+- The filter is applied by narrowing the reader's condominium sets (`owner` /
+  `occupant` / `member`) to `{C}`; the audience condition itself
+  (`myapi_bulletin_visibility_condition()`) is untouched, preserving parity with
+  the fan-out (spec 25).
+
+Example: `GET /api/v1/bulletins?condominium_id=1234` returns the General and
+Personalizado bulletins visible to the user, plus the `Condominio` bulletins of
+condominium `1234` matching the user's role there.
+
 **Data model assumptions**
 
 This endpoint reads directly from Drupal 7's Field API storage tables instead of
@@ -190,6 +231,11 @@ so a reader with no units of a given role never produces an invalid `IN ()`.
 | 401  | `missing_authorization` | `Authorization` header is absent or does not match the `Bearer <token>` pattern. |
 | 401  | `invalid_token` | Access token not found in the database, already revoked, expired, or the associated user does not exist or is blocked (`status = 0`). |
 | 405  | `method_not_allowed` | Any HTTP method other than `GET`. |
+| 422  | `invalid_field` | `condominium_id` is present but not a positive integer (`@field = condominium_id`). |
+| 403  | `condominium_access_denied` | `condominium_id` is a valid positive integer but the user does not belong to that condominium (foreign or non-existent; the two are not distinguished). |
+
+`401` (missing/invalid token) and `405` (wrong method) are evaluated **before**
+the `condominium_id` gate — authentication first, then the filter's `422`/`403`.
 
 Error envelope:
 ```json
@@ -207,5 +253,11 @@ according to the `Accept-Language` header (`es`/`en`, default `es`). See
 **Example:**
 ```bash
 curl -i -X GET 'https://host/api/v1/bulletins?page=1&limit=20&sort=desc' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+Scoped to a single condominium:
+```bash
+curl -i -X GET 'https://host/api/v1/bulletins?condominium_id=1234' \
   -H 'Authorization: Bearer <access_token>'
 ```
