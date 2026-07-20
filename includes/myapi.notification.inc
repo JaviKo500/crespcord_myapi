@@ -80,11 +80,16 @@ function myapi_notification_field_value($node, $field) {
 /**
  * Reduces a rich-text (possibly HTML) value to clean plain text.
  *
- * field_mensaje may come from a WYSIWYG, so it can carry markup. The inbox and
- * the push both need plain text (an HTML push banner would show literal tags),
- * so the notification is stored already flattened. Block-level breaks are turned
- * into newlines first so basic structure survives, then tags are stripped and
- * entities decoded.
+ * field_mensaje may come from a WYSIWYG, so it can carry markup and the source
+ * indentation of that markup. The inbox and the push both need plain text (an
+ * HTML push banner would show literal tags), so the notification is stored
+ * already flattened. Block-level breaks become newlines first so basic
+ * structure survives, then tags are stripped and entities decoded.
+ *
+ * Whitespace is then tidied so the banner reads cleanly: every line is trimmed
+ * and its internal space/tab runs squeezed to a single space (killing the
+ * source indentation like "    2"), and blank lines are dropped entirely — a
+ * push reads better as tight lines than as text spread out by empty paragraphs.
  *
  * @param string|null $value  Raw field value.
  *
@@ -100,11 +105,19 @@ function myapi_notification_plain_text($value) {
   $text = strip_tags($text);
   $text = html_entity_decode($text, ENT_QUOTES, 'UTF-8');
 
-  // Tidy whitespace: drop trailing spaces on lines and collapse blank runs.
-  $text = preg_replace("/[ \t]+\n/", "\n", $text);
-  $text = preg_replace("/\n{3,}/", "\n\n", $text);
+  // A &nbsp; decodes to a non-breaking space (U+00A0); treat it as a normal one.
+  $text = str_replace("\xC2\xA0", ' ', $text);
 
-  return trim($text);
+  // Normalize line endings so the per-line pass below is predictable.
+  $text = preg_replace('/\r\n?/', "\n", $text);
+
+  // Trim each line and squeeze internal space/tab runs, then drop blank lines so
+  // WYSIWYG indentation and empty paragraphs do not leak through as extra space.
+  $lines = array_filter(array_map(function ($line) {
+    return trim(preg_replace('/[ \t]+/', ' ', $line));
+  }, explode("\n", $text)), 'strlen');
+
+  return implode("\n", $lines);
 }
 
 /**

@@ -12,10 +12,20 @@ scoped to the caller — a user never sees or touches another user's rows.
 
 **Body is plain text.** `field_mensaje` may come from a WYSIWYG, so it is
 flattened to plain text at fan-out time (`myapi_notification_plain_text()`:
-block breaks → newlines, `strip_tags`, entity decode) before it is stored. The
+block breaks → newlines, `strip_tags`, entity decode) before it is stored. Each
+line is then trimmed, internal space runs are squeezed to one, and blank lines
+are dropped, so WYSIWYG indentation and empty paragraphs do not leak through as
+extra whitespace — the banner reads as tight, single-spaced lines. The
 same value feeds both the inbox `body` and the push `contents`, and a push
 banner cannot render HTML. Rich formatting (a separate sanitized `body_html`) is
 left for a future spec.
+
+**Push body is capped at 150 characters.** The inbox row keeps the full text,
+but the push `contents` is truncated to `MYAPI_ONESIGNAL_MAX_BODY_LENGTH` (150)
+in the transport layer (`myapi_onesignal_truncate_body()`): a longer body is cut
+and `...` is appended so the banner stays compact and the total, ellipsis
+included, never exceeds 150. Truncation is multibyte-safe, so accented text is
+never split mid-character.
 
 **Push is best-effort, the inbox is the source of truth.** The rows are written
 synchronously; the push is deferred to a cron queue (`myapi_onesignal_push`). If

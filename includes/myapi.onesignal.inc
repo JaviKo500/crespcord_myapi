@@ -28,6 +28,34 @@ define('MYAPI_ONESIGNAL_ENDPOINT', 'https://onesignal.com/api/v1/notifications')
 define('MYAPI_ONESIGNAL_MAX_EXTERNAL_IDS', 2000);
 
 /**
+ * Maximum length (in characters) of the push body. A longer body is truncated
+ * and an ellipsis is appended so the banner stays compact on the device; the
+ * total, ellipsis included, never exceeds this limit. The inbox row keeps the
+ * full text — only the push is shortened.
+ */
+define('MYAPI_ONESIGNAL_MAX_BODY_LENGTH', 150);
+
+/**
+ * Truncates a push body to MYAPI_ONESIGNAL_MAX_BODY_LENGTH characters, appending
+ * "..." when it had to cut. Multibyte-safe (drupal_strlen/drupal_substr), so an
+ * accented body is never split mid-character. A trailing space before the cut is
+ * trimmed for tidiness. The result, ellipsis included, never exceeds the limit.
+ *
+ * @param string $body  Plain-text push body.
+ *
+ * @return string  Body within the limit.
+ */
+function myapi_onesignal_truncate_body($body) {
+  $body = (string) $body;
+  if (drupal_strlen($body) <= MYAPI_ONESIGNAL_MAX_BODY_LENGTH) {
+    return $body;
+  }
+  $ellipsis = '...';
+  $keep = MYAPI_ONESIGNAL_MAX_BODY_LENGTH - drupal_strlen($ellipsis);
+  return rtrim(drupal_substr($body, 0, $keep)) . $ellipsis;
+}
+
+/**
  * Whether both OneSignal credentials (app id + REST API key) are configured.
  *
  * @return bool
@@ -67,6 +95,9 @@ function myapi_onesignal_send(array $external_ids, $title, $body, array $data) {
   if (empty($external_ids)) {
     return FALSE;
   }
+
+  // Keep the push banner compact; the inbox already stored the full text.
+  $body = myapi_onesignal_truncate_body($body);
 
   $ok = TRUE;
 
