@@ -20,11 +20,11 @@ same value feeds both the inbox `body` and the push `contents`, and a push
 banner cannot render HTML. Rich formatting (a separate sanitized `body_html`) is
 left for a future spec.
 
-**Push body is capped at 150 characters.** The inbox row keeps the full text,
-but the push `contents` is truncated to `MYAPI_ONESIGNAL_MAX_BODY_LENGTH` (150)
+**Push body is capped at 200 characters.** The inbox row keeps the full text,
+but the push `contents` is truncated to `MYAPI_ONESIGNAL_MAX_BODY_LENGTH` (200)
 in the transport layer (`myapi_onesignal_truncate_body()`): a longer body is cut
 and `...` is appended so the banner stays compact and the total, ellipsis
-included, never exceeds 150. Truncation is multibyte-safe, so accented text is
+included, never exceeds 200. Truncation is multibyte-safe, so accented text is
 never split mid-character.
 
 **Push is best-effort, the inbox is the source of truth.** The rows are written

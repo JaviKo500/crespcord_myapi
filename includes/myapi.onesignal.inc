@@ -33,7 +33,7 @@ define('MYAPI_ONESIGNAL_MAX_EXTERNAL_IDS', 2000);
  * total, ellipsis included, never exceeds this limit. The inbox row keeps the
  * full text — only the push is shortened.
  */
-define('MYAPI_ONESIGNAL_MAX_BODY_LENGTH', 150);
+define('MYAPI_ONESIGNAL_MAX_BODY_LENGTH', 200);
 
 /**
  * Truncates a push body to MYAPI_ONESIGNAL_MAX_BODY_LENGTH characters, appending
