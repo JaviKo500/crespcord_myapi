@@ -3,6 +3,9 @@ description = Custom REST API module for Drupal 7. Exposes resources consumed by
 core = 7.x
 package = Custom
 
+dependencies[] = entityreference
+dependencies[] = date
+
 files[] = myapi.module
 files[] = myapi.install
 files[] = includes/myapi.response.inc
