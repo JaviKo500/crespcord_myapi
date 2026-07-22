@@ -240,6 +240,7 @@ function myapi_schema() {
  */
 function myapi_install() {
   myapi_mail_system_register();
+  _myapi_reservations_install();
 }
 
 /**
@@ -270,6 +271,462 @@ function myapi_mail_system_unregister() {
   $mail_system = variable_get('mail_system', []);
   unset($mail_system['myapi_password_reset']);
   variable_set('mail_system', $mail_system);
+}
+
+/**
+ * Ensures a node content type exists (idempotent).
+ *
+ * If the bundle already exists it returns without touching anything. Otherwise
+ * it creates a node_content type, saves it, and sets the publishing and comment
+ * behaviour agreed in the spec: published by default (no promote, no sticky) and
+ * comments hidden. No body field is added: the reservations model defines no
+ * field that maps to the native body.
+ *
+ * @param string $type
+ *   Machine name of the content type (e.g. 'area').
+ * @param string $name
+ *   Human name of the content type (e.g. 'Área').
+ * @param string $description
+ *   Admin description of the content type.
+ * @param string $title_label
+ *   Label of the native title field.
+ */
+function _myapi_reservations_ensure_node_type($type, $name, $description, $title_label) {
+  if (node_type_load($type)) {
+    return;
+  }
+
+  $node_type = node_type_set_defaults([
+    'type'        => $type,
+    'name'        => $name,
+    'base'        => 'node_content',
+    'description' => $description,
+    'has_title'   => 1,
+    'title_label' => $title_label,
+    'custom'      => 1,
+    'modified'    => 1,
+    'locked'      => 0,
+  ]);
+
+  node_type_save($node_type);
+
+  // Published by default; not promoted to front page, not sticky.
+  variable_set('node_options_' . $type, ['status']);
+  // Comments hidden on this content type.
+  variable_set('comment_' . $type, COMMENT_NODE_HIDDEN);
+}
+
+/**
+ * Ensures a field exists at the field (storage) level (idempotent).
+ *
+ * A field is created once regardless of how many bundles use it, so this checks
+ * the live field definition and only calls field_create_field() when missing.
+ * Covers every field type used by the reservations model: entityreference
+ * (target node/user), text, number_integer, list_text (with allowed_values),
+ * image and datetime.
+ *
+ * @param string $field_name
+ *   Machine name of the field (e.g. 'field_condominium').
+ * @param array $definition
+ *   Field definition array passed verbatim to field_create_field().
+ */
+function _myapi_reservations_ensure_field($field_name, array $definition) {
+  if (!field_info_field($field_name)) {
+    field_create_field($definition);
+  }
+}
+
+/**
+ * Ensures a field instance exists on a bundle (idempotent).
+ *
+ * Instances are per bundle, so this checks the live instance definition on the
+ * given node bundle and only calls field_create_instance() when missing. The
+ * instance array carries its own label, required flag, widget, default_value,
+ * description and settings.
+ *
+ * @param string $field_name
+ *   Machine name of the field (e.g. 'field_condominium').
+ * @param string $bundle
+ *   Machine name of the node bundle the instance belongs to (e.g. 'area').
+ * @param array $instance
+ *   Instance definition array passed verbatim to field_create_instance().
+ */
+function _myapi_reservations_ensure_instance($field_name, $bundle, array $instance) {
+  if (!field_info_instance('node', $field_name, $bundle)) {
+    field_create_instance($instance);
+  }
+}
+
+/**
+ * Creates the reservations content types, fields and instances (idempotent).
+ *
+ * Single source of truth for the reservations schema: it is called both from
+ * hook_install() (fresh sites) and from myapi_update_7006() (already installed
+ * sites). Re-running it never duplicates anything nor throws, because every
+ * creation goes through the idempotent _ensure_* sub-helpers.
+ *
+ * Order: (a) the two node types; (b) every field at the storage level
+ * (field_condominium once, shared by both bundles); (c) the per-bundle
+ * instances.
+ *
+ * entityreference note: only 'target_type' is a field-level setting in D7; the
+ * 'handler'/'handler_settings.target_bundles' that restrict the referenceable
+ * bundle live on the instance, which is where entityreference reads them.
+ */
+function _myapi_reservations_install() {
+  // (a) Content types.
+  _myapi_reservations_ensure_node_type(
+    'area',
+    'Área',
+    'Áreas comunes reservables de un condominio.',
+    'Nombre del área'
+  );
+  _myapi_reservations_ensure_node_type(
+    'reservation',
+    'Reserva',
+    'Reserva de un área común hecha por un usuario.',
+    'Título'
+  );
+
+  // (b) Fields (storage level). field_condominium is created once and shared
+  // by both bundles.
+  _myapi_reservations_ensure_field('field_condominium', [
+    'field_name'  => 'field_condominium',
+    'type'        => 'entityreference',
+    'cardinality' => 1,
+    'settings'    => ['target_type' => 'node'],
+  ]);
+  _myapi_reservations_ensure_field('field_image', [
+    'field_name'  => 'field_image',
+    'type'        => 'image',
+    'cardinality' => 1,
+  ]);
+  _myapi_reservations_ensure_field('field_open_time', [
+    'field_name'  => 'field_open_time',
+    'type'        => 'text',
+    'cardinality' => 1,
+    'settings'    => ['max_length' => 5],
+  ]);
+  _myapi_reservations_ensure_field('field_close_time', [
+    'field_name'  => 'field_close_time',
+    'type'        => 'text',
+    'cardinality' => 1,
+    'settings'    => ['max_length' => 5],
+  ]);
+  _myapi_reservations_ensure_field('field_slot_minutes', [
+    'field_name'  => 'field_slot_minutes',
+    'type'        => 'number_integer',
+    'cardinality' => 1,
+  ]);
+  _myapi_reservations_ensure_field('field_max_minutes', [
+    'field_name'  => 'field_max_minutes',
+    'type'        => 'number_integer',
+    'cardinality' => 1,
+  ]);
+  _myapi_reservations_ensure_field('field_area_status', [
+    'field_name'  => 'field_area_status',
+    'type'        => 'list_text',
+    'cardinality' => 1,
+    'settings'    => [
+      'allowed_values' => [
+        'active'      => 'Activo',
+        'closed'      => 'Cerrado',
+        'maintenance' => 'En Mantenimiento',
+      ],
+    ],
+  ]);
+  _myapi_reservations_ensure_field('field_who_can_reserve', [
+    'field_name'  => 'field_who_can_reserve',
+    'type'        => 'list_text',
+    'cardinality' => 1,
+    'settings'    => [
+      'allowed_values' => [
+        'both'   => 'Ambos',
+        'owner'  => 'Propietario',
+        'tenant' => 'Arrendatario',
+      ],
+    ],
+  ]);
+  _myapi_reservations_ensure_field('field_cancel_deadline_minutes', [
+    'field_name'  => 'field_cancel_deadline_minutes',
+    'type'        => 'number_integer',
+    'cardinality' => 1,
+  ]);
+  _myapi_reservations_ensure_field('field_unit', [
+    'field_name'  => 'field_unit',
+    'type'        => 'entityreference',
+    'cardinality' => 1,
+    'settings'    => ['target_type' => 'node'],
+  ]);
+  _myapi_reservations_ensure_field('field_requester', [
+    'field_name'  => 'field_requester',
+    'type'        => 'entityreference',
+    'cardinality' => 1,
+    'settings'    => ['target_type' => 'user'],
+  ]);
+  _myapi_reservations_ensure_field('field_area', [
+    'field_name'  => 'field_area',
+    'type'        => 'entityreference',
+    'cardinality' => 1,
+    'settings'    => ['target_type' => 'node'],
+  ]);
+  _myapi_reservations_ensure_field('field_date', [
+    'field_name'  => 'field_date',
+    'type'        => 'datetime',
+    'cardinality' => 1,
+    'settings'    => [
+      'granularity' => [
+        'year'   => 'year',
+        'month'  => 'month',
+        'day'    => 'day',
+        'hour'   => 0,
+        'minute' => 0,
+        'second' => 0,
+      ],
+      'tz_handling' => 'none',
+      'timezone_db' => '',
+      'todate'      => '',
+    ],
+  ]);
+  _myapi_reservations_ensure_field('field_start_time', [
+    'field_name'  => 'field_start_time',
+    'type'        => 'text',
+    'cardinality' => 1,
+    'settings'    => ['max_length' => 5],
+  ]);
+  _myapi_reservations_ensure_field('field_end_time', [
+    'field_name'  => 'field_end_time',
+    'type'        => 'text',
+    'cardinality' => 1,
+    'settings'    => ['max_length' => 5],
+  ]);
+  _myapi_reservations_ensure_field('field_reservation_status', [
+    'field_name'  => 'field_reservation_status',
+    'type'        => 'list_text',
+    'cardinality' => 1,
+    'settings'    => [
+      'allowed_values' => [
+        'confirmed' => 'Confirmada',
+        'cancelled' => 'Cancelada',
+      ],
+    ],
+  ]);
+  _myapi_reservations_ensure_field('field_cancelled_by', [
+    'field_name'  => 'field_cancelled_by',
+    'type'        => 'list_text',
+    'cardinality' => 1,
+    'settings'    => [
+      'allowed_values' => [
+        'user'  => 'Usuario',
+        'admin' => 'Admin',
+      ],
+    ],
+  ]);
+
+  // (c) Instances of the 'area' bundle.
+  _myapi_reservations_ensure_instance('field_condominium', 'area', [
+    'field_name'  => 'field_condominium',
+    'entity_type' => 'node',
+    'bundle'      => 'area',
+    'label'       => 'Condominio',
+    'required'    => 1,
+    'settings'    => [
+      'handler'          => 'base',
+      'handler_settings' => [
+        'target_bundles' => ['condominio' => 'condominio'],
+        'sort'           => ['type' => 'none'],
+      ],
+    ],
+    'widget'      => ['type' => 'entityreference_autocomplete'],
+  ]);
+  _myapi_reservations_ensure_instance('field_image', 'area', [
+    'field_name'  => 'field_image',
+    'entity_type' => 'node',
+    'bundle'      => 'area',
+    'label'       => 'Imagen',
+    'required'    => 0,
+    'settings'    => [
+      'file_extensions' => 'png jpg jpeg',
+      'alt_field'       => 0,
+      'title_field'     => 0,
+    ],
+    'widget'      => ['type' => 'image_image'],
+  ]);
+  _myapi_reservations_ensure_instance('field_open_time', 'area', [
+    'field_name'  => 'field_open_time',
+    'entity_type' => 'node',
+    'bundle'      => 'area',
+    'label'       => 'Hora de apertura',
+    'required'    => 1,
+    'widget'      => ['type' => 'text_textfield'],
+  ]);
+  _myapi_reservations_ensure_instance('field_close_time', 'area', [
+    'field_name'  => 'field_close_time',
+    'entity_type' => 'node',
+    'bundle'      => 'area',
+    'label'       => 'Hora de cierre',
+    'required'    => 1,
+    'widget'      => ['type' => 'text_textfield'],
+  ]);
+  _myapi_reservations_ensure_instance('field_slot_minutes', 'area', [
+    'field_name'    => 'field_slot_minutes',
+    'entity_type'   => 'node',
+    'bundle'        => 'area',
+    'label'         => 'Tamaño del bloque (min)',
+    'required'      => 1,
+    'description'   => 'Tamaño del bloque de reserva en minutos.',
+    'default_value' => [['value' => 60]],
+    'widget'        => ['type' => 'number'],
+  ]);
+  _myapi_reservations_ensure_instance('field_max_minutes', 'area', [
+    'field_name'    => 'field_max_minutes',
+    'entity_type'   => 'node',
+    'bundle'        => 'area',
+    'label'         => 'Duración máxima (min)',
+    'required'      => 1,
+    'description'   => 'Duración máxima de una reserva en minutos.',
+    'default_value' => [['value' => 120]],
+    'widget'        => ['type' => 'number'],
+  ]);
+  _myapi_reservations_ensure_instance('field_area_status', 'area', [
+    'field_name'    => 'field_area_status',
+    'entity_type'   => 'node',
+    'bundle'        => 'area',
+    'label'         => 'Estado del área',
+    'required'      => 1,
+    'default_value' => [['value' => 'active']],
+    'widget'        => ['type' => 'options_select'],
+  ]);
+  _myapi_reservations_ensure_instance('field_who_can_reserve', 'area', [
+    'field_name'    => 'field_who_can_reserve',
+    'entity_type'   => 'node',
+    'bundle'        => 'area',
+    'label'         => 'Quién puede reservar',
+    'required'      => 1,
+    'default_value' => [['value' => 'both']],
+    'widget'        => ['type' => 'options_select'],
+  ]);
+  _myapi_reservations_ensure_instance('field_cancel_deadline_minutes', 'area', [
+    'field_name'    => 'field_cancel_deadline_minutes',
+    'entity_type'   => 'node',
+    'bundle'        => 'area',
+    'label'         => 'Antelación mínima para cancelar (min)',
+    'required'      => 1,
+    'description'   => 'Minutos mínimos antes del inicio para poder cancelar.',
+    'default_value' => [['value' => 120]],
+    'widget'        => ['type' => 'number'],
+  ]);
+
+  // (c) Instances of the 'reservation' bundle.
+  _myapi_reservations_ensure_instance('field_condominium', 'reservation', [
+    'field_name'  => 'field_condominium',
+    'entity_type' => 'node',
+    'bundle'      => 'reservation',
+    'label'       => 'Condominio',
+    'required'    => 1,
+    'settings'    => [
+      'handler'          => 'base',
+      'handler_settings' => [
+        'target_bundles' => ['condominio' => 'condominio'],
+        'sort'           => ['type' => 'none'],
+      ],
+    ],
+    'widget'      => ['type' => 'entityreference_autocomplete'],
+  ]);
+  _myapi_reservations_ensure_instance('field_unit', 'reservation', [
+    'field_name'  => 'field_unit',
+    'entity_type' => 'node',
+    'bundle'      => 'reservation',
+    'label'       => 'Vivienda',
+    'required'    => 1,
+    'settings'    => [
+      'handler'          => 'base',
+      'handler_settings' => [
+        'target_bundles' => ['vivienda' => 'vivienda'],
+        'sort'           => ['type' => 'none'],
+      ],
+    ],
+    'widget'      => ['type' => 'entityreference_autocomplete'],
+  ]);
+  _myapi_reservations_ensure_instance('field_requester', 'reservation', [
+    'field_name'  => 'field_requester',
+    'entity_type' => 'node',
+    'bundle'      => 'reservation',
+    'label'       => 'Solicitante',
+    'required'    => 1,
+    'settings'    => [
+      'handler'          => 'base',
+      'handler_settings' => [
+        'sort' => ['type' => 'none'],
+      ],
+    ],
+    'widget'      => ['type' => 'entityreference_autocomplete'],
+  ]);
+  _myapi_reservations_ensure_instance('field_area', 'reservation', [
+    'field_name'  => 'field_area',
+    'entity_type' => 'node',
+    'bundle'      => 'reservation',
+    'label'       => 'Área',
+    'required'    => 1,
+    'settings'    => [
+      'handler'          => 'base',
+      'handler_settings' => [
+        'target_bundles' => ['area' => 'area'],
+        'sort'           => ['type' => 'none'],
+      ],
+    ],
+    'widget'      => ['type' => 'entityreference_autocomplete'],
+  ]);
+  _myapi_reservations_ensure_instance('field_date', 'reservation', [
+    'field_name'  => 'field_date',
+    'entity_type' => 'node',
+    'bundle'      => 'reservation',
+    'label'       => 'Fecha',
+    'required'    => 1,
+    'widget'      => [
+      'type'     => 'date_select',
+      'settings' => [
+        'input_format'   => 'Y-m-d',
+        'year_range'     => '-1:+3',
+        'increment'      => 1,
+        'label_position' => 'above',
+        'text_parts'     => [],
+      ],
+    ],
+  ]);
+  _myapi_reservations_ensure_instance('field_start_time', 'reservation', [
+    'field_name'  => 'field_start_time',
+    'entity_type' => 'node',
+    'bundle'      => 'reservation',
+    'label'       => 'Hora de inicio',
+    'required'    => 1,
+    'widget'      => ['type' => 'text_textfield'],
+  ]);
+  _myapi_reservations_ensure_instance('field_end_time', 'reservation', [
+    'field_name'  => 'field_end_time',
+    'entity_type' => 'node',
+    'bundle'      => 'reservation',
+    'label'       => 'Hora de fin',
+    'required'    => 1,
+    'widget'      => ['type' => 'text_textfield'],
+  ]);
+  _myapi_reservations_ensure_instance('field_reservation_status', 'reservation', [
+    'field_name'    => 'field_reservation_status',
+    'entity_type'   => 'node',
+    'bundle'        => 'reservation',
+    'label'         => 'Estado de la reserva',
+    'required'      => 1,
+    'default_value' => [['value' => 'confirmed']],
+    'widget'        => ['type' => 'options_select'],
+  ]);
+  _myapi_reservations_ensure_instance('field_cancelled_by', 'reservation', [
+    'field_name'  => 'field_cancelled_by',
+    'entity_type' => 'node',
+    'bundle'      => 'reservation',
+    'label'       => 'Cancelada por',
+    'required'    => 0,
+    'widget'      => ['type' => 'options_select'],
+  ]);
 }
 
 /**
