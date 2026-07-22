@@ -1,6 +1,6 @@
 # SPEC 33 — Endpoint de listado de áreas (áreas de un condominio, solo lectura)
 
-> **Estado:** Approved · **Depende de:** SPEC 14 (patrón de listado de payments), SPEC 32 (tipos de contenido de reservas) · **Fecha:** 2026-07-22
+> **Estado:** Implemented · **Depende de:** SPEC 14 (patrón de listado de payments), SPEC 32 (tipos de contenido de reservas) · **Fecha:** 2026-07-22
 > **Objetivo:** Exponer `GET /api/v1/condominiums/{condominium_id}/areas` como un listado paginado y de solo lectura de los nodos `area` visibles (`active`/`maintenance`) de un condominio al que el usuario autenticado tiene acceso, replicando el patrón de payments.
 
 ---
@@ -110,18 +110,18 @@ define('MYAPI_AREA_VISIBLE_STATUSES', ['active', 'maintenance']);
 
 ## Criterios de aceptación
 
-- [ ] `GET /api/v1/condominiums/{id}/areas` sin token Bearer → `401 missing_authorization`.
-- [ ] Con un token inválido/expirado → `401 invalid_token`.
-- [ ] Con un token válido para un condominio con el que el usuario **no** se relaciona (o un id inexistente) → `403 condominium_access_denied`, indistinguible.
-- [ ] `POST`/`PUT`/`DELETE` sobre la ruta → `405 method_not_allowed`.
-- [ ] El listado devuelve solo nodos `area` con `status=1`, que casan con `field_condominium`, y con estado `active` o `maintenance`; las `closed` y las áreas sin estado nunca aparecen.
-- [ ] Cada item expone las 13 claves documentadas con los tipos correctos (ints casteados, `null` cuando no hay fila).
-- [ ] Un área con imagen devuelve `image_id` no nulo y una `image_url` absoluta; un área sin imagen devuelve ambos `null`.
-- [ ] `sort=asc` ordena por título ascendente, `sort=desc` (default) descendente; los empates se resuelven por `nid` en la misma dirección, estable entre páginas.
-- [ ] `limit=-1` devuelve todas las áreas visibles en una sola página (`page=1`, `total_pages=1`, o `0` cuando `total=0`).
-- [ ] `total=0` → `total_pages=0`; una página más allá de la última → `200` con `areas: []`.
-- [ ] `page`/`limit`/`sort` con valores basura caen a los defaults sin 422.
-- [ ] `docs/area.md` existe y casa con el contrato implementado.
+- [x] `GET /api/v1/condominiums/{id}/areas` sin token Bearer → `401 missing_authorization`.
+- [x] Con un token inválido/expirado → `401 invalid_token`.
+- [x] Con un token válido para un condominio con el que el usuario **no** se relaciona (o un id inexistente) → `403 condominium_access_denied`, indistinguible.
+- [x] `POST`/`PUT`/`DELETE` sobre la ruta → `405 method_not_allowed`.
+- [x] El listado devuelve solo nodos `area` con `status=1`, que casan con `field_condominium`, y con estado `active` o `maintenance`; las `closed` y las áreas sin estado nunca aparecen.
+- [x] Cada item expone las 13 claves documentadas con los tipos correctos (ints casteados, `null` cuando no hay fila).
+- [x] Un área con imagen devuelve `image_id` no nulo y una `image_url` absoluta; un área sin imagen devuelve ambos `null`.
+- [x] `sort=asc` ordena por título ascendente, `sort=desc` (default) descendente; los empates se resuelven por `nid` en la misma dirección, estable entre páginas.
+- [x] `limit=-1` devuelve todas las áreas visibles en una sola página (`page=1`, `total_pages=1`, o `0` cuando `total=0`).
+- [x] `total=0` → `total_pages=0`; una página más allá de la última → `200` con `areas: []`.
+- [x] `page`/`limit`/`sort` con valores basura caen a los defaults sin 422.
+- [x] `docs/area.md` existe y casa con el contrato implementado.
 
 ---
 
