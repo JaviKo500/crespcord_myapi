@@ -41,6 +41,7 @@ Common reservable areas of a condominium.
 | `field_area_status` | list_text | Yes | `active` | `active\|Activo`, `closed\|Cerrado`, `maintenance\|En Mantenimiento`. |
 | `field_who_can_reserve` | list_text | Yes | `both` | `both\|Ambos`, `owner\|Propietario`, `tenant\|Arrendatario`. |
 | `field_cancel_deadline_minutes` | number_integer | Yes | `120` | Minimum minutes before the start to cancel. |
+| `field_area_category` | list_text | Yes | `other` | Stable catalogue key the app maps to an icon; see catalogue below. |
 
 ### Reserva (`reservation`)
 
@@ -75,6 +76,7 @@ A reservation of a common area made by a user.
 |---|---|---|
 | `field_area_status` | `area` | `active` → Activo · `closed` → Cerrado · `maintenance` → En Mantenimiento |
 | `field_who_can_reserve` | `area` | `both` → Ambos · `owner` → Propietario · `tenant` → Arrendatario |
+| `field_area_category` | `area` | `pool` → Piscina · `gym` → Gimnasio · `party_hall` → Salón de eventos · `bbq` → Zona de parrillas (BBQ) · `playground` → Área infantil · `sports_court` → Cancha deportiva · `coworking` → Coworking / Sala de trabajo · `sauna` → Sauna / Spa · `rooftop` → Terraza / Rooftop · `other` → Otra |
 | `field_reservation_status` | `reservation` | `confirmed` → Confirmada · `cancelled` → Cancelada |
 | `field_cancelled_by` | `reservation` | `user` → Usuario · `admin` → Admin |
 
@@ -86,6 +88,17 @@ Drupal 7 Field API, `allowed_values` of a `list_text` field is a **field-level**
 setting, not per-instance — a single shared field could not carry two different
 catalogues. So there are two separate fields, one per bundle, each with a clean
 catalogue. An area can therefore never end up in `confirmed`.
+
+### `field_area_category` is a stable client key, not a display label
+
+`field_area_category` classifies each area so the Flutter app can pick an icon
+**deterministically from the key** (`pool`, `gym`, …), never from the free-text
+area name. The keys are English `snake_case` and **must stay stable**: the client
+maps key → icon, so renaming a key would break existing icons, whereas the
+Spanish labels are admin-facing only and can be reworded freely. `other` is the
+default so every area — including ones created before this field existed — always
+resolves to a valid catalogue key. It lives only on the `area` bundle; it does
+not exist on `reservation` or `condominio`.
 
 ### `field_condominium` is the only genuinely shared field
 
@@ -143,6 +156,23 @@ field or instance and never throws a `FieldException`.
 Both paths call the exact same helper — it is the single source of truth for the
 reservations schema.
 
+### `field_area_category` on already-installed sites
+
+`field_area_category` was added after the initial reservations schema, so it has
+its own update hook, `myapi_update_7007()`. Fresh sites get it through
+`_myapi_reservations_install()` like every other area field; existing sites get
+it with:
+
+```bash
+drush updb    # runs myapi_update_7007 → adds field_area_category to 'area'
+drush cc all
+```
+
+The hook reuses the same idempotent `_ensure_field` / `_ensure_instance`
+sub-helpers, so re-running it never duplicates the field/instance nor throws a
+`FieldException`. It only adds the field and its `area` instance — no REST
+endpoint, no business logic — and leaves `reservation` and `condominio` alone.
+
 ---
 
 ## Uninstall policy (conservative)
@@ -158,7 +188,7 @@ The destructive path exists but is opt-in, guarded by a constant at the top of
 define('MYAPI_RESERVATIONS_DESTRUCTIVE_UNINSTALL', FALSE);
 ```
 
-Only when this is flipped to `TRUE` does `myapi_uninstall()` delete the 17
+Only when this is flipped to `TRUE` does `myapi_uninstall()` delete the 18
 fields (which also deletes their instances and stored values) and both content
 types. Leave it `FALSE` in production; an accidental uninstall would otherwise
 wipe real areas and reservations.
