@@ -1,6 +1,6 @@
 # SPEC 33 — Endpoint de listado de áreas (áreas de un condominio, solo lectura)
 
-> **Estado:** Borrador · **Depende de:** SPEC 14 (patrón de listado de payments), SPEC 32 (tipos de contenido de reservas) · **Fecha:** 2026-07-22
+> **Estado:** Approved · **Depende de:** SPEC 14 (patrón de listado de payments), SPEC 32 (tipos de contenido de reservas) · **Fecha:** 2026-07-22
 > **Objetivo:** Exponer `GET /api/v1/condominiums/{condominium_id}/areas` como un listado paginado y de solo lectura de los nodos `area` visibles (`active`/`maintenance`) de un condominio al que el usuario autenticado tiene acceso, replicando el patrón de payments.
 
 ---
