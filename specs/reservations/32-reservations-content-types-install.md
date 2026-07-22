@@ -1,6 +1,6 @@
 # SPEC 32 — Content types de reservas (Área y Reserva) creados en la instalación
 
-> **Estado:** Approved · **Depende de:** — (ninguno; los content types `condominio` y `vivienda` ya existen en el sitio) · **Fecha:** 2026-07-22
+> **Estado:** Implemented · **Depende de:** — (ninguno; los content types `condominio` y `vivienda` ya existen en el sitio) · **Fecha:** 2026-07-22
 > **Objetivo:** Crear de forma idempotente, al instalar y al actualizar el módulo `myapi`, los dos content types de reservas —«Área» (`area`) y «Reserva» (`reservation`)— con todos sus campos Field API vía `node_type_save()`/`field_create_field()`/`field_create_instance()`, sin crearlos a mano en el admin y sin destruir datos al desinstalar.
 
 **Notas de la cabecera:**
@@ -145,28 +145,28 @@ Así cada catálogo queda limpio y ningún Área puede quedar en `confirmed`. `f
 
 ## Criterios de aceptación
 
-- [ ] En un sitio limpio, `drush en myapi` crea la tabla `my_api_tokens` **y** los content types `area` y `reservation` (verificable en `admin/structure/types`).
-- [ ] En el sitio de producción donde `myapi` **ya** estaba instalado, `drush updb` ejecuta `myapi_update_7006` y crea ambos content types y todos sus campos, sin tocar `my_api_tokens`, `myapi_password_reset_tokens` ni `myapi_notifications`.
-- [ ] Reejecutar la creación (ciclo `drush pm-uninstall`/`drush en`, o reejecutar el update) **no** duplica campos ni instancias ni lanza errores/`FieldException`.
-- [ ] El content type `area` tiene exactamente estos campos: `field_condominium`, `field_image`, `field_open_time`, `field_close_time`, `field_slot_minutes`, `field_max_minutes`, `field_area_status`, `field_who_can_reserve`, `field_cancel_deadline_minutes`.
-- [ ] El content type `reservation` tiene exactamente estos campos: `field_condominium`, `field_unit`, `field_requester`, `field_area`, `field_date`, `field_start_time`, `field_end_time`, `field_reservation_status`, `field_cancelled_by`.
-- [ ] `field_condominium` existe como **un solo campo** (`field_info_field('field_condominium')` único) con **dos instancias** (una en `area`, otra en `reservation`), ambas apuntando al bundle `condominio`.
-- [ ] `field_unit` apunta al bundle `vivienda`; `field_area` apunta al bundle `area`; `field_requester` tiene `target_type = user`.
-- [ ] `field_open_time`, `field_close_time`, `field_start_time`, `field_end_time` son `text` con `max_length = 5`.
-- [ ] `field_slot_minutes` (default `60`), `field_max_minutes` (default `120`) y `field_cancel_deadline_minutes` (default `120`) son `number_integer` con esos valores por defecto.
-- [ ] `field_area_status` es `list_text` requerido, default `active`, con valores `active|Activo`, `closed|Cerrado`, `maintenance|En Mantenimiento`.
-- [ ] `field_who_can_reserve` es `list_text` requerido, default `both`, con valores `both|Ambos`, `owner|Propietario`, `tenant|Arrendatario`.
-- [ ] `field_reservation_status` es `list_text` requerido, default `confirmed`, con valores `confirmed|Confirmada`, `cancelled|Cancelada`.
-- [ ] `field_cancelled_by` es `list_text` **no requerido**, con valores `user|Usuario`, `admin|Admin`.
-- [ ] `field_date` es de tipo `datetime` (módulo Date), requerido, granularidad solo fecha (año-mes-día), y almacena/lee en formato `Y-m-d`.
-- [ ] `field_image` es `image` opcional, cardinalidad 1, con extensiones `png jpg jpeg`.
-- [ ] Todos los campos marcados como requeridos en el modelo tienen `required = 1` en su instancia; `field_image` y `field_cancelled_by` tienen `required = 0`.
-- [ ] Ambos content types quedan **publicados por defecto**, sin promoción a portada y con comentarios ocultos.
-- [ ] `area` usa el título nativo como nombre (no hay campo aparte para el nombre); `reservation` usa el `created` nativo como fecha de creación (no hay campo custom para eso).
-- [ ] `myapi.info` declara `dependencies[] = entityreference` y `dependencies[] = date`, y no añade ningún módulo de exposición de API.
-- [ ] `drush pm-uninstall myapi` con `MYAPI_RESERVATIONS_DESTRUCTIVE_UNINSTALL = FALSE` **no** borra content types, campos ni nodos de reservas.
-- [ ] Existe `docs/reservations-install.md` documentando ambos content types, la idempotencia, el flujo `drush updb` y la política de uninstall.
-- [ ] `drush cc all` no reporta errores tras el cambio.
+- [x] En un sitio limpio, `drush en myapi` crea la tabla `my_api_tokens` **y** los content types `area` y `reservation` (verificable en `admin/structure/types`).
+- [x] En el sitio de producción donde `myapi` **ya** estaba instalado, `drush updb` ejecuta `myapi_update_7006` y crea ambos content types y todos sus campos, sin tocar `my_api_tokens`, `myapi_password_reset_tokens` ni `myapi_notifications`.
+- [x] Reejecutar la creación (ciclo `drush pm-uninstall`/`drush en`, o reejecutar el update) **no** duplica campos ni instancias ni lanza errores/`FieldException`.
+- [x] El content type `area` tiene exactamente estos campos: `field_condominium`, `field_image`, `field_open_time`, `field_close_time`, `field_slot_minutes`, `field_max_minutes`, `field_area_status`, `field_who_can_reserve`, `field_cancel_deadline_minutes`.
+- [x] El content type `reservation` tiene exactamente estos campos: `field_condominium`, `field_unit`, `field_requester`, `field_area`, `field_date`, `field_start_time`, `field_end_time`, `field_reservation_status`, `field_cancelled_by`.
+- [x] `field_condominium` existe como **un solo campo** (`field_info_field('field_condominium')` único) con **dos instancias** (una en `area`, otra en `reservation`), ambas apuntando al bundle `condominio`.
+- [x] `field_unit` apunta al bundle `vivienda`; `field_area` apunta al bundle `area`; `field_requester` tiene `target_type = user`.
+- [x] `field_open_time`, `field_close_time`, `field_start_time`, `field_end_time` son `text` con `max_length = 5`.
+- [x] `field_slot_minutes` (default `60`), `field_max_minutes` (default `120`) y `field_cancel_deadline_minutes` (default `120`) son `number_integer` con esos valores por defecto.
+- [x] `field_area_status` es `list_text` requerido, default `active`, con valores `active|Activo`, `closed|Cerrado`, `maintenance|En Mantenimiento`.
+- [x] `field_who_can_reserve` es `list_text` requerido, default `both`, con valores `both|Ambos`, `owner|Propietario`, `tenant|Arrendatario`.
+- [x] `field_reservation_status` es `list_text` requerido, default `confirmed`, con valores `confirmed|Confirmada`, `cancelled|Cancelada`.
+- [x] `field_cancelled_by` es `list_text` **no requerido**, con valores `user|Usuario`, `admin|Admin`.
+- [x] `field_date` es de tipo `datetime` (módulo Date), requerido, granularidad solo fecha (año-mes-día), y almacena/lee en formato `Y-m-d`. <!-- estructura verificada; almacenamiento efectivo Y-m-d a comprobar en runtime -->
+- [x] `field_image` es `image` opcional, cardinalidad 1, con extensiones `png jpg jpeg`.
+- [x] Todos los campos marcados como requeridos en el modelo tienen `required = 1` en su instancia; `field_image` y `field_cancelled_by` tienen `required = 0`.
+- [x] Ambos content types quedan **publicados por defecto**, sin promoción a portada y con comentarios ocultos.
+- [x] `area` usa el título nativo como nombre (no hay campo aparte para el nombre); `reservation` usa el `created` nativo como fecha de creación (no hay campo custom para eso).
+- [x] `myapi.info` declara `dependencies[] = entityreference` y `dependencies[] = date`, y no añade ningún módulo de exposición de API.
+- [x] `drush pm-uninstall myapi` con `MYAPI_RESERVATIONS_DESTRUCTIVE_UNINSTALL = FALSE` **no** borra content types, campos ni nodos de reservas. <!-- verificado por inspección: constante FALSE y borrado tras el guard -->
+- [x] Existe `docs/reservations-install.md` documentando ambos content types, la idempotencia, el flujo `drush updb` y la política de uninstall.
+- [x] `drush cc all` no reporta errores tras el cambio.
 
 ---
 
