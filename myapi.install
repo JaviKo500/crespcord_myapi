@@ -6,6 +6,16 @@
  */
 
 /**
+ * Whether uninstalling the module also destroys the reservations content types,
+ * their fields and ALL their data (areas and reservations).
+ *
+ * Kept FALSE on purpose: areas and reservations hold real client data, so an
+ * accidental `drush pm-uninstall myapi` must never wipe them. Flip this to TRUE
+ * only for a deliberate, one-off teardown where losing that data is intended.
+ */
+define('MYAPI_RESERVATIONS_DESTRUCTIVE_UNINSTALL', FALSE);
+
+/**
  * Implements hook_schema().
  */
 function myapi_schema() {
@@ -248,6 +258,58 @@ function myapi_install() {
  */
 function myapi_uninstall() {
   myapi_mail_system_unregister();
+
+  // Conservative by default: uninstalling does NOT remove the reservations
+  // content types, fields or data — they hold real client records. The
+  // destructive path only runs when MYAPI_RESERVATIONS_DESTRUCTIVE_UNINSTALL is
+  // flipped to TRUE manually (see the constant at the top of this file).
+  if (MYAPI_RESERVATIONS_DESTRUCTIVE_UNINSTALL) {
+    _myapi_reservations_uninstall_destructive();
+  }
+}
+
+/**
+ * Destroys the reservations schema and all its data (opt-in, never automatic).
+ *
+ * Only ever called from myapi_uninstall() when
+ * MYAPI_RESERVATIONS_DESTRUCTIVE_UNINSTALL is TRUE. Deleting a field also
+ * deletes its instances and stored values, so this wipes every area and
+ * reservation node's field data; the node types are then removed.
+ */
+function _myapi_reservations_uninstall_destructive() {
+  $fields = [
+    'field_condominium',
+    'field_image',
+    'field_open_time',
+    'field_close_time',
+    'field_slot_minutes',
+    'field_max_minutes',
+    'field_area_status',
+    'field_who_can_reserve',
+    'field_cancel_deadline_minutes',
+    'field_unit',
+    'field_requester',
+    'field_area',
+    'field_date',
+    'field_start_time',
+    'field_end_time',
+    'field_reservation_status',
+    'field_cancelled_by',
+  ];
+  foreach ($fields as $field_name) {
+    if (field_info_field($field_name)) {
+      field_delete_field($field_name);
+    }
+  }
+
+  foreach (['area', 'reservation'] as $type) {
+    if (node_type_load($type)) {
+      node_type_delete($type);
+    }
+  }
+
+  // Purge the deleted field data now instead of waiting for cron.
+  field_purge_batch(1000);
 }
 
 /**
@@ -790,4 +852,17 @@ function myapi_update_7005() {
       'not null'    => FALSE,
     ]);
   }
+}
+
+/**
+ * Creates the reservations content types (area, reservation) and their fields
+ * on sites where the module is already installed.
+ *
+ * Runs the same idempotent _myapi_reservations_install() used by hook_install(),
+ * so existing production sites get the reservations schema via `drush updb`
+ * without a disable/enable cycle and without touching any existing data or
+ * tables (my_api_tokens, myapi_password_reset_tokens, myapi_notifications).
+ */
+function myapi_update_7006() {
+  _myapi_reservations_install();
 }
