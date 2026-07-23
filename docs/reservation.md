@@ -352,3 +352,117 @@ curl -i -X POST 'https://host/api/v1/reservations' \
   -H 'Content-Type: application/json' \
   -d '{"unit_id":21,"area_id":42,"date":"2026-07-25","start_time":"10:00","duration_minutes":120}'
 ```
+
+---
+
+## PUT /api/v1/reservations/{id}/cancel
+
+Cancels a `confirmed` reservation on behalf of the authenticated user.
+Soft-cancel only: `field_reservation_status` is rewritten to `cancelled` and
+`field_cancelled_by` to `user`, every other field on the node is left
+untouched (no `node_delete()`). Only the reservation's own `field_requester`
+may cancel it — unlike `payment.resource.inc`, no other owner/occupant of the
+unit is allowed. No reactivation endpoint exists.
+
+**Authentication:** required (Bearer access token)
+
+**Headers**
+| Header | Value |
+|--------|-------|
+| Authorization | Bearer `<access_token>` |
+
+**Request body**
+
+None. The reservation id travels in the path; any body sent is ignored.
+
+**Validation order**
+
+Each validation short-circuits the request before the next one runs and
+before the node is ever touched:
+
+| # | Validation | Error |
+|---|---|---|
+| 1 | Bearer token present and valid | `401 missing_authorization` / `401 invalid_token` |
+| 2 | `{id}` is a positive integer, the node exists and is of type `reservation` | `404 reservation_not_found` |
+| 3 | Authenticated user is exactly the reservation's `field_requester` | `403 reservation_forbidden` |
+| 4 | `field_reservation_status` is exactly `confirmed` | `409 reservation_not_confirmed` |
+| 5 | Cancellation window has not closed (see below) | `409 reservation_cancel_window_expired` |
+
+**Cancellation window (validation 5)**
+
+`minutes_until_start = floor((timestamp(date, start_time) - now) / 60)`
+(site timezone). Cancellation is allowed only when `minutes_until_start` is
+strictly greater than the reservation's area's `field_cancel_deadline_minutes`.
+A reservation whose start has already passed always fails this check (no
+separate error code for "already started"). If the referenced area node is
+missing (deleted) or has no `field_cancel_deadline_minutes` row, the window is
+treated as already expired, since it cannot be confirmed. The deadline is read
+live from the area at cancellation time, not frozen at reservation creation —
+if an admin changes it later, it retroactively applies to existing
+reservations.
+
+**Success response (200)**
+
+Same shape as an item from `GET /api/v1/units/{unit_id}/reservations`.
+
+```json
+{
+  "success": true,
+  "data": {
+    "reservation": {
+      "id": 91,
+      "condominium_id": 7,
+      "unit_id": 21,
+      "requester_id": 34,
+      "area_id": 42,
+      "area_name": "Piscina principal",
+      "date": "2026-07-25",
+      "start_time": "10:00",
+      "end_time": "12:00",
+      "status": "cancelled",
+      "cancelled_by": "user",
+      "created": "2026-07-22T14:30:00"
+    }
+  },
+  "message": "Reserva cancelada correctamente."
+}
+```
+
+Notes:
+- Cancelling an already-`cancelled` reservation fails with
+  `409 reservation_not_confirmed` (idempotency: the second call always fails).
+- The cancelled reservation remains visible through
+  `GET /api/v1/units/{unit_id}/reservations` with `status: "cancelled"`.
+- Not in scope: cancellation by an administrator or by another
+  owner/occupant of the unit, reactivation of a cancelled reservation, a
+  cancellation `reason`, and cancellation notifications.
+
+**Possible errors**
+| Code | `error_code` | When |
+|------|--------------|------|
+| 401  | `missing_authorization` | `Authorization` header is absent or malformed. |
+| 401  | `invalid_token` | Access token not found, revoked, expired, or the user no longer exists/is blocked. |
+| 404  | `reservation_not_found` | `{id}` is not a positive integer, or does not reference an existing `reservation` node. |
+| 403  | `reservation_forbidden` | The authenticated user is not the reservation's `field_requester`. |
+| 409  | `reservation_not_confirmed` | `field_reservation_status` is not `confirmed` (e.g. already `cancelled`). |
+| 409  | `reservation_cancel_window_expired` | Fewer minutes than (or exactly) the area's `field_cancel_deadline_minutes` remain until the start, the reservation already started/passed, or the area is missing/has no deadline row. |
+| 405  | `method_not_allowed` | Any HTTP method other than `PUT`. |
+
+Error envelope:
+```json
+{
+  "success": false,
+  "error_code": "reservation_cancel_window_expired",
+  "error": "La ventana de cancelación de esta reserva ya expiró."
+}
+```
+
+`error_code` is a stable, language-independent key; `error` is translated
+according to the `Accept-Language` header (`es`/`en`, default `es`). See
+[i18n.md](i18n.md).
+
+**Example:**
+```bash
+curl -i -X PUT 'https://host/api/v1/reservations/91/cancel' \
+  -H 'Authorization: Bearer <access_token>'
+```
