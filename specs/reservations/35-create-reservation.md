@@ -1,6 +1,6 @@
 # SPEC 35 — Crear reserva de área comunal (`POST /api/v1/reservations`)
 
-> **Estado:** Draft · **Depende de:** SPEC 09 (roles owner/occupant de unidad), SPEC 32 (content types de reservas), SPEC 33 (áreas), SPEC 34 (listado de reservas) · **Fecha:** 2026-07-22
+> **Estado:** Approved · **Depende de:** SPEC 09 (roles owner/occupant de unidad), SPEC 32 (content types de reservas), SPEC 33 (áreas), SPEC 34 (listado de reservas) · **Fecha:** 2026-07-22
 > **Objetivo:** Exponer `POST /api/v1/reservations` como el endpoint autenticado que crea una reserva de área comunal para una unidad, aplicando en orden las ocho validaciones de negocio (rol, estado del área, no-pasado, horario, duración máxima, solapamiento, una-sola-reserva-activa y saldo) antes de escribir el nodo `reservation`.
 
 **Notas de la cabecera:**
