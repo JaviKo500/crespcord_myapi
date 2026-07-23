@@ -1,6 +1,6 @@
 # SPEC 36 — Cancelar reserva propia (`PUT /api/v1/reservations/%/cancel`)
 
-> **Estado:** Draft · **Depende de:** SPEC 23 (patrón de anulación soft-cancel de `payment.resource.inc`), SPEC 32 (content types de reservas), SPEC 35 (creación de reserva) · **Fecha:** 2026-07-22
+> **Estado:** Approved · **Depende de:** SPEC 23 (patrón de anulación soft-cancel de `payment.resource.inc`), SPEC 32 (content types de reservas), SPEC 35 (creación de reserva) · **Fecha:** 2026-07-22
 > **Objetivo:** Agregar `PUT /api/v1/reservations/%/cancel`, un endpoint autenticado que permite al usuario que figura en `field_requester` de una reserva `confirmed` cancelarla —soft-cancel, reescribiendo `field_reservation_status` a `'cancelled'` y `field_cancelled_by` a `'user'`— siempre que falten más minutos que `field_cancel_deadline_minutes` del área entre la hora actual del servidor y el inicio de la reserva.
 
 **Notas de la cabecera:**
