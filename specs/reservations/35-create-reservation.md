@@ -1,6 +1,6 @@
 # SPEC 35 — Crear reserva de área comunal (`POST /api/v1/reservations`)
 
-> **Estado:** Approved · **Depende de:** SPEC 09 (roles owner/occupant de unidad), SPEC 32 (content types de reservas), SPEC 33 (áreas), SPEC 34 (listado de reservas) · **Fecha:** 2026-07-22
+> **Estado:** Implemented · **Depende de:** SPEC 09 (roles owner/occupant de unidad), SPEC 32 (content types de reservas), SPEC 33 (áreas), SPEC 34 (listado de reservas) · **Fecha:** 2026-07-22
 > **Objetivo:** Exponer `POST /api/v1/reservations` como el endpoint autenticado que crea una reserva de área comunal para una unidad, aplicando en orden las ocho validaciones de negocio (rol, estado del área, no-pasado, horario, duración máxima, solapamiento, una-sola-reserva-activa y saldo) antes de escribir el nodo `reservation`.
 
 **Notas de la cabecera:**
@@ -167,36 +167,36 @@ Mismo shape que los items de SPEC 34 (`myapi_reservation_build_item`), vía un h
 ## Criterios de aceptación
 
 **Auth y body**
-- [ ] Sin header `Authorization` → `401 missing_authorization`; token inválido/expirado → `401 invalid_token`.
-- [ ] Falta `unit_id`, `area_id`, `date`, `start_time` o `duration_minutes` → `422 missing_field` (`@field` correspondiente).
-- [ ] `date` no calendario, `start_time` fuera de `HH:MM` 24h, o `duration_minutes <= 0`/no numérico → `422 invalid_field` (`@field` correspondiente).
-- [ ] `GET`/`PUT`/`DELETE` sobre `/api/v1/reservations` → `405 method_not_allowed`.
+- [x] Sin header `Authorization` → `401 missing_authorization`; token inválido/expirado → `401 invalid_token`.
+- [x] Falta `unit_id`, `area_id`, `date`, `start_time` o `duration_minutes` → `422 missing_field` (`@field` correspondiente).
+- [x] `date` no calendario, `start_time` fuera de `HH:MM` 24h, o `duration_minutes <= 0`/no numérico → `422 invalid_field` (`@field` correspondiente).
+- [x] `GET`/`PUT`/`DELETE` sobre `/api/v1/reservations` → `405 method_not_allowed`.
 
 **Acceso**
-- [ ] `unit_id` de una unidad que el usuario autenticado no posee ni ocupa (o inexistente) → `403 unit_access_denied`.
-- [ ] `area_id` inexistente, o de un condominio distinto al de `unit_id` → `404 area_not_found`, indistinguibles.
+- [x] `unit_id` de una unidad que el usuario autenticado no posee ni ocupa (o inexistente) → `403 unit_access_denied`.
+- [x] `area_id` inexistente, o de un condominio distinto al de `unit_id` → `404 area_not_found`, indistinguibles.
 
 **Validaciones de negocio (en orden, cada una sin modificar el nodo si falla)**
-- [ ] Área `owner`-only reservada por un ocupante (o `tenant`-only por un propietario) → `403 reservation_role_not_allowed`. Área `both` acepta cualquiera de los dos roles.
-- [ ] Área en `maintenance` o `closed` → `409 area_not_active`.
-- [ ] `date`+`start_time` en el pasado respecto a la hora del servidor (timezone del sitio) → `422 invalid_field` (`@field = date`).
-- [ ] Rango solicitado fuera de `field_open_time`–`field_close_time` del área → `422 reservation_outside_hours`.
-- [ ] `duration_minutes` mayor a `field_max_minutes` del área → `422 reservation_duration_exceeded`.
-- [ ] Rango solicitado se cruza con otra reserva `confirmed` de la misma área en la misma fecha (según el criterio de intervalo semiabierto) → `409 reservation_overlap`; una reserva que termina exactamente cuando otra empieza **no** se considera solapamiento.
-- [ ] La unidad ya tiene una reserva `confirmed` para la misma área cuya fecha/hora de inicio aún no pasó → `409 reservation_already_active`, sin importar si es hoy o un día futuro.
-- [ ] `field_saldo_actual <= 0` de la unidad → puede reservar sin evaluar recibos.
-- [ ] `field_saldo_actual > 0` y el recibo `Enviado` más reciente (por `field_periodo`) tiene `field_saldo_anterior > 0` → `403 insufficient_balance`.
-- [ ] `field_saldo_actual > 0` pero sin recibo `Enviado`, o el más reciente tiene `field_saldo_anterior <= 0`/sin fila → puede reservar.
+- [x] Área `owner`-only reservada por un ocupante (o `tenant`-only por un propietario) → `403 reservation_role_not_allowed`. Área `both` acepta cualquiera de los dos roles.
+- [x] Área en `maintenance` o `closed` → `409 area_not_active`.
+- [x] `date`+`start_time` en el pasado respecto a la hora del servidor (timezone del sitio) → `422 invalid_field` (`@field = date`).
+- [x] Rango solicitado fuera de `field_open_time`–`field_close_time` del área → `422 reservation_outside_hours`.
+- [x] `duration_minutes` mayor a `field_max_minutes` del área → `422 reservation_duration_exceeded`.
+- [x] Rango solicitado se cruza con otra reserva `confirmed` de la misma área en la misma fecha (según el criterio de intervalo semiabierto) → `409 reservation_overlap`; una reserva que termina exactamente cuando otra empieza **no** se considera solapamiento.
+- [x] La unidad ya tiene una reserva `confirmed` para la misma área cuya fecha/hora de inicio aún no pasó → `409 reservation_already_active`, sin importar si es hoy o un día futuro.
+- [x] `field_saldo_actual <= 0` de la unidad → puede reservar sin evaluar recibos.
+- [x] `field_saldo_actual > 0` y el recibo `Enviado` más reciente (por `field_periodo`) tiene `field_saldo_anterior > 0` → `403 insufficient_balance`.
+- [x] `field_saldo_actual > 0` pero sin recibo `Enviado`, o el más reciente tiene `field_saldo_anterior <= 0`/sin fila → puede reservar.
 
 **Éxito**
-- [ ] Con todas las validaciones satisfechas, `201` con `data.reservation` en el shape documentado; `field_reservation_status` queda `'confirmed'`, `field_condominium` igual al de la unidad, `field_requester` igual al `uid` autenticado.
-- [ ] `end_time` calculado coincide con `start_time + duration_minutes`.
-- [ ] La reserva creada aparece luego en `GET /api/v1/units/{unit_id}/reservations` (SPEC 34) con los mismos valores.
+- [x] Con todas las validaciones satisfechas, `201` con `data.reservation` en el shape documentado; `field_reservation_status` queda `'confirmed'`, `field_condominium` igual al de la unidad, `field_requester` igual al `uid` autenticado.
+- [x] `end_time` calculado coincide con `start_time + duration_minutes`.
+- [x] La reserva creada aparece luego en `GET /api/v1/units/{unit_id}/reservations` (SPEC 34) con los mismos valores.
 
 **No regresión**
-- [ ] `GET /api/v1/units/%/reservations` (SPEC 34) sigue funcionando idéntico.
-- [ ] `docs/reservation.md` incluye la sección `POST /api/v1/reservations` completa.
-- [ ] `drush cc all` no reporta errores tras el cambio.
+- [x] `GET /api/v1/units/%/reservations` (SPEC 34) sigue funcionando idéntico.
+- [x] `docs/reservation.md` incluye la sección `POST /api/v1/reservations` completa.
+- [x] `drush cc all` no reporta errores tras el cambio.
 
 ---
 
