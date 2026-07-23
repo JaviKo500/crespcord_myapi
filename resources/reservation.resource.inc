@@ -52,6 +52,25 @@ function myapi_reservation_create_dispatch() {
 }
 
 /**
+ * Dispatcher for /api/v1/reservations/%/cancel.
+ *
+ * Routes by HTTP method. Only PUT is supported (cancel a reservation); any
+ * other method returns 405. Authentication and the rest of the validations
+ * are resolved inside myapi_reservation_cancel(), not here.
+ *
+ * @param int $reservation_id  The 'reservation' nid from the route.
+ */
+function myapi_reservation_cancel_dispatch($reservation_id) {
+  $method = myapi_request_method();
+  if ($method === 'PUT') {
+    myapi_reservation_cancel($reservation_id);
+  }
+  else {
+    myapi_error('method_not_allowed', 405);
+  }
+}
+
+/**
  * Reads the first 'value' of a single-value Field API field on a node.
  *
  * @param object $node   The node to read from.
@@ -77,6 +96,22 @@ function myapi_reservation_node_target_id($node, $field) {
   return isset($node->{$field}[LANGUAGE_NONE][0]['target_id'])
     ? $node->{$field}[LANGUAGE_NONE][0]['target_id']
     : NULL;
+}
+
+/**
+ * Reads field_date's plain 'Y-m-d', regardless of whether $node is the
+ * in-memory node built by myapi_reservation_build_node() (value already
+ * 'Y-m-d') or one freshly loaded from the DB (Date field, full
+ * 'Y-m-d H:i:s' value) — same truncation as every SQL read of this field
+ * (SUBSTR(field_date_value, 1, 10)) in this file.
+ *
+ * @param object $node  The reservation node to read from.
+ *
+ * @return string|NULL  'Y-m-d', or NULL if the field has no value.
+ */
+function myapi_reservation_node_date($node) {
+  $value = myapi_reservation_node_value($node, 'field_date');
+  return $value !== NULL ? substr($value, 0, 10) : NULL;
 }
 
 /**
@@ -207,6 +242,79 @@ function myapi_reservation_create() {
   node_save($node);
 
   myapi_respond(['reservation' => myapi_reservation_build_created_item($node, $area->title)], 201, 'reservation_created');
+}
+
+/**
+ * Handles PUT /api/v1/reservations/%/cancel.
+ *
+ * Cancels a 'confirmed' reservation on behalf of the authenticated user, but
+ * only when that user is exactly the reservation's field_requester and the
+ * cancellation window (field_cancel_deadline_minutes of the area) has not
+ * closed yet. Soft-cancel only: field_reservation_status is rewritten to
+ * 'cancelled' and field_cancelled_by to 'user', every other field is left
+ * untouched. Every check aborts with its own error before the node is ever
+ * modified.
+ *
+ * See the ordered plan in specs/reservations/36-cancel-reservation.md, step 3.
+ *
+ * @param mixed $reservation_id  The 'reservation' nid from the route.
+ */
+function myapi_reservation_cancel($reservation_id) {
+  // 1. Authentication: valid Bearer access token, or 401.
+  $row = myapi_auth_require_access_token();
+  $uid = $row->uid;
+
+  // 2. reservation_id must be a positive integer and reference an existing
+  // 'reservation' node; both "invalid id" and "not found" map to the same 404.
+  if (!ctype_digit((string) $reservation_id) || (int) $reservation_id <= 0) {
+    myapi_error('reservation_not_found', 404);
+  }
+  $node = node_load((int) $reservation_id);
+  if (!$node || $node->type !== 'reservation') {
+    myapi_error('reservation_not_found', 404);
+  }
+
+  // 3. Authorship: only the exact field_requester of the reservation may
+  // cancel it, unlike payment.resource.inc's unit-wide access.
+  $requester_uid = myapi_reservation_node_target_id($node, 'field_requester');
+  if ((int) $requester_uid !== (int) $uid) {
+    myapi_error('reservation_forbidden', 403);
+  }
+
+  // 4. Status: only a 'confirmed' reservation may be cancelled; any other
+  // status (including an already-cancelled reservation) is a 409, with no
+  // modification to the node.
+  $status = myapi_reservation_node_value($node, 'field_reservation_status');
+  if ($status !== 'confirmed') {
+    myapi_error('reservation_not_confirmed', 409);
+  }
+
+  // 5. Cancellation window: minutes between now and the reservation's start
+  // must exceed the area's field_cancel_deadline_minutes. A deleted area, or
+  // one with no deadline row, fails closed as an expired window (documented
+  // edge case in the spec's risk table) since the window cannot be confirmed.
+  $area_id = myapi_reservation_node_target_id($node, 'field_area');
+  $area = $area_id ? node_load($area_id) : NULL;
+  $deadline_minutes = $area ? myapi_reservation_node_value($area, 'field_cancel_deadline_minutes') : NULL;
+  if ($area === NULL || $deadline_minutes === NULL) {
+    myapi_error('reservation_cancel_window_expired', 409);
+  }
+
+  $date = myapi_reservation_node_date($node);
+  $start_time = myapi_reservation_node_value($node, 'field_start_time');
+  $start_timestamp = strtotime($date . ' ' . $start_time . ':00');
+  $minutes_until_start = floor(($start_timestamp - REQUEST_TIME) / 60);
+  if ($minutes_until_start <= (int) $deadline_minutes) {
+    myapi_error('reservation_cancel_window_expired', 409);
+  }
+
+  // 6. Apply the cancellation.
+  $node->field_reservation_status[LANGUAGE_NONE][0]['value'] = 'cancelled';
+  $node->field_cancelled_by[LANGUAGE_NONE][0]['value'] = 'user';
+  node_save($node);
+
+  // 7. Respond 200 with the updated reservation.
+  myapi_respond(['reservation' => myapi_reservation_build_created_item($node, $area->title)], 200, 'reservation_cancelled');
 }
 
 /**
@@ -402,11 +510,11 @@ function myapi_reservation_build_created_item($node, $area_title) {
     'requester_id'   => (int) myapi_reservation_node_target_id($node, 'field_requester'),
     'area_id'        => (int) myapi_reservation_node_target_id($node, 'field_area'),
     'area_name'      => $area_title,
-    'date'           => myapi_reservation_node_value($node, 'field_date'),
+    'date'           => myapi_reservation_node_date($node),
     'start_time'     => myapi_reservation_node_value($node, 'field_start_time'),
     'end_time'       => myapi_reservation_node_value($node, 'field_end_time'),
     'status'         => myapi_reservation_node_value($node, 'field_reservation_status'),
-    'cancelled_by'   => NULL,
+    'cancelled_by'   => myapi_reservation_node_value($node, 'field_cancelled_by'),
     'created'        => format_date($node->created, 'custom', 'Y-m-d\TH:i:s'),
   ];
 }

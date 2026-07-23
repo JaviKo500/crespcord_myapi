@@ -127,6 +127,11 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'reservation_already_active'    => 'This unit already has an active reservation for this area.',
       'insufficient_balance'          => 'You cannot make a reservation while you have an outstanding balance.',
       'reservation_created'           => 'Reservation created successfully.',
+      'reservation_not_found'              => 'Reservation not found.',
+      'reservation_forbidden'              => 'You are not allowed to cancel this reservation.',
+      'reservation_not_confirmed'          => 'Only a confirmed reservation can be cancelled.',
+      'reservation_cancel_window_expired'  => 'The cancellation window for this reservation has expired.',
+      'reservation_cancelled'              => 'Reservation cancelled successfully.',
     ],
     'es' => [
       'invalid_credentials'    => 'Usuario o contraseña incorrectos.',
@@ -186,6 +191,11 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'reservation_already_active'    => 'Esta unidad ya tiene una reserva activa para esta área.',
       'insufficient_balance'          => 'No puedes hacer una reserva mientras tengas saldo pendiente.',
       'reservation_created'           => 'Reserva creada correctamente.',
+      'reservation_not_found'              => 'Reserva no encontrada.',
+      'reservation_forbidden'              => 'No tienes permitido cancelar esta reserva.',
+      'reservation_not_confirmed'          => 'Solo se puede cancelar una reserva confirmada.',
+      'reservation_cancel_window_expired'  => 'La ventana de cancelación de esta reserva ya expiró.',
+      'reservation_cancelled'              => 'Reserva cancelada correctamente.',
     ],
   ];
 
