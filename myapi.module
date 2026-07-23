@@ -112,6 +112,14 @@ function myapi_menu() {
     'file'             => 'resources/reservation.resource.inc',
   ];
 
+  $items['api/v1/reservations'] = [
+    'page callback'    => 'myapi_reservation_create_dispatch',
+    'page arguments'   => [],
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/reservation.resource.inc',
+  ];
+
   $items['api/v1/payments'] = [
     'page callback'    => 'myapi_payment_create_dispatch',
     'access callback'  => TRUE,
