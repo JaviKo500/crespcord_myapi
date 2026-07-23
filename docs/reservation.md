@@ -1,12 +1,14 @@
 ## GET /api/v1/units/{unit_id}/reservations
 
-Returns a paginated list of `reservation` nodes belonging to `unit_id`,
-visible only to the authenticated user who is the owner or occupant of that
-unit — same access rule as `GET /api/v1/units`. Both `confirmed` and
-`cancelled` reservations are returned; this is "My Reservations", so a
-cancelled reservation is still history the resident wants to see. Read-only:
-no create/update/delete/cancel, no single-reservation detail endpoint, no
-availability/conflict check.
+Returns a paginated list of `reservation` nodes belonging to `unit_id` AND
+created by the authenticated user (`field_requester = uid`), provided the
+user is the owner or occupant of that unit — same access rule as
+`GET /api/v1/units`. A unit shared by multiple owners/occupants never shows
+one user another's reservations: each of them only ever sees their own. Both
+`confirmed` and `cancelled` reservations are returned; this is "My
+Reservations", so a cancelled reservation is still history the resident
+wants to see. Read-only: no create/update/delete/cancel, no
+single-reservation detail endpoint, no availability/conflict check.
 
 **Authentication:** required (Bearer access token)
 
@@ -70,6 +72,10 @@ Notes:
 - `unit_id` that does not belong to the authenticated user and `unit_id` that
   does not exist at all return the exact same `403 unit_access_denied` — the
   response never reveals whether a unit exists.
+- The result set is always restricted to `field_requester = uid` of the
+  authenticated user, in addition to `field_unit = unit_id`: a unit with
+  several owners/occupants each only sees the reservations they themselves
+  created, never another resident's.
 - Only published (`status = 1`) `reservation` nodes are returned.
 - Both `confirmed` and `cancelled` reservations are returned; `status` travels
   in each item so the client can distinguish them.
@@ -140,9 +146,9 @@ full schema definition.
 | Drupal field | JSON key | Type | `NULL` rule |
 |---|---|---|---|
 | `nid` | `id` | int | never `NULL` |
-| `field_unit_target_id` | `unit_id` | int | never `NULL` (it is the query filter) |
+| `field_unit_target_id` | `unit_id` | int | never `NULL` (it is a query filter) |
 | `field_condominium_target_id` | `condominium_id` | int | `NULL` if no row |
-| `field_requester_target_id` | `requester_id` | int | `NULL` if no row |
+| `field_requester_target_id` | `requester_id` | int | never `NULL` (it is also a query filter, `= uid`) |
 | `field_area_target_id` | `area_id` | int | `NULL` if no row |
 | `node.title` (of the referenced area) | `area_name` | string | `NULL` when `area_id` is `NULL` or the area node is missing |
 | `field_date_value` | `date` | string (`Y-m-d`) | `NULL` if no row |
@@ -155,9 +161,9 @@ full schema definition.
 | Table | Relevant columns | Use |
 |---|---|---|
 | `node` | `nid`, `type`, `status`, `created` | `reservation` nodes. |
-| `field_data_field_unit` | `entity_id`, `field_unit_target_id` | Reservation → unit relation (`unit_id`). Main filter of the endpoint. |
+| `field_data_field_unit` | `entity_id`, `field_unit_target_id` | Reservation → unit relation (`unit_id`). Filter of the endpoint. |
 | `field_data_field_condominium` | `entity_id`, `field_condominium_target_id` | `condominium_id`. Left join. |
-| `field_data_field_requester` | `entity_id`, `field_requester_target_id` | `requester_id`. Left join. |
+| `field_data_field_requester` | `entity_id`, `field_requester_target_id` | `requester_id`. Also the mandatory filter restricting the result set to the authenticated user's own reservations (`= uid`). |
 | `field_data_field_area` | `entity_id`, `field_area_target_id` | `area_id`. Left join. |
 | `node` (aliased) | `nid`, `title` | `area_name`, resolved via a left join on `field_area_target_id`. |
 | `field_data_field_date` | `entity_id`, `field_date_value` | `date`. Default sort column and date-range filter column. Left join. |

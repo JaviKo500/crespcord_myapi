@@ -4,10 +4,14 @@
  * @file
  * Reservation resource for the myapi module.
  *
- * Lists 'reservation' nodes of a unit for its owner or occupant. Read-only,
- * paginated, with an optional date-range and status filter. Mirrors
- * payment.resource.inc, except both 'confirmed' and 'cancelled' reservations
- * are exposed (status travels in the payload instead of being excluded).
+ * Lists 'reservation' nodes belonging to the authenticated user, scoped to a
+ * unit the user owns or occupies. Read-only, paginated, with an optional
+ * date-range and status filter. Mirrors payment.resource.inc, except both
+ * 'confirmed' and 'cancelled' reservations are exposed (status travels in the
+ * payload instead of being excluded), and the result set is additionally
+ * restricted to field_requester = the authenticated uid (SPEC 37): a unit
+ * shared by multiple owners/occupants shows each of them only their own
+ * reservations, not the whole unit's.
  */
 
 module_load_include('inc', 'myapi', 'includes/myapi.request');
@@ -545,10 +549,12 @@ function myapi_reservation_build_created_item($node, $area_title) {
 /**
  * Handles GET /api/v1/units/%/reservations.
  *
- * Returns, for the authenticated user, a paginated list of 'reservation'
- * nodes belonging to $unit_id, provided the user is the owner or occupant of
- * that unit (same access rule as GET /api/v1/units). Both 'confirmed' and
- * 'cancelled' reservations are returned; the status travels in the payload.
+ * Returns a paginated list of 'reservation' nodes belonging to $unit_id AND
+ * created by the authenticated user (field_requester = uid), provided the
+ * user is the owner or occupant of that unit (same access rule as
+ * GET /api/v1/units). Both 'confirmed' and 'cancelled' reservations are
+ * returned; the status travels in the payload. A unit shared by multiple
+ * owners/occupants never shows one user another's reservations (SPEC 37).
  *
  * @param int $unit_id  The 'vivienda' nid from the route.
  */
@@ -587,12 +593,12 @@ function myapi_reservation_list($unit_id) {
     ? $_GET['status']
     : NULL;
 
-  $total = myapi_reservation_count($unit_id, $from, $to, $status);
+  $total = myapi_reservation_count($unit_id, $from, $to, $status, $uid);
   $total_pages = $limit === -1
     ? ($total > 0 ? 1 : 0)
     : ($total > 0 ? (int) ceil($total / $limit) : 0);
 
-  $rows = myapi_reservation_fetch($unit_id, $page, $limit, $sort, $from, $to, $status);
+  $rows = myapi_reservation_fetch($unit_id, $page, $limit, $sort, $from, $to, $status, $uid);
   $reservations = array_map('myapi_reservation_build_item', $rows);
 
   myapi_respond([
@@ -689,21 +695,28 @@ function myapi_reservation_add_minutes($hhmm, $minutes) {
  * fetched page; with an active bound, reservations with no date row are
  * excluded. When a status filter is given, joins
  * field_data_field_reservation_status and restricts to that value.
+ * Always restricted to field_requester = $uid (SPEC 37), so the count
+ * reflects only the authenticated user's own reservations, not the whole
+ * unit's.
  *
  * @param int         $unit_id  The 'vivienda' nid to filter by.
  * @param string|NULL $from     Inclusive lower bound 'YYYY-MM-DD', or NULL.
  * @param string|NULL $to       Inclusive upper bound 'YYYY-MM-DD', or NULL.
  * @param string|NULL $status   'confirmed', 'cancelled', or NULL for both.
+ * @param int         $uid      The authenticated user's uid.
  *
  * @return int  Total number of matching reservations.
  */
-function myapi_reservation_count($unit_id, $from = NULL, $to = NULL, $status = NULL) {
+function myapi_reservation_count($unit_id, $from = NULL, $to = NULL, $status = NULL, $uid = NULL) {
   $query = db_select('node', 'n')
     ->condition('n.type', 'reservation')
     ->condition('n.status', 1);
 
   $query->innerJoin('field_data_field_unit', 'fu', "fu.entity_id = n.nid AND fu.entity_type = 'node' AND fu.deleted = 0");
   $query->condition('fu.field_unit_target_id', $unit_id);
+
+  $query->innerJoin('field_data_field_requester', 'freq', "freq.entity_id = n.nid AND freq.entity_type = 'node' AND freq.deleted = 0");
+  $query->condition('freq.field_requester_target_id', $uid);
 
   if ($from !== NULL || $to !== NULL) {
     $query->innerJoin('field_data_field_date', 'fdate', "fdate.entity_id = n.nid AND fdate.entity_type = 'node' AND fdate.deleted = 0");
@@ -734,10 +747,12 @@ function myapi_reservation_count($unit_id, $from = NULL, $to = NULL, $status = N
  * @param string|NULL $from     Inclusive lower bound 'YYYY-MM-DD', or NULL.
  * @param string|NULL $to       Inclusive upper bound 'YYYY-MM-DD', or NULL.
  * @param string|NULL $status   'confirmed', 'cancelled', or NULL for both.
+ * @param int         $uid      The authenticated user's uid. Rows are always
+ *                              restricted to field_requester = $uid (SPEC 37).
  *
  * @return array  Rows keyed numerically, one per reservation.
  */
-function myapi_reservation_fetch($unit_id, $page, $limit, $sort, $from = NULL, $to = NULL, $status = NULL) {
+function myapi_reservation_fetch($unit_id, $page, $limit, $sort, $from = NULL, $to = NULL, $status = NULL, $uid = NULL) {
   $query = db_select('node', 'n')
     ->fields('n', ['nid', 'created'])
     ->condition('n.type', 'reservation')
@@ -752,6 +767,9 @@ function myapi_reservation_fetch($unit_id, $page, $limit, $sort, $from = NULL, $
 
   $query->leftJoin('field_data_field_requester', 'freq', "freq.entity_id = n.nid AND freq.entity_type = 'node' AND freq.deleted = 0");
   $query->addField('freq', 'field_requester_target_id', 'requester_id');
+  // Mandatory filter (SPEC 37): only the authenticated user's own
+  // reservations, never another owner/occupant's of the same unit.
+  $query->condition('freq.field_requester_target_id', $uid);
 
   $query->leftJoin('field_data_field_area', 'farea', "farea.entity_id = n.nid AND farea.entity_type = 'node' AND farea.deleted = 0");
   $query->addField('farea', 'field_area_target_id', 'area_id');
