@@ -268,7 +268,7 @@ function myapi_reservation_create() {
   // and releases the area lock before the response is built below.
   unset($transaction);
 
-  myapi_respond(['reservation' => myapi_reservation_build_created_item($node, $area->title)], 201, 'reservation_created');
+  myapi_respond(['reservation' => myapi_reservation_build_created_item($node, $area->title, myapi_reservation_node_value($area, 'field_area_category'))], 201, 'reservation_created');
 }
 
 /**
@@ -341,7 +341,7 @@ function myapi_reservation_cancel($reservation_id) {
   node_save($node);
 
   // 7. Respond 200 with the updated reservation.
-  myapi_respond(['reservation' => myapi_reservation_build_created_item($node, $area->title)], 200, 'reservation_cancelled');
+  myapi_respond(['reservation' => myapi_reservation_build_created_item($node, $area->title, myapi_reservation_node_value($area, 'field_area_category'))], 200, 'reservation_cancelled');
 }
 
 /**
@@ -524,12 +524,13 @@ function myapi_reservation_build_node($condominium_id, $unit_id, $uid, $area_id,
  * set on creation); 'area_name' comes from the caller since the node itself
  * only stores the area's nid.
  *
- * @param object $node        The saved reservation node.
- * @param string $area_title  The reserved area's title.
+ * @param object      $node           The saved reservation node.
+ * @param string      $area_title     The reserved area's title.
+ * @param string|NULL $area_category  The reserved area's category, or NULL.
  *
- * @return array  Response item with all 12 mapped keys.
+ * @return array  Response item with all 13 mapped keys.
  */
-function myapi_reservation_build_created_item($node, $area_title) {
+function myapi_reservation_build_created_item($node, $area_title, $area_category = NULL) {
   return [
     'id'             => (int) $node->nid,
     'condominium_id' => (int) myapi_reservation_node_target_id($node, 'field_condominium'),
@@ -537,6 +538,7 @@ function myapi_reservation_build_created_item($node, $area_title) {
     'requester_id'   => (int) myapi_reservation_node_target_id($node, 'field_requester'),
     'area_id'        => (int) myapi_reservation_node_target_id($node, 'field_area'),
     'area_name'      => $area_title,
+    'area_category'  => $area_category,
     'date'           => myapi_reservation_node_date($node),
     'start_time'     => myapi_reservation_node_value($node, 'field_start_time'),
     'end_time'       => myapi_reservation_node_value($node, 'field_end_time'),
@@ -775,6 +777,11 @@ function myapi_reservation_fetch($unit_id, $page, $limit, $sort, $from = NULL, $
   $query->addField('farea', 'field_area_target_id', 'area_id');
   $query->leftJoin('node', 'na', 'na.nid = farea.field_area_target_id');
   $query->addField('na', 'title', 'area_name');
+  // Area category lives on the referenced 'area' node, so it joins on the
+  // area nid (farea.field_area_target_id), not on the reservation node. NULL
+  // when the area has no category row or the reservation has no area.
+  $query->leftJoin('field_data_field_area_category', 'fcat', "fcat.entity_id = farea.field_area_target_id AND fcat.entity_type = 'node' AND fcat.deleted = 0");
+  $query->addField('fcat', 'field_area_category_value', 'area_category');
 
   $query->leftJoin('field_data_field_date', 'fdate', "fdate.entity_id = n.nid AND fdate.entity_type = 'node' AND fdate.deleted = 0");
   $query->addField('fdate', 'field_date_value', 'date');
@@ -833,11 +840,12 @@ function myapi_reservation_fetch($unit_id, $page, $limit, $sort, $from = NULL, $
  * as an ISO 8601 string in the site's timezone. Text fields (area_name,
  * start_time, end_time, status, cancelled_by) pass through as stored, with
  * no business interpretation, and stay NULL when the node has no row for
- * that field.
+ * that field. 'area_category' is the referenced area's category, NULL when
+ * the area has no category row or the reservation has no area.
  *
  * @param object $reservation  One row from myapi_reservation_fetch().
  *
- * @return array  Response item with all 12 mapped keys.
+ * @return array  Response item with all 13 mapped keys.
  */
 function myapi_reservation_build_item($reservation) {
   return [
@@ -847,6 +855,7 @@ function myapi_reservation_build_item($reservation) {
     'requester_id'   => $reservation->requester_id !== NULL ? (int) $reservation->requester_id : NULL,
     'area_id'        => $reservation->area_id !== NULL ? (int) $reservation->area_id : NULL,
     'area_name'      => $reservation->area_name,
+    'area_category'  => $reservation->area_category,
     'date'           => $reservation->date !== NULL ? substr($reservation->date, 0, 10) : NULL,
     'start_time'     => $reservation->start_time,
     'end_time'       => $reservation->end_time,

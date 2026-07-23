@@ -40,6 +40,8 @@ single-reservation detail endpoint, no availability/conflict check.
         "requester_id": 34,
         "area_id": 42,
         "area_name": "Piscina principal",
+      "area_category": "pool",
+        "area_category": "pool",
         "date": "2026-07-25",
         "start_time": "10:00",
         "end_time": "12:00",
@@ -79,16 +81,20 @@ Notes:
 - Only published (`status = 1`) `reservation` nodes are returned.
 - Both `confirmed` and `cancelled` reservations are returned; `status` travels
   in each item so the client can distinguish them.
-- Every reservation includes exactly 12 keys: `id`, `condominium_id`,
-  `unit_id`, `requester_id`, `area_id`, `area_name`, `date`, `start_time`,
-  `end_time`, `status`, `cancelled_by`, `created` (see mapping table below).
-  `condominium_id`, `requester_id`, `area_id`, `area_name`, `date`,
-  `start_time`, `end_time`, `cancelled_by` are `null` when the node has no row
-  in that field's storage table — no other transformation or business
-  validation is applied.
+- Every reservation includes exactly 13 keys: `id`, `condominium_id`,
+  `unit_id`, `requester_id`, `area_id`, `area_name`, `area_category`, `date`,
+  `start_time`, `end_time`, `status`, `cancelled_by`, `created` (see mapping
+  table below). `condominium_id`, `requester_id`, `area_id`, `area_name`,
+  `area_category`, `date`, `start_time`, `end_time`, `cancelled_by` are `null`
+  when the node has no row in that field's storage table — no other
+  transformation or business validation is applied.
 - `area_name` is the `title` of the `area` node referenced by `field_area`,
   resolved via a join; it is `null` when the reservation has no area row or
   the referenced area node is missing (e.g. deleted).
+- `area_category` is the `field_area_category` value of that same referenced
+  `area` node (the same field surfaced as `category` in
+  `GET /api/v1/condominiums/%/areas`); it is `null` when the reservation has
+  no area row or the area has no category set.
 - `total`/`total_pages` in `pagination` reflect the unpaginated count of the
   **filtered** set (`date_from`/`date_to`/`status` if any), not the unit's
   full reservation count. `total_pages` is `0` when `total` is `0`.
@@ -151,6 +157,7 @@ full schema definition.
 | `field_requester_target_id` | `requester_id` | int | never `NULL` (it is also a query filter, `= uid`) |
 | `field_area_target_id` | `area_id` | int | `NULL` if no row |
 | `node.title` (of the referenced area) | `area_name` | string | `NULL` when `area_id` is `NULL` or the area node is missing |
+| `field_area_category_value` (of the referenced area) | `area_category` | string | `NULL` when `area_id` is `NULL` or the area has no category |
 | `field_date_value` | `date` | string (`Y-m-d`) | `NULL` if no row |
 | `field_start_time_value` | `start_time` | string | `NULL` if no row |
 | `field_end_time_value` | `end_time` | string | `NULL` if no row |
@@ -166,6 +173,7 @@ full schema definition.
 | `field_data_field_requester` | `entity_id`, `field_requester_target_id` | `requester_id`. Also the mandatory filter restricting the result set to the authenticated user's own reservations (`= uid`). |
 | `field_data_field_area` | `entity_id`, `field_area_target_id` | `area_id`. Left join. |
 | `node` (aliased) | `nid`, `title` | `area_name`, resolved via a left join on `field_area_target_id`. |
+| `field_data_field_area_category` | `entity_id`, `field_area_category_value` | `area_category`, joined on the referenced area's nid (`field_area_target_id`), not on the reservation node. Left join. |
 | `field_data_field_date` | `entity_id`, `field_date_value` | `date`. Default sort column and date-range filter column. Left join. |
 | `field_data_field_start_time` | `entity_id`, `field_start_time_value` | `start_time`, text. Left join. |
 | `field_data_field_end_time` | `entity_id`, `field_end_time_value` | `end_time`, text. Left join. |
@@ -295,6 +303,7 @@ Same shape as an item from `GET /api/v1/units/{unit_id}/reservations`.
       "requester_id": 34,
       "area_id": 42,
       "area_name": "Piscina principal",
+      "area_category": "pool",
       "date": "2026-07-25",
       "start_time": "10:00",
       "end_time": "12:00",
@@ -422,6 +431,7 @@ Same shape as an item from `GET /api/v1/units/{unit_id}/reservations`.
       "requester_id": 34,
       "area_id": 42,
       "area_name": "Piscina principal",
+      "area_category": "pool",
       "date": "2026-07-25",
       "start_time": "10:00",
       "end_time": "12:00",
