@@ -183,6 +183,14 @@ function myapi_menu() {
     'file'             => 'resources/area.resource.inc',
   ];
 
+  $items['api/v1/areas/%'] = [
+    'page callback'    => 'myapi_area_details_dispatch',
+    'page arguments'   => [3],
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/area.resource.inc',
+  ];
+
   $items['api/v1/banks'] = [
     'page callback'    => 'myapi_bank_dispatch',
     'access callback'  => TRUE,
