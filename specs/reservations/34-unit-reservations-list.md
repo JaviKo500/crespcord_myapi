@@ -1,6 +1,6 @@
 # SPEC 34 — Endpoint de listado de reservas ("Mis Reservas", solo lectura)
 
-> **Estado:** Approved · **Depende de:** SPEC 14 (patrón de listado de payments), SPEC 32 (tipos de contenido de reservas), SPEC 33 (listado de áreas) · **Fecha:** 2026-07-22
+> **Estado:** Implemented · **Depende de:** SPEC 14 (patrón de listado de payments), SPEC 32 (tipos de contenido de reservas), SPEC 33 (listado de áreas) · **Fecha:** 2026-07-22
 > **Objetivo:** Exponer `GET /api/v1/units/{unit_id}/reservations` como un listado paginado y de solo lectura de las reservas de una vivienda (tanto `confirmed` como `cancelled`), visible solo para el dueño/ocupante autenticado de esa vivienda, replicando el patrón de payments.
 
 ---
@@ -110,19 +110,19 @@
 
 ## Criterios de aceptación
 
-- [ ] `GET /api/v1/units/{id}/reservations` sin token Bearer → `401 missing_authorization`.
-- [ ] Con un token inválido/expirado → `401 invalid_token`.
-- [ ] Con un token válido para una vivienda que el usuario **no** posee/ocupa (o un id inexistente) → `403 unit_access_denied`, indistinguible.
-- [ ] `POST`/`PUT`/`DELETE` sobre la ruta → `405 method_not_allowed`.
-- [ ] El listado devuelve solo nodos `reservation` con `status=1` que casan con `field_unit`; aparecen **ambos** `confirmed` y `cancelled`, con `status` en cada item.
-- [ ] Cada item expone las 12 claves documentadas con los tipos correctos (ints casteados, `null` cuando no hay fila).
-- [ ] `area_name` es igual al título del nodo área referenciado; `null` cuando el área falta.
-- [ ] `date` es `Y-m-d`; `created` es ISO `Y-m-d\TH:i:s`.
-- [ ] `sort=asc`/`desc` ordenan por `field_date`; los empates se resuelven por `nid` en la misma dirección, estable entre páginas.
-- [ ] `date_from`/`date_to` filtran inclusivamente sobre la fecha (granularidad de día); un valor malformado/no-calendario se ignora en silencio (sin 422); un rango invertido descarta el filtro entero; con una cota activa, las reservas sin fecha se excluyen.
-- [ ] `status=confirmed` / `status=cancelled` filtran acordemente; cualquier otro valor devuelve ambos, sin 422.
-- [ ] `limit=-1` devuelve todas las reservas que casan en una sola página; `total=0` → `total_pages=0`; página más allá de la última → `200` con `reservations: []`.
-- [ ] `docs/reservation.md` existe y casa con el contrato implementado.
+- [x] `GET /api/v1/units/{id}/reservations` sin token Bearer → `401 missing_authorization`.
+- [x] Con un token inválido/expirado → `401 invalid_token`.
+- [x] Con un token válido para una vivienda que el usuario **no** posee/ocupa (o un id inexistente) → `403 unit_access_denied`, indistinguible.
+- [x] `POST`/`PUT`/`DELETE` sobre la ruta → `405 method_not_allowed`.
+- [x] El listado devuelve solo nodos `reservation` con `status=1` que casan con `field_unit`; aparecen **ambos** `confirmed` y `cancelled`, con `status` en cada item.
+- [x] Cada item expone las 12 claves documentadas con los tipos correctos (ints casteados, `null` cuando no hay fila).
+- [x] `area_name` es igual al título del nodo área referenciado; `null` cuando el área falta.
+- [x] `date` es `Y-m-d`; `created` es ISO `Y-m-d\TH:i:s`.
+- [x] `sort=asc`/`desc` ordenan por `field_date`; los empates se resuelven por `nid` en la misma dirección, estable entre páginas.
+- [x] `date_from`/`date_to` filtran inclusivamente sobre la fecha (granularidad de día); un valor malformado/no-calendario se ignora en silencio (sin 422); un rango invertido descarta el filtro entero; con una cota activa, las reservas sin fecha se excluyen.
+- [x] `status=confirmed` / `status=cancelled` filtran acordemente; cualquier otro valor devuelve ambos, sin 422.
+- [x] `limit=-1` devuelve todas las reservas que casan en una sola página; `total=0` → `total_pages=0`; página más allá de la última → `200` con `reservations: []`.
+- [x] `docs/reservation.md` existe y casa con el contrato implementado.
 
 ---
 
