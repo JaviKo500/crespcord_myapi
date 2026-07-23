@@ -1,6 +1,6 @@
 # SPEC 34 — Endpoint de listado de reservas ("Mis Reservas", solo lectura)
 
-> **Estado:** Borrador · **Depende de:** SPEC 14 (patrón de listado de payments), SPEC 32 (tipos de contenido de reservas), SPEC 33 (listado de áreas) · **Fecha:** 2026-07-22
+> **Estado:** Approved · **Depende de:** SPEC 14 (patrón de listado de payments), SPEC 32 (tipos de contenido de reservas), SPEC 33 (listado de áreas) · **Fecha:** 2026-07-22
 > **Objetivo:** Exponer `GET /api/v1/units/{unit_id}/reservations` como un listado paginado y de solo lectura de las reservas de una vivienda (tanto `confirmed` como `cancelled`), visible solo para el dueño/ocupante autenticado de esa vivienda, replicando el patrón de payments.
 
 ---
