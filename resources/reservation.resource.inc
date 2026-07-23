@@ -221,25 +221,48 @@ function myapi_reservation_create() {
     myapi_error('reservation_duration_exceeded', 422);
   }
 
+  // 6-8. Overlap, active-reservation and balance checks, plus the insert
+  // itself, run inside a DB transaction holding a row lock (SELECT ... FOR
+  // UPDATE) on the area node. This closes the check-then-act race: two
+  // concurrent requests for the same area serialize on that lock, so the
+  // second one re-runs its checks only after the first has already
+  // committed its node_save(), instead of both reading the same stale
+  // "no overlap yet" snapshot and both inserting. Requires the area's
+  // underlying tables to use the InnoDB engine (Drupal 7's default).
+  $transaction = db_transaction();
+
+  db_select('node', 'n')
+    ->fields('n', ['nid'])
+    ->condition('n.nid', $area_id)
+    ->forUpdate()
+    ->execute()
+    ->fetchField();
+
   // 6. Overlap with another 'confirmed' reservation of the same area/date.
   if (myapi_reservation_has_overlap($area_id, $date, $start_minutes, $end_minutes)) {
+    $transaction->rollback();
     myapi_error('reservation_overlap', 409);
   }
 
   // 7. Only one active 'confirmed' reservation per unit+area (start not yet
   // passed).
   if (myapi_reservation_has_active_reservation($unit_id, $area_id)) {
+    $transaction->rollback();
     myapi_error('reservation_already_active', 409);
   }
 
   // 8. Balance: current debt blocks new reservations unless the most recent
   // sent receipt shows no previous balance due.
   if (!myapi_reservation_check_balance($unit_id)) {
+    $transaction->rollback();
     myapi_error('insufficient_balance', 403);
   }
 
   $node = myapi_reservation_build_node($unit_condominium_id, $unit_id, $uid, $area_id, $date, $start_time, $end_time);
   node_save($node);
+  // Explicit unset commits now (Drupal 7 transactions commit on destruct)
+  // and releases the area lock before the response is built below.
+  unset($transaction);
 
   myapi_respond(['reservation' => myapi_reservation_build_created_item($node, $area->title)], 201, 'reservation_created');
 }
