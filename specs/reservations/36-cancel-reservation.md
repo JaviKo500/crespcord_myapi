@@ -1,6 +1,6 @@
 # SPEC 36 — Cancelar reserva propia (`PUT /api/v1/reservations/%/cancel`)
 
-> **Estado:** Approved · **Depende de:** SPEC 23 (patrón de anulación soft-cancel de `payment.resource.inc`), SPEC 32 (content types de reservas), SPEC 35 (creación de reserva) · **Fecha:** 2026-07-22
+> **Estado:** Implemented · **Depende de:** SPEC 23 (patrón de anulación soft-cancel de `payment.resource.inc`), SPEC 32 (content types de reservas), SPEC 35 (creación de reserva) · **Fecha:** 2026-07-22
 > **Objetivo:** Agregar `PUT /api/v1/reservations/%/cancel`, un endpoint autenticado que permite al usuario que figura en `field_requester` de una reserva `confirmed` cancelarla —soft-cancel, reescribiendo `field_reservation_status` a `'cancelled'` y `field_cancelled_by` a `'user'`— siempre que falten más minutos que `field_cancel_deadline_minutes` del área entre la hora actual del servidor y el inicio de la reserva.
 
 **Notas de la cabecera:**
@@ -132,32 +132,32 @@ Mismo shape que SPEC 34/35, reutilizando `myapi_reservation_build_created_item($
 ## Criterios de aceptación
 
 **Éxito**
-- [ ] `PUT /api/v1/reservations/{id}/cancel` con token válido, reserva propia (`field_requester` = uid autenticado) en estado `'confirmed'`, y dentro de la ventana de cancelación → `200` con `data.reservation`; `status` = `'cancelled'`, `cancelled_by` = `'user'`.
-- [ ] Tras cancelar, el nodo en BD tiene `field_reservation_status` = `'cancelled'` y `field_cancelled_by` = `'user'`; todos los demás campos (`field_unit`, `field_area`, `field_date`, `field_start_time`, `field_end_time`, `field_condominium`, `field_requester`) quedan intactos.
-- [ ] `GET /api/v1/units/%/reservations` (SPEC 34) muestra la reserva cancelada con `status: "cancelled"` (esa lista ya devuelve ambos estados).
+- [x] `PUT /api/v1/reservations/{id}/cancel` con token válido, reserva propia (`field_requester` = uid autenticado) en estado `'confirmed'`, y dentro de la ventana de cancelación → `200` con `data.reservation`; `status` = `'cancelled'`, `cancelled_by` = `'user'`.
+- [x] Tras cancelar, el nodo en BD tiene `field_reservation_status` = `'cancelled'` y `field_cancelled_by` = `'user'`; todos los demás campos (`field_unit`, `field_area`, `field_date`, `field_start_time`, `field_end_time`, `field_condominium`, `field_requester`) quedan intactos.
+- [x] `GET /api/v1/units/%/reservations` (SPEC 34) muestra la reserva cancelada con `status: "cancelled"` (esa lista ya devuelve ambos estados).
 
 **Autenticación**
-- [ ] Sin header `Authorization` → `401 missing_authorization`; token inválido/expirado → `401 invalid_token`.
+- [x] Sin header `Authorization` → `401 missing_authorization`; token inválido/expirado → `401 invalid_token`.
 
 **Existencia**
-- [ ] `reservation_id` inexistente, o de un nodo que no es tipo `reservation` → `404 reservation_not_found`.
+- [x] `reservation_id` inexistente, o de un nodo que no es tipo `reservation` → `404 reservation_not_found`.
 
 **Autoría**
-- [ ] Un usuario que es propietario/ocupante de la unidad pero **no** es el `field_requester` de esa reserva → `403 reservation_forbidden`, la reserva no se modifica.
+- [x] Un usuario que es propietario/ocupante de la unidad pero **no** es el `field_requester` de esa reserva → `403 reservation_forbidden`, la reserva no se modifica.
 
 **Estado**
-- [ ] Una reserva ya `'cancelled'` → `409 reservation_not_confirmed`, sin modificar el nodo (idempotencia: cancelar dos veces falla la segunda vez).
+- [x] Una reserva ya `'cancelled'` → `409 reservation_not_confirmed`, sin modificar el nodo (idempotencia: cancelar dos veces falla la segunda vez).
 
 **Ventana de cancelación**
-- [ ] Faltan más minutos que `field_cancel_deadline_minutes` del área hasta el inicio → cancelación permitida.
-- [ ] Faltan exactamente o menos minutos que `field_cancel_deadline_minutes`, o la reserva ya empezó/pasó → `409 reservation_cancel_window_expired`, sin modificar el nodo.
+- [x] Faltan más minutos que `field_cancel_deadline_minutes` del área hasta el inicio → cancelación permitida.
+- [x] Faltan exactamente o menos minutos que `field_cancel_deadline_minutes`, o la reserva ya empezó/pasó → `409 reservation_cancel_window_expired`, sin modificar el nodo.
 
 **Método y no regresión**
-- [ ] Cualquier método distinto de `PUT` sobre `/api/v1/reservations/{id}/cancel` → `405 method_not_allowed`.
-- [ ] `POST /api/v1/reservations` (SPEC 35) y `GET /api/v1/units/%/reservations` (SPEC 34) siguen funcionando idénticos.
-- [ ] Todas las claves i18n nuevas están en el catálogo en `es`/`en`.
-- [ ] `docs/reservation.md` incluye la sección `PUT /api/v1/reservations/%/cancel` completa.
-- [ ] `drush cc all` no reporta errores tras el cambio.
+- [x] Cualquier método distinto de `PUT` sobre `/api/v1/reservations/{id}/cancel` → `405 method_not_allowed`.
+- [x] `POST /api/v1/reservations` (SPEC 35) y `GET /api/v1/units/%/reservations` (SPEC 34) siguen funcionando idénticos.
+- [x] Todas las claves i18n nuevas están en el catálogo en `es`/`en`.
+- [x] `docs/reservation.md` incluye la sección `PUT /api/v1/reservations/%/cancel` completa.
+- [x] `drush cc all` no reporta errores tras el cambio.
 
 ---
 
