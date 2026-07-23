@@ -40,8 +40,8 @@ single-reservation detail endpoint, no availability/conflict check.
         "requester_id": 34,
         "area_id": 42,
         "area_name": "Piscina principal",
-      "area_category": "pool",
         "area_category": "pool",
+        "cancel_deadline_minutes": 120,
         "date": "2026-07-25",
         "start_time": "10:00",
         "end_time": "12:00",
@@ -81,12 +81,13 @@ Notes:
 - Only published (`status = 1`) `reservation` nodes are returned.
 - Both `confirmed` and `cancelled` reservations are returned; `status` travels
   in each item so the client can distinguish them.
-- Every reservation includes exactly 13 keys: `id`, `condominium_id`,
-  `unit_id`, `requester_id`, `area_id`, `area_name`, `area_category`, `date`,
-  `start_time`, `end_time`, `status`, `cancelled_by`, `created` (see mapping
-  table below). `condominium_id`, `requester_id`, `area_id`, `area_name`,
-  `area_category`, `date`, `start_time`, `end_time`, `cancelled_by` are `null`
-  when the node has no row in that field's storage table — no other
+- Every reservation includes exactly 14 keys: `id`, `condominium_id`,
+  `unit_id`, `requester_id`, `area_id`, `area_name`, `area_category`,
+  `cancel_deadline_minutes`, `date`, `start_time`, `end_time`, `status`,
+  `cancelled_by`, `created` (see mapping table below). `condominium_id`,
+  `requester_id`, `area_id`, `area_name`, `area_category`,
+  `cancel_deadline_minutes`, `date`, `start_time`, `end_time`, `cancelled_by`
+  are `null` when the node has no row in that field's storage table — no other
   transformation or business validation is applied.
 - `area_name` is the `title` of the `area` node referenced by `field_area`,
   resolved via a join; it is `null` when the reservation has no area row or
@@ -95,6 +96,12 @@ Notes:
   `area` node (the same field surfaced as `category` in
   `GET /api/v1/condominiums/%/areas`); it is `null` when the reservation has
   no area row or the area has no category set.
+- `cancel_deadline_minutes` is the `field_cancel_deadline_minutes` value of the
+  referenced `area` node, cast to `int`; `null` when the reservation has no
+  area row or the area has no deadline set. It is a **client-side UX hint** so
+  the app can decide whether to offer the cancel action (combine it with
+  `date`/`start_time` against the current time); it is not authoritative —
+  `PUT /api/v1/reservations/%/cancel` re-validates the window server-side.
 - `total`/`total_pages` in `pagination` reflect the unpaginated count of the
   **filtered** set (`date_from`/`date_to`/`status` if any), not the unit's
   full reservation count. `total_pages` is `0` when `total` is `0`.
@@ -158,6 +165,7 @@ full schema definition.
 | `field_area_target_id` | `area_id` | int | `NULL` if no row |
 | `node.title` (of the referenced area) | `area_name` | string | `NULL` when `area_id` is `NULL` or the area node is missing |
 | `field_area_category_value` (of the referenced area) | `area_category` | string | `NULL` when `area_id` is `NULL` or the area has no category |
+| `field_cancel_deadline_minutes_value` (of the referenced area) | `cancel_deadline_minutes` | int | `NULL` when `area_id` is `NULL` or the area has no deadline |
 | `field_date_value` | `date` | string (`Y-m-d`) | `NULL` if no row |
 | `field_start_time_value` | `start_time` | string | `NULL` if no row |
 | `field_end_time_value` | `end_time` | string | `NULL` if no row |
@@ -174,6 +182,7 @@ full schema definition.
 | `field_data_field_area` | `entity_id`, `field_area_target_id` | `area_id`. Left join. |
 | `node` (aliased) | `nid`, `title` | `area_name`, resolved via a left join on `field_area_target_id`. |
 | `field_data_field_area_category` | `entity_id`, `field_area_category_value` | `area_category`, joined on the referenced area's nid (`field_area_target_id`), not on the reservation node. Left join. |
+| `field_data_field_cancel_deadline_minutes` | `entity_id`, `field_cancel_deadline_minutes_value` | `cancel_deadline_minutes`, joined on the referenced area's nid (`field_area_target_id`), not on the reservation node. Left join. |
 | `field_data_field_date` | `entity_id`, `field_date_value` | `date`. Default sort column and date-range filter column. Left join. |
 | `field_data_field_start_time` | `entity_id`, `field_start_time_value` | `start_time`, text. Left join. |
 | `field_data_field_end_time` | `entity_id`, `field_end_time_value` | `end_time`, text. Left join. |
@@ -304,6 +313,7 @@ Same shape as an item from `GET /api/v1/units/{unit_id}/reservations`.
       "area_id": 42,
       "area_name": "Piscina principal",
       "area_category": "pool",
+      "cancel_deadline_minutes": 120,
       "date": "2026-07-25",
       "start_time": "10:00",
       "end_time": "12:00",
@@ -432,6 +442,7 @@ Same shape as an item from `GET /api/v1/units/{unit_id}/reservations`.
       "area_id": 42,
       "area_name": "Piscina principal",
       "area_category": "pool",
+      "cancel_deadline_minutes": 120,
       "date": "2026-07-25",
       "start_time": "10:00",
       "end_time": "12:00",
@@ -480,5 +491,100 @@ according to the `Accept-Language` header (`es`/`en`, default `es`). See
 **Example:**
 ```bash
 curl -i -X PUT 'https://host/api/v1/reservations/91/cancel' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+---
+
+## GET /api/v1/reservations/{id}/details
+
+Returns a single reservation by id, in the same item shape as
+`GET /api/v1/units/{unit_id}/reservations`, wrapped as `{"reservation": ...}`.
+Read-only. Applies the **same access rules as the list**: the reservation is
+visible only when it would also appear in the caller's own list — it must be a
+published `reservation` node, belong to a unit the caller owns or occupies, and
+have `field_requester = uid` (the authenticated user's own reservation). Both
+`confirmed` and `cancelled` reservations are returned; `status` travels in the
+payload.
+
+**Authentication:** required (Bearer access token)
+
+**Headers**
+| Header | Value |
+|--------|-------|
+| Authorization | Bearer `<access_token>` |
+
+**Request body**
+
+None. The reservation id travels in the path; any body sent is ignored.
+
+**Validation order**
+
+Each validation short-circuits before the next one runs:
+
+| # | Validation | Error |
+|---|---|---|
+| 1 | Bearer token present and valid | `401 missing_authorization` / `401 invalid_token` |
+| 2 | `{id}` is a positive integer referencing a published (`status = 1`) `reservation` node | `404 reservation_not_found` |
+| 3 | Authenticated user is the reservation's `field_requester` | `404 reservation_not_found` |
+| 4 | Authenticated user owns or occupies the reservation's `field_unit` | `404 reservation_not_found` |
+
+Validations 2–4 all collapse into the **same** `404 reservation_not_found`: a
+bad/nonexistent id, an unpublished node, another resident's reservation, and a
+reservation on a unit the caller is not related to are indistinguishable. This
+mirrors the list's non-revealing access rule (where "no access" and "does not
+exist" both return the same error), so the endpoint never reveals whether a
+reservation id exists or whom it belongs to. This differs on purpose from
+`PUT .../cancel`, which distinguishes `403 reservation_forbidden` from
+`404 reservation_not_found`.
+
+**Success response (200)**
+
+Same shape as an item from `GET /api/v1/units/{unit_id}/reservations` — the same
+14 keys, with the identical `NULL` rules (see the mapping table under that
+endpoint). `area_name`, `area_category` and `cancel_deadline_minutes` are read
+live from the referenced `area` node and are `null` when the area is missing
+(deleted).
+
+```json
+{
+  "success": true,
+  "data": {
+    "reservation": {
+      "id": 88,
+      "condominium_id": 7,
+      "unit_id": 21,
+      "requester_id": 34,
+      "area_id": 42,
+      "area_name": "Piscina principal",
+      "area_category": "pool",
+      "cancel_deadline_minutes": 120,
+      "date": "2026-07-25",
+      "start_time": "10:00",
+      "end_time": "12:00",
+      "status": "confirmed",
+      "cancelled_by": null,
+      "created": "2026-07-22T14:30:00"
+    }
+  }
+}
+```
+
+Notes:
+- No `message` is returned (this is a plain read, like the list).
+- Unlike the list, there are no `page`/`limit`/`sort`/`date_from`/`date_to`/
+  `status` query params — a single item takes none.
+
+**Possible errors**
+| Code | `error_code` | When |
+|------|--------------|------|
+| 401  | `missing_authorization` | `Authorization` header is absent or malformed. |
+| 401  | `invalid_token` | Access token not found, revoked, expired, or the user no longer exists/is blocked. |
+| 404  | `reservation_not_found` | `{id}` is not a positive integer, does not reference a published `reservation` node, is another resident's reservation, or is on a unit the caller does not own/occupy. All indistinguishable. |
+| 405  | `method_not_allowed` | Any HTTP method other than `GET`. |
+
+**Example:**
+```bash
+curl -i 'https://host/api/v1/reservations/88/details' \
   -H 'Authorization: Bearer <access_token>'
 ```

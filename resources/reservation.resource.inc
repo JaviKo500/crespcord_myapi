@@ -75,6 +75,25 @@ function myapi_reservation_cancel_dispatch($reservation_id) {
 }
 
 /**
+ * Dispatcher for /api/v1/reservations/%/details.
+ *
+ * Routes by HTTP method. Only GET is supported (read one reservation); any
+ * other method returns 405. Authentication and the rest of the validations
+ * are resolved inside myapi_reservation_details(), not here.
+ *
+ * @param int $reservation_id  The 'reservation' nid from the route.
+ */
+function myapi_reservation_details_dispatch($reservation_id) {
+  $method = myapi_request_method();
+  if ($method === 'GET') {
+    myapi_reservation_details($reservation_id);
+  }
+  else {
+    myapi_error('method_not_allowed', 405);
+  }
+}
+
+/**
  * Reads the first 'value' of a single-value Field API field on a node.
  *
  * @param object $node   The node to read from.
@@ -268,7 +287,7 @@ function myapi_reservation_create() {
   // and releases the area lock before the response is built below.
   unset($transaction);
 
-  myapi_respond(['reservation' => myapi_reservation_build_created_item($node, $area->title, myapi_reservation_node_value($area, 'field_area_category'))], 201, 'reservation_created');
+  myapi_respond(['reservation' => myapi_reservation_build_item_from_node($node, $area->title, myapi_reservation_node_value($area, 'field_area_category'), myapi_reservation_node_value($area, 'field_cancel_deadline_minutes'))], 201, 'reservation_created');
 }
 
 /**
@@ -341,7 +360,65 @@ function myapi_reservation_cancel($reservation_id) {
   node_save($node);
 
   // 7. Respond 200 with the updated reservation.
-  myapi_respond(['reservation' => myapi_reservation_build_created_item($node, $area->title, myapi_reservation_node_value($area, 'field_area_category'))], 200, 'reservation_cancelled');
+  myapi_respond(['reservation' => myapi_reservation_build_item_from_node($node, $area->title, myapi_reservation_node_value($area, 'field_area_category'), $deadline_minutes)], 200, 'reservation_cancelled');
+}
+
+/**
+ * Handles GET /api/v1/reservations/%/details.
+ *
+ * Returns the single 'reservation' node identified by $reservation_id, in the
+ * same 14-key item shape as the list (GET /api/v1/units/%/reservations),
+ * wrapped as {"reservation": ...}. The reservation is only visible when it
+ * would also appear in the caller's own list: it must exist, be a published
+ * 'reservation' node, belong to a unit the caller owns or occupies, and have
+ * field_requester = the authenticated uid (same two filters as SPEC 34 + 37).
+ *
+ * Every "not visible to you" case — invalid id, missing/unpublished node,
+ * a unit the caller is not related to, or another resident's reservation —
+ * collapses into the same 404 reservation_not_found, so the endpoint never
+ * reveals whether a reservation id exists or whom it belongs to, mirroring the
+ * list's non-revealing access rule (where "no access" and "does not exist"
+ * are indistinguishable).
+ *
+ * @param mixed $reservation_id  The 'reservation' nid from the route.
+ */
+function myapi_reservation_details($reservation_id) {
+  // 1. Authentication: valid Bearer access token, or 401.
+  $row = myapi_auth_require_access_token();
+  $uid = $row->uid;
+
+  // 2. reservation_id must be a positive integer referencing a published
+  // 'reservation' node; anything else is a non-revealing 404.
+  if (!ctype_digit((string) $reservation_id) || (int) $reservation_id <= 0) {
+    myapi_error('reservation_not_found', 404);
+  }
+  $node = node_load((int) $reservation_id);
+  if (!$node || $node->type !== 'reservation' || (int) $node->status !== 1) {
+    myapi_error('reservation_not_found', 404);
+  }
+
+  // 3. Requester filter (SPEC 37): only the caller's own reservations. A
+  // reservation created by another resident collapses into the same 404.
+  if ((int) myapi_reservation_node_target_id($node, 'field_requester') !== (int) $uid) {
+    myapi_error('reservation_not_found', 404);
+  }
+
+  // 4. Unit access (same rule as the list, SPEC 34): the caller must own or
+  // occupy the reservation's unit. Also collapses into the same 404.
+  $unit_id = myapi_reservation_node_target_id($node, 'field_unit');
+  if ($unit_id === NULL || !in_array((int) $unit_id, myapi_unit_related_nids($uid))) {
+    myapi_error('reservation_not_found', 404);
+  }
+
+  // 5. Resolve the area-derived values from the referenced 'area' node. A
+  // deleted/missing area leaves them NULL, exactly like the list's left join.
+  $area_id = myapi_reservation_node_target_id($node, 'field_area');
+  $area = $area_id ? node_load($area_id) : NULL;
+  $area_title = $area ? $area->title : NULL;
+  $area_category = $area ? myapi_reservation_node_value($area, 'field_area_category') : NULL;
+  $cancel_deadline_minutes = $area ? myapi_reservation_node_value($area, 'field_cancel_deadline_minutes') : NULL;
+
+  myapi_respond(['reservation' => myapi_reservation_build_item_from_node($node, $area_title, $area_category, $cancel_deadline_minutes)], 200);
 }
 
 /**
@@ -515,22 +592,26 @@ function myapi_reservation_build_node($condominium_id, $unit_id, $uid, $area_id,
 }
 
 /**
- * Maps the just-created 'reservation' node into the 201 response shape.
+ * Maps a loaded/in-memory 'reservation' node into the single-item response
+ * shape, wrapped by the caller as {"reservation": ...}.
  *
- * Same shape as myapi_reservation_build_item() (GET /api/v1/units/%/reservations,
- * SPEC 34), but reads straight from the in-memory node built by
- * myapi_reservation_build_node() instead of a DB row, since the fetch query
- * used for the list is not re-run here. 'cancelled_by' is always NULL (never
- * set on creation); 'area_name' comes from the caller since the node itself
- * only stores the area's nid.
+ * Same 14-key shape as myapi_reservation_build_item()
+ * (GET /api/v1/units/%/reservations, SPEC 34), but reads straight from a node
+ * object instead of a DB fetch row. Used by three by-node responses: create
+ * (201), cancel (200) and detail (GET /api/v1/reservations/%/details, 200).
+ * The area-derived values ('area_name', 'area_category',
+ * 'cancel_deadline_minutes') are passed in by the caller, since the node
+ * itself only stores the area's nid; each is NULL when the caller could not
+ * resolve the area (e.g. it was deleted).
  *
- * @param object      $node           The saved reservation node.
- * @param string      $area_title     The reserved area's title.
- * @param string|NULL $area_category  The reserved area's category, or NULL.
+ * @param object      $node                     The reservation node.
+ * @param string      $area_title               The reserved area's title.
+ * @param string|NULL $area_category            The reserved area's category.
+ * @param int|NULL    $cancel_deadline_minutes  The area's cancellation window.
  *
- * @return array  Response item with all 13 mapped keys.
+ * @return array  Response item with all 14 mapped keys.
  */
-function myapi_reservation_build_created_item($node, $area_title, $area_category = NULL) {
+function myapi_reservation_build_item_from_node($node, $area_title, $area_category = NULL, $cancel_deadline_minutes = NULL) {
   return [
     'id'             => (int) $node->nid,
     'condominium_id' => (int) myapi_reservation_node_target_id($node, 'field_condominium'),
@@ -539,6 +620,7 @@ function myapi_reservation_build_created_item($node, $area_title, $area_category
     'area_id'        => (int) myapi_reservation_node_target_id($node, 'field_area'),
     'area_name'      => $area_title,
     'area_category'  => $area_category,
+    'cancel_deadline_minutes' => $cancel_deadline_minutes !== NULL ? (int) $cancel_deadline_minutes : NULL,
     'date'           => myapi_reservation_node_date($node),
     'start_time'     => myapi_reservation_node_value($node, 'field_start_time'),
     'end_time'       => myapi_reservation_node_value($node, 'field_end_time'),
@@ -782,6 +864,12 @@ function myapi_reservation_fetch($unit_id, $page, $limit, $sort, $from = NULL, $
   // when the area has no category row or the reservation has no area.
   $query->leftJoin('field_data_field_area_category', 'fcat', "fcat.entity_id = farea.field_area_target_id AND fcat.entity_type = 'node' AND fcat.deleted = 0");
   $query->addField('fcat', 'field_area_category_value', 'area_category');
+  // Cancellation window, also read from the referenced 'area' node (joined on
+  // the area nid). A UX hint so the client can decide whether to offer the
+  // cancel action; the cancel endpoint still re-validates the window. NULL
+  // when the area has no deadline row or the reservation has no area.
+  $query->leftJoin('field_data_field_cancel_deadline_minutes', 'fcdl', "fcdl.entity_id = farea.field_area_target_id AND fcdl.entity_type = 'node' AND fcdl.deleted = 0");
+  $query->addField('fcdl', 'field_cancel_deadline_minutes_value', 'cancel_deadline_minutes');
 
   $query->leftJoin('field_data_field_date', 'fdate', "fdate.entity_id = n.nid AND fdate.entity_type = 'node' AND fdate.deleted = 0");
   $query->addField('fdate', 'field_date_value', 'date');
@@ -842,10 +930,13 @@ function myapi_reservation_fetch($unit_id, $page, $limit, $sort, $from = NULL, $
  * no business interpretation, and stay NULL when the node has no row for
  * that field. 'area_category' is the referenced area's category, NULL when
  * the area has no category row or the reservation has no area.
+ * 'cancel_deadline_minutes' is the referenced area's cancellation window, cast
+ * to int, NULL under the same conditions; it is a client-side UX hint (the
+ * cancel endpoint re-validates the window), not authoritative data.
  *
  * @param object $reservation  One row from myapi_reservation_fetch().
  *
- * @return array  Response item with all 13 mapped keys.
+ * @return array  Response item with all 14 mapped keys.
  */
 function myapi_reservation_build_item($reservation) {
   return [
@@ -856,6 +947,7 @@ function myapi_reservation_build_item($reservation) {
     'area_id'        => $reservation->area_id !== NULL ? (int) $reservation->area_id : NULL,
     'area_name'      => $reservation->area_name,
     'area_category'  => $reservation->area_category,
+    'cancel_deadline_minutes' => $reservation->cancel_deadline_minutes !== NULL ? (int) $reservation->cancel_deadline_minutes : NULL,
     'date'           => $reservation->date !== NULL ? substr($reservation->date, 0, 10) : NULL,
     'start_time'     => $reservation->start_time,
     'end_time'       => $reservation->end_time,
