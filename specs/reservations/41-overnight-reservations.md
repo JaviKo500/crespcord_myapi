@@ -1,6 +1,6 @@
 # SPEC 41 — Reservas que cruzan la medianoche en áreas con cierre después de medianoche (`POST /api/v1/reservations`)
 
-> **Estado:** Approved · **Depende de:** SPEC 32 (content types de reservas/áreas), SPEC 35 (`POST /api/v1/reservations` y sus 8 validaciones), SPEC 40 (disponibilidad: convención `field_date`=día de reloj + derivación de cruce) · **Fecha:** 2026-07-24
+> **Estado:** Implemented · **Depende de:** SPEC 32 (content types de reservas/áreas), SPEC 35 (`POST /api/v1/reservations` y sus 8 validaciones), SPEC 40 (disponibilidad: convención `field_date`=día de reloj + derivación de cruce) · **Fecha:** 2026-07-24
 > **Objetivo:** Hacer que `POST /api/v1/reservations` acepte reservas en áreas cuyo `field_close_time` es anterior al `field_open_time` (cierre tras medianoche), normalizando `field_date` al día de reloj del inicio y proyectando las validaciones 3, 4 y 6 sobre la ventana extendida `[open, close+24h]`, sin alterar el comportamiento de las áreas normales ni el contrato del cliente.
 
 ---
@@ -61,9 +61,11 @@ valido = start_min >= open_min && end_abs <= close_min
 
 // Área que envuelve (close <= open): ventana [open_min, close_min + 1440].
 start_eff = (start_min < close_min) ? start_min + 1440 : start_min
-end_eff   = end_min + (end_min <= start_min ? 1440 : 0)   // cruce derivado, proyectado sobre start_eff
+end_eff   = start_eff + (end_min - start_min)   // end proyectado sobre el mismo marco que start_eff (dur = end_min - start_min)
 valido    = start_eff >= open_min && end_eff <= (close_min + 1440)
 ```
+
+> Nota: `end_eff` se ancla en `start_eff` (no en `end_min` suelto) para que un inicio en la cola de madrugada cuya duración cruza el cierre —p. ej. `01:00` + `120` → `03:00` en un área `12:00–02:00`— caiga fuera de horario. Con `end_eff = end_min + (end_min <= start_min ? 1440 : 0)` ese caso se aceptaría por error, porque para el candidato `end_min = start_min + duration` nunca es `<= start_min`.
 
 - Corte previo `reservation_crosses_midnight`: el rango calculado **cruza medianoche** (`end_min <= start_min`, o `duration` empuja `end` a `>= 24:00`) **y el área no envuelve** → `422 reservation_crosses_midnight`, antes de evaluar la ventana.
 
@@ -136,36 +138,36 @@ Estos helpers **no** llaman a Drupal ni a la BD (solo aritmética de minutos y `
 ## Criterios de aceptación
 
 **Normalización de día (área que envuelve, `12:00–02:00`)**
-- [ ] `POST` con `date=D`, `start_time=01:00`, `duration=60` (elegido a las 20:00 de D) → `201`; el nodo se guarda con `field_date = D+1`, `start_time=01:00`, `end_time=02:00`.
-- [ ] Esa reserva aparece luego en `GET /api/v1/areas/{id}/availability?date=D+1` (SPEC 40) con `start_date = end_date = D+1`, sin que SPEC 40 se haya modificado.
-- [ ] `POST` con `date=D`, `start_time=20:00`, `duration=360` (→ `02:00`) → `201`; se guarda `field_date = D` (sin normalizar), `end_time=02:00`.
-- [ ] El cliente **no** cambia lo que manda: el request sigue llevando `date = D` en ambos casos.
+- [x] `POST` con `date=D`, `start_time=01:00`, `duration=60` (elegido a las 20:00 de D) → `201`; el nodo se guarda con `field_date = D+1`, `start_time=01:00`, `end_time=02:00`.
+- [x] Esa reserva aparece luego en `GET /api/v1/areas/{id}/availability?date=D+1` (SPEC 40) con `start_date = end_date = D+1`, sin que SPEC 40 se haya modificado.
+- [x] `POST` con `date=D`, `start_time=20:00`, `duration=360` (→ `02:00`) → `201`; se guarda `field_date = D` (sin normalizar), `end_time=02:00`.
+- [x] El cliente **no** cambia lo que manda: el request sigue llevando `date = D` en ambos casos.
 
 **Ventana extendida (validación 4)**
-- [ ] Área `12:00–02:00`: `start=20:00`, `duration=360` (→ `02:00`) queda **dentro** de horario → no falla la validación 4.
-- [ ] Área `12:00–02:00`: `start=20:00`, `duration=480` (→ `04:00`, pasa el cierre proyectado `26:00`) → `422 reservation_outside_hours`.
-- [ ] Área `12:00–02:00`: `start=05:00` (hueco muerto entre `02:00` y `12:00`) → no se normaliza y → `422 reservation_outside_hours`.
+- [x] Área `12:00–02:00`: `start=20:00`, `duration=360` (→ `02:00`) queda **dentro** de horario → no falla la validación 4.
+- [x] Área `12:00–02:00`: `start=20:00`, `duration=480` (→ `04:00`, pasa el cierre proyectado `26:00`) → `422 reservation_outside_hours`.
+- [x] Área `12:00–02:00`: `start=05:00` (hueco muerto entre `02:00` y `12:00`) → no se normaliza y → `422 reservation_outside_hours`.
 
 **Corte `reservation_crosses_midnight` (área normal)**
-- [ ] Área `08:00–22:00`: `start=21:00`, `duration=240` (→ `01:00`, cruza medianoche) → `422 reservation_crosses_midnight`, **no** `reservation_outside_hours` ni `invalid_field`.
-- [ ] El `error_code` viaja como `reservation_crosses_midnight`; `error` traducido según `Accept-Language` (`es`/`en`).
+- [x] Área `08:00–22:00`: `start=21:00`, `duration=240` (→ `01:00`, cruza medianoche) → `422 reservation_crosses_midnight`, **no** `reservation_outside_hours` ni `invalid_field`.
+- [x] El `error_code` viaja como `reservation_crosses_midnight`; `error` traducido según `Accept-Language` (`es`/`en`).
 
 **Solapamiento en eje absoluto (validación 6)**
-- [ ] Con una reserva existente `20:00→02:00` (`field_date=D`), un `POST` de madrugada `date=D+1`/`start=01:00`/`duration=60` (que se normaliza a `field_date=D+1`) → `409 reservation_overlap` (la cola de la existente pisa `D+1 01:00–02:00`).
-- [ ] El caso simétrico: existiendo la reserva de madrugada `field_date=D+1 01:00–02:00`, un `POST` `20:00→02:00` sobre `date=D` también detecta el solape.
-- [ ] Back-to-back sigue permitido: existente `20:00→02:00`, nueva `02:00→03:00` (misma área que envuelve) → **no** solapa → `201`.
+- [x] Con una reserva existente `20:00→02:00` (`field_date=D`), un `POST` de madrugada `date=D+1`/`start=01:00`/`duration=60` (que se normaliza a `field_date=D+1`) → `409 reservation_overlap` (la cola de la existente pisa `D+1 01:00–02:00`).
+- [x] El caso simétrico: existiendo la reserva de madrugada `field_date=D+1 01:00–02:00`, un `POST` `20:00→02:00` sobre `date=D` también detecta el solape.
+- [x] Back-to-back sigue permitido: existente `20:00→02:00`, nueva `02:00→03:00` (misma área que envuelve) → **no** solapa → `201`.
 
 **No-regresión de áreas normales (`08:00–22:00`)**
-- [ ] `start=10:00`, `duration=120` → `201`, `field_date=D` sin normalizar, mismo comportamiento que hoy.
-- [ ] `start=07:00` (antes de apertura) o `start=21:30`+`60` (→ `22:30`, pasa cierre sin cruzar medianoche) → `422 reservation_outside_hours`, igual que hoy.
-- [ ] El solape en un área normal (misma fecha, sin cruce) da el mismo resultado que antes del cambio.
+- [x] `start=10:00`, `duration=120` → `201`, `field_date=D` sin normalizar, mismo comportamiento que hoy.
+- [x] `start=07:00` (antes de apertura) o `start=21:30`+`60` (→ `22:30`, pasa cierre sin cruzar medianoche) → `422 reservation_outside_hours`, igual que hoy.
+- [x] El solape en un área normal (misma fecha, sin cruce) da el mismo resultado que antes del cambio.
 
 **Tests y no-regresión general**
-- [ ] Los unit tests de los 5 helpers puros pasan (`scripts/run-unit-tests.sh`).
-- [ ] `docs/reservation.md` ya no afirma que ningún `field_close_time` pasa de medianoche; documenta normalización, ventana extendida y `reservation_crosses_midnight`.
-- [ ] `docs/i18n.md` e `includes/myapi.i18n.inc` incluyen `reservation_crosses_midnight` en `es`/`en`.
-- [ ] `GET /api/v1/areas/%/availability`, listado, detalle y cancelación de reservas quedan sin cambios de código.
-- [ ] `drush cc all` no reporta errores.
+- [x] Los unit tests de los 5 helpers puros pasan (`scripts/run-unit-tests.sh`).
+- [x] `docs/reservation.md` ya no afirma que ningún `field_close_time` pasa de medianoche; documenta normalización, ventana extendida y `reservation_crosses_midnight`.
+- [x] `docs/i18n.md` e `includes/myapi.i18n.inc` incluyen `reservation_crosses_midnight` en `es`/`en`.
+- [x] `GET /api/v1/areas/%/availability`, listado, detalle y cancelación de reservas quedan sin cambios de código.
+- [x] `drush cc all` no reporta errores.
 
 ---
 
