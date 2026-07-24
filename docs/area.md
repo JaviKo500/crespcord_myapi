@@ -245,3 +245,143 @@ only the area id, so a single non-revealing `404` is used instead.)
 curl -i -X GET 'https://host/api/v1/areas/42' \
   -H 'Authorization: Bearer <access_token>'
 ```
+
+---
+
+## GET /api/v1/areas/{id}/availability
+
+Returns the **busy** time ranges of an `area` for a single day: every
+**confirmed**, published reservation of the area — across **all** units of the
+condominium, not just the caller's — so the app can grey out the taken slots
+before letting a resident confirm a new booking. Read-only: no
+create/update/delete.
+
+The endpoint only reports **that** a slot is taken, never **by whom**: an item
+carries the four date/time keys and nothing else (no `id`, `unit_id`,
+`requester_id` or names).
+
+**Authentication:** required (Bearer access token)
+
+**Headers**
+| Header | Value |
+|--------|-------|
+| Authorization | Bearer `<access_token>` |
+
+**Query parameters**
+| Param | Required | Notes |
+|-------|----------|-------|
+| `date` | yes | The day to inspect, `YYYY-MM-DD`. Validated strictly: absent/empty → `422 missing_field`; wrong format or non-calendar date (e.g. `2026-02-30`) → `422 invalid_field`. There is no silent fallback to "today". |
+
+There is no pagination and no other filter: one area, one day.
+
+**Success response (200)**
+```json
+{
+  "success": true,
+  "data": {
+    "date": "2026-07-25",
+    "busy": [
+      {
+        "start_date": "2026-07-24",
+        "start_time": "23:00",
+        "end_date": "2026-07-25",
+        "end_time": "01:00"
+      },
+      {
+        "start_date": "2026-07-25",
+        "start_time": "10:00",
+        "end_date": "2026-07-25",
+        "end_time": "12:00"
+      }
+    ]
+  }
+}
+```
+
+A day with no confirmed reservations returns `200` with `{"date": "<date>",
+"busy": []}` (not an error). `data.date` echoes the validated `date` verbatim.
+
+**Busy items and midnight handling**
+
+Each item in `busy` has **exactly four keys, always present**, all absolute
+dates so the client never infers the day from the times:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `start_date` | string `YYYY-MM-DD` | The reservation's own `field_date`. |
+| `start_time` | string `HH:MM` | Raw stored start time. |
+| `end_date` | string `YYYY-MM-DD` | Same as `start_date`, or the **next day** when the reservation crosses midnight. |
+| `end_time` | string `HH:MM` | Raw stored end time. |
+
+- A reservation **crosses midnight** when `end_time <= start_time` (e.g.
+  `23:00 → 01:00`). Then `end_date = start_date + 1 day`; otherwise
+  `start_date == end_date`.
+- The query looks at **two** days — the requested `date` and the day before —
+  so a booking that started the previous evening and spills past midnight into
+  `date` is included, reported with `start_date = date − 1`.
+- A previous-day booking that does **not** cross midnight is excluded (it ended
+  before `date` began). Consequently the **same** crossing reservation appears
+  in **both** days it touches, with consistent absolute dates: querying its
+  start day shows `end_date = start_date + 1`; querying its end day shows
+  `start_date = end_date − 1`.
+- `busy` is sorted ascending by `(start_date, start_time)`, so previous-day
+  early-morning spillovers come first.
+
+**Access & visibility (non-revealing 404)**
+
+Identical to [`GET /api/v1/areas/{id}`](#get-apiv1areasid): every "not visible to
+you" case collapses into the **same** `404 area_not_found` — invalid id, no such
+node, not a published `area`, hidden `field_area_status`, or an area in a
+condominium the caller is not related to. Indistinguishable on purpose.
+
+**Data model assumptions**
+
+Reads directly from the Field API storage tables (same approach as the rest of
+the module), joining published `reservation` nodes on `field_area`,
+`field_reservation_status = 'confirmed'`, `field_date`, `field_start_time` and
+`field_end_time`. A reservation with a missing `field_date` / `field_start_time`
+/ `field_end_time` row is excluded by the inner joins (consistent with the write
+path). `field_date` is stored as `YYYY-MM-DD HH:MM:SS`, so the day is matched
+with `SUBSTR(field_date_value, 1, 10)`. `cancelled` reservations never produce a
+row and so never appear in `busy`. A future schema change to any of those fields
+(rename, single→multi-value, type change) would silently break this endpoint
+without a Drupal update warning.
+
+This endpoint only **reports** overlaps; it does not touch
+`myapi_reservation_has_overlap()` nor `POST /api/v1/reservations`.
+
+**Possible errors**
+| Code | `error_code` | When |
+|------|--------------|------|
+| 401  | `missing_authorization` | `Authorization` header is absent or does not match the `Bearer <token>` pattern. |
+| 401  | `invalid_token` | Access token not found, revoked, expired, or the associated user does not exist/is blocked. |
+| 404  | `area_not_found` | The id is invalid, references no published/visible `area`, or the area is in a condominium the caller is not related to. All indistinguishable. |
+| 422  | `missing_field` | `date` query param is absent or empty (`@field = date`). |
+| 422  | `invalid_field` | `date` is not `YYYY-MM-DD` or is a non-calendar date (`@field = date`). |
+| 405  | `method_not_allowed` | Any HTTP method other than GET. |
+
+**Manual test matrix (curl)**
+
+No token / malformed header → `401 missing_authorization`; unknown token →
+`401 invalid_token`; foreign-condominium area → `404 area_not_found`:
+```bash
+# Happy path: a day with reservations from several units.
+curl -i -X GET 'https://host/api/v1/areas/42/availability?date=2026-07-25' \
+  -H 'Authorization: Bearer <access_token>'
+
+# Missing date → 422 missing_field.
+curl -i -X GET 'https://host/api/v1/areas/42/availability' \
+  -H 'Authorization: Bearer <access_token>'
+
+# Non-calendar date → 422 invalid_field.
+curl -i -X GET 'https://host/api/v1/areas/42/availability?date=2026-02-30' \
+  -H 'Authorization: Bearer <access_token>'
+
+# Crossing reservation seen from its END day (start_date = date − 1).
+curl -i -X GET 'https://host/api/v1/areas/42/availability?date=2026-07-25' \
+  -H 'Authorization: Bearer <access_token>'
+
+# Wrong method → 405 method_not_allowed.
+curl -i -X POST 'https://host/api/v1/areas/42/availability?date=2026-07-25' \
+  -H 'Authorization: Bearer <access_token>'
+```
