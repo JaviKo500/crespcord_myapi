@@ -50,6 +50,24 @@ class ReservationMidnightTest extends TestCase {
     return $as < $be && $ae > $bs;
   }
 
+  /* ---- myapi_reservation_wrap_time() ---- */
+
+  public function testWrapTimeLeavesSameDayValueUnchanged() {
+    // 12:00 (720) is a normal clock time -> unchanged.
+    $this->assertSame('12:00', myapi_reservation_wrap_time(720));
+  }
+
+  public function testWrapTimeFoldsCrossingValueIntoClockTime() {
+    // 26:00 (1560) is stored as 02:00; 25:30 (1530) as 01:30.
+    $this->assertSame('02:00', myapi_reservation_wrap_time(1560));
+    $this->assertSame('01:30', myapi_reservation_wrap_time(1530));
+  }
+
+  public function testWrapTimeFoldsExactMidnightToZero() {
+    // 24:00 (1440) is midnight -> 00:00.
+    $this->assertSame('00:00', myapi_reservation_wrap_time(1440));
+  }
+
   /* ---- myapi_reservation_area_wraps() ---- */
 
   public function testAreaWrapsWhenCloseAtOrBeforeOpen() {

@@ -270,6 +270,11 @@ these "wrapping" areas:
   the client keeps sending `date = D` in both cases, and the response returns
   the real stored `date`/`start_time`/`end_time`, so a normalized slot comes
   back with `date = D+1`.
+- **Stored `end_time` is a wrapped clock time.** A range that crosses midnight
+  is persisted as its real time-of-day (e.g. `23:00 + 180min` stores
+  `end_time = 02:00`, **not** `26:00`), with `field_date` unchanged. The
+  crossing is derived downstream by comparison (`end_time <= start_time`), which
+  is what `GET /api/v1/areas/{id}/availability` uses to report `end_date = D+1`.
 - **Extended opening-hours window (validation 4).** The range is checked
   against `[open, close + 24h]`: a `20:00` start of 6h ending at `02:00` is
   inside hours; `20:00 + 8h → 04:00` overruns the projected close and fails

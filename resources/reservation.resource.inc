@@ -249,6 +249,12 @@ function myapi_reservation_create() {
   // on. $start_minutes was parsed at the normalization step above.
   $end_time = myapi_reservation_add_minutes($start_time, $duration_minutes);
   $end_minutes = myapi_reservation_parse_time($end_time);
+  // Value persisted on the node: the wrapped clock time (mod 24h). A crossing
+  // range is stored as '02:00', not '26:00', so the response, the reservation
+  // list and SPEC 40 availability all read a real time-of-day and derive the
+  // crossing by comparison. Validations 4-6 keep using the unbounded
+  // $start_minutes/$end_minutes above.
+  $end_time_stored = myapi_reservation_wrap_time($end_minutes);
 
   // 4. Opening hours (SPEC 41). First the midnight-crossing cut: a range that
   // crosses midnight in an area that does NOT wrap past midnight gets its own
@@ -311,7 +317,7 @@ function myapi_reservation_create() {
     myapi_error('insufficient_balance', 403);
   }
 
-  $node = myapi_reservation_build_node($unit_condominium_id, $unit_id, $uid, $area_id, $date, $start_time, $end_time);
+  $node = myapi_reservation_build_node($unit_condominium_id, $unit_id, $uid, $area_id, $date, $start_time, $end_time_stored);
   node_save($node);
   // Explicit unset commits now (Drupal 7 transactions commit on destruct)
   // and releases the area lock before the response is built below.
@@ -819,6 +825,27 @@ function myapi_reservation_add_minutes($hhmm, $minutes) {
   $hours = intdiv($total, 60);
   $mins = $total % 60;
   return sprintf('%02d:%02d', $hours, $mins);
+}
+
+/**
+ * Wraps a minutes-since-midnight value back into a 24h 'HH:MM' clock string.
+ *
+ * The counterpart to myapi_reservation_add_minutes(): where that returns the
+ * unbounded value ('26:00') needed by the opening-hours math, this returns the
+ * clock time actually persisted on the node ('02:00'), so a range crossing
+ * midnight is stored as a real time-of-day and its crossing is derived
+ * downstream by comparison (end <= start) — the convention the reservation
+ * list and GET /api/v1/areas/%/availability (SPEC 40) both rely on.
+ *
+ * Pure arithmetic helper: no DB, no Drupal calls.
+ *
+ * @param int $minutes  Minutes since midnight, possibly >= 1440.
+ *
+ * @return string  Clock time in 'HH:MM', wrapped into [00:00, 24:00).
+ */
+function myapi_reservation_wrap_time($minutes) {
+  $wrapped = (((int) $minutes % 1440) + 1440) % 1440;
+  return sprintf('%02d:%02d', intdiv($wrapped, 60), $wrapped % 60);
 }
 
 /**
