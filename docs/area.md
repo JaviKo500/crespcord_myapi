@@ -250,11 +250,12 @@ curl -i -X GET 'https://host/api/v1/areas/42' \
 
 ## GET /api/v1/areas/{id}/availability
 
-Returns the **busy** time ranges of an `area` for a single day: every
-**confirmed**, published reservation of the area — across **all** units of the
-condominium, not just the caller's — so the app can grey out the taken slots
-before letting a resident confirm a new booking. Read-only: no
-create/update/delete.
+Returns the **busy** time ranges of an `area` for a single day's **session**:
+every **confirmed**, published reservation of the area — across **all** units of
+the condominium, not just the caller's — so the app can grey out the taken slots
+before letting a resident confirm a new booking. For an area that closes after
+midnight, the session for day `D` runs `[D open, D+1 close]` (see **Availability
+is per SESSION** below). Read-only: no create/update/delete.
 
 The endpoint only reports **that** a slot is taken, never **by whom**: an item
 carries the four date/time keys and nothing else (no `id`, `unit_id`,
@@ -279,7 +280,7 @@ There is no pagination and no other filter: one area, one day.
 {
   "success": true,
   "data": {
-    "date": "2026-07-25",
+    "date": "2026-07-24",
     "busy": [
       {
         "start_date": "2026-07-24",
@@ -289,9 +290,9 @@ There is no pagination and no other filter: one area, one day.
       },
       {
         "start_date": "2026-07-25",
-        "start_time": "10:00",
+        "start_time": "00:00",
         "end_date": "2026-07-25",
-        "end_time": "12:00"
+        "end_time": "02:00"
       }
     ]
   }
@@ -301,31 +302,45 @@ There is no pagination and no other filter: one area, one day.
 A day with no confirmed reservations returns `200` with `{"date": "<date>",
 "busy": []}` (not an error). `data.date` echoes the validated `date` verbatim.
 
-**Busy items and midnight handling**
+**Availability is per SESSION, not per calendar day**
+
+`date=D` reports the area's whole operating **session** for day `D`, i.e. the
+window `[D open_time, D+1 close_time]`:
+
+- **Normal area** (`close_time > open_time`, e.g. `08:00–22:00`): the session is
+  just the calendar day `D`. All reservations are same-day
+  (`start_date == end_date`); none cross midnight (the create path rejects a
+  range that would, with `422 reservation_crosses_midnight`).
+- **Area that closes after midnight** (`close_time <= open_time`, e.g.
+  `12:00–02:00`): the session spans two calendar days. Because the create path
+  stores each reservation under the **clock day** of its start (SPEC 41), a
+  single session is assembled from two stored slices:
+  - `field_date = D` with `start_time >= open_time` — the evening/late-night
+    part; a booking passing midnight (`end_time <= start_time`, e.g.
+    `23:00 → 01:00`) reports `end_date = D+1`.
+  - `field_date = D+1` with `start_time < close_time` — the **early-morning
+    tail** (e.g. `00:00 → 02:00`), stored under its own clock day `D+1` and
+    reported with `start_date = end_date = D+1`.
+
+  A `field_date = D` row starting **before** `open_time` is the tail of the
+  **previous** session and is excluded; a `field_date = D+1` row starting **at
+  or after** `close_time` is the evening of the **next** session and is also
+  excluded. So every reservation belongs to exactly one session, and the
+  early-morning tail of a wrapping area appears **only** under the session it
+  belongs to — never doubled into the next day's session.
 
 Each item in `busy` has **exactly four keys, always present**, all absolute
 dates so the client never infers the day from the times:
 
 | Key | Type | Meaning |
 |---|---|---|
-| `start_date` | string `YYYY-MM-DD` | The reservation's own `field_date`. |
+| `start_date` | string `YYYY-MM-DD` | The reservation's own `field_date` (its start clock day). |
 | `start_time` | string `HH:MM` | Raw stored start time. |
-| `end_date` | string `YYYY-MM-DD` | Same as `start_date`, or the **next day** when the reservation crosses midnight. |
-| `end_time` | string `HH:MM` | Raw stored end time. |
+| `end_date` | string `YYYY-MM-DD` | Same as `start_date`, or the **next day** when the reservation crosses midnight (`end_time <= start_time`). |
+| `end_time` | string `HH:MM` | Raw stored end time (a range crossing midnight is stored wrapped, e.g. `02:00`, not `26:00`). |
 
-- A reservation **crosses midnight** when `end_time <= start_time` (e.g.
-  `23:00 → 01:00`). Then `end_date = start_date + 1 day`; otherwise
-  `start_date == end_date`.
-- The query looks at **two** days — the requested `date` and the day before —
-  so a booking that started the previous evening and spills past midnight into
-  `date` is included, reported with `start_date = date − 1`.
-- A previous-day booking that does **not** cross midnight is excluded (it ended
-  before `date` began). Consequently the **same** crossing reservation appears
-  in **both** days it touches, with consistent absolute dates: querying its
-  start day shows `end_date = start_date + 1`; querying its end day shows
-  `start_date = end_date − 1`.
-- `busy` is sorted ascending by `(start_date, start_time)`, so previous-day
-  early-morning spillovers come first.
+`busy` is sorted ascending by `(start_date, start_time)`, so the evening part of
+a wrapping session comes before its early-morning tail.
 
 **Access & visibility (non-revealing 404)**
 
@@ -342,7 +357,11 @@ the module), joining published `reservation` nodes on `field_area`,
 `field_end_time`. A reservation with a missing `field_date` / `field_start_time`
 / `field_end_time` row is excluded by the inner joins (consistent with the write
 path). `field_date` is stored as `YYYY-MM-DD HH:MM:SS`, so the day is matched
-with `SUBSTR(field_date_value, 1, 10)`. `cancelled` reservations never produce a
+with `SUBSTR(field_date_value, 1, 10)`. The endpoint fetches only the day(s) the
+session needs: just `date` for a normal area, and `date` **plus** `date + 1` for
+an area that closes after midnight (to pick up the early-morning tail stored
+under the next clock day); the area's `field_open_time`/`field_close_time` decide
+which stored rows belong to the session. `cancelled` reservations never produce a
 row and so never appear in `busy`. A future schema change to any of those fields
 (rename, single→multi-value, type change) would silently break this endpoint
 without a Drupal update warning.
@@ -377,8 +396,9 @@ curl -i -X GET 'https://host/api/v1/areas/42/availability' \
 curl -i -X GET 'https://host/api/v1/areas/42/availability?date=2026-02-30' \
   -H 'Authorization: Bearer <access_token>'
 
-# Crossing reservation seen from its END day (start_date = date − 1).
-curl -i -X GET 'https://host/api/v1/areas/42/availability?date=2026-07-25' \
+# Area that closes after midnight: the session for D shows the evening slots of
+# D plus the early-morning tail stored under D+1 (e.g. a 00:00->02:00 booking).
+curl -i -X GET 'https://host/api/v1/areas/42/availability?date=2026-07-24' \
   -H 'Authorization: Bearer <access_token>'
 
 # Wrong method → 405 method_not_allowed.

@@ -67,46 +67,76 @@ function myapi_reservation_busy_rows($area_id, array $dates) {
 }
 
 /**
- * Derives absolute busy date/time ranges from raw reservation rows.
+ * Derives the busy date/time ranges of an area's SESSION for a requested day.
  *
- * Pure function (no DB, no Drupal): unit-testable in isolation. For each row it
- * decides whether the reservation crosses midnight (end <= start), sets the
- * start date to the reservation's own date and the end date to the next day
- * when it crosses. Rows belonging to $prev_date that do NOT cross midnight are
- * dropped (a previous-day reservation that ends before midnight does not touch
- * the requested day). Rows of $date are always kept. The result is sorted
- * ascending by (start_date, start_time).
+ * A "session" is the area's operating window for day D. For a normal area
+ * (close_min > open_min) the session is the calendar day itself: only
+ * reservations stored under $date belong to it and none cross midnight.
  *
- * @param array  $rows       Raw rows (stdClass with date, start_time, end_time).
- * @param string $date       Requested day, 'YYYY-MM-DD'.
- * @param string $prev_date  The day before, 'YYYY-MM-DD'.
+ * For an area that wraps past midnight (close_min <= open_min) the session runs
+ * [D open, D+1 close] and is assembled from two stored slices, because the
+ * create path stores every reservation under the CLOCK day of its start:
+ *   - field_date = D   with start >= open  — the evening/late-night part; a
+ *     booking passing midnight has end <= start and ends on D+1.
+ *   - field_date = D+1 with start <  close — the early-morning tail, stored
+ *     under its own clock day.
+ * Conversely, a field_date = D row with start < close is the tail of the
+ * PREVIOUS session, and a field_date = D+1 row with start >= close is the
+ * evening of the NEXT session; both are excluded here so each reservation
+ * belongs to exactly one session.
+ *
+ * Pure function (no DB, no Drupal): unit-testable in isolation. The caller
+ * fetches $date and (only when the area wraps) $next_date. $open_min/$close_min
+ * may be NULL when the area has no hours row, in which case it degrades to a
+ * plain calendar-day (non-wrapping) session. The result is sorted ascending by
+ * (start_date, start_time).
+ *
+ * @param array    $rows       Raw rows (stdClass: date, start_time, end_time).
+ * @param string   $date       Requested session day, 'YYYY-MM-DD' (D).
+ * @param string   $next_date  The day after, 'YYYY-MM-DD' (D+1).
+ * @param int|NULL $open_min   Area open time in minutes since midnight, or NULL.
+ * @param int|NULL $close_min  Area close time in minutes since midnight, or NULL.
  *
  * @return array  List of items with exactly 4 keys:
- *   start_date, start_time, end_date, end_time. Empty array when no row applies.
+ *   start_date, start_time, end_date, end_time. Empty array when none applies.
  */
-function myapi_reservation_busy_ranges($rows, $date, $prev_date) {
+function myapi_reservation_busy_ranges($rows, $date, $next_date, $open_min = NULL, $close_min = NULL) {
+  $wraps = $open_min !== NULL && $close_min !== NULL && $close_min <= $open_min;
   $busy = array();
 
   foreach ($rows as $row) {
     $start_minutes = myapi_reservation_time_to_minutes($row->start_time);
     $end_minutes = myapi_reservation_time_to_minutes($row->end_time);
-    $crosses = $end_minutes <= $start_minutes;
 
-    // A previous-day reservation that does not cross midnight ends before the
-    // requested day even begins, so it is not busy time for $date.
-    if ($row->date === $prev_date && !$crosses) {
+    if (!$wraps) {
+      // Plain calendar-day session: only rows stored under $date apply.
+      if ($row->date !== $date) {
+        continue;
+      }
+    }
+    elseif ($row->date === $date) {
+      // Evening/late-night slice of the session; a start before open is the
+      // tail of the previous session and does not belong here.
+      if ($start_minutes < $open_min) {
+        continue;
+      }
+    }
+    elseif ($row->date === $next_date) {
+      // Early-morning tail of the session; a start at or after close is the
+      // evening of the next session and does not belong here.
+      if ($start_minutes >= $close_min) {
+        continue;
+      }
+    }
+    else {
       continue;
     }
 
-    $start_date = $row->date;
-    $end_date = $crosses
-      ? date('Y-m-d', strtotime($row->date . ' +1 day'))
-      : $row->date;
-
+    $crosses = $end_minutes <= $start_minutes;
     $busy[] = array(
-      'start_date' => $start_date,
+      'start_date' => $row->date,
       'start_time' => $row->start_time,
-      'end_date' => $end_date,
+      'end_date' => $crosses ? date('Y-m-d', strtotime($row->date . ' +1 day')) : $row->date,
       'end_time' => $row->end_time,
     );
   }

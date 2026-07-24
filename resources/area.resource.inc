@@ -233,10 +233,22 @@ function myapi_area_availability($area_id) {
     myapi_error('invalid_field', 422, ['@field' => 'date']);
   }
 
-  $prev_date = date('Y-m-d', strtotime($date . ' -1 day'));
+  // Availability is reported per SESSION (SPEC 41 follow-up): availability for
+  // day D covers the area's operating window [D open, D+1 close]. For a normal
+  // area that is just the calendar day D; for an area that closes after
+  // midnight it also includes the early-morning tail stored under D+1's clock
+  // day. The derivation needs the area's open/close to tell the tail of this
+  // session apart from the evening of the next one, so both are parsed here and
+  // the next day is fetched only when the area wraps.
+  $open_min = $area->open_time !== NULL ? myapi_reservation_time_to_minutes($area->open_time) : NULL;
+  $close_min = $area->close_time !== NULL ? myapi_reservation_time_to_minutes($area->close_time) : NULL;
+  $wraps = $open_min !== NULL && $close_min !== NULL && $close_min <= $open_min;
 
-  $rows = myapi_reservation_busy_rows((int) $area_id, [$date, $prev_date]);
-  $busy = myapi_reservation_busy_ranges($rows, $date, $prev_date);
+  $next_date = date('Y-m-d', strtotime($date . ' +1 day'));
+  $fetch_dates = $wraps ? [$date, $next_date] : [$date];
+
+  $rows = myapi_reservation_busy_rows((int) $area_id, $fetch_dates);
+  $busy = myapi_reservation_busy_ranges($rows, $date, $next_date, $open_min, $close_min);
 
   myapi_respond(['date' => $date, 'busy' => $busy], 200);
 }
