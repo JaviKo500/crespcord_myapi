@@ -1,6 +1,6 @@
 # SPEC 40 — Endpoint de disponibilidad de un área (horarios ocupados)
 
-> **Estado:** Approved · **Depende de:** SPEC 32 (content types de reservas/áreas), SPEC 33 (listado de áreas + `myapi_condominium_related_nids`), SPEC 35 (query base de solape + clave `area_not_found`), SPEC 39 (`404` no-revelador sobre recurso de área por id) · **Fecha:** 2026-07-24
+> **Estado:** Implemented · **Depende de:** SPEC 32 (content types de reservas/áreas), SPEC 33 (listado de áreas + `myapi_condominium_related_nids`), SPEC 35 (query base de solape + clave `area_not_found`), SPEC 39 (`404` no-revelador sobre recurso de área por id) · **Fecha:** 2026-07-24
 > **Objetivo:** Exponer `GET /api/v1/areas/{id}/availability?date=YYYY-MM-DD` como lectura de solo lectura que devuelve los rangos horarios ocupados (reservas confirmadas de **todas** las unidades del condominio) de un área para una fecha, incluidas las que cruzan la medianoche, para que la app marque los horarios tomados antes de confirmar.
 
 ---
@@ -114,23 +114,23 @@ Sin `message` (lectura simple). `data.date` es el `date` pedido y validado, tal 
 
 ## Criterios de aceptación
 
-- [ ] `GET /api/v1/areas/{id}/availability?date=...` sin header `Authorization` o malformado → `401 missing_authorization`; token inexistente/revocado/expirado o usuario inexistente/bloqueado → `401 invalid_token`.
-- [ ] `{id}` inexistente, no-`area`, no publicado, con `field_area_status` no visible, o de un condominio no relacionado con el usuario → todos el **mismo** `404 area_not_found`, indistinguibles (igual que `GET /api/v1/areas/{id}`).
-- [ ] Sin `date` en el query string → `422 missing_field` con `@field = date`.
-- [ ] `date` con formato distinto de `YYYY-MM-DD` o fecha no-calendario (p. ej. `2026-02-30`) → `422 invalid_field` con `@field = date`.
-- [ ] Con token válido, área visible del condominio del usuario y `date` válida sin reservas confirmadas → `200` con `{"date": "<date>", "busy": []}`.
-- [ ] Con varias reservas confirmadas de **distintas unidades** del condominio → todas aparecen en `busy`; ningún item lleva `id`, `unit_id`, `requester_id` ni nombres, solo las 4 claves de fecha/hora.
-- [ ] Una reserva `cancelled` **no** aparece en `busy` (solo `confirmed` publicadas).
-- [ ] Reserva del mismo día (no cruza medianoche): `start_date == end_date == date`, con las 4 claves presentes.
-- [ ] Reserva que cruza medianoche consultada **desde su día de inicio** (`date`): `start_date = date`, `end_date = date + 1 día`.
-- [ ] La misma reserva consultada **desde el día siguiente** (`date` = su día de fin): aparece con `start_date = date - 1`, `start_time` original, `end_date = date`, `end_time` original.
-- [ ] Una reserva del día anterior que **no** cruza medianoche **no** aparece al consultar `date`.
-- [ ] `busy` viene ordenado ascendente por `(start_date, start_time)`.
-- [ ] Cualquier método distinto de `GET` sobre la ruta → `405 method_not_allowed`.
-- [ ] No se agregan claves i18n nuevas (`missing_authorization`, `invalid_token`, `area_not_found`, `missing_field`, `invalid_field`, `method_not_allowed` ya existen en es/en).
-- [ ] `myapi_reservation_has_overlap()` y `POST /api/v1/reservations` quedan sin cambios (mismo diff = 0 sobre esas funciones).
-- [ ] Los unit tests de `myapi_reservation_busy_ranges()` pasan (`scripts/run-unit-tests.sh`).
-- [ ] `docs/area.md` incluye la sección del endpoint y casa con el contrato implementado.
+- [x] `GET /api/v1/areas/{id}/availability?date=...` sin header `Authorization` o malformado → `401 missing_authorization`; token inexistente/revocado/expirado o usuario inexistente/bloqueado → `401 invalid_token`.
+- [x] `{id}` inexistente, no-`area`, no publicado, con `field_area_status` no visible, o de un condominio no relacionado con el usuario → todos el **mismo** `404 area_not_found`, indistinguibles (igual que `GET /api/v1/areas/{id}`).
+- [x] Sin `date` en el query string → `422 missing_field` con `@field = date`.
+- [x] `date` con formato distinto de `YYYY-MM-DD` o fecha no-calendario (p. ej. `2026-02-30`) → `422 invalid_field` con `@field = date`.
+- [x] Con token válido, área visible del condominio del usuario y `date` válida sin reservas confirmadas → `200` con `{"date": "<date>", "busy": []}`.
+- [x] Con varias reservas confirmadas de **distintas unidades** del condominio → todas aparecen en `busy`; ningún item lleva `id`, `unit_id`, `requester_id` ni nombres, solo las 4 claves de fecha/hora.
+- [x] Una reserva `cancelled` **no** aparece en `busy` (solo `confirmed` publicadas).
+- [x] Reserva del mismo día (no cruza medianoche): `start_date == end_date == date`, con las 4 claves presentes.
+- [x] Reserva que cruza medianoche consultada **desde su día de inicio** (`date`): `start_date = date`, `end_date = date + 1 día`.
+- [x] La misma reserva consultada **desde el día siguiente** (`date` = su día de fin): aparece con `start_date = date - 1`, `start_time` original, `end_date = date`, `end_time` original.
+- [x] Una reserva del día anterior que **no** cruza medianoche **no** aparece al consultar `date`.
+- [x] `busy` viene ordenado ascendente por `(start_date, start_time)`.
+- [x] Cualquier método distinto de `GET` sobre la ruta → `405 method_not_allowed`.
+- [x] No se agregan claves i18n nuevas (`missing_authorization`, `invalid_token`, `area_not_found`, `missing_field`, `invalid_field`, `method_not_allowed` ya existen en es/en).
+- [x] `myapi_reservation_has_overlap()` y `POST /api/v1/reservations` quedan sin cambios (mismo diff = 0 sobre esas funciones).
+- [x] Los unit tests de `myapi_reservation_busy_ranges()` pasan (`scripts/run-unit-tests.sh`).
+- [x] `docs/area.md` incluye la sección del endpoint y casa con el contrato implementado.
 
 ---
 
