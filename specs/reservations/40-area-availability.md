@@ -13,7 +13,7 @@
 - Dispatcher `myapi_area_availability_dispatch($area_id)` en `resources/area.resource.inc` (solo `GET`; cualquier otro método → `405 method_not_allowed`), más el orquestador `myapi_area_availability($area_id)` en el mismo archivo.
 - **Archivo nuevo** `includes/myapi.reservation_query.inc` (registrado en `myapi.info` con `files[]`) con dos funciones reutilizables de dominio-reserva:
   - `myapi_reservation_busy_rows($area_id, array $dates)` — query a las tablas `field_data_field_*` que devuelve las filas crudas (`date`, `start_time`, `end_time`) de reservas **confirmadas** y **publicadas** del área cuyas `field_date` caen en las fechas dadas. Sin filtro de requester.
-  - `myapi_reservation_busy_ranges($rows, $date, $prev_date)` — **función pura** (sin BD): deriva `start_date`/`end_date`, descarta las filas de `prev_date` que no cruzan medianoche, ordena y devuelve los items de 4 claves.
+  - `myapi_reservation_busy_ranges($rows, $date, $prev_date)` — **función pura** (sin BD): deriva `start_date`/`end_date`, descarta las filas de `prev_date` que no cruzan medianoche, ordena y devuelve los items de 4 claves. **⚠️ Superseded por SPEC 42:** su firma y su lógica pasaron a un modelo **por sesión** (`($rows, $date, $next_date, $open_min, $close_min)`) para ubicar correctamente la cola de madrugada de áreas que cierran tras medianoche. Ver `specs/reservations/42-session-availability-overnight-areas.md`.
 - Respuesta `{"success": true, "data": {"date": "...", "busy": [ {start_date,start_time,end_date,end_time}, ... ]}}`; `busy: []` con `200` cuando no hay reservas.
 - Validación estricta de `date` (query param, `YYYY-MM-DD` + `checkdate()`): ausente → `422 missing_field`, mal formada/no-calendario → `422 invalid_field` (`@field = date`).
 - Acceso idéntico al detalle de área (SPEC 39): área no visible o de condominio ajeno → único `404 area_not_found` no-revelador, reutilizando `myapi_area_fetch_one()` + `myapi_condominium_related_nids()`.
@@ -123,7 +123,7 @@ Sin `message` (lectura simple). `data.date` es el `date` pedido y validado, tal 
 - [x] Una reserva `cancelled` **no** aparece en `busy` (solo `confirmed` publicadas).
 - [x] Reserva del mismo día (no cruza medianoche): `start_date == end_date == date`, con las 4 claves presentes.
 - [x] Reserva que cruza medianoche consultada **desde su día de inicio** (`date`): `start_date = date`, `end_date = date + 1 día`.
-- [x] La misma reserva consultada **desde el día siguiente** (`date` = su día de fin): aparece con `start_date = date - 1`, `start_time` original, `end_date = date`, `end_time` original.
+- [x] La misma reserva consultada **desde el día siguiente** (`date` = su día de fin): aparece con `start_date = date - 1`, `start_time` original, `end_date = date`, `end_time` original. **⚠️ Superseded por SPEC 42:** con el modelo de disponibilidad **por sesión**, una reserva de la sesión `date − 1` ya **no** aparece al consultar `date` (termina antes de que la sesión `date` abra). Ver `specs/reservations/42-session-availability-overnight-areas.md`.
 - [x] Una reserva del día anterior que **no** cruza medianoche **no** aparece al consultar `date`.
 - [x] `busy` viene ordenado ascendente por `(start_date, start_time)`.
 - [x] Cualquier método distinto de `GET` sobre la ruta → `405 method_not_allowed`.
