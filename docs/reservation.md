@@ -254,10 +254,36 @@ cancel endpoint) or a single-reservation detail endpoint.
 | `duration_minutes` | int | Yes | Positive integer (`> 0`). Invalid → `422 invalid_field` (`@field = duration_minutes`). |
 
 `end_time` is always computed server-side (`start_time + duration_minutes`,
-in minutes since midnight); the client never sends it. If the computed
-`end_time` reaches or crosses midnight (`>= 24:00`), it is not specially
-handled — it naturally fails the opening-hours validation below, since no
-area's `field_close_time` is ever past midnight.
+in minutes since midnight); the client never sends it.
+
+**Areas that close after midnight (SPEC 41).** An area whose
+`field_close_time` is at or before its `field_open_time` (e.g. open `12:00`,
+close `02:00`) stays open into the early hours of the next calendar day. For
+these "wrapping" areas:
+
+- **Day normalization.** The client always sends `date = D` (the day it shows
+  on its calendar). When the start falls in the early-morning tail
+  `[00:00, close)` — e.g. `01:00` in a `12:00–02:00` area — the server stores
+  `field_date = D+1` (the start's clock day, the same convention
+  `GET /api/v1/areas/{id}/availability` already uses). A start that is **not**
+  in that tail keeps `field_date = D`. The request contract does not change:
+  the client keeps sending `date = D` in both cases, and the response returns
+  the real stored `date`/`start_time`/`end_time`, so a normalized slot comes
+  back with `date = D+1`.
+- **Extended opening-hours window (validation 4).** The range is checked
+  against `[open, close + 24h]`: a `20:00` start of 6h ending at `02:00` is
+  inside hours; `20:00 + 8h → 04:00` overruns the projected close and fails
+  with `reservation_outside_hours`. A start in the dead gap between `close` and
+  `open` (e.g. `05:00` in a `12:00–02:00` area) is **not** normalized and also
+  fails as out of hours.
+- **Overlap on an absolute axis (validation 6).** See the overlap criterion
+  below.
+
+For a **normal** area (`field_close_time` strictly after `field_open_time`)
+nothing changes: `field_date` is never normalized, and a range that would
+reach or cross midnight (`end >= 24:00`) is rejected with
+`422 reservation_crosses_midnight`, a distinct error from a plain
+out-of-hours request so the client can message it usefully.
 
 **Validation order**
 
@@ -272,10 +298,10 @@ before the node is ever touched:
 | 0d | `area_id` exists and belongs to `unit_id`'s condominium | `404 area_not_found` |
 | 1 | Role vs the area's `who_can_reserve` (`owner`/`tenant` must match; any other value allows both) | `403 reservation_role_not_allowed` |
 | 2 | Area's status is exactly `active` | `409 area_not_active` |
-| 3 | `date` + `start_time` is not in the past (site timezone) | `422 invalid_field` (`@field = date`) |
-| 4 | Requested range is within the area's opening hours | `422 reservation_outside_hours` |
+| 3 | `date` + `start_time` is not in the past (site timezone; evaluated on the normalized `field_date`) | `422 invalid_field` (`@field = date`) |
+| 4 | Range does not cross midnight in a same-day area, and is within the area's opening hours (extended `[open, close+24h]` window for areas that close after midnight) | `422 reservation_crosses_midnight` / `422 reservation_outside_hours` |
 | 5 | `duration_minutes` does not exceed the area's maximum | `422 reservation_duration_exceeded` |
-| 6 | No overlap with another `confirmed` reservation of the same area/date | `409 reservation_overlap` |
+| 6 | No overlap with another `confirmed` reservation of the same area (absolute axis across `D−1`/`D`/`D+1`) | `409 reservation_overlap` |
 | 7 | Unit has no other `confirmed` reservation for the same area whose start has not passed | `409 reservation_already_active` |
 | 8 | Unit's balance allows reserving (see below) | `403 insufficient_balance` |
 
@@ -293,9 +319,16 @@ before the node is ever touched:
 
 **Overlap criterion (validation 6)**
 
-Half-open interval: `new_start < existing_end AND new_end > existing_start`.
-A reservation that ends exactly when another begins is **not** an overlap
-(back-to-back bookings are allowed).
+Each reservation — the candidate and every existing `confirmed` one — is
+projected onto an absolute minute axis anchored at the midnight of its own
+`field_date`, so same-day, midnight-crossing and early-morning reservations
+compare uniformly. Existing reservations are fetched for three days
+(`field_date IN (D−1, D, D+1)`) so a previous day's tail that runs past
+midnight, or a next-day early-morning booking, is compared too.
+
+Half-open interval: `new_start_abs < existing_end_abs AND
+new_end_abs > existing_start_abs`. A reservation that ends exactly when
+another begins is **not** an overlap (back-to-back bookings are allowed).
 
 **Success response (201)**
 
@@ -345,14 +378,15 @@ Notes:
 | 401  | `missing_authorization` | `Authorization` header is absent or malformed. |
 | 401  | `invalid_token` | Access token not found, revoked, expired, or the user no longer exists/is blocked. |
 | 422  | `missing_field` | `unit_id`, `area_id`, `date`, `start_time` or `duration_minutes` is missing. |
-| 422  | `invalid_field` | Any of the five fields fails its format/type/range check, the requested date/time is in the past, or (see above) `end_time` crosses midnight. |
+| 422  | `invalid_field` | Any of the five fields fails its format/type/range check, or the requested date/time is in the past. |
 | 403  | `unit_access_denied` | `unit_id` does not exist, or is not owned/occupied by the authenticated user. |
 | 404  | `area_not_found` | `area_id` does not exist, or belongs to a different condominium than `unit_id`. Both cases return the same error. |
 | 403  | `reservation_role_not_allowed` | The area is `owner`-only and the user only occupies the unit, or `tenant`-only and the user only owns it. |
 | 409  | `area_not_active` | The area's status is `maintenance`, `closed`, or anything other than `active`. |
-| 422  | `reservation_outside_hours` | The requested range falls outside the area's `open_time`–`close_time` window. |
+| 422  | `reservation_outside_hours` | The requested range falls outside the area's `open_time`–`close_time` window (the extended `[open, close+24h]` window for areas that close after midnight). |
+| 422  | `reservation_crosses_midnight` | The requested range would cross midnight (`end >= 24:00`) but the area closes the same clock day (its `close_time` is after `open_time`). |
 | 422  | `reservation_duration_exceeded` | `duration_minutes` exceeds the area's `max_minutes`. |
-| 409  | `reservation_overlap` | The requested range overlaps another `confirmed` reservation of the same area/date. |
+| 409  | `reservation_overlap` | The requested range overlaps another `confirmed` reservation of the same area, compared on an absolute axis across the previous/current/next day. |
 | 409  | `reservation_already_active` | The unit already has a `confirmed` reservation for the same area whose start has not passed. |
 | 403  | `insufficient_balance` | The unit's balance is positive and its most recent sent receipt shows a positive previous balance. |
 | 405  | `method_not_allowed` | Any HTTP method other than `POST`. |
@@ -376,6 +410,37 @@ curl -i -X POST 'https://host/api/v1/reservations' \
   -H 'Authorization: Bearer <access_token>' \
   -H 'Content-Type: application/json' \
   -d '{"unit_id":21,"area_id":42,"date":"2026-07-25","start_time":"10:00","duration_minutes":120}'
+```
+
+**Overnight-area acceptance matrix (SPEC 41)**
+
+Assumes `area_id=42` is a wrapping area open `12:00`–`02:00`, and `area_id=50`
+a normal area open `08:00`–`22:00`. `D = 2026-07-25`. The client always sends
+`date = D`; the stored `field_date` is what the server normalizes to.
+
+| Case | `area_id` | `date` | `start_time` | `duration_minutes` | Result | Stored `field_date` |
+|---|---|---|---|---|---|---|
+| Early-morning slot normalized | 42 | `2026-07-25` | `01:00` | 60 | `201` | `2026-07-26` (D+1) |
+| Evening slot crossing midnight | 42 | `2026-07-25` | `20:00` | 360 (→`02:00`) | `201` | `2026-07-25` (D) |
+| Evening slot overruns projected close | 42 | `2026-07-25` | `20:00` | 480 (→`04:00`) | `422 reservation_outside_hours` | — |
+| Dead gap (not normalized) | 42 | `2026-07-25` | `05:00` | 60 | `422 reservation_outside_hours` | — |
+| Cross midnight in a same-day area | 50 | `2026-07-25` | `21:00` | 240 (→`01:00`) | `422 reservation_crosses_midnight` | — |
+| Overlap: morning slot vs previous evening's tail | 42 | `2026-07-25` | `01:00` | 60 | `409 reservation_overlap` (given an existing `20:00→02:00` on D−1) | — |
+| Normal area, no change | 50 | `2026-07-25` | `10:00` | 120 | `201` | `2026-07-25` (D) |
+| Normal area, out of hours | 50 | `2026-07-25` | `07:00` | 60 | `422 reservation_outside_hours` | — |
+
+```bash
+# Early-morning slot in a wrapping area → stored on D+1
+curl -i -X POST 'https://host/api/v1/reservations' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"unit_id":21,"area_id":42,"date":"2026-07-25","start_time":"01:00","duration_minutes":60}'
+
+# Same-day area, range crossing midnight → reservation_crosses_midnight
+curl -i -X POST 'https://host/api/v1/reservations' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"unit_id":21,"area_id":50,"date":"2026-07-25","start_time":"21:00","duration_minutes":240}'
 ```
 
 ---
