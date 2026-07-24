@@ -36,3 +36,4 @@ files[] = includes/myapi.fee_notification.inc
 files[] = resources/bulletin.resource.inc
 files[] = resources/area.resource.inc
 files[] = resources/reservation.resource.inc
+files[] = includes/myapi.reservation_query.inc

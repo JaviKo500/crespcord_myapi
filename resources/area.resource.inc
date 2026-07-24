@@ -22,6 +22,7 @@ module_load_include('inc', 'myapi', 'includes/myapi.i18n');
 module_load_include('inc', 'myapi', 'includes/myapi.token');
 module_load_include('inc', 'myapi', 'includes/myapi.auth');
 module_load_include('inc', 'myapi', 'includes/myapi.unit_access');
+module_load_include('inc', 'myapi', 'includes/myapi.reservation_query');
 
 /**
  * Area statuses that are visible to the app (inclusion criterion).
@@ -62,6 +63,25 @@ function myapi_area_details_dispatch($area_id) {
   $method = myapi_request_method();
   if ($method === 'GET') {
     myapi_area_details($area_id);
+  }
+  else {
+    myapi_error('method_not_allowed', 405);
+  }
+}
+
+/**
+ * Dispatcher for /api/v1/areas/%/availability.
+ *
+ * Routes by HTTP method. Only GET is supported (read the busy time ranges of an
+ * area for a day); any other method returns 405. Authentication and the rest of
+ * the validations are resolved inside myapi_area_availability(), not here.
+ *
+ * @param int $area_id  The 'area' nid from the route.
+ */
+function myapi_area_availability_dispatch($area_id) {
+  $method = myapi_request_method();
+  if ($method === 'GET') {
+    myapi_area_availability($area_id);
   }
   else {
     myapi_error('method_not_allowed', 405);
@@ -168,6 +188,57 @@ function myapi_area_details($area_id) {
   }
 
   myapi_respond(['area' => myapi_area_build_item($area)], 200);
+}
+
+/**
+ * Handles GET /api/v1/areas/%/availability.
+ *
+ * Read-only. Returns the busy time ranges of a visible area for a given day:
+ * every confirmed, published reservation of the area (all units of the
+ * condominium), including those that cross midnight. The requester only learns
+ * that a slot is taken, never by whom (no id/unit_id/requester_id/names).
+ *
+ * Access mirrors the area detail (SPEC 39): a nonexistent, unpublished, hidden
+ * or foreign-condominium area collapses into the same non-revealing 404. The
+ * 'date' query param is validated strictly (YYYY-MM-DD + checkdate): absent is
+ * 422 missing_field, malformed or non-calendar is 422 invalid_field.
+ *
+ * @param mixed $area_id  The 'area' nid from the route.
+ */
+function myapi_area_availability($area_id) {
+  $row = myapi_auth_require_access_token();
+  $uid = $row->uid;
+
+  if (!ctype_digit((string) $area_id) || (int) $area_id <= 0) {
+    myapi_error('area_not_found', 404);
+  }
+
+  // Same non-revealing criterion as the area detail: no row means nonexistent,
+  // not an 'area', unpublished, or a hidden status.
+  $area = myapi_area_fetch_one((int) $area_id);
+  if (!$area) {
+    myapi_error('area_not_found', 404);
+  }
+
+  if (!in_array((int) $area->condominium_id, myapi_condominium_related_nids($uid))) {
+    myapi_error('area_not_found', 404);
+  }
+
+  $date = isset($_GET['date']) ? $_GET['date'] : NULL;
+  if (!is_string($date) || $date === '') {
+    myapi_error('missing_field', 422, ['@field' => 'date']);
+  }
+  if (!preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $date, $date_parts)
+    || !checkdate((int) $date_parts[2], (int) $date_parts[3], (int) $date_parts[1])) {
+    myapi_error('invalid_field', 422, ['@field' => 'date']);
+  }
+
+  $prev_date = date('Y-m-d', strtotime($date . ' -1 day'));
+
+  $rows = myapi_reservation_busy_rows((int) $area_id, [$date, $prev_date]);
+  $busy = myapi_reservation_busy_ranges($rows, $date, $prev_date);
+
+  myapi_respond(['date' => $date, 'busy' => $busy], 200);
 }
 
 /**
