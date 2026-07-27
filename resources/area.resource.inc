@@ -150,7 +150,7 @@ function myapi_area_list($condominium_id) {
  * Handles GET /api/v1/areas/%.
  *
  * Returns the single visible 'area' node identified by $area_id, in the same
- * 14-key item shape as the list (GET /api/v1/condominiums/%/areas), wrapped as
+ * 15-key item shape as the list (GET /api/v1/condominiums/%/areas), wrapped as
  * {"area": ...}. The area is only visible when it would also appear in the
  * caller's list: it must be a published 'area' node with a visible
  * field_area_status (MYAPI_AREA_VISIBLE_STATUSES) and belong to a condominium
@@ -193,10 +193,18 @@ function myapi_area_details($area_id) {
 /**
  * Handles GET /api/v1/areas/%/availability.
  *
- * Read-only. Returns the busy time ranges of a visible area for a given day:
- * every confirmed, published reservation of the area (all units of the
+ * Read-only. Reports what a visible area has taken for a given day, derived
+ * from every confirmed, published reservation of the area (all units of the
  * condominium), including those that cross midnight. The requester only learns
  * that a slot is taken, never by whom (no id/unit_id/requester_id/names).
+ *
+ * Responds with 4 keys (SPEC 45 turned the original {date, busy} into this;
+ * the change is additive and 'date'/'busy' keep their name and shape):
+ *   - date       — the requested day, echoed back as received.
+ *   - capacity   — the area's effective capacity, always an int >= 1.
+ *   - busy       — ranges the caller CANNOT book (see the split below).
+ *   - occupancy  — every constant-occupancy range with its reserved/remaining
+ *                  counters; always present, capacity 1 included.
  *
  * Access mirrors the area detail (SPEC 39): a nonexistent, unpublished, hidden
  * or foreign-condominium area collapses into the same non-revealing 404. The
@@ -250,7 +258,52 @@ function myapi_area_availability($area_id) {
   $rows = myapi_reservation_busy_rows((int) $area_id, $fetch_dates);
   $busy = myapi_reservation_busy_ranges($rows, $date, $next_date, $open_min, $close_min);
 
-  myapi_respond(['date' => $date, 'busy' => $busy], 200);
+  // Occupancy per constant-occupancy range (SPEC 45), always reported — also in
+  // capacity-1 areas, where it is redundant with 'busy', so the client never
+  // has to branch on capacity to read the response. Counters only: the privacy
+  // rule above still holds.
+  $capacity = myapi_reservation_effective_capacity($area->max_concurrent_reservations);
+  $occupancy = myapi_reservation_occupancy_ranges($busy, $capacity);
+
+  // 'busy' keeps its meaning — "you cannot book this" — but is derived
+  // differently depending on the capacity, and that split is DELIBERATE.
+  //
+  // Capacity 1: 'busy' stays byte for byte what it has always been, one entry
+  // per reservation. Deriving blocks for every area instead would merge two
+  // consecutive bookings (10:00-11:00 and 11:00-12:00) into a single
+  // 10:00-12:00 block, silently changing the payload of every area in
+  // production. Do not "unify this for cleanliness".
+  //
+  // Capacity > 1: a range with free slots is still bookable, so it must NOT be
+  // in 'busy'. Only saturated ranges (reserved >= capacity) are, with
+  // contiguous ones merged into a single block.
+  if ($capacity > 1) {
+    $busy = [];
+    foreach ($occupancy as $range) {
+      if ($range['reserved'] < $capacity) {
+        continue;
+      }
+      $last = count($busy) - 1;
+      if ($last >= 0
+        && $busy[$last]['end_date'] === $range['start_date']
+        && $busy[$last]['end_time'] === $range['start_time']) {
+        // Contiguous with the previous block: extend it instead of emitting a
+        // second entry. Safe because occupancy comes sorted ascending.
+        $busy[$last]['end_date'] = $range['end_date'];
+        $busy[$last]['end_time'] = $range['end_time'];
+      }
+      else {
+        $busy[] = [
+          'start_date' => $range['start_date'],
+          'start_time' => $range['start_time'],
+          'end_date' => $range['end_date'],
+          'end_time' => $range['end_time'],
+        ];
+      }
+    }
+  }
+
+  myapi_respond(['date' => $date, 'capacity' => $capacity, 'busy' => $busy, 'occupancy' => $occupancy], 200);
 }
 
 /**
@@ -424,25 +477,34 @@ function myapi_area_fetch_one($area_id) {
  * field_area_notes_value: it may contain HTML and is never sanitized or
  * rendered here (no check_markup(), no filter_xss()).
  *
+ * 'max_concurrent_reservations' (SPEC 45) is the ONE key that deviates from
+ * that convention: instead of passing raw with NULL when the node has no row,
+ * it is exposed already NORMALISED through
+ * myapi_reservation_effective_capacity() — always an int, always >= 1. This is
+ * deliberate, not an oversight. The client needs the EFFECTIVE capacity to draw
+ * free slots, and re-implementing the fail-closed rule in Flutter is exactly
+ * what would drift out of sync with the server's validation 6.
+ *
  * @param object $area  One row from myapi_area_fetch().
  *
- * @return array  Response item with all 14 mapped keys.
+ * @return array  Response item with all 15 mapped keys.
  */
 function myapi_area_build_item($area) {
   return [
-    'id'                      => (int) $area->nid,
-    'name'                    => $area->title,
-    'condominium_id'          => (int) $area->condominium_id,
-    'image_id'                => $area->image_id !== NULL ? (int) $area->image_id : NULL,
-    'image_url'               => $area->image_uri !== NULL ? file_create_url($area->image_uri) : NULL,
-    'open_time'               => $area->open_time,
-    'close_time'              => $area->close_time,
-    'slot_minutes'            => $area->slot_minutes !== NULL ? (int) $area->slot_minutes : NULL,
-    'max_minutes'             => $area->max_minutes !== NULL ? (int) $area->max_minutes : NULL,
-    'status'                  => $area->status,
-    'who_can_reserve'         => $area->who_can_reserve,
-    'cancel_deadline_minutes' => $area->cancel_deadline_minutes !== NULL ? (int) $area->cancel_deadline_minutes : NULL,
-    'category'                => $area->category,
-    'notes'                   => $area->notes,
+    'id'                          => (int) $area->nid,
+    'name'                        => $area->title,
+    'condominium_id'              => (int) $area->condominium_id,
+    'image_id'                    => $area->image_id !== NULL ? (int) $area->image_id : NULL,
+    'image_url'                   => $area->image_uri !== NULL ? file_create_url($area->image_uri) : NULL,
+    'open_time'                   => $area->open_time,
+    'close_time'                  => $area->close_time,
+    'slot_minutes'                => $area->slot_minutes !== NULL ? (int) $area->slot_minutes : NULL,
+    'max_minutes'                 => $area->max_minutes !== NULL ? (int) $area->max_minutes : NULL,
+    'status'                      => $area->status,
+    'who_can_reserve'             => $area->who_can_reserve,
+    'cancel_deadline_minutes'     => $area->cancel_deadline_minutes !== NULL ? (int) $area->cancel_deadline_minutes : NULL,
+    'category'                    => $area->category,
+    'notes'                       => $area->notes,
+    'max_concurrent_reservations' => myapi_reservation_effective_capacity($area->max_concurrent_reservations),
   ];
 }
