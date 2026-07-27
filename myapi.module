@@ -428,6 +428,12 @@ function myapi_node_insert($node) {
  * - 'recibo' / 'alicuota_extra': delegates to myapi_fee_is_sent_transition() /
  *   myapi_fee_notify_issued() in includes/myapi.fee_notification.inc, notifying
  *   the unit occupants when the fee transitions to "Enviado" on edit.
+ * - 'reservation': delegates to myapi_reservation_is_cancellation_transition() /
+ *   myapi_reservation_notify_cancelled() in
+ *   includes/myapi.reservation_notification.inc, notifying the resident when an
+ *   operator cancels their reservation from the back office. The opt-out save
+ *   from PUT /api/v1/reservations/%/cancel never matches it, so a resident
+ *   cancelling from the app notifies nobody.
  */
 function myapi_node_update($node) {
   if ($node->type === 'pagos') {
@@ -445,6 +451,14 @@ function myapi_node_update($node) {
     if (myapi_fee_is_sent_transition($node)) {
       myapi_fee_notify_issued($node);
     }
+    return;
+  }
+  if ($node->type === 'reservation') {
+    module_load_include('inc', 'myapi', 'includes/myapi.reservation_notification');
+    if (myapi_reservation_is_cancellation_transition($node)) {
+      myapi_reservation_notify_cancelled($node);
+    }
+    return;
   }
 }
 

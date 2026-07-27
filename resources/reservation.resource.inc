@@ -360,6 +360,16 @@ function myapi_reservation_create() {
   // and releases the area lock before the response is built below.
   unset($transaction);
 
+  // Notify the resident (push + inbox + email) and email the detail to the
+  // 'backend' role (SPEC 48). Deliberately outside the transaction: the
+  // reservation is already committed, so neither a failure to notify nor the
+  // latency of the enqueue may roll it back or delay the 201. This is the ONLY
+  // trigger of the "reservation created" notification — there is no
+  // hook_node_insert() branch for 'reservation', so a reservation created from
+  // the node form, drush or an import notifies nobody.
+  module_load_include('inc', 'myapi', 'includes/myapi.reservation_notification');
+  myapi_reservation_notify_created($node);
+
   myapi_respond(['reservation' => myapi_reservation_build_item_from_node($node, $area->title, myapi_reservation_node_value($area, 'field_area_category'), myapi_reservation_node_value($area, 'field_cancel_deadline_minutes'))], 201, 'reservation_created');
 }
 
@@ -430,6 +440,13 @@ function myapi_reservation_cancel($reservation_id) {
   // 6. Apply the cancellation.
   $node->field_reservation_status[LANGUAGE_NONE][0]['value'] = 'cancelled';
   $node->field_cancelled_by[LANGUAGE_NONE][0]['value'] = 'user';
+  // Transient opt-out flag (SPEC 48): the resident is cancelling their own
+  // reservation, so nobody is notified. myapi_node_update() sees this same
+  // $node object and myapi_reservation_is_cancellation_transition() returns
+  // FALSE because of it. Not a field: it is never persisted, and it is absent
+  // on every other save path — which is why a back-office cancellation does
+  // notify.
+  $node->myapi_skip_reservation_notification = TRUE;
   node_save($node);
 
   // 7. Respond 200 with the updated reservation.
