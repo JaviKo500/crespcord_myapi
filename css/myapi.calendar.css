@@ -10,9 +10,86 @@
  * theme, and no rule targets a bare element selector.
  */
 
+/* ---- Filter row ----
+ *
+ * Drupal stacks every form item in its own block. Here the five filters plus
+ * the button belong on a single line, so the form becomes a flex row whose
+ * items align on their input, whatever the height of their label. It wraps on
+ * a narrow window instead of overflowing. */
+
+.myapi-cal-filters {
+  margin: 1em 0 0.5em;
+  padding: 12px 14px;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  background: #fafafa;
+}
+
+/* theme_form() wraps every child of a form in an anonymous <div> ("to satisfy
+ * XHTML compliance"), so the form has exactly one child and the flex row has
+ * to go on that div, not on the <form> itself. */
+.myapi-cal-filters > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+
+.myapi-cal-filters .form-item {
+  margin: 0 14px 0 0;
+  padding: 0;
+}
+
+.myapi-cal-filters label {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 0.82em;
+  font-weight: bold;
+  color: #555;
+  white-space: nowrap;
+}
+
+.myapi-cal-filters select,
+.myapi-cal-filters .myapi-cal-date-input {
+  max-width: 220px;
+  height: 30px;
+  box-sizing: border-box;
+  padding: 3px 6px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  background: #fff;
+  font-size: 0.9em;
+  vertical-align: middle;
+}
+
+.myapi-cal-filters select[disabled] {
+  background: #f0f0f0;
+  color: #999;
+}
+
+/* The native date input measures itself from its own text, so it is pinned to
+ * a width that fits the picker icon in every browser. */
+.myapi-cal-filters .myapi-cal-date-input {
+  width: 150px;
+}
+
+.myapi-cal-filters .form-submit {
+  height: 30px;
+  margin: 0;
+  padding: 0 16px;
+}
+
+/* The descriptions of the fields would break the alignment of the row; the
+ * information they carried now lives in the empty option of the area select
+ * and in the placeholder of the date input. */
+.myapi-cal-filters .description {
+  display: none;
+}
+
 /* ---- Navigation ---- */
 
 .myapi-cal-nav {
+  display: flex;
+  align-items: center;
   margin: 1em 0 0.6em;
 }
 
@@ -36,6 +113,38 @@
   font-size: 1.15em;
   font-weight: bold;
   text-transform: capitalize;
+}
+
+/* Pushed to the right edge of the bar: auto margin instead of a float, so it
+ * cannot escape the flex row. */
+.myapi-cal-viewswitch {
+  display: flex;
+  margin-left: auto;
+}
+
+.myapi-cal-view-link {
+  margin: 0;
+  border-radius: 0;
+}
+
+.myapi-cal-view-link:first-child {
+  border-radius: 3px 0 0 3px;
+}
+
+.myapi-cal-view-link:last-child {
+  border-radius: 0 3px 3px 0;
+  border-left-width: 0;
+}
+
+.myapi-cal-view-link.is-active {
+  background: #4c6ef5;
+  border-color: #4c6ef5;
+  color: #fff;
+  font-weight: bold;
+}
+
+.myapi-cal-view-link.is-active:hover {
+  background: #4c6ef5;
 }
 
 /* ---- Month grid ---- */
@@ -121,14 +230,23 @@
   background: #fffdf0;
 }
 
+/* INVARIANT: 24 rows x 40px = 960px, exactly the height of .myapi-cal-daycol.
+ * The two columns are independent boxes, so anything that changes the height
+ * of a row here — a margin, a border, a different line-height — desynchronises
+ * the labels from the chips. And because the rows stack, the error is
+ * CUMULATIVE: half a line of negative margin per row drifts into a two-hour
+ * offset by the bottom of the day.
+ *
+ * The half-line nudge that puts the label on its own grid line is therefore
+ * done with position/top, which paints elsewhere without touching the flow. */
 .myapi-cal-hour {
+  position: relative;
+  top: -0.5em;
   height: 40px;
   padding-right: 6px;
   font-size: 0.75em;
   color: #999;
   text-align: right;
-  /* Nudged up half a line so the label sits ON its own grid line. */
-  margin-top: -0.5em;
 }
 
 .myapi-cal-daycol {

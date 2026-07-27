@@ -542,6 +542,8 @@ function myapi_calendar_filters($area_options) {
  */
 function myapi_reservation_calendar_filter_form($form, &$form_state, $filters, $condominium_options, $area_options) {
   $form['#method'] = 'get';
+  // Hook for the stylesheet, which lays the five filters out on one row.
+  $form['#attributes']['class'][] = 'myapi-cal-filters';
   // No CSRF token: a read-only GET filter has nothing to forge, and the token
   // would show up in the URL.
   $form['#token'] = FALSE;
@@ -569,13 +571,16 @@ function myapi_reservation_calendar_filter_form($form, &$form_state, $filters, $
     '#default_value' => $filters['condominium'] === NULL ? '' : $filters['condominium'],
   );
 
+  // The empty option carries the instruction while the select is disabled, so
+  // the row needs no description line under the field.
   $form['area'] = array(
     '#type' => 'select',
     '#title' => t('Área'),
-    '#options' => array('' => t('- Todas -')) + $area_options,
+    '#options' => array(
+      '' => $filters['condominium'] === NULL ? t('- Elige un condominio -') : t('- Todas -'),
+    ) + $area_options,
     '#default_value' => $filters['area'] === NULL ? '' : $filters['area'],
     '#disabled' => $filters['condominium'] === NULL,
-    '#description' => $filters['condominium'] === NULL ? t('Elige un condominio para filtrar por área.') : NULL,
   );
 
   $form['status'] = array(
@@ -589,23 +594,30 @@ function myapi_reservation_calendar_filter_form($form, &$form_state, $filters, $
     '#default_value' => $filters['status'],
   );
 
-  $form['view'] = array(
-    '#type' => 'select',
-    '#title' => t('Vista'),
-    '#options' => array(
-      'month' => t('Mes'),
-      'week' => t('Semana'),
-    ),
-    '#default_value' => $filters['view'],
-  );
+  // 'view' is NOT a field of this form: it is the pair of Mes/Semana links at
+  // the right of the navigation bar (myapi_calendar_render_nav()). A select
+  // sitting outside its <form> would not be submitted with it, and the switch
+  // belongs visually next to ‹ hoy › rather than among the filters. The GET
+  // parameter is unchanged — those links carry it, and every other link of the
+  // page carries the current value along.
 
+  // Native HTML5 date input, written by hand because theme_textfield() forces
+  // type="text" on the element and would undo an #attributes override. It is
+  // markup inside an 'item', so it keeps the Drupal label and wrapper while
+  // the browser supplies its own calendar picker — no date_popup submodule to
+  // enable, no jQuery UI. A browser without support renders a plain text box,
+  // exactly what this field was before, and the placeholder keeps the format
+  // hint there.
+  //
+  // The input is named 'date' and lives inside the form, so the browser
+  // submits it in the query string like any other field; type="date" always
+  // submits 'YYYY-MM-DD', which is what myapi_calendar_filters() expects.
   $form['date'] = array(
-    '#type' => 'textfield',
+    '#type' => 'item',
     '#title' => t('Fecha de referencia'),
-    '#size' => 12,
-    '#maxlength' => 10,
-    '#default_value' => $filters['date'],
-    '#description' => t('Formato AAAA-MM-DD.'),
+    '#markup' => '<input type="date" name="date" class="myapi-cal-date-input"'
+      . ' value="' . check_plain($filters['date']) . '"'
+      . ' placeholder="' . t('AAAA-MM-DD') . '" />',
   );
 
   $form['submit'] = array(
@@ -811,12 +823,14 @@ function myapi_calendar_render_legend($segments) {
  *
  * @param array  $filters  Validated filters.
  * @param string $date     The reference date the link points to.
+ * @param string $view     Optional view override, for the Mes/Semana switch.
+ *   Defaults to the current one, which is what every other link needs.
  *
  * @return string  Absolute-path URL.
  */
-function myapi_calendar_url($filters, $date) {
+function myapi_calendar_url($filters, $date, $view = NULL) {
   $query = array(
-    'view' => $filters['view'],
+    'view' => $view === NULL ? $filters['view'] : $view,
     'date' => $date,
     'status' => $filters['status'],
   );
@@ -861,11 +875,24 @@ function myapi_calendar_render_nav($filters, $range) {
     $title = check_plain(format_date(strtotime($first), 'custom', 'F Y'));
   }
 
+  // Month/week switch, pushed to the right edge of the bar. Two links and not
+  // a select, so it needs no form around it and stays consistent with the rest
+  // of the navigation: every position of the calendar is a plain URL.
+  $switch = '';
+  foreach (array('month' => t('Mes'), 'week' => t('Semana')) as $option => $label) {
+    $classes = 'myapi-cal-nav-link myapi-cal-view-link';
+    if ($filters['view'] === $option) {
+      $classes .= ' is-active';
+    }
+    $switch .= '<a class="' . $classes . '" href="' . myapi_calendar_url($filters, $filters['date'], $option) . '">' . $label . '</a>';
+  }
+
   return '<div class="myapi-cal-nav">'
     . '<a class="myapi-cal-nav-link" href="' . myapi_calendar_url($filters, $previous) . '">‹</a> '
     . '<a class="myapi-cal-nav-link" href="' . myapi_calendar_url($filters, date('Y-m-d')) . '">' . t('hoy') . '</a> '
     . '<a class="myapi-cal-nav-link" href="' . myapi_calendar_url($filters, $next) . '">›</a>'
     . '<span class="myapi-cal-nav-title">' . $title . '</span>'
+    . '<span class="myapi-cal-viewswitch">' . $switch . '</span>'
     . '</div>';
 }
 

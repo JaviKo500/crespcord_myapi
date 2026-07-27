@@ -20,74 +20,96 @@
 (function () {
   'use strict';
 
-  var grid = document.querySelector('.myapi-cal');
-  var details = document.querySelector('.myapi-cal-details');
+  /**
+   * Wires the panel once the grid and the detail blocks exist in the document.
+   *
+   * drupal_add_js() puts a file in the <head> by default, so this script runs
+   * BEFORE the body is parsed: querying for the grid at that moment returns
+   * null and the whole thing would bail out silently, with no console error.
+   * Hence the readyState guard rather than running at once — it also keeps
+   * working if the file is ever moved to the footer or merged into a JS
+   * aggregate.
+   */
+  function init() {
+    var grid = document.querySelector('.myapi-cal');
+    var details = document.querySelector('.myapi-cal-details');
 
-  if (!grid || !details) {
-    return;
-  }
-
-  // The panel currently open, or null. Keeping the reference is what
-  // guarantees a second chip cannot leave two panels open at once.
-  var open = null;
-
-  function hide() {
-    if (open) {
-      open.setAttribute('hidden', 'hidden');
-      open = null;
-    }
-  }
-
-  function show(nid) {
-    var panel = document.getElementById('myapi-cal-detail-' + nid);
-    if (!panel) {
+    if (!grid || !details) {
       return;
     }
-    hide();
-    panel.removeAttribute('hidden');
-    open = panel;
-  }
 
-  /**
-   * Climbs from the clicked node up to the container looking for a chip.
-   *
-   * Written by hand instead of with Element.closest() because Drupal 7 sites
-   * still run on browsers that do not implement it.
-   */
-  function chipFrom(node) {
-    while (node && node !== grid) {
-      if (node.getAttribute && node.getAttribute('data-nid')) {
-        return node;
+    // The panel currently open, or null. Keeping the reference is what
+    // guarantees a second chip cannot leave two panels open at once.
+    var open = null;
+
+    function hide() {
+      if (open) {
+        open.setAttribute('hidden', 'hidden');
+        open = null;
       }
-      node = node.parentNode;
     }
-    return null;
+
+    function show(nid) {
+      var panel = document.getElementById('myapi-cal-detail-' + nid);
+      if (!panel) {
+        return;
+      }
+      hide();
+      panel.removeAttribute('hidden');
+      open = panel;
+    }
+
+    /**
+     * Climbs from the clicked node up to the container looking for a chip.
+     *
+     * Written by hand instead of with Element.closest() because Drupal 7 sites
+     * still run on browsers that do not implement it.
+     */
+    function chipFrom(node) {
+      while (node && node !== grid) {
+        if (node.getAttribute && node.getAttribute('data-nid')) {
+          return node;
+        }
+        node = node.parentNode;
+      }
+      return null;
+    }
+
+    grid.addEventListener('click', function (event) {
+      var chip = chipFrom(event.target);
+      if (chip) {
+        show(chip.getAttribute('data-nid'));
+      }
+    });
+
+    details.addEventListener('click', function (event) {
+      // The backdrop IS the open panel element: a click landing on it, rather
+      // than inside its box, closes. So does the X button. A click anywhere
+      // inside the box does nothing, which is what lets the operator select
+      // the email address.
+      var target = event.target;
+      var isClose = target.className && String(target.className).indexOf('myapi-cal-detail-close') !== -1;
+
+      if (target === open || isClose) {
+        hide();
+      }
+    });
+
+    document.addEventListener('keydown', function (event) {
+      // event.key on modern browsers, keyCode as the fallback for the old ones.
+      if (event.key === 'Escape' || event.key === 'Esc' || event.keyCode === 27) {
+        hide();
+      }
+    });
   }
 
-  grid.addEventListener('click', function (event) {
-    var chip = chipFrom(event.target);
-    if (chip) {
-      show(chip.getAttribute('data-nid'));
-    }
-  });
-
-  details.addEventListener('click', function (event) {
-    // The backdrop IS the open panel element: a click landing on it, rather
-    // than inside its box, closes. So does the X button. A click anywhere
-    // inside the box does nothing, which is what lets the operator select the
-    // email address.
-    var target = event.target;
-    var isClose = target.className && String(target.className).indexOf('myapi-cal-detail-close') !== -1;
-
-    if (target === open || isClose) {
-      hide();
-    }
-  });
-
-  document.addEventListener('keydown', function (event) {
-    // event.key on modern browsers, keyCode as the fallback for the old ones.
-    if (event.key === 'Escape' || event.key === 'Esc' || event.keyCode === 27) {
-      hide();
-    }
-  });
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  }
+  else {
+    // Already parsed: the file was placed in the footer, loaded async, or
+    // injected late. Wiring right away is correct and avoids waiting for an
+    // event that will never fire again.
+    init();
+  }
 })();
