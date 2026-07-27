@@ -289,6 +289,7 @@ function _myapi_reservations_uninstall_destructive() {
     'field_cancel_deadline_minutes',
     'field_area_category',
     'field_area_notes',
+    'field_max_concurrent_reservations',
     'field_unit',
     'field_requester',
     'field_area',
@@ -540,6 +541,11 @@ function _myapi_reservations_install() {
     'type'        => 'text_long',
     'cardinality' => 1,
   ]);
+  _myapi_reservations_ensure_field('field_max_concurrent_reservations', [
+    'field_name'  => 'field_max_concurrent_reservations',
+    'type'        => 'number_integer',
+    'cardinality' => 1,
+  ]);
   _myapi_reservations_ensure_field('field_unit', [
     'field_name'  => 'field_unit',
     'type'        => 'entityreference',
@@ -724,6 +730,16 @@ function _myapi_reservations_install() {
     'settings'      => ['text_processing' => 1],
     'default_value' => [['value' => '', 'format' => 'full_html']],
     'widget'        => ['type' => 'text_textarea'],
+  ]);
+  _myapi_reservations_ensure_instance('field_max_concurrent_reservations', 'area', [
+    'field_name'    => 'field_max_concurrent_reservations',
+    'entity_type'   => 'node',
+    'bundle'        => 'area',
+    'label'         => 'Reservas simultáneas permitidas',
+    'required'      => 0,
+    'description'   => 'Número de reservas que pueden coincidir en el mismo horario. Vacío o menor que 1 se interpreta como 1.',
+    'default_value' => [['value' => 1]],
+    'widget'        => ['type' => 'number'],
   ]);
 
   // (c) Instances of the 'reservation' bundle.
@@ -982,5 +998,37 @@ function myapi_update_7008() {
     'settings'      => ['text_processing' => 1],
     'default_value' => [['value' => '', 'format' => 'full_html']],
     'widget'        => ['type' => 'text_textarea'],
+  ]);
+}
+
+/**
+ * Adds the field_max_concurrent_reservations capacity field to the 'area'
+ * bundle on sites where the module is already installed.
+ *
+ * Reuses the same idempotent sub-helpers as _myapi_reservations_install(), so it
+ * creates the number_integer field and its 'area' instance without duplicating
+ * them or throwing a FieldException where they already exist. It only touches
+ * the 'area' bundle — reservation and condominio are left untouched — and adds
+ * no REST endpoint or business logic, just the field and its instance.
+ *
+ * Leaving the field empty on an existing area is safe: the API normalises a
+ * missing, NULL or below-1 value to a capacity of 1, which is exactly the
+ * single-reservation overlap behaviour those areas already had.
+ */
+function myapi_update_7009() {
+  _myapi_reservations_ensure_field('field_max_concurrent_reservations', [
+    'field_name'  => 'field_max_concurrent_reservations',
+    'type'        => 'number_integer',
+    'cardinality' => 1,
+  ]);
+  _myapi_reservations_ensure_instance('field_max_concurrent_reservations', 'area', [
+    'field_name'    => 'field_max_concurrent_reservations',
+    'entity_type'   => 'node',
+    'bundle'        => 'area',
+    'label'         => 'Reservas simultáneas permitidas',
+    'required'      => 0,
+    'description'   => 'Número de reservas que pueden coincidir en el mismo horario. Vacío o menor que 1 se interpreta como 1.',
+    'default_value' => [['value' => 1]],
+    'widget'        => ['type' => 'number'],
   ]);
 }
