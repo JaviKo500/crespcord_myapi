@@ -151,8 +151,9 @@ function myapi_reservation_peak_concurrency($intervals, $cand_start, $cand_end) 
  * Fetches the raw rows of confirmed, published reservations of an area whose
  * field_date falls on any of the given days.
  *
- * Same base as myapi_reservation_has_overlap() but WITHOUT the requester filter
- * and WITHOUT a candidate range to compare: it reports every confirmed booking
+ * Same base as myapi_reservation_fetch_abs_intervals() but WITHOUT the
+ * requester filter and WITHOUT the D-1/D+1 window: it reports every confirmed
+ * booking
  * of the area (all units of the condominium) across the given dates. Rows
  * missing any of field_date / field_start_time / field_end_time are excluded by
  * the inner joins, consistent with the write path.

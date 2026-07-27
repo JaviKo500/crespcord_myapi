@@ -344,6 +344,13 @@ function myapi_area_base_select() {
   $query->leftJoin('field_data_field_area_notes', 'fnot', "fnot.entity_id = n.nid AND fnot.entity_type = 'node' AND fnot.deleted = 0");
   $query->addField('fnot', 'field_area_notes_value', 'notes');
 
+  // Concurrent capacity (SPEC 45). Left join like every optional field: an area
+  // with no row yields NULL here, which myapi_reservation_effective_capacity()
+  // reads as a capacity of 1 — the single-reservation behaviour those areas
+  // already had.
+  $query->leftJoin('field_data_field_max_concurrent_reservations', 'fcap', "fcap.entity_id = n.nid AND fcap.entity_type = 'node' AND fcap.deleted = 0");
+  $query->addField('fcap', 'field_max_concurrent_reservations_value', 'max_concurrent_reservations');
+
   return $query;
 }
 

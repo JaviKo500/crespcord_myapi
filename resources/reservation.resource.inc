@@ -21,6 +21,7 @@ module_load_include('inc', 'myapi', 'includes/myapi.i18n');
 module_load_include('inc', 'myapi', 'includes/myapi.token');
 module_load_include('inc', 'myapi', 'includes/myapi.auth');
 module_load_include('inc', 'myapi', 'includes/myapi.unit_access');
+module_load_include('inc', 'myapi', 'includes/myapi.reservation_query');
 
 /**
  * Dispatcher for /api/v1/units/%/reservations.
@@ -296,12 +297,47 @@ function myapi_reservation_create() {
     ->execute()
     ->fetchField();
 
-  // 6. Overlap with another 'confirmed' reservation of the same area, compared
-  // on an absolute axis across D-1/D/D+1 so midnight-crossing tails are caught
+  // 6. Concurrent capacity of the area (SPEC 45). Until SPEC 45 a single
+  // overlap rejected the request; the area now declares in
+  // field_max_concurrent_reservations how many reservations may coincide, and
+  // only a full slot rejects. Existing reservations are still compared on an
+  // absolute axis across D-1/D/D+1 so midnight-crossing tails are caught
   // (SPEC 41). $date is the normalized clock day.
-  if (myapi_reservation_has_overlap($area_id, $date, $start_minutes, $end_minutes)) {
-    $transaction->rollback();
-    myapi_error('reservation_overlap', 409);
+  //
+  // This check MUST stay inside the transaction, after the SELECT ... FOR
+  // UPDATE above: without that lock two concurrent requests would both read
+  // "there is still room" and both insert, making the capacity trivially
+  // exceedable. With capacity 1 the race already existed; with capacity N it is
+  // easier to hit, because more legitimate requests compete for the same slot.
+  $capacity = myapi_reservation_effective_capacity(myapi_reservation_node_value($area, 'field_max_concurrent_reservations'));
+  $intervals = myapi_reservation_fetch_abs_intervals($area_id, $date, $start_minutes, $end_minutes);
+  list($cand_start_abs, $cand_end_abs) = myapi_reservation_abs_interval($date, $start_minutes, $end_minutes);
+
+  // The peak can never exceed the number of reservations overlapping the
+  // candidate, so fewer overlaps than slots is already an accept. Exact, not an
+  // approximation: it just keeps the happy path — most requests — out of the
+  // O(n^2) scan. Same half-open criterion as everywhere else (SPEC 35).
+  $overlapping = 0;
+  foreach ($intervals as $interval) {
+    if ($interval[0] < $cand_end_abs && $interval[1] > $cand_start_abs) {
+      $overlapping++;
+    }
+  }
+
+  if ($overlapping >= $capacity) {
+    // The +1 is the candidate itself: rejecting means it would push some
+    // instant of its own window above the area's capacity. Counting the
+    // reservations that overlap would be wrong here — two bookings can both
+    // overlap the candidate and never coincide with each other.
+    $peak = myapi_reservation_peak_concurrency($intervals, $cand_start_abs, $cand_end_abs);
+    if ($peak + 1 > $capacity) {
+      $transaction->rollback();
+      // Capacity-1 areas — all of them before SPEC 45 — keep the exact
+      // error_code they already returned, so a behaviour that did not change
+      // does not force a client release. The new code only shows up in
+      // situations that could not happen before.
+      myapi_error($capacity === 1 ? 'reservation_overlap' : 'area_capacity_full', 409);
+    }
   }
 
   // 7. Only one active 'confirmed' reservation per unit+area (start not yet
@@ -459,22 +495,30 @@ function myapi_reservation_details($reservation_id) {
 }
 
 /**
- * Checks whether a candidate interval overlaps a 'confirmed' reservation of
- * the same area, comparing on an absolute minute axis (SPEC 41).
+ * Fetches the 'confirmed' reservations of an area that could touch a candidate
+ * on day D, projected onto the absolute minute axis (SPEC 41).
  *
- * Each reservation — the candidate and every existing one — is projected onto
- * an absolute axis anchored at the midnight of its own field_date
- * (myapi_reservation_abs_interval), so same-day, midnight-crossing and
- * early-morning reservations all compare uniformly. To catch the tails that a
- * single-date query would miss, existing reservations are fetched for three
- * days: field_date IN (D-1, D, D+1). D-1 covers a previous-day reservation
- * whose tail runs past midnight into $date; D+1 covers an early-morning
- * reservation of the next day that a crossing candidate could hit. The
- * per-area/day volume stays low, so interval math is done in PHP.
+ * Until SPEC 45 this was myapi_reservation_has_overlap() and answered a
+ * yes/no question. Validation 6 now enforces a capacity of N simultaneous
+ * reservations instead of rejecting on the first overlap, so it needs the
+ * INTERVALS themselves to compute the concurrency peak. The query is unchanged;
+ * only what is done with the rows is.
  *
- * Half-open interval criterion (unchanged from SPEC 35): new_start_abs <
- * existing_end_abs AND new_end_abs > existing_start_abs, so back-to-back
- * reservations (one ends exactly when another begins) do not overlap.
+ * Each reservation is projected onto an absolute axis anchored at the midnight
+ * of its own field_date (myapi_reservation_abs_interval), so same-day,
+ * midnight-crossing and early-morning reservations all compare uniformly. To
+ * catch the tails that a single-date query would miss, reservations are fetched
+ * for three days: field_date IN (D-1, D, D+1). D-1 covers a previous-day
+ * reservation whose tail runs past midnight into $date; D+1 covers an
+ * early-morning reservation of the next day that a crossing candidate could
+ * hit. The per-area/day volume stays low, so interval math is done in PHP.
+ *
+ * The candidate's own range is NOT used to filter here: the caller projects it
+ * with myapi_reservation_abs_interval() and hands both to
+ * myapi_reservation_peak_concurrency(), which applies the half-open criterion
+ * (unchanged from SPEC 35, so back-to-back reservations still do not overlap).
+ * $start_minutes/$end_minutes are kept in the signature per SPEC 45 so the call
+ * site reads the same as before the rename.
  *
  * @param int    $area_id       The 'area' nid.
  * @param string $date          Normalized 'YYYY-MM-DD' of the candidate (D).
@@ -482,9 +526,10 @@ function myapi_reservation_details($reservation_id) {
  * @param int    $end_minutes   Candidate end, minutes since midnight (unbounded
  *                              when the candidate crosses midnight).
  *
- * @return bool  TRUE when the candidate interval overlaps an existing one.
+ * @return array  List of [start_abs, end_abs] pairs, absolute minutes, one per
+ *                confirmed reservation of the three days. Empty when none.
  */
-function myapi_reservation_has_overlap($area_id, $date, $start_minutes, $end_minutes) {
+function myapi_reservation_fetch_abs_intervals($area_id, $date, $start_minutes, $end_minutes) {
   $prev = date('Y-m-d', strtotime($date . ' -1 day'));
   $next = date('Y-m-d', strtotime($date . ' +1 day'));
 
@@ -508,20 +553,16 @@ function myapi_reservation_has_overlap($area_id, $date, $start_minutes, $end_min
   $query->innerJoin('field_data_field_end_time', 'fe', "fe.entity_id = n.nid AND fe.entity_type = 'node' AND fe.deleted = 0");
   $query->addField('fe', 'field_end_time_value', 'end_time');
 
-  list($new_start_abs, $new_end_abs) = myapi_reservation_abs_interval($date, $start_minutes, $end_minutes);
-
+  $intervals = [];
   $rows = $query->execute()->fetchAll();
   foreach ($rows as $existing) {
     $existing_date = substr($existing->date, 0, 10);
     $existing_start = myapi_reservation_parse_time($existing->start_time);
     $existing_end = myapi_reservation_parse_time($existing->end_time);
-    list($existing_start_abs, $existing_end_abs) = myapi_reservation_abs_interval($existing_date, $existing_start, $existing_end);
-    if ($new_start_abs < $existing_end_abs && $new_end_abs > $existing_start_abs) {
-      return TRUE;
-    }
+    $intervals[] = myapi_reservation_abs_interval($existing_date, $existing_start, $existing_end);
   }
 
-  return FALSE;
+  return $intervals;
 }
 
 /**
