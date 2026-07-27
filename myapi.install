@@ -289,7 +289,7 @@ function _myapi_reservations_uninstall_destructive() {
     'field_cancel_deadline_minutes',
     'field_area_category',
     'field_area_notes',
-    'field_max_concurrent_reservations',
+    'field_concurrent_reservations',
     'field_unit',
     'field_requester',
     'field_area',
@@ -541,8 +541,11 @@ function _myapi_reservations_install() {
     'type'        => 'text_long',
     'cardinality' => 1,
   ]);
-  _myapi_reservations_ensure_field('field_max_concurrent_reservations', [
-    'field_name'  => 'field_max_concurrent_reservations',
+  // Named without a 'max_' prefix on purpose: Drupal 7 rejects field names
+  // longer than 32 characters, and 'field_max_concurrent_reservations' is 33.
+  // The JSON key stays 'max_concurrent_reservations' (see area.resource.inc).
+  _myapi_reservations_ensure_field('field_concurrent_reservations', [
+    'field_name'  => 'field_concurrent_reservations',
     'type'        => 'number_integer',
     'cardinality' => 1,
   ]);
@@ -731,8 +734,8 @@ function _myapi_reservations_install() {
     'default_value' => [['value' => '', 'format' => 'full_html']],
     'widget'        => ['type' => 'text_textarea'],
   ]);
-  _myapi_reservations_ensure_instance('field_max_concurrent_reservations', 'area', [
-    'field_name'    => 'field_max_concurrent_reservations',
+  _myapi_reservations_ensure_instance('field_concurrent_reservations', 'area', [
+    'field_name'    => 'field_concurrent_reservations',
     'entity_type'   => 'node',
     'bundle'        => 'area',
     'label'         => 'Reservas simultáneas permitidas',
@@ -1002,7 +1005,7 @@ function myapi_update_7008() {
 }
 
 /**
- * Adds the field_max_concurrent_reservations capacity field to the 'area'
+ * Adds the field_concurrent_reservations capacity field to the 'area'
  * bundle on sites where the module is already installed.
  *
  * Reuses the same idempotent sub-helpers as _myapi_reservations_install(), so it
@@ -1014,15 +1017,19 @@ function myapi_update_7008() {
  * Leaving the field empty on an existing area is safe: the API normalises a
  * missing, NULL or below-1 value to a capacity of 1, which is exactly the
  * single-reservation overlap behaviour those areas already had.
+ *
+ * The field name carries no 'max_' prefix because Drupal 7 rejects field names
+ * longer than 32 characters; the JSON key the API exposes is still
+ * 'max_concurrent_reservations'.
  */
 function myapi_update_7009() {
-  _myapi_reservations_ensure_field('field_max_concurrent_reservations', [
-    'field_name'  => 'field_max_concurrent_reservations',
+  _myapi_reservations_ensure_field('field_concurrent_reservations', [
+    'field_name'  => 'field_concurrent_reservations',
     'type'        => 'number_integer',
     'cardinality' => 1,
   ]);
-  _myapi_reservations_ensure_instance('field_max_concurrent_reservations', 'area', [
-    'field_name'    => 'field_max_concurrent_reservations',
+  _myapi_reservations_ensure_instance('field_concurrent_reservations', 'area', [
+    'field_name'    => 'field_concurrent_reservations',
     'entity_type'   => 'node',
     'bundle'        => 'area',
     'label'         => 'Reservas simultáneas permitidas',

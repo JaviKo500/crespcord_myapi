@@ -33,7 +33,7 @@ function myapi_reservation_time_to_minutes($hhmm) {
 }
 
 /**
- * Normalises the raw field_max_concurrent_reservations value of an area into
+ * Normalises the raw field_concurrent_reservations value of an area into
  * its EFFECTIVE capacity: how many reservations may coincide in the same slot.
  *
  * The rule is deliberately FAIL-CLOSED:

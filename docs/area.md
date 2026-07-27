@@ -150,7 +150,7 @@ this endpoint — the caller receives a URL, not an authenticated stream.
 | `field_cancel_deadline_minutes_value` | `cancel_deadline_minutes` | int | `NULL` if no row |
 | `field_area_category_value` | `category` | string | `NULL` if no row |
 | `field_area_notes_value` | `notes` | string (raw, may contain unsanitized HTML) | `NULL` if no row; `""` stays `""` |
-| `field_max_concurrent_reservations_value` | `max_concurrent_reservations` | int (**normalized**, always `>= 1`) | never `NULL`: no row, `NULL`, `0` or negative all return `1` |
+| `field_concurrent_reservations_value` | `max_concurrent_reservations` | int (**normalized**, always `>= 1`) | never `NULL`: no row, `NULL`, `0` or negative all return `1` |
 
 | Table | Relevant columns | Use |
 |---|---|---|
@@ -167,7 +167,7 @@ this endpoint — the caller receives a URL, not an authenticated stream.
 | `field_data_field_cancel_deadline_minutes` | `entity_id`, `field_cancel_deadline_minutes_value` | `cancel_deadline_minutes`, integer. Left join. |
 | `field_data_field_area_category` | `entity_id`, `field_area_category_value` | `category`, list text. Left join. |
 | `field_data_field_area_notes` | `entity_id`, `field_area_notes_value` | `notes`, long text. Left join (alias `fnot`). Only `_value` is selected; `field_area_notes_format` is never exposed. |
-| `field_data_field_max_concurrent_reservations` | `entity_id`, `field_max_concurrent_reservations_value` | `max_concurrent_reservations`, integer. Left join (alias `fcap`). A missing row yields `NULL`, which is normalized to `1` before it reaches the response. |
+| `field_data_field_concurrent_reservations` | `entity_id`, `field_concurrent_reservations_value` | `max_concurrent_reservations`, integer. Left join (alias `fcap`). A missing row yields `NULL`, which is normalized to `1` before it reaches the response. |
 
 **Possible errors**
 | Code | `error_code` | When |
@@ -488,7 +488,7 @@ row and so never appear in `busy`. A future schema change to any of those fields
 (rename, single→multi-value, type change) would silently break this endpoint
 without a Drupal update warning.
 
-`capacity` comes from the same `field_max_concurrent_reservations` left join as
+`capacity` comes from the same `field_concurrent_reservations` left join as
 the area item, so no extra query is issued for it.
 
 This endpoint only **reports**; it never creates, updates or rejects anything.

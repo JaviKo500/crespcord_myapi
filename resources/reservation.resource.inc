@@ -299,7 +299,7 @@ function myapi_reservation_create() {
 
   // 6. Concurrent capacity of the area (SPEC 45). Until SPEC 45 a single
   // overlap rejected the request; the area now declares in
-  // field_max_concurrent_reservations how many reservations may coincide, and
+  // field_concurrent_reservations how many reservations may coincide, and
   // only a full slot rejects. Existing reservations are still compared on an
   // absolute axis across D-1/D/D+1 so midnight-crossing tails are caught
   // (SPEC 41). $date is the normalized clock day.
@@ -309,7 +309,7 @@ function myapi_reservation_create() {
   // "there is still room" and both insert, making the capacity trivially
   // exceedable. With capacity 1 the race already existed; with capacity N it is
   // easier to hit, because more legitimate requests compete for the same slot.
-  $capacity = myapi_reservation_effective_capacity(myapi_reservation_node_value($area, 'field_max_concurrent_reservations'));
+  $capacity = myapi_reservation_effective_capacity(myapi_reservation_node_value($area, 'field_concurrent_reservations'));
   $intervals = myapi_reservation_fetch_abs_intervals($area_id, $date, $start_minutes, $end_minutes);
   list($cand_start_abs, $cand_end_abs) = myapi_reservation_abs_interval($date, $start_minutes, $end_minutes);
 

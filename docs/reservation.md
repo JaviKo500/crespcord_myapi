@@ -381,7 +381,7 @@ before the node is ever touched:
 
 **Concurrent capacity criterion (validation 6)**
 
-An area declares in `field_max_concurrent_reservations` how many reservations
+An area declares in `field_concurrent_reservations` how many reservations
 may **coincide** in the same time slot — a gym that fits three groups at once
 has capacity `3`. The value is read-only through the API and exposed as
 `max_concurrent_reservations` in the area item (see [area.md](area.md)).
