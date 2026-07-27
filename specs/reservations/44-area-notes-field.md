@@ -1,6 +1,6 @@
 # SPEC 44 — Campo de notas/instrucciones del área
 
-> **Estado:** Approved · **Depende de:** SPEC 32 (install de content types y campos), SPEC 33 (listado de áreas de un condominio), SPEC 39 (detalle de área y `myapi_area_base_select()`) · **Fecha:** 2026-07-27
+> **Estado:** Implemented · **Depende de:** SPEC 32 (install de content types y campos), SPEC 33 (listado de áreas de un condominio), SPEC 39 (detalle de área y `myapi_area_base_select()`) · **Fecha:** 2026-07-27
 > **Objetivo:** Añadir el campo `field_area_notes` (`text_long`, formato por defecto `full_html`) al bundle `area` y exponer su valor crudo como clave `notes` en las dos lecturas de área ya existentes, pasando el item de 13 a 14 claves.
 
 ---
@@ -120,20 +120,20 @@ Dos apuntes que van implícitos en el modelo:
 
 ## Criterios de aceptación
 
-- [ ] Tras `drush updb`, `field_info_field('field_area_notes')` existe y `field_info_instance('node', 'field_area_notes', 'area')` devuelve el instance; el bundle `reservation` **no** tiene instance de ese campo.
-- [ ] El formulario `node/add/area` muestra "Instrucciones o notas" como textarea, no obligatorio, con el selector de formato en "Full HTML".
-- [ ] Reejecutar `myapi_update_7008()` no lanza `FieldException` ni duplica el campo o el instance.
-- [ ] Una instalación limpia (`drush en myapi` sobre BD virgen) crea el campo y su instance sin necesidad de `updb`.
-- [ ] `GET /api/v1/condominiums/{id}/areas` devuelve items de **14 claves**, con `notes` en último lugar, después de `category`.
-- [ ] `GET /api/v1/areas/{id}` devuelve el mismo item de 14 claves envuelto como `{"area": ...}`.
-- [ ] Un área **con** notas devuelve el texto exactamente como se guardó, incluido el HTML si lo tiene, sin escapar ni filtrar.
-- [ ] Un área **sin** fila en `field_data_field_area_notes` devuelve `"notes": null` y sigue apareciendo en el listado y en el detalle igual que antes del cambio.
-- [ ] El número de áreas devueltas y el bloque `pagination` del listado son idénticos a los de antes del cambio (el `leftJoin` no filtra nada).
-- [ ] `GET /api/v1/areas/{id}/availability` devuelve exactamente la misma respuesta `{date, busy}` que antes, sin clave `notes`.
-- [ ] El payload de reservas (`GET /api/v1/units/{id}/reservations`, detalle y creación) no cambia en ninguna clave.
-- [ ] No hay claves i18n ni `error_code` nuevos.
-- [ ] `myapi.info` y `hook_menu()` sin cambios en el diff.
-- [ ] `docs/area.md` documenta `notes` en los dos endpoints, en las dos tablas, y avisa de que el valor puede contener HTML sin sanear.
+- [x] Tras `drush updb`, `field_info_field('field_area_notes')` existe y `field_info_instance('node', 'field_area_notes', 'area')` devuelve el instance; el bundle `reservation` **no** tiene instance de ese campo.
+- [x] El formulario `node/add/area` muestra "Instrucciones o notas" como textarea, no obligatorio, con el selector de formato en "Full HTML".
+- [x] Reejecutar `myapi_update_7008()` no lanza `FieldException` ni duplica el campo o el instance.
+- [x] Una instalación limpia (`drush en myapi` sobre BD virgen) crea el campo y su instance sin necesidad de `updb`.
+- [x] `GET /api/v1/condominiums/{id}/areas` devuelve items de **14 claves**, con `notes` en último lugar, después de `category`.
+- [x] `GET /api/v1/areas/{id}` devuelve el mismo item de 14 claves envuelto como `{"area": ...}`.
+- [x] Un área **con** notas devuelve el texto exactamente como se guardó, incluido el HTML si lo tiene, sin escapar ni filtrar.
+- [x] Un área **sin** fila en `field_data_field_area_notes` devuelve `"notes": null` y sigue apareciendo en el listado y en el detalle igual que antes del cambio.
+- [x] El número de áreas devueltas y el bloque `pagination` del listado son idénticos a los de antes del cambio (el `leftJoin` no filtra nada).
+- [x] `GET /api/v1/areas/{id}/availability` devuelve exactamente la misma respuesta `{date, busy}` que antes, sin clave `notes`.
+- [x] El payload de reservas (`GET /api/v1/units/{id}/reservations`, detalle y creación) no cambia en ninguna clave.
+- [x] No hay claves i18n ni `error_code` nuevos.
+- [x] `myapi.info` y `hook_menu()` sin cambios en el diff.
+- [x] `docs/area.md` documenta `notes` en los dos endpoints, en las dos tablas, y avisa de que el valor puede contener HTML sin sanear.
 
 ---
 
