@@ -340,6 +340,28 @@ function myapi_node_update($node) {
 }
 
 /**
+ * Implements hook_node_validate().
+ *
+ * Glue only: ignores everything that is not an 'area' node and delegates the
+ * HH:MM format check of field_open_time / field_close_time to
+ * includes/myapi.area_admin.inc. The type guard on the first line keeps every
+ * other node form untouched and stops the include from being loaded on them.
+ *
+ * This hook is reached from node_form_validate() only, so it guards the admin
+ * node form (node/add/area and node/%/edit) and nothing else: a programmatic
+ * node_save() — a migration, drush, or the node the reservation endpoints save
+ * — does not go through form validation and is deliberately out of scope
+ * (SPEC 46).
+ */
+function myapi_node_validate($node, $form, &$form_state) {
+  if ($node->type !== 'area') {
+    return;
+  }
+  module_load_include('inc', 'myapi', 'includes/myapi.area_admin');
+  myapi_area_validate_times($node, $form, $form_state);
+}
+
+/**
  * Implements hook_cron_queue_info().
  *
  * Registers the worker that drains the OneSignal push queue. This hook is

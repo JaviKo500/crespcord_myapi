@@ -169,6 +169,17 @@ this endpoint — the caller receives a URL, not an authenticated stream.
 | `field_data_field_area_notes` | `entity_id`, `field_area_notes_value` | `notes`, long text. Left join (alias `fnot`). Only `_value` is selected; `field_area_notes_format` is never exposed. |
 | `field_data_field_concurrent_reservations` | `entity_id`, `field_concurrent_reservations_value` | `max_concurrent_reservations`, integer. Left join (alias `fcap`). A missing row yields `NULL`, which is normalized to `1` before it reaches the response. |
 
+Since SPEC 46, `field_open_time` and `field_close_time` are validated as `HH:MM`
+on a 24h clock (`00:00`–`23:59`, leading zero required) when an area is saved
+from the Drupal admin form. The rule is format-only: `close_time <= open_time`
+stays legal, because that is how an overnight area is expressed (SPEC 41).
+
+The API does **not** validate the format on read: `open_time` and `close_time`
+are still returned exactly as stored, so an area saved with a malformed value
+before that validation existed keeps being served as-is until its node is saved
+again. Nothing rejects it, and the reservation arithmetic treats it the same way
+it did before.
+
 **Possible errors**
 | Code | `error_code` | When |
 |------|--------------|------|
