@@ -18,6 +18,13 @@ if (!defined('MYAPI_ONESIGNAL_QUEUE')) {
   define('MYAPI_ONESIGNAL_QUEUE', 'myapi_onesignal_push');
 }
 
+// Deferred mail queue name. Defined here for the same reason as the OneSignal
+// queue above: hook_cron_queue_info() references it to register the worker
+// before includes/myapi.mail_queue.inc is necessarily loaded.
+if (!defined('MYAPI_MAIL_QUEUE')) {
+  define('MYAPI_MAIL_QUEUE', 'myapi_mail_send');
+}
+
 /**
  * Implements hook_menu().
  */
@@ -332,11 +339,30 @@ function myapi_calendar_access() {
 
 /**
  * Implements hook_mail().
+ *
+ * Glue only: loads the mail include and delegates the formatting. The
+ * reservation keys are reached from the deferred mail queue during cron (see
+ * includes/myapi.mail_queue.inc), the password reset one from the request that
+ * asks for it.
  */
 function myapi_mail($key, &$message, $params) {
-  if ($key == 'password_reset') {
-    module_load_include('inc', 'myapi', 'includes/myapi.mail');
-    myapi_mail_format_password_reset($message, $params);
+  module_load_include('inc', 'myapi', 'includes/myapi.mail');
+
+  switch ($key) {
+    case 'password_reset':
+      myapi_mail_format_password_reset($message, $params);
+      break;
+
+    // Both resident keys share a formatter: they differ only in the subject,
+    // the context sentence and the closing line.
+    case 'reservation_created_user':
+    case 'reservation_cancelled_user':
+      myapi_mail_format_reservation_user($message, $params, $key);
+      break;
+
+    case 'reservation_created_admin':
+      myapi_mail_format_reservation_created_admin($message, $params);
+      break;
   }
 }
 
@@ -447,22 +473,31 @@ function myapi_node_validate($node, $form, &$form_state) {
 /**
  * Implements hook_cron_queue_info().
  *
- * Registers the worker that drains the OneSignal push queue. This hook is
- * invoked by drupal_cron_run() right before it processes the queues in the same
- * request, so loading the include here guarantees the worker function is
- * defined when the queue is drained. A failing item is retried on the next cron
- * (standard Queue API behaviour).
+ * Registers the workers that drain the OneSignal push queue and the deferred
+ * mail queue. This hook is invoked by drupal_cron_run() right before it
+ * processes the queues in the same request, so loading the includes here
+ * guarantees the worker functions are defined when the queues are drained.
+ *
+ * Retry policy differs per queue: a failing push item throws and is retried on
+ * the next cron (standard Queue API behaviour), while the mail worker re-enqueues
+ * with a bounded attempt counter and drops afterwards (see
+ * includes/myapi.mail_queue.inc).
  */
 function myapi_cron_queue_info() {
-  // Load the include so the worker callback is defined when drupal_cron_run()
-  // drains the queue later in this same request. The queue name comes from the
-  // constant defined at the top of this file, so it never depends on the load
+  // Load the includes so the worker callbacks are defined when drupal_cron_run()
+  // drains the queues later in this same request. The queue names come from the
+  // constants defined at the top of this file, so they never depend on the loads
   // above succeeding.
   module_load_include('inc', 'myapi', 'includes/myapi.onesignal');
+  module_load_include('inc', 'myapi', 'includes/myapi.mail_queue');
 
   $queues = [];
   $queues[MYAPI_ONESIGNAL_QUEUE] = [
     'worker callback' => 'myapi_onesignal_queue_worker',
+    'time'            => 60,
+  ];
+  $queues[MYAPI_MAIL_QUEUE] = [
+    'worker callback' => 'myapi_mail_queue_worker',
     'time'            => 60,
   ];
   return $queues;

@@ -316,25 +316,43 @@ function _myapi_reservations_uninstall_destructive() {
 }
 
 /**
- * Maps the 'myapi_password_reset' mail key to MyapiHtmlMailSystem.
+ * Mail keys of this module that must keep their HTML body.
  *
- * Drupal's mail_system variable is keyed by "{module}_{key}"; this makes only
- * the password reset email use the HTML-preserving mail system (see
- * includes/myapi.mailsystem.inc), leaving every other mail on this site
- * (core, other modules) on the default plain-text system.
+ * Drupal's mail_system variable is keyed by "{module}_{key}", so these are the
+ * exact keys that get mapped to MyapiHtmlMailSystem.
+ */
+function myapi_html_mail_keys() {
+  return [
+    'myapi_password_reset',
+    'myapi_reservation_created_user',
+    'myapi_reservation_cancelled_user',
+    'myapi_reservation_created_admin',
+  ];
+}
+
+/**
+ * Maps this module's HTML mail keys to MyapiHtmlMailSystem.
+ *
+ * Only these keys use the HTML-preserving mail system (see
+ * includes/myapi.mailsystem.inc), leaving every other mail on this site (core,
+ * other modules) on the default plain-text system.
  */
 function myapi_mail_system_register() {
   $mail_system = variable_get('mail_system', ['default-system' => 'DefaultMailSystem']);
-  $mail_system['myapi_password_reset'] = 'MyapiHtmlMailSystem';
+  foreach (myapi_html_mail_keys() as $key) {
+    $mail_system[$key] = 'MyapiHtmlMailSystem';
+  }
   variable_set('mail_system', $mail_system);
 }
 
 /**
- * Removes the 'myapi_password_reset' mail system mapping.
+ * Removes this module's mail system mappings.
  */
 function myapi_mail_system_unregister() {
   $mail_system = variable_get('mail_system', []);
-  unset($mail_system['myapi_password_reset']);
+  foreach (myapi_html_mail_keys() as $key) {
+    unset($mail_system[$key]);
+  }
   variable_set('mail_system', $mail_system);
 }
 
@@ -1038,4 +1056,16 @@ function myapi_update_7009() {
     'default_value' => [['value' => 1]],
     'widget'        => ['type' => 'number'],
   ]);
+}
+
+/**
+ * SPEC 48: maps the three reservation mail keys to MyapiHtmlMailSystem.
+ *
+ * myapi_mail_system_register() runs on install, so a fresh site already gets
+ * the mapping; this update applies it where the module is already installed.
+ * Without it, the new keys would fall back to DefaultMailSystem and the HTML
+ * body would arrive converted to plain text.
+ */
+function myapi_update_7010() {
+  myapi_mail_system_register();
 }
