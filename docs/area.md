@@ -39,7 +39,8 @@ create/update/delete. For a single area by id, see
         "status": "active",
         "who_can_reserve": "both",
         "cancel_deadline_minutes": 120,
-        "category": "pool"
+        "category": "pool",
+        "notes": "<p>Aforo máximo 20 personas.</p><p>Prohibido el vidrio.</p>"
       }
     ],
     "pagination": {
@@ -75,15 +76,23 @@ Notes:
   visible set, centralized in the `MYAPI_AREA_VISIBLE_STATUSES` constant so it
   can be adjusted in one place. This is the opposite of the by-exclusion
   criterion used by payments: "no status" is not a safe state to show.
-- Every area includes exactly 13 keys: `id`, `name`, `condominium_id`,
+- Every area includes exactly 14 keys: `id`, `name`, `condominium_id`,
   `image_id`, `image_url`, `open_time`, `close_time`, `slot_minutes`,
   `max_minutes`, `status`, `who_can_reserve`, `cancel_deadline_minutes`,
-  `category` (see mapping table below). Text/list fields pass through as the raw
-  stored value (e.g. `status`, `who_can_reserve`, `category` are the stored
-  option keys, not their labels; `open_time`/`close_time` are raw `HH:MM`
+  `category`, `notes` (see mapping table below). Text/list fields pass through as
+  the raw stored value (e.g. `status`, `who_can_reserve`, `category` are the
+  stored option keys, not their labels; `open_time`/`close_time` are raw `HH:MM`
   strings). A field is `null` when the node has no row in that field's storage
   table. `slot_minutes`, `max_minutes`, `cancel_deadline_minutes` and `image_id`
   are cast to `int` when present, `null` otherwise.
+- `notes` is free text edited from the Drupal admin (field "Instrucciones o
+  notas", default text format Full HTML) and is **read-only** through the API.
+  It is returned **exactly as stored**: the value may contain HTML and the server
+  never sanitizes or renders it (no `check_markup()`, no `filter_xss()`). Any
+  client that renders it — a WebView in particular — is responsible for its own
+  sanitization. `notes` is `null` only when the node has no row in
+  `field_data_field_area_notes`; an empty string is returned as `""` and is not
+  normalized to `null`. The text format itself is not exposed.
 - `image_id` and `image_url` are `null` **together** when the area has no image.
   When an image is present, `image_url` is the absolute URL built with
   `file_create_url()` over the joined `file_managed.uri`.
@@ -123,6 +132,7 @@ this endpoint — the caller receives a URL, not an authenticated stream.
 | `field_who_can_reserve_value` | `who_can_reserve` | string | `NULL` if no row |
 | `field_cancel_deadline_minutes_value` | `cancel_deadline_minutes` | int | `NULL` if no row |
 | `field_area_category_value` | `category` | string | `NULL` if no row |
+| `field_area_notes_value` | `notes` | string (raw, may contain unsanitized HTML) | `NULL` if no row; `""` stays `""` |
 
 | Table | Relevant columns | Use |
 |---|---|---|
@@ -138,6 +148,7 @@ this endpoint — the caller receives a URL, not an authenticated stream.
 | `field_data_field_who_can_reserve` | `entity_id`, `field_who_can_reserve_value` | `who_can_reserve`, list text. Left join. |
 | `field_data_field_cancel_deadline_minutes` | `entity_id`, `field_cancel_deadline_minutes_value` | `cancel_deadline_minutes`, integer. Left join. |
 | `field_data_field_area_category` | `entity_id`, `field_area_category_value` | `category`, list text. Left join. |
+| `field_data_field_area_notes` | `entity_id`, `field_area_notes_value` | `notes`, long text. Left join (alias `fnot`). Only `_value` is selected; `field_area_notes_format` is never exposed. |
 
 **Possible errors**
 | Code | `error_code` | When |
@@ -190,8 +201,9 @@ None. The area id travels in the path; any body sent is ignored.
 
 **Success response (200)**
 
-Same 13 keys as a list item, with the identical types and `NULL` rules (see the
-mapping table under the list endpoint).
+Same 14 keys as a list item, with the identical types and `NULL` rules (see the
+mapping table under the list endpoint). `notes` included: raw value, may contain
+unsanitized HTML, `null` when the node has no row.
 
 ```json
 {
@@ -210,7 +222,8 @@ mapping table under the list endpoint).
       "status": "active",
       "who_can_reserve": "both",
       "cancel_deadline_minutes": 120,
-      "category": "pool"
+      "category": "pool",
+      "notes": "<p>Aforo máximo 20 personas.</p><p>Prohibido el vidrio.</p>"
     }
   }
 }
