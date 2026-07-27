@@ -6,5 +6,342 @@
  * declared in myapi.info: a stylesheets[] entry would ship this file on every
  * page of the site, API responses included.
  *
- * Filled in step 6 (month grid, palette) and step 7 (week grid, lanes).
+ * Everything is namespaced under .myapi-cal-* so it cannot leak into the admin
+ * theme, and no rule targets a bare element selector.
  */
+
+/* ---- Navigation ---- */
+
+.myapi-cal-nav {
+  margin: 1em 0 0.6em;
+}
+
+.myapi-cal-nav-link {
+  display: inline-block;
+  padding: 2px 10px;
+  margin-right: 4px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  background: #f7f7f7;
+  color: #333;
+  text-decoration: none;
+}
+
+.myapi-cal-nav-link:hover {
+  background: #eaeaea;
+}
+
+.myapi-cal-nav-title {
+  margin-left: 12px;
+  font-size: 1.15em;
+  font-weight: bold;
+  text-transform: capitalize;
+}
+
+/* ---- Month grid ---- */
+
+.myapi-cal-weekdays,
+.myapi-cal-week {
+  display: flex;
+}
+
+.myapi-cal-weekday {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  font-weight: bold;
+  font-size: 0.9em;
+  text-transform: capitalize;
+  color: #555;
+}
+
+/* No fixed height: the cell grows with its chips, which is what makes a day
+ * with 15 reservations show all 15 instead of a '+N more'. Cells of the same
+ * week stay equal because flex items stretch by default. */
+.myapi-cal-day {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 90px;
+  padding: 3px;
+  border: 1px solid #ddd;
+  margin: -1px 0 0 -1px;
+  background: #fff;
+}
+
+.myapi-cal-day.myapi-cal-out {
+  background: #fafafa;
+}
+
+.myapi-cal-day.myapi-cal-out .myapi-cal-daynum {
+  color: #bbb;
+}
+
+.myapi-cal-day.myapi-cal-today {
+  background: #fffdf0;
+}
+
+.myapi-cal-daynum {
+  font-size: 0.85em;
+  font-weight: bold;
+  color: #666;
+  text-align: right;
+  padding: 0 2px 2px;
+}
+
+/* ---- Week grid ----
+ *
+ * The axis is fixed: 24 rows of 40px, so one day column is always 960px and a
+ * minute is always 960/1440 px. Chip positions are percentages of that column,
+ * which keeps the arithmetic in one place — here — and the markup free of
+ * pixel values. */
+
+.myapi-cal-week-head,
+.myapi-cal-week-body {
+  display: flex;
+}
+
+.myapi-cal-hours-head,
+.myapi-cal-hours {
+  flex: 0 0 52px;
+}
+
+.myapi-cal-daycol-head {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 4px 6px;
+  border-left: 1px solid #ddd;
+  font-weight: bold;
+  font-size: 0.9em;
+  text-transform: capitalize;
+  color: #555;
+}
+
+.myapi-cal-daycol-head.myapi-cal-today {
+  background: #fffdf0;
+}
+
+.myapi-cal-hour {
+  height: 40px;
+  padding-right: 6px;
+  font-size: 0.75em;
+  color: #999;
+  text-align: right;
+  /* Nudged up half a line so the label sits ON its own grid line. */
+  margin-top: -0.5em;
+}
+
+.myapi-cal-daycol {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 960px;
+  border-left: 1px solid #ddd;
+  background: #fff;
+  /* Hourly lines drawn by the background instead of 24 empty divs per column. */
+  background-image: repeating-linear-gradient(
+    to bottom,
+    #eee 0,
+    #eee 1px,
+    transparent 1px,
+    transparent 40px
+  );
+}
+
+.myapi-cal-daycol.myapi-cal-today {
+  background-color: #fffdf0;
+}
+
+/* In the week view a chip is placed on the axis, so it leaves the normal flow
+ * and its top/height/left/width arrive inline from the data. */
+.myapi-cal-daycol .myapi-cal-chip {
+  position: absolute;
+  margin: 0;
+  padding: 1px 3px;
+  min-height: 13px;
+  box-sizing: border-box;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-left-width: 3px;
+  white-space: normal;
+}
+
+/* ---- Chips ---- */
+
+.myapi-cal-chip {
+  display: block;
+  margin-bottom: 2px;
+  padding: 2px 4px;
+  border-left: 3px solid transparent;
+  border-radius: 2px;
+  font-size: 0.82em;
+  line-height: 1.35;
+  color: #222;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.myapi-cal-time {
+  font-variant-numeric: tabular-nums;
+}
+
+.myapi-cal-area {
+  opacity: 0.85;
+}
+
+.myapi-cal-nextday {
+  font-size: 0.85em;
+  font-weight: bold;
+  vertical-align: super;
+}
+
+/* Comes from the previous day: dimmed and with a dashed edge. */
+.myapi-cal-chip.myapi-cal-continuation {
+  opacity: 0.62;
+  border-left-style: dashed;
+}
+
+/* Wins over the whole palette: a cancelled reservation must never read as
+ * real occupancy. Specificity of two classes is what keeps it on top. */
+.myapi-cal-chip.myapi-cal-cancelled {
+  background: #eee;
+  border-left-color: #999;
+  color: #777;
+  text-decoration: line-through;
+}
+
+/* Reservation with no area at all: neutral, outside the palette. */
+.myapi-cal-chip.myapi-cal-noarea {
+  background: #f0f0f0;
+  border-left-color: #aaa;
+}
+
+/* ---- Area palette: 12 fixed colours, index = area nid % 12 ---- */
+
+.myapi-cal-c0  { background: #e3f0fd; border-left-color: #1a73e8; }
+.myapi-cal-c1  { background: #e0f5f1; border-left-color: #0f9d78; }
+.myapi-cal-c2  { background: #e9f6df; border-left-color: #57a20b; }
+.myapi-cal-c3  { background: #fdf3d6; border-left-color: #c9960c; }
+.myapi-cal-c4  { background: #fde9d9; border-left-color: #e2761b; }
+.myapi-cal-c5  { background: #fce0e0; border-left-color: #d93b3b; }
+.myapi-cal-c6  { background: #fbe1ee; border-left-color: #c2317f; }
+.myapi-cal-c7  { background: #efe4fb; border-left-color: #7a3fc4; }
+.myapi-cal-c8  { background: #e2e4fb; border-left-color: #3f4fc4; }
+.myapi-cal-c9  { background: #dff0f5; border-left-color: #0d7f9c; }
+.myapi-cal-c10 { background: #efe7de; border-left-color: #8a6240; }
+.myapi-cal-c11 { background: #e6e9ec; border-left-color: #55636e; }
+
+/* ---- Detail panel ---- */
+
+.myapi-cal-chip {
+  cursor: pointer;
+}
+
+/* The panel is its own backdrop: full viewport, centring its box. The explicit
+ * [hidden] rule is required — without it the display below would win over the
+ * browser default for the hidden attribute and every panel would show at
+ * once. */
+.myapi-cal-detail {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.myapi-cal-detail[hidden] {
+  display: none;
+}
+
+.myapi-cal-detail-box {
+  position: relative;
+  width: 380px;
+  max-width: 92%;
+  max-height: 84vh;
+  overflow-y: auto;
+  padding: 18px 22px;
+  border-radius: 4px;
+  background: #fff;
+  box-shadow: 0 6px 28px rgba(0, 0, 0, 0.3);
+  cursor: auto;
+}
+
+.myapi-cal-detail-close {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  padding: 0 6px;
+  border: 0;
+  background: none;
+  font-size: 1.5em;
+  line-height: 1;
+  color: #888;
+  cursor: pointer;
+}
+
+.myapi-cal-detail-close:hover {
+  color: #333;
+}
+
+.myapi-cal-detail-title {
+  margin: 0 0 12px;
+  padding-right: 24px;
+  font-size: 1.1em;
+}
+
+.myapi-cal-detail-list {
+  margin: 0;
+}
+
+.myapi-cal-detail-list dt {
+  float: left;
+  clear: left;
+  width: 110px;
+  padding: 3px 0;
+  font-weight: bold;
+  font-size: 0.85em;
+  color: #666;
+}
+
+.myapi-cal-detail-list dd {
+  margin: 0 0 0 118px;
+  padding: 3px 0;
+  font-size: 0.9em;
+  word-break: break-word;
+}
+
+.myapi-cal-nextday-label {
+  font-size: 0.85em;
+  color: #b06000;
+}
+
+/* ---- Legend ---- */
+
+.myapi-cal-legend {
+  list-style: none;
+  margin: 1em 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.myapi-cal-legend-item {
+  display: flex;
+  align-items: center;
+  margin: 0 16px 6px 0;
+  font-size: 0.88em;
+}
+
+.myapi-cal-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 6px;
+  border-left: 3px solid transparent;
+  border-radius: 2px;
+}

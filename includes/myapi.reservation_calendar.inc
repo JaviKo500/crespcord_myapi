@@ -630,6 +630,531 @@ function myapi_reservation_calendar_filter_form_after_build($form, &$form_state)
 }
 
 /* ---------------------------------------------------------------------------
+ * Rendering.
+ *
+ * Every value coming from the database is printed through check_plain(). A
+ * unit or area title is written by an administrator, but Drupal 7 is EOL and
+ * receives no security patches, so the cost of one escaping call per field is
+ * not worth arguing about.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Human label for the area of a reservation row.
+ *
+ * The area join is a LEFT join, so a reservation whose area node was deleted
+ * still comes back with its target_id and a NULL title. Hiding that row would
+ * falsify the calendar — the booking existed and it occupied a slot — and
+ * leaving the label blank would not say what happened, so it degrades to
+ * 'Área eliminada (#123)': the nid is something to investigate with.
+ *
+ * @param object $row  Reservation row.
+ *
+ * @return string  Already escaped, ready to print.
+ */
+function myapi_calendar_area_label($row) {
+  if ($row->area_id === NULL) {
+    return t('Sin área');
+  }
+  if ($row->area_title === NULL) {
+    return t('Área eliminada (#@nid)', array('@nid' => $row->area_id));
+  }
+  return check_plain($row->area_title);
+}
+
+/**
+ * CSS colour class of a reservation chip.
+ *
+ * Cancelled reservations never wear the colour of their area: an operator
+ * reads this page to know what is booked, and a cancelled booking painted in
+ * the area colour would read as real occupancy. They get their own class,
+ * which the stylesheet makes win.
+ *
+ * A reservation with no area at all falls back to a neutral class rather than
+ * to an arbitrary palette slot.
+ *
+ * @param object $row  Reservation row.
+ *
+ * @return string  A single CSS class name.
+ */
+function myapi_calendar_chip_color_class($row) {
+  if ($row->status === 'cancelled') {
+    return 'myapi-cal-cancelled';
+  }
+  if ($row->area_id === NULL) {
+    return 'myapi-cal-noarea';
+  }
+  return 'myapi-cal-c' . myapi_calendar_area_color_index($row->area_id);
+}
+
+/**
+ * Renders one chip: a single day segment of a reservation.
+ *
+ * Shared by the month and week views so a reservation looks the same in both.
+ * Three shapes:
+ * - Plain: 'HH:MM–HH:MM'.
+ * - Head of an overnight: the REAL end time plus a '+1' mark, so the operator
+ *   sees where it actually finishes instead of a 24:00 that never appears on a
+ *   clock.
+ * - Continuation on D+1: prefixed with an arrow and dimmed by CSS, which is
+ *   what says "this one comes from yesterday".
+ *
+ * @param array  $segment  A segment from myapi_calendar_day_segments().
+ * @param string $style    Optional inline style. The week view uses it to
+ *   place the chip on the time axis; the month view passes nothing. It is the
+ *   only inline style of the page and it is unavoidable: top, height, left and
+ *   width depend on the data, so they cannot live in the stylesheet.
+ *
+ * @return string  HTML.
+ */
+function myapi_calendar_render_chip($segment, $style = '') {
+  $row = $segment['row'];
+
+  $classes = array('myapi-cal-chip', myapi_calendar_chip_color_class($row));
+  if ($segment['is_continuation']) {
+    $classes[] = 'myapi-cal-continuation';
+  }
+
+  if ($segment['is_continuation']) {
+    $time = '↳ ' . check_plain($segment['start_time']) . '–' . check_plain($segment['end_time']);
+  }
+  elseif ($segment['ends_next_day']) {
+    $time = check_plain($segment['start_time']) . '–' . check_plain($row->end_time) . ' <span class="myapi-cal-nextday">+1</span>';
+  }
+  else {
+    $time = check_plain($segment['start_time']) . '–' . check_plain($segment['end_time']);
+  }
+
+  // data-nid is what the JS reads to open the right detail block. Both chips
+  // of an overnight carry the same nid, so both open the same panel.
+  return '<div class="' . implode(' ', $classes) . '" data-nid="' . (int) $segment['nid'] . '"'
+    . ($style === '' ? '' : ' style="' . check_plain($style) . '"') . '>'
+    . '<span class="myapi-cal-time">' . $time . '</span> '
+    . '<span class="myapi-cal-area">' . myapi_calendar_area_label($row) . '</span>'
+    . '</div>';
+}
+
+/**
+ * Collects the segments of the days actually painted, in day order.
+ *
+ * myapi_calendar_day_segments() returns every segment it can derive, including
+ * those of the extra query day and the continuation of a reservation starting
+ * on the last day of the grid. Dropping them is a render decision, taken here:
+ * a segment is painted only if its day is one of the grid's.
+ *
+ * @param array $segments_by_day  'YYYY-MM-DD' => segments.
+ * @param array $days             Flat list of the grid days.
+ *
+ * @return array  Flat list of segments.
+ */
+function myapi_calendar_grid_segments($segments_by_day, $days) {
+  $segments = array();
+  foreach ($days as $day) {
+    if (isset($segments_by_day[$day])) {
+      $segments = array_merge($segments, $segments_by_day[$day]);
+    }
+  }
+  return $segments;
+}
+
+/**
+ * Renders the area colour legend.
+ *
+ * One entry per distinct area with at least one NON-cancelled reservation
+ * visible in the grid, ordered by label. Cancelled ones are out: they do not
+ * wear the area colour, so they have nothing to explain here.
+ *
+ * @param array $segments  Segments already restricted to the grid.
+ *
+ * @return string  HTML, empty string when there is nothing to explain.
+ */
+function myapi_calendar_render_legend($segments) {
+  $labels = array();
+  foreach ($segments as $segment) {
+    $row = $segment['row'];
+    if ($row->status === 'cancelled' || $row->area_id === NULL) {
+      continue;
+    }
+    $labels[(int) $row->area_id] = myapi_calendar_area_label($row);
+  }
+
+  if (!$labels) {
+    return '';
+  }
+
+  // Sorted by a de-accented key: comparing the UTF-8 bytes directly would push
+  // 'Área' past 'Zona', because the accented letters sit above the ASCII range.
+  // A fixed map instead of setlocale()/strcoll() keeps the order identical in
+  // every environment.
+  $keys = array();
+  foreach ($labels as $area_id => $label) {
+    $keys[$area_id] = strtr($label, array(
+      'á' => 'a', 'é' => 'e', 'í' => 'i', 'ó' => 'o', 'ú' => 'u', 'ü' => 'u', 'ñ' => 'n',
+      'Á' => 'A', 'É' => 'E', 'Í' => 'I', 'Ó' => 'O', 'Ú' => 'U', 'Ü' => 'U', 'Ñ' => 'N',
+    ));
+  }
+  asort($keys, SORT_NATURAL | SORT_FLAG_CASE);
+  $labels = array_replace($keys, $labels);
+
+  $items = '';
+  foreach ($labels as $area_id => $label) {
+    $items .= '<li class="myapi-cal-legend-item">'
+      . '<span class="myapi-cal-swatch myapi-cal-c' . myapi_calendar_area_color_index($area_id) . '"></span>'
+      . '<span class="myapi-cal-legend-label">' . $label . '</span>'
+      . '</li>';
+  }
+
+  return '<ul class="myapi-cal-legend">' . $items . '</ul>';
+}
+
+/**
+ * Builds a calendar URL keeping every filter but the reference date.
+ *
+ * @param array  $filters  Validated filters.
+ * @param string $date     The reference date the link points to.
+ *
+ * @return string  Absolute-path URL.
+ */
+function myapi_calendar_url($filters, $date) {
+  $query = array(
+    'view' => $filters['view'],
+    'date' => $date,
+    'status' => $filters['status'],
+  );
+  if ($filters['condominium'] !== NULL) {
+    $query['condominium'] = $filters['condominium'];
+  }
+  if ($filters['area'] !== NULL) {
+    $query['area'] = $filters['area'];
+  }
+
+  return url('admin/content/reservation-calendar', array('query' => $query));
+}
+
+/**
+ * Renders the ‹ hoy › navigation and the title of the current range.
+ *
+ * Plain <a href> links, no forms and no JS, which is what makes every position
+ * of the calendar a shareable URL. All the other filters travel along.
+ *
+ * The month step is computed from the FIRST of the month and not from the
+ * reference day: strtotime('2026-03-31 -1 month') lands on 2026-03-03, so
+ * stepping back from a 31st would skip February altogether.
+ *
+ * @param array $filters  Validated filters.
+ * @param array $range    Output of myapi_calendar_range().
+ *
+ * @return string  HTML.
+ */
+function myapi_calendar_render_nav($filters, $range) {
+  if ($filters['view'] === 'week') {
+    $previous = date('Y-m-d', strtotime($filters['date'] . ' -7 days'));
+    $next = date('Y-m-d', strtotime($filters['date'] . ' +7 days'));
+    $title = t('Semana del @from al @to', array(
+      '@from' => format_date(strtotime($range['grid_from']), 'custom', 'j M Y'),
+      '@to' => format_date(strtotime($range['grid_to']), 'custom', 'j M Y'),
+    ));
+  }
+  else {
+    $first = date('Y-m-01', strtotime($filters['date']));
+    $previous = date('Y-m-d', strtotime($first . ' -1 month'));
+    $next = date('Y-m-d', strtotime($first . ' +1 month'));
+    $title = check_plain(format_date(strtotime($first), 'custom', 'F Y'));
+  }
+
+  return '<div class="myapi-cal-nav">'
+    . '<a class="myapi-cal-nav-link" href="' . myapi_calendar_url($filters, $previous) . '">‹</a> '
+    . '<a class="myapi-cal-nav-link" href="' . myapi_calendar_url($filters, date('Y-m-d')) . '">' . t('hoy') . '</a> '
+    . '<a class="myapi-cal-nav-link" href="' . myapi_calendar_url($filters, $next) . '">›</a>'
+    . '<span class="myapi-cal-nav-title">' . $title . '</span>'
+    . '</div>';
+}
+
+/**
+ * Renders the month grid.
+ *
+ * Weeks of exactly seven days, Monday first. Days outside the reference month
+ * are painted greyed out instead of blank, so the week they belong to still
+ * reads as a week.
+ *
+ * A day shows ALL its reservations and the cell grows to fit them: no '+N
+ * more'. A non-clickable '+N more' is a dead end, and a clickable one needs
+ * either AJAX or a day view, both out of scope.
+ *
+ * @param array  $weeks            Output of myapi_calendar_month_grid().
+ * @param array  $segments_by_day  'YYYY-MM-DD' => segments.
+ * @param string $ref_date         Reference day, for the "same month" test.
+ *
+ * @return string  HTML.
+ */
+function myapi_calendar_render_month($weeks, $segments_by_day, $ref_date) {
+  $ref_month = substr($ref_date, 0, 7);
+
+  // Weekday names taken from the first week, so they follow the site language
+  // and always line up with the columns below them.
+  $header = '';
+  foreach ($weeks[0] as $day) {
+    $header .= '<div class="myapi-cal-weekday">' . check_plain(format_date(strtotime($day), 'custom', 'D')) . '</div>';
+  }
+
+  $body = '';
+  foreach ($weeks as $week) {
+    $body .= '<div class="myapi-cal-week">';
+    foreach ($week as $day) {
+      $classes = array('myapi-cal-day');
+      if (substr($day, 0, 7) !== $ref_month) {
+        $classes[] = 'myapi-cal-out';
+      }
+      if ($day === date('Y-m-d')) {
+        $classes[] = 'myapi-cal-today';
+      }
+
+      $chips = '';
+      if (isset($segments_by_day[$day])) {
+        foreach ($segments_by_day[$day] as $segment) {
+          $chips .= myapi_calendar_render_chip($segment);
+        }
+      }
+
+      $body .= '<div class="' . implode(' ', $classes) . '">'
+        . '<div class="myapi-cal-daynum">' . check_plain(format_date(strtotime($day), 'custom', 'j')) . '</div>'
+        . '<div class="myapi-cal-chips">' . $chips . '</div>'
+        . '</div>';
+    }
+    $body .= '</div>';
+  }
+
+  return '<div class="myapi-cal myapi-cal-month">'
+    . '<div class="myapi-cal-weekdays">' . $header . '</div>'
+    . $body
+    . '</div>';
+}
+
+/**
+ * Renders the week grid: seven day columns over a fixed 00:00-24:00 axis.
+ *
+ * The axis is always the same 24 hourly rows, never a window cropped to the
+ * data. Deterministic: the grid does not change shape depending on what has
+ * been booked, and an overnight reservation falls inside it with no special
+ * case.
+ *
+ * Chips are positioned proportionally to the MINUTE (top and height as a
+ * percentage of the 1440 minutes of the column) instead of being stacked
+ * inside the row of their starting hour: stacked, a 10:00 and a 10:45 booking
+ * would look identical and the lanes would communicate nothing.
+ *
+ * Width and horizontal offset come from the lane assignment, computed per day
+ * column: overlapping reservations share the column, consecutive ones do not.
+ *
+ * Percentages are printed with %.4F — the uppercase, locale-independent
+ * conversion — so a site running under a locale with comma as decimal
+ * separator cannot emit 'top: 41,6667%' and break every chip.
+ *
+ * @param array $days             The 7 days, output of
+ *   myapi_calendar_week_days().
+ * @param array $segments_by_day  'YYYY-MM-DD' => segments.
+ *
+ * @return string  HTML.
+ */
+function myapi_calendar_render_week($days, $segments_by_day) {
+  $today = date('Y-m-d');
+
+  $head = '<div class="myapi-cal-hours-head"></div>';
+  foreach ($days as $day) {
+    $classes = 'myapi-cal-daycol-head' . ($day === $today ? ' myapi-cal-today' : '');
+    $head .= '<div class="' . $classes . '">'
+      . check_plain(format_date(strtotime($day), 'custom', 'D j'))
+      . '</div>';
+  }
+
+  // 24 hourly labels: the axis runs to 24:00, so the last one printed is
+  // 23:00 and the bottom edge of the column is midnight.
+  $hours = '';
+  for ($hour = 0; $hour < 24; $hour++) {
+    $hours .= '<div class="myapi-cal-hour">' . sprintf('%02d:00', $hour) . '</div>';
+  }
+
+  $columns = '';
+  foreach ($days as $day) {
+    $segments = isset($segments_by_day[$day]) ? myapi_calendar_assign_lanes($segments_by_day[$day]) : array();
+
+    $chips = '';
+    foreach ($segments as $segment) {
+      $style = sprintf(
+        'top:%.4F%%;height:%.4F%%;left:%.4F%%;width:%.4F%%;',
+        $segment['start_min'] / 1440 * 100,
+        max(0, $segment['end_min'] - $segment['start_min']) / 1440 * 100,
+        $segment['lane'] / $segment['lanes_total'] * 100,
+        100 / $segment['lanes_total']
+      );
+      $chips .= myapi_calendar_render_chip($segment, $style);
+    }
+
+    $classes = 'myapi-cal-daycol' . ($day === $today ? ' myapi-cal-today' : '');
+    $columns .= '<div class="' . $classes . '">' . $chips . '</div>';
+  }
+
+  return '<div class="myapi-cal myapi-cal-week-view">'
+    . '<div class="myapi-cal-week-head">' . $head . '</div>'
+    . '<div class="myapi-cal-week-body">'
+    . '<div class="myapi-cal-hours">' . $hours . '</div>'
+    . $columns
+    . '</div>'
+    . '</div>';
+}
+
+/**
+ * Human label for the unit of a reservation row.
+ *
+ * Same criterion as myapi_calendar_area_label(): a deleted unit degrades to
+ * its nid instead of removing the reservation or leaving a blank.
+ *
+ * @param object $row  Reservation row.
+ *
+ * @return string  Already escaped.
+ */
+function myapi_calendar_unit_label($row) {
+  if ($row->unit_id === NULL) {
+    return t('Sin vivienda');
+  }
+  if ($row->unit_title === NULL) {
+    return t('Vivienda eliminada (#@nid)', array('@nid' => $row->unit_id));
+  }
+  return check_plain($row->unit_title);
+}
+
+/**
+ * Human label for the requester of a reservation row.
+ *
+ * Two different absences: a reservation with no field_requester at all ('Sin
+ * usuario') and one whose user account was deleted, which still has the uid
+ * ('Usuario eliminado (#789)').
+ *
+ * @param object $row  Reservation row.
+ *
+ * @return string  Already escaped.
+ */
+function myapi_calendar_user_label($row) {
+  if ($row->uid === NULL) {
+    return t('Sin usuario');
+  }
+  if ($row->user_name === NULL) {
+    return t('Usuario eliminado (#@uid)', array('@uid' => $row->uid));
+  }
+  return check_plain($row->user_name);
+}
+
+/**
+ * Human label for the condominium of a reservation row.
+ *
+ * The query returns the condominium nid but no title — the select at the top
+ * of the page already loaded every published condominium, so resolving the
+ * title here costs no extra query.
+ *
+ * @param object $row      Reservation row.
+ * @param array  $options  nid => title, from
+ *   myapi_calendar_condominium_options().
+ *
+ * @return string  Already escaped.
+ */
+function myapi_calendar_condominium_label($row, $options) {
+  if ($row->condominium_id === NULL) {
+    return t('Sin condominio');
+  }
+  if (!isset($options[$row->condominium_id])) {
+    return t('Condominio no disponible (#@nid)', array('@nid' => $row->condominium_id));
+  }
+  return check_plain($options[$row->condominium_id]);
+}
+
+/**
+ * Duration of a reservation, as 'Xh Ymin'.
+ *
+ * Computed on the ROW and never on a segment. On the segment, opening the
+ * detail from the continuation chip of a 22:00 -> 02:00 would report '2h
+ * 0min': the reservation is one thing and its duration does not depend on
+ * which of its two chips was clicked.
+ *
+ * @param object $row  Reservation row.
+ *
+ * @return string  E.g. '4h 0min'.
+ */
+function myapi_calendar_duration_label($row) {
+  $start_min = myapi_reservation_time_to_minutes($row->start_time);
+  $end_min = myapi_reservation_time_to_minutes($row->end_time);
+  // Same crossing rule as the segment split: an end at or below the start
+  // lands on the next day, so a full day is added.
+  $minutes = $end_min - $start_min + ($end_min <= $start_min ? 1440 : 0);
+
+  // Plain numeric formatting, nothing to translate.
+  return sprintf('%dh %dmin', intdiv($minutes, 60), $minutes % 60);
+}
+
+/**
+ * Renders the hidden detail panels: one block per reservation.
+ *
+ * All of them are printed in the server response, so opening a detail needs no
+ * request of any kind — no new endpoint to secure, no state to keep in sync.
+ * The cost is a bigger HTML document, bounded by MYAPI_CALENDAR_MAX_ROWS.
+ *
+ * Exactly ONE block per reservation even when it has two chips: the blocks are
+ * keyed by nid and both chips of an overnight point at the same id.
+ *
+ * The panel prints the requester's name and email. That is deliberate: this is
+ * a back-office page whose access callback limits it to the operator of the
+ * condominium, and it answers the question the operator actually has.
+ *
+ * @param array $rows                 Reservation rows to emit, keyed by nid.
+ * @param array $condominium_options  nid => title.
+ *
+ * @return string  HTML.
+ */
+function myapi_calendar_render_details($rows, $condominium_options) {
+  $blocks = '';
+
+  foreach ($rows as $row) {
+    $end = check_plain($row->end_time);
+    if (myapi_reservation_time_to_minutes($row->end_time) <= myapi_reservation_time_to_minutes($row->start_time)) {
+      $end .= ' <span class="myapi-cal-nextday-label">' . t('(+1 día)') . '</span>';
+    }
+
+    $lines = array(
+      t('Usuario') => myapi_calendar_user_label($row),
+      t('Email') => $row->user_mail === NULL ? '—' : check_plain($row->user_mail),
+      t('Vivienda') => myapi_calendar_unit_label($row),
+      t('Área') => myapi_calendar_area_label($row),
+      t('Condominio') => myapi_calendar_condominium_label($row, $condominium_options),
+      t('Fecha') => check_plain(format_date(strtotime($row->date), 'custom', 'd/m/Y')),
+      t('Horario') => check_plain($row->start_time) . ' – ' . $end,
+      t('Duración') => myapi_calendar_duration_label($row),
+      t('Estado') => $row->status === 'cancelled' ? t('Cancelada') : t('Confirmada'),
+    );
+
+    // Only a cancelled reservation has a cancelled_by to show; on a confirmed
+    // one the line is absent, not empty.
+    if ($row->status === 'cancelled') {
+      $lines[t('Cancelada por')] = $row->cancelled_by === NULL ? '—' : check_plain($row->cancelled_by);
+    }
+
+    $lines[t('Creada')] = check_plain(format_date($row->created, 'custom', 'd/m/Y H:i'));
+
+    $definitions = '';
+    foreach ($lines as $label => $value) {
+      $definitions .= '<dt>' . $label . '</dt><dd>' . $value . '</dd>';
+    }
+
+    $blocks .= '<div class="myapi-cal-detail" id="myapi-cal-detail-' . (int) $row->nid . '" hidden>'
+      . '<div class="myapi-cal-detail-box">'
+      . '<button type="button" class="myapi-cal-detail-close" title="' . t('Cerrar') . '">×</button>'
+      . '<h3 class="myapi-cal-detail-title">' . t('Reserva #@nid', array('@nid' => $row->nid)) . '</h3>'
+      . '<dl class="myapi-cal-detail-list">' . $definitions . '</dl>'
+      . '</div>'
+      . '</div>';
+  }
+
+  return '<div class="myapi-cal-details">' . $blocks . '</div>';
+}
+
+/* ---------------------------------------------------------------------------
  * Page.
  * ------------------------------------------------------------------------ */
 
@@ -648,9 +1173,8 @@ function myapi_reservation_calendar_filter_form_after_build($form, &$form_state)
  * tail of an overnight starting just before it is not lost) to
  * range['grid_to'].
  *
- * At this step of SPEC 47 it prints the filter form and how many reservations
- * were found; the grid, the legend, the detail panel and the ceiling warning
- * arrive in steps 6 to 9.
+ * At this step of SPEC 47 it renders the month view; the week view, the detail
+ * panel and the ceiling warning arrive in steps 7 to 9.
  */
 function myapi_reservation_calendar_page() {
   $path = drupal_get_path('module', 'myapi');
@@ -675,16 +1199,60 @@ function myapi_reservation_calendar_page() {
     MYAPI_CALENDAR_MAX_ROWS
   );
 
+  // The helper asked for MYAPI_CALENDAR_MAX_ROWS + 1 rows, so getting more
+  // than the ceiling back is the signal that the range holds even more. The
+  // extra rows are dropped and the operator is told on screen — a watchdog()
+  // entry would not do: someone would take decisions on an incomplete
+  // calendar without ever knowing it was incomplete.
+  if (count($rows) > MYAPI_CALENDAR_MAX_ROWS) {
+    $rows = array_slice($rows, 0, MYAPI_CALENDAR_MAX_ROWS);
+    drupal_set_message(
+      t('Esta vista está incompleta: se muestran solo las primeras @limit reservas del rango. Acota el filtro por condominio, área o fecha para verlas todas.', array(
+        '@limit' => MYAPI_CALENDAR_MAX_ROWS,
+      )),
+      'warning'
+    );
+  }
+
+  $segments_by_day = myapi_calendar_day_segments($rows);
+
+  if ($filters['view'] === 'week') {
+    $days = myapi_calendar_week_days($filters['date']);
+    $grid = myapi_calendar_render_week($days, $segments_by_day);
+  }
+  else {
+    $weeks = myapi_calendar_month_grid($filters['date']);
+    $days = call_user_func_array('array_merge', $weeks);
+    $grid = myapi_calendar_render_month($weeks, $segments_by_day, $filters['date']);
+  }
+
   $build = array();
 
   $build['filters'] = drupal_get_form('myapi_reservation_calendar_filter_form', $filters, $condominium_options, $area_options);
 
-  $build['count'] = array(
-    '#markup' => '<p class="myapi-cal-count">' . t('@count reservas entre el @from y el @to.', array(
-      '@count' => count($rows),
-      '@from' => $range['grid_from'],
-      '@to' => $range['grid_to'],
-    )) . '</p>',
+  $build['nav'] = array(
+    '#markup' => myapi_calendar_render_nav($filters, $range),
+  );
+
+  $build['grid'] = array(
+    '#markup' => $grid,
+  );
+
+  $grid_segments = myapi_calendar_grid_segments($segments_by_day, $days);
+
+  $build['legend'] = array(
+    '#markup' => myapi_calendar_render_legend($grid_segments),
+  );
+
+  // Only the reservations with a chip on screen get a detail block, keyed by
+  // nid so an overnight with two chips still produces exactly one.
+  $painted = array();
+  foreach ($grid_segments as $segment) {
+    $painted[$segment['nid']] = $segment['row'];
+  }
+
+  $build['details'] = array(
+    '#markup' => myapi_calendar_render_details($painted, $condominium_options),
   );
 
   return $build;
