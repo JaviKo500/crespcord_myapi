@@ -38,3 +38,4 @@ files[] = resources/area.resource.inc
 files[] = resources/reservation.resource.inc
 files[] = includes/myapi.reservation_query.inc
 files[] = includes/myapi.area_admin.inc
+files[] = includes/myapi.reservation_calendar.inc

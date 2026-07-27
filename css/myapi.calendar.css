@@ -1,0 +1,10 @@
+/**
+ * @file
+ * Styles for the back-office reservation calendar (SPEC 47).
+ *
+ * Loaded from myapi_reservation_calendar_page() with drupal_add_css(), never
+ * declared in myapi.info: a stylesheets[] entry would ship this file on every
+ * page of the site, API responses included.
+ *
+ * Filled in step 6 (month grid, palette) and step 7 (week grid, lanes).
+ */

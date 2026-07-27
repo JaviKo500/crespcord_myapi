@@ -376,3 +376,124 @@ function myapi_reservation_occupancy_ranges($busy, $capacity) {
 
   return $ranges;
 }
+
+/**
+ * Fetches every published reservation whose field_date falls inside a range,
+ * with the data the back-office calendar needs to paint and describe it
+ * (SPEC 47).
+ *
+ * Sibling of myapi_reservation_busy_rows(): same base (node of type
+ * 'reservation' with n.status = 1) and the same tz-free SUBSTR on
+ * field_date_value, but over a RANGE instead of a list of days, without the
+ * mandatory area filter, and returning the descriptive columns the calendar
+ * chips, legend and detail panel print. It lives here and not inside
+ * includes/myapi.reservation_calendar.inc because shared reservation-domain
+ * queries belong in includes/ (rule 3 of CLAUDE.md), next to the helper it
+ * mirrors. The cost is that API requests loading this file define ~40 lines
+ * they never execute.
+ *
+ * One query for the whole visible range. Grouping the rows by day afterwards
+ * is string arithmetic in PHP and costs nothing, whereas one query per day
+ * would be 42 queries in the month view.
+ *
+ * Why each join is what it is:
+ * - INNER on field_date, field_start_time, field_end_time and
+ *   field_reservation_status. A reservation missing any of those four cannot be
+ *   placed on a grid, and the write path already treats such a row as
+ *   incoherent (same criterion as myapi_reservation_busy_rows()). Excluding it
+ *   here keeps the calendar and the API telling the same story.
+ * - LEFT on field_area, field_unit, field_condominium, field_requester and
+ *   their node/users rows. A deleted area or unit must NOT remove the
+ *   reservation from the calendar: it existed and it occupied a slot. The
+ *   target_id survives in the field table while the title arrives NULL, and
+ *   the render degrades to 'Área eliminada (#123)'. field_cancelled_by is left
+ *   too because a confirmed reservation simply has no row there.
+ *
+ * $limit + 1 rows are requested on purpose: if the caller gets more than
+ * $limit back it knows the view is truncated, without a second COUNT() query.
+ * The trimming and the on-screen warning are the caller's job.
+ *
+ * @param string   $from            First day of the range, 'YYYY-MM-DD',
+ *                                  inclusive. Normally grid_from minus one day,
+ *                                  so an overnight starting just before the
+ *                                  grid still leaves its tail inside it.
+ * @param string   $to              Last day of the range, 'YYYY-MM-DD',
+ *                                  inclusive.
+ * @param int|NULL $condominium_id  Optional field_condominium filter.
+ * @param int|NULL $area_id         Optional field_area filter.
+ * @param array    $statuses        Reservation statuses to include, e.g.
+ *                                  array('confirmed'). Never a raw user string.
+ * @param int      $limit           Maximum rows to paint; $limit + 1 are
+ *                                  fetched.
+ *
+ * @return array  Raw rows (stdClass) ordered by date, start_time and nid, with
+ *   nid, created, date, start_time, end_time, status, cancelled_by, area_id,
+ *   area_title, unit_id, unit_title, condominium_id, uid, user_name and
+ *   user_mail. Empty array when nothing matches.
+ */
+function myapi_reservation_calendar_rows($from, $to, $condominium_id, $area_id, array $statuses, $limit) {
+  $query = db_select('node', 'n')
+    ->fields('n', array('nid', 'created'))
+    ->condition('n.type', 'reservation')
+    ->condition('n.status', 1);
+
+  // Date, hours and status: mandatory for a row to be paintable.
+  $query->innerJoin('field_data_field_date', 'fd', "fd.entity_id = n.nid AND fd.entity_type = 'node' AND fd.deleted = 0");
+  $query->where('SUBSTR(fd.field_date_value, 1, 10) BETWEEN :from AND :to', array(':from' => $from, ':to' => $to));
+  $query->addExpression('SUBSTR(fd.field_date_value, 1, 10)', 'date');
+
+  $query->innerJoin('field_data_field_start_time', 'fs', "fs.entity_id = n.nid AND fs.entity_type = 'node' AND fs.deleted = 0");
+  $query->addField('fs', 'field_start_time_value', 'start_time');
+
+  $query->innerJoin('field_data_field_end_time', 'fe', "fe.entity_id = n.nid AND fe.entity_type = 'node' AND fe.deleted = 0");
+  $query->addField('fe', 'field_end_time_value', 'end_time');
+
+  $query->innerJoin('field_data_field_reservation_status', 'fst', "fst.entity_id = n.nid AND fst.entity_type = 'node' AND fst.deleted = 0");
+  $query->condition('fst.field_reservation_status_value', $statuses, 'IN');
+  $query->addField('fst', 'field_reservation_status_value', 'status');
+
+  // Descriptive data: never a reason to drop the row.
+  $query->leftJoin('field_data_field_area', 'fa', "fa.entity_id = n.nid AND fa.entity_type = 'node' AND fa.deleted = 0");
+  $query->addField('fa', 'field_area_target_id', 'area_id');
+  $query->leftJoin('node', 'na', 'na.nid = fa.field_area_target_id');
+  $query->addField('na', 'title', 'area_title');
+
+  $query->leftJoin('field_data_field_unit', 'fu', "fu.entity_id = n.nid AND fu.entity_type = 'node' AND fu.deleted = 0");
+  $query->addField('fu', 'field_unit_target_id', 'unit_id');
+  $query->leftJoin('node', 'nu', 'nu.nid = fu.field_unit_target_id');
+  $query->addField('nu', 'title', 'unit_title');
+
+  $query->leftJoin('field_data_field_condominium', 'fc', "fc.entity_id = n.nid AND fc.entity_type = 'node' AND fc.deleted = 0");
+  $query->addField('fc', 'field_condominium_target_id', 'condominium_id');
+
+  $query->leftJoin('field_data_field_requester', 'fr', "fr.entity_id = n.nid AND fr.entity_type = 'node' AND fr.deleted = 0");
+  $query->addField('fr', 'field_requester_target_id', 'uid');
+  $query->leftJoin('users', 'u', 'u.uid = fr.field_requester_target_id');
+  $query->addField('u', 'name', 'user_name');
+  $query->addField('u', 'mail', 'user_mail');
+
+  $query->leftJoin('field_data_field_cancelled_by', 'fcb', "fcb.entity_id = n.nid AND fcb.entity_type = 'node' AND fcb.deleted = 0");
+  $query->addField('fcb', 'field_cancelled_by_value', 'cancelled_by');
+
+  // Optional filters. Applied on the left-joined columns, so a reservation
+  // with no condominium or no area row is also excluded when filtering by
+  // one — which is the desired reading of "show me this condominium".
+  if ($condominium_id !== NULL) {
+    $query->condition('fc.field_condominium_target_id', $condominium_id);
+  }
+  if ($area_id !== NULL) {
+    $query->condition('fa.field_area_target_id', $area_id);
+  }
+
+  // Chronological, with nid as the deterministic tie-breaker so the grid is
+  // reproducible across requests. Times are zero-padded 'HH:MM', so the plain
+  // string sort is already clock order.
+  $query->orderBy('date');
+  $query->orderBy('start_time');
+  $query->orderBy('n.nid');
+
+  // One extra row: its presence is the "there are more" flag.
+  $query->range(0, $limit + 1);
+
+  return $query->execute()->fetchAll();
+}

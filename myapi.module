@@ -244,7 +244,90 @@ function myapi_menu() {
     'file'             => 'resources/bulletin.resource.inc',
   ];
 
+  // Back-office reservation calendar (SPEC 47). The only route of this module
+  // that is not an api/v1 endpoint: it renders HTML for an operator, not the
+  // JSON envelope for the app, which is why its callback lives in includes/
+  // and not in resources/. MENU_NORMAL_ITEM so it shows up under Contenido in
+  // the administration menu; a local task would need a parent route that does
+  // not exist today.
+  $items['admin/content/reservation-calendar'] = [
+    'title'            => 'Calendario de reservas',
+    'page callback'    => 'myapi_reservation_calendar_page',
+    'access callback'  => 'myapi_calendar_access',
+    'type'             => MENU_NORMAL_ITEM,
+    'file'             => 'includes/myapi.reservation_calendar.inc',
+  ];
+
   return $items;
+}
+
+/**
+ * Implements hook_permission().
+ *
+ * Declares the calendar capability so it is visible at
+ * admin/people/permissions under "My API", where an administrator looks for
+ * it.
+ *
+ * Careful: myapi_calendar_access() does NOT check this permission. Granting it
+ * to a role does not open the calendar to that role — access is by role name
+ * only. See the docblock of myapi_calendar_access() and
+ * docs/reservation-calendar.md for why.
+ */
+function myapi_permission() {
+  return [
+    'view reservation calendar' => [
+      'title'       => t('Ver el calendario de reservas'),
+      'description' => t('Capacidad declarada para que sea visible aquí. El acceso a admin/content/reservation-calendar se decide por rol (administrator, backend), no por este permiso.'),
+    ],
+  ];
+}
+
+/**
+ * The roles allowed into the back-office reservation calendar (SPEC 47).
+ *
+ * Single source of truth for that list: myapi_calendar_access() is its only
+ * caller, and adding a third role means editing this one line. Names, never
+ * rids: a rid is assigned per environment, so the 4 of production may well be
+ * a different role on the client's site or in local.
+ *
+ * @return array  Role names.
+ */
+function myapi_calendar_admin_roles() {
+  return ['administrator', 'backend'];
+}
+
+/**
+ * Access callback of admin/content/reservation-calendar (SPEC 47).
+ *
+ * By ROLE only. The 'view reservation calendar' permission is declared in
+ * myapi_permission() so the capability is discoverable, but it is deliberately
+ * NOT consulted here: with an "either the permission or the role" rule,
+ * granting the permission to "authenticated user" by mistake would open every
+ * resident's reservations — names and emails included — to the whole site.
+ * That this is counter-intuitive is accepted, and it is written down in the
+ * hook_permission() description, in docs/reservation-calendar.md and in an
+ * acceptance criterion of the spec.
+ *
+ * Returning FALSE makes Drupal answer 403, not a redirect to the login form
+ * nor a blank page.
+ *
+ * uid 1 is let in explicitly: Drupal's superuser bypass lives inside
+ * user_access(), which this callback never calls, so without this guard the
+ * site owner could be locked out of their own calendar.
+ *
+ * $user->roles is rid => name in Drupal 7, so array_intersect() compares names
+ * and no rid ever enters the logic.
+ *
+ * @return bool  TRUE when the current user may see the calendar.
+ */
+function myapi_calendar_access() {
+  global $user;
+
+  if ((int) $user->uid === 1) {
+    return TRUE;
+  }
+
+  return (bool) array_intersect($user->roles, myapi_calendar_admin_roles());
 }
 
 /**
