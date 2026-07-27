@@ -6,7 +6,8 @@
  *
  * Lists 'reservation' nodes belonging to the authenticated user, scoped to a
  * unit the user owns or occupies. Read-only, paginated, with an optional
- * date-range and status filter. Mirrors payment.resource.inc, except both
+ * date-range filter (each bound refinable to an hour, SPEC 43) and status
+ * filter. Mirrors payment.resource.inc, except both
  * 'confirmed' and 'cancelled' reservations are exposed (status travels in the
  * payload instead of being excluded), and the result set is additionally
  * restricted to field_requester = the authenticated uid (SPEC 37): a unit
@@ -726,17 +727,19 @@ function myapi_reservation_list($unit_id) {
   $range = myapi_reservation_parse_date_range();
   $from = $range['from'];
   $to = $range['to'];
+  $time_from = $range['time_from'];
+  $time_to = $range['time_to'];
 
   $status = isset($_GET['status']) && in_array($_GET['status'], ['confirmed', 'cancelled'], TRUE)
     ? $_GET['status']
     : NULL;
 
-  $total = myapi_reservation_count($unit_id, $from, $to, $status, $uid);
+  $total = myapi_reservation_count($unit_id, $from, $to, $time_from, $time_to, $status, $uid);
   $total_pages = $limit === -1
     ? ($total > 0 ? 1 : 0)
     : ($total > 0 ? (int) ceil($total / $limit) : 0);
 
-  $rows = myapi_reservation_fetch($unit_id, $page, $limit, $sort, $from, $to, $status, $uid);
+  $rows = myapi_reservation_fetch($unit_id, $page, $limit, $sort, $from, $to, $time_from, $time_to, $status, $uid);
   $reservations = array_map('myapi_reservation_build_item', $rows);
 
   myapi_respond([
@@ -760,17 +763,48 @@ function myapi_reservation_list($unit_id) {
  * but inverted (from > to), the whole filter is dropped so the endpoint
  * responds as if no range were given. No 422 is ever raised here.
  *
- * @return array  ['from' => string|NULL, 'to' => string|NULL].
+ * Each date bound accepts an optional time refinement, $_GET['time_from'] /
+ * $_GET['time_to'] in 'HH:MM' 24h format (SPEC 43). A time bound is not a
+ * filter of its own: it narrows its date bound on the boundary day only, so
+ * 'date_from=D&time_from=09:00' means "from D at 09:00 onwards" and leaves
+ * every later day untouched. It is therefore dropped whenever its own date
+ * bound is absent or invalid, and both are dropped when the range collapses
+ * to a single inverted day (from == to and time_from > time_to), mirroring
+ * the inverted-date-range rule.
+ *
+ * @return array  ['from' => string|NULL, 'to' => string|NULL,
+ *                 'time_from' => string|NULL, 'time_to' => string|NULL].
  */
 function myapi_reservation_parse_date_range() {
   $from = myapi_reservation_valid_date(isset($_GET['date_from']) ? $_GET['date_from'] : NULL);
   $to = myapi_reservation_valid_date(isset($_GET['date_to']) ? $_GET['date_to'] : NULL);
 
   if ($from !== NULL && $to !== NULL && $from > $to) {
-    return ['from' => NULL, 'to' => NULL];
+    return ['from' => NULL, 'to' => NULL, 'time_from' => NULL, 'time_to' => NULL];
   }
 
-  return ['from' => $from, 'to' => $to];
+  $time_from = $from !== NULL
+    ? myapi_reservation_valid_time(isset($_GET['time_from']) ? $_GET['time_from'] : NULL)
+    : NULL;
+  $time_to = $to !== NULL
+    ? myapi_reservation_valid_time(isset($_GET['time_to']) ? $_GET['time_to'] : NULL)
+    : NULL;
+
+  // Single-day range with inverted times: keep the day, drop both times, so
+  // the request behaves as if only the date range had been sent instead of
+  // returning an always-empty set.
+  if ($from !== NULL && $from === $to
+    && $time_from !== NULL && $time_to !== NULL && $time_from > $time_to) {
+    $time_from = NULL;
+    $time_to = NULL;
+  }
+
+  return [
+    'from'      => $from,
+    'to'        => $to,
+    'time_from' => $time_from,
+    'time_to'   => $time_to,
+  ];
 }
 
 /**
@@ -789,6 +823,81 @@ function myapi_reservation_valid_date($value) {
     return NULL;
   }
   return $value;
+}
+
+/**
+ * Validates a single 'HH:MM' 24h time string (SPEC 43).
+ *
+ * Same lax contract as myapi_reservation_valid_date(): anything that is not a
+ * well-formed clock time is silently ignored, never a 422. The pattern is the
+ * one field_start_time values are created with, so a valid bound compares
+ * correctly against the stored column as a plain zero-padded string.
+ *
+ * @param mixed $value  Raw query-string value, or NULL when absent.
+ *
+ * @return string|NULL  The value when it is a valid 'HH:MM' time, NULL
+ *                       otherwise.
+ */
+function myapi_reservation_valid_time($value) {
+  if (!is_string($value) || !preg_match('/^([01]\d|2[0-3]):([0-5]\d)$/', $value)) {
+    return NULL;
+  }
+  return $value;
+}
+
+/**
+ * Applies the date-range filter (and its optional time bounds) to a query.
+ *
+ * Shared by myapi_reservation_count() and myapi_reservation_fetch() so both
+ * always filter over exactly the same set — 'total' in the pagination block
+ * would otherwise drift from the rows actually returned. Expects the caller
+ * to have joined field_data_field_date as 'fdate' and, whenever a time bound
+ * is active, field_data_field_start_time as 'fstart'.
+ *
+ * A bare date bound compares on the day only. A date bound carrying a time
+ * refinement becomes a boundary-day comparison instead:
+ *
+ *   date > from  OR (date = from AND start_time >= time_from)
+ *   date < to    OR (date = to   AND start_time <= time_to)
+ *
+ * so the hour narrows the boundary day and every other day in range keeps all
+ * of its reservations. Both ends stay inclusive. On the boundary day a
+ * reservation with no field_start_time row is excluded (NULL comparison), the
+ * same way a reservation with no date row is excluded from a date range.
+ *
+ * The placeholder for the day is repeated under two names on purpose: the
+ * same named placeholder cannot appear twice in one prepared statement.
+ *
+ * @param SelectQuery $query      The query being built.
+ * @param string|NULL $from       Inclusive lower bound 'YYYY-MM-DD', or NULL.
+ * @param string|NULL $to         Inclusive upper bound 'YYYY-MM-DD', or NULL.
+ * @param string|NULL $time_from  'HH:MM' refinement of $from, or NULL.
+ * @param string|NULL $time_to    'HH:MM' refinement of $to, or NULL.
+ */
+function myapi_reservation_apply_range($query, $from, $to, $time_from = NULL, $time_to = NULL) {
+  if ($from !== NULL) {
+    if ($time_from !== NULL) {
+      $query->where(
+        '(SUBSTR(fdate.field_date_value, 1, 10) > :date_from) OR (SUBSTR(fdate.field_date_value, 1, 10) = :date_from_day AND fstart.field_start_time_value >= :time_from)',
+        [':date_from' => $from, ':date_from_day' => $from, ':time_from' => $time_from]
+      );
+    }
+    else {
+      $query->where('SUBSTR(fdate.field_date_value, 1, 10) >= :date_from', [':date_from' => $from]);
+    }
+  }
+
+  if ($to !== NULL) {
+    if ($time_to !== NULL) {
+      $query->where(
+        '(SUBSTR(fdate.field_date_value, 1, 10) < :date_to) OR (SUBSTR(fdate.field_date_value, 1, 10) = :date_to_day AND fstart.field_start_time_value <= :time_to)',
+        [':date_to' => $to, ':date_to_day' => $to, ':time_to' => $time_to]
+      );
+    }
+    else {
+      $query->where('SUBSTR(fdate.field_date_value, 1, 10) <= :date_to', [':date_to' => $to]);
+    }
+  }
 }
 
 /**
@@ -993,15 +1102,17 @@ function myapi_reservation_within_hours($start_min, $end_min, $open_min, $close_
  * reflects only the authenticated user's own reservations, not the whole
  * unit's.
  *
- * @param int         $unit_id  The 'vivienda' nid to filter by.
- * @param string|NULL $from     Inclusive lower bound 'YYYY-MM-DD', or NULL.
- * @param string|NULL $to       Inclusive upper bound 'YYYY-MM-DD', or NULL.
- * @param string|NULL $status   'confirmed', 'cancelled', or NULL for both.
- * @param int         $uid      The authenticated user's uid.
+ * @param int         $unit_id    The 'vivienda' nid to filter by.
+ * @param string|NULL $from       Inclusive lower bound 'YYYY-MM-DD', or NULL.
+ * @param string|NULL $to         Inclusive upper bound 'YYYY-MM-DD', or NULL.
+ * @param string|NULL $time_from  'HH:MM' refinement of $from, or NULL.
+ * @param string|NULL $time_to    'HH:MM' refinement of $to, or NULL.
+ * @param string|NULL $status     'confirmed', 'cancelled', or NULL for both.
+ * @param int         $uid        The authenticated user's uid.
  *
  * @return int  Total number of matching reservations.
  */
-function myapi_reservation_count($unit_id, $from = NULL, $to = NULL, $status = NULL, $uid = NULL) {
+function myapi_reservation_count($unit_id, $from = NULL, $to = NULL, $time_from = NULL, $time_to = NULL, $status = NULL, $uid = NULL) {
   $query = db_select('node', 'n')
     ->condition('n.type', 'reservation')
     ->condition('n.status', 1);
@@ -1014,12 +1125,13 @@ function myapi_reservation_count($unit_id, $from = NULL, $to = NULL, $status = N
 
   if ($from !== NULL || $to !== NULL) {
     $query->innerJoin('field_data_field_date', 'fdate', "fdate.entity_id = n.nid AND fdate.entity_type = 'node' AND fdate.deleted = 0");
-    if ($from !== NULL) {
-      $query->where('SUBSTR(fdate.field_date_value, 1, 10) >= :date_from', [':date_from' => $from]);
+    // The start time is only needed when a bound carries a time refinement;
+    // left-joined so a reservation with no start_time row still reaches the
+    // WHERE clause (and is dropped there, on the boundary day only).
+    if ($time_from !== NULL || $time_to !== NULL) {
+      $query->leftJoin('field_data_field_start_time', 'fstart', "fstart.entity_id = n.nid AND fstart.entity_type = 'node' AND fstart.deleted = 0");
     }
-    if ($to !== NULL) {
-      $query->where('SUBSTR(fdate.field_date_value, 1, 10) <= :date_to', [':date_to' => $to]);
-    }
+    myapi_reservation_apply_range($query, $from, $to, $time_from, $time_to);
   }
 
   if ($status !== NULL) {
@@ -1037,16 +1149,19 @@ function myapi_reservation_count($unit_id, $from = NULL, $to = NULL, $status = N
  * @param int         $page     1-based page number.
  * @param int         $limit    Rows per page, already clamped to [1, 50], or
  *                              -1 to return every row unpaginated.
- * @param string      $sort     'asc' or 'desc', applied to field_date_value.
- * @param string|NULL $from     Inclusive lower bound 'YYYY-MM-DD', or NULL.
- * @param string|NULL $to       Inclusive upper bound 'YYYY-MM-DD', or NULL.
- * @param string|NULL $status   'confirmed', 'cancelled', or NULL for both.
- * @param int         $uid      The authenticated user's uid. Rows are always
- *                              restricted to field_requester = $uid (SPEC 37).
+ * @param string      $sort      'asc' or 'desc', applied to field_date_value
+ *                               and then to field_start_time_value.
+ * @param string|NULL $from      Inclusive lower bound 'YYYY-MM-DD', or NULL.
+ * @param string|NULL $to        Inclusive upper bound 'YYYY-MM-DD', or NULL.
+ * @param string|NULL $time_from 'HH:MM' refinement of $from, or NULL.
+ * @param string|NULL $time_to   'HH:MM' refinement of $to, or NULL.
+ * @param string|NULL $status    'confirmed', 'cancelled', or NULL for both.
+ * @param int         $uid       The authenticated user's uid. Rows are always
+ *                               restricted to field_requester = $uid (SPEC 37).
  *
  * @return array  Rows keyed numerically, one per reservation.
  */
-function myapi_reservation_fetch($unit_id, $page, $limit, $sort, $from = NULL, $to = NULL, $status = NULL, $uid = NULL) {
+function myapi_reservation_fetch($unit_id, $page, $limit, $sort, $from = NULL, $to = NULL, $time_from = NULL, $time_to = NULL, $status = NULL, $uid = NULL) {
   $query = db_select('node', 'n')
     ->fields('n', ['nid', 'created'])
     ->condition('n.type', 'reservation')
@@ -1084,19 +1199,14 @@ function myapi_reservation_fetch($unit_id, $page, $limit, $sort, $from = NULL, $
   $query->leftJoin('field_data_field_date', 'fdate', "fdate.entity_id = n.nid AND fdate.entity_type = 'node' AND fdate.deleted = 0");
   $query->addField('fdate', 'field_date_value', 'date');
 
-  // Optional date-range filter on field_date. Applying a condition on the
-  // left-joined column also excludes reservations with no date row (NULL),
-  // which is the desired behaviour: a reservation without a date cannot fall
-  // in a range.
-  if ($from !== NULL) {
-    $query->where('SUBSTR(fdate.field_date_value, 1, 10) >= :date_from', [':date_from' => $from]);
-  }
-  if ($to !== NULL) {
-    $query->where('SUBSTR(fdate.field_date_value, 1, 10) <= :date_to', [':date_to' => $to]);
-  }
-
   $query->leftJoin('field_data_field_start_time', 'fstart', "fstart.entity_id = n.nid AND fstart.entity_type = 'node' AND fstart.deleted = 0");
   $query->addField('fstart', 'field_start_time_value', 'start_time');
+
+  // Optional date-range filter on field_date, with its optional time bounds
+  // on field_start_time. Applying a condition on the left-joined column also
+  // excludes reservations with no date row (NULL), which is the desired
+  // behaviour: a reservation without a date cannot fall in a range.
+  myapi_reservation_apply_range($query, $from, $to, $time_from, $time_to);
 
   $query->leftJoin('field_data_field_end_time', 'fend', "fend.entity_id = n.nid AND fend.entity_type = 'node' AND fend.deleted = 0");
   $query->addField('fend', 'field_end_time_value', 'end_time');
@@ -1115,6 +1225,12 @@ function myapi_reservation_fetch($unit_id, $page, $limit, $sort, $from = NULL, $
   $query->addField('fcancel', 'field_cancelled_by_value', 'cancelled_by');
 
   $query->orderBy('fdate.field_date_value', $sort === 'asc' ? 'ASC' : 'DESC');
+  // Second key (SPEC 43): reservations of the same day come back in clock
+  // order, so an ascending list reads as a real timeline instead of jumping
+  // 15:00 before 09:00. Stored as zero-padded 'HH:MM', so a plain string sort
+  // is already chronological. Rows with no start_time row sort together at
+  // one end (NULL), never interleaved.
+  $query->orderBy('fstart.field_start_time_value', $sort === 'asc' ? 'ASC' : 'DESC');
   // Deterministic tie-breaker: reservations sharing the same date would
   // otherwise come back in an unstable order across requests (and could
   // shift between pages), because SQL does not guarantee row order for

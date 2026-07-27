@@ -22,9 +22,11 @@ single-reservation detail endpoint, no availability/conflict check.
 |-------|---------|-------|
 | `page` | `1` | 1-based. Any non-positive-integer value falls back to the default silently (no `422`). |
 | `limit` | `20` | Clamped to `[1, 50]`. Any non-positive-integer or out-of-range value falls back to the default/clamp silently. Special value `-1` disables pagination entirely: every matching reservation is returned in one response, `page` is forced to `1`, and `total_pages` is `1` (or `0` when `total` is `0`). |
-| `sort` | `desc` | `asc` or `desc`, applied to `date` (`field_date_value`). Any other value falls back to `desc`. |
+| `sort` | `desc` | `asc` or `desc`, applied to `date` (`field_date_value`) and then to `start_time`. Any other value falls back to `desc`. |
 | `date_from` | absent = no lower bound | ISO `YYYY-MM-DD`. When valid, keeps only reservations with `date >= date_from`. Any malformed or non-calendar value (e.g. `2026-13-40`, `01-06-2026`, `hoy`) is ignored silently (no `422`), as if absent. |
 | `date_to` | absent = no upper bound | ISO `YYYY-MM-DD`. When valid, keeps only reservations with `date <= date_to`. Same silent-ignore rule as `date_from`. |
+| `time_from` | absent = no time refinement | `HH:MM` 24h. Refines `date_from` **on that day only**: on `date_from` keeps `start_time >= time_from`, later days unaffected. Ignored silently when malformed or when `date_from` is absent/invalid. |
+| `time_to` | absent = no time refinement | `HH:MM` 24h. Refines `date_to` **on that day only**: on `date_to` keeps `start_time <= time_to`, earlier days unaffected. Same silent-ignore rule as `time_from`. |
 | `status` | absent = both statuses | `confirmed` or `cancelled`. Any other value is ignored silently (no `422`), as if absent — both statuses are returned. |
 
 **Success response (200)**
@@ -103,13 +105,20 @@ Notes:
   `date`/`start_time` against the current time); it is not authoritative —
   `PUT /api/v1/reservations/%/cancel` re-validates the window server-side.
 - `total`/`total_pages` in `pagination` reflect the unpaginated count of the
-  **filtered** set (`date_from`/`date_to`/`status` if any), not the unit's
-  full reservation count. `total_pages` is `0` when `total` is `0`.
-- Sorting is always by `date` (`field_date_value`); there is no other sort
-  field. Reservations sharing the same `date` are broken by `id` (`nid`) in
-  the same direction as `sort`, so the order is deterministic and stable
-  across requests and pages (no row can shift between pages on repeated
-  calls).
+  **filtered** set (`date_from`/`date_to`/`time_from`/`time_to`/`status` if
+  any), not the unit's full reservation count. `total_pages` is `0` when
+  `total` is `0`.
+- Sorting is by `date` (`field_date_value`) and then by `start_time`
+  (`field_start_time_value`), both in the direction given by `sort`; there is
+  no other sort field and no way to sort by one without the other.
+  Reservations sharing the same `date` therefore come back in clock order —
+  with `sort=asc`, `09:00` before `15:00`. Remaining ties (same date and same
+  start time) are broken by `id` (`nid`) in the same direction, so the order
+  is deterministic and stable across requests and pages (no row can shift
+  between pages on repeated calls). `start_time` is stored zero-padded
+  (`HH:MM`), so the string ordering is chronological; reservations with no
+  `start_time` row group together at one end of their day (`NULL` ordering),
+  never interleaved.
 
 **Date-range filter (`date_from` / `date_to`)**
 
@@ -132,6 +141,48 @@ Both bounds are optional and independent: you may send only `date_from`, only
 
 Example: `GET /api/v1/units/21/reservations?date_from=2026-07-01&date_to=2026-07-31`
 returns only reservations whose `date` falls within July 2026 inclusive.
+
+**Time refinement (`time_from` / `time_to`)**
+
+Each date bound accepts an optional `HH:MM` refinement. A time is **not a
+filter of its own**: it narrows its own date bound on the boundary day and
+leaves every other day in the range untouched. This is the "from now onwards"
+semantics the app needs — asking for today from `09:00` must not also hide
+tomorrow's `08:00`.
+
+The resulting comparison is:
+
+```
+lower bound:  date > date_from  OR (date = date_from AND start_time >= time_from)
+upper bound:  date < date_to    OR (date = date_to   AND start_time <= time_to)
+```
+
+- Both ends stay **inclusive**: a reservation starting exactly at `time_from`
+  (or exactly at `time_to`) is returned.
+- Only `start_time` is compared. A reservation already in progress —
+  `08:00→10:00` queried with `time_from=09:00` — is **not** returned; the
+  filter answers "which reservations start from this hour", not "which are
+  active at this hour".
+- On the boundary day, a reservation with no `start_time` row is excluded
+  (same rule as a reservation with no `date` row inside a date range). On any
+  other day of the range it is still returned.
+- `time_from` is dropped when `date_from` is absent or invalid, and `time_to`
+  when `date_to` is absent or invalid — there would be no boundary day to
+  apply them to. A malformed time (`9:00`, `24:00`, `09:00:00`, `ahora`) is
+  ignored per bound, silently, with no `422`; its date bound still applies.
+- When the range collapses to a single day (`date_from == date_to`) and the
+  times are inverted (`time_from > time_to`), **both times are dropped** and
+  the day is kept, mirroring the inverted-date-range rule — the request never
+  degrades into a guaranteed-empty result. Across different days inverted
+  times are legitimate (`27th from 18:00` → `28th until 09:00`) and are kept.
+- Reservations that cross midnight are stored under their own clock day with
+  their real `start_time` (SPEC 41), so they are matched by the day they start
+  on: a `23:00→01:00` reservation of the 27th is returned by
+  `date_from=2026-07-27&time_from=22:00`, not by the 28th's bounds.
+
+Example — everything from today 09:00 onwards, in chronological order:
+
+`GET /api/v1/units/21/reservations?status=confirmed&date_from=2026-07-27&time_from=09:00&sort=asc`
 
 **Status filter (`status`)**
 
@@ -183,8 +234,8 @@ full schema definition.
 | `node` (aliased) | `nid`, `title` | `area_name`, resolved via a left join on `field_area_target_id`. |
 | `field_data_field_area_category` | `entity_id`, `field_area_category_value` | `area_category`, joined on the referenced area's nid (`field_area_target_id`), not on the reservation node. Left join. |
 | `field_data_field_cancel_deadline_minutes` | `entity_id`, `field_cancel_deadline_minutes_value` | `cancel_deadline_minutes`, joined on the referenced area's nid (`field_area_target_id`), not on the reservation node. Left join. |
-| `field_data_field_date` | `entity_id`, `field_date_value` | `date`. Default sort column and date-range filter column. Left join. |
-| `field_data_field_start_time` | `entity_id`, `field_start_time_value` | `start_time`, text. Left join. |
+| `field_data_field_date` | `entity_id`, `field_date_value` | `date`. Primary sort column and date-range filter column. Left join. |
+| `field_data_field_start_time` | `entity_id`, `field_start_time_value` | `start_time`, text. Second sort column and `time_from`/`time_to` filter column. Left join. |
 | `field_data_field_end_time` | `entity_id`, `field_end_time_value` | `end_time`, text. Left join. |
 | `field_data_field_reservation_status` | `entity_id`, `field_reservation_status_value` | `status`. Left join; also the `status` filter column. |
 | `field_data_field_cancelled_by` | `entity_id`, `field_cancelled_by_value` | `cancelled_by`, text. Left join. |
@@ -213,6 +264,12 @@ according to the `Accept-Language` header (`es`/`en`, default `es`). See
 **Example:**
 ```bash
 curl -i -X GET 'https://host/api/v1/units/21/reservations?status=confirmed&sort=asc' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+Upcoming reservations only, from today at 09:00 onwards:
+```bash
+curl -i -X GET 'https://host/api/v1/units/21/reservations?status=confirmed&date_from=2026-07-27&time_from=09:00&sort=asc' \
   -H 'Authorization: Bearer <access_token>'
 ```
 
