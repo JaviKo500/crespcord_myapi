@@ -288,6 +288,7 @@ function _myapi_reservations_uninstall_destructive() {
     'field_who_can_reserve',
     'field_cancel_deadline_minutes',
     'field_area_category',
+    'field_area_notes',
     'field_unit',
     'field_requester',
     'field_area',
@@ -534,6 +535,11 @@ function _myapi_reservations_install() {
       ],
     ],
   ]);
+  _myapi_reservations_ensure_field('field_area_notes', [
+    'field_name'  => 'field_area_notes',
+    'type'        => 'text_long',
+    'cardinality' => 1,
+  ]);
   _myapi_reservations_ensure_field('field_unit', [
     'field_name'  => 'field_unit',
     'type'        => 'entityreference',
@@ -707,6 +713,17 @@ function _myapi_reservations_install() {
     'description'   => 'Categoría de catálogo del área; la app la usa como clave estable para elegir el icono.',
     'default_value' => [['value' => 'other']],
     'widget'        => ['type' => 'options_select'],
+  ]);
+  _myapi_reservations_ensure_instance('field_area_notes', 'area', [
+    'field_name'    => 'field_area_notes',
+    'entity_type'   => 'node',
+    'bundle'        => 'area',
+    'label'         => 'Instrucciones o notas',
+    'required'      => 0,
+    'description'   => 'Instrucciones, normas o detalles del área que la app muestra al residente antes de reservar. Admite HTML.',
+    'settings'      => ['text_processing' => 1],
+    'default_value' => [['value' => '', 'format' => 'full_html']],
+    'widget'        => ['type' => 'text_textarea'],
   ]);
 
   // (c) Instances of the 'reservation' bundle.
@@ -936,5 +953,34 @@ function myapi_update_7007() {
     'description'   => 'Categoría de catálogo del área; la app la usa como clave estable para elegir el icono.',
     'default_value' => [['value' => 'other']],
     'widget'        => ['type' => 'options_select'],
+  ]);
+}
+
+/**
+ * Adds the field_area_notes free-text field to the 'area' bundle on sites where
+ * the module is already installed.
+ *
+ * Reuses the same idempotent sub-helpers as _myapi_reservations_install(), so it
+ * creates the text_long field and its 'area' instance without duplicating them
+ * or throwing a FieldException where they already exist. It only touches the
+ * 'area' bundle — reservation and condominio are left untouched — and adds no
+ * REST endpoint or business logic, just the field and its instance.
+ */
+function myapi_update_7008() {
+  _myapi_reservations_ensure_field('field_area_notes', [
+    'field_name'  => 'field_area_notes',
+    'type'        => 'text_long',
+    'cardinality' => 1,
+  ]);
+  _myapi_reservations_ensure_instance('field_area_notes', 'area', [
+    'field_name'    => 'field_area_notes',
+    'entity_type'   => 'node',
+    'bundle'        => 'area',
+    'label'         => 'Instrucciones o notas',
+    'required'      => 0,
+    'description'   => 'Instrucciones, normas o detalles del área que la app muestra al residente antes de reservar. Admite HTML.',
+    'settings'      => ['text_processing' => 1],
+    'default_value' => [['value' => '', 'format' => 'full_html']],
+    'widget'        => ['type' => 'text_textarea'],
   ]);
 }

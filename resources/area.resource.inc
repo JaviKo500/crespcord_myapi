@@ -150,7 +150,7 @@ function myapi_area_list($condominium_id) {
  * Handles GET /api/v1/areas/%.
  *
  * Returns the single visible 'area' node identified by $area_id, in the same
- * 13-key item shape as the list (GET /api/v1/condominiums/%/areas), wrapped as
+ * 14-key item shape as the list (GET /api/v1/condominiums/%/areas), wrapped as
  * {"area": ...}. The area is only visible when it would also appear in the
  * caller's list: it must be a published 'area' node with a visible
  * field_area_status (MYAPI_AREA_VISIBLE_STATUSES) and belong to a condominium
@@ -341,6 +341,9 @@ function myapi_area_base_select() {
   $query->leftJoin('field_data_field_area_category', 'fcat', "fcat.entity_id = n.nid AND fcat.entity_type = 'node' AND fcat.deleted = 0");
   $query->addField('fcat', 'field_area_category_value', 'category');
 
+  $query->leftJoin('field_data_field_area_notes', 'fnot', "fnot.entity_id = n.nid AND fnot.entity_type = 'node' AND fnot.deleted = 0");
+  $query->addField('fnot', 'field_area_notes_value', 'notes');
+
   return $query;
 }
 
@@ -409,12 +412,14 @@ function myapi_area_fetch_one($area_id) {
  * NULL otherwise. 'image_url' is built with file_create_url() from the joined
  * file_managed uri (absolute URL, no per-row file_load), NULL together with
  * 'image_id' when the area has no image. Text/list fields (open_time,
- * close_time, status, who_can_reserve, category) pass through as stored, NULL
- * when the node has no row for that field.
+ * close_time, status, who_can_reserve, category, notes) pass through as stored,
+ * NULL when the node has no row for that field. 'notes' is the raw
+ * field_area_notes_value: it may contain HTML and is never sanitized or
+ * rendered here (no check_markup(), no filter_xss()).
  *
  * @param object $area  One row from myapi_area_fetch().
  *
- * @return array  Response item with all 13 mapped keys.
+ * @return array  Response item with all 14 mapped keys.
  */
 function myapi_area_build_item($area) {
   return [
@@ -431,5 +436,6 @@ function myapi_area_build_item($area) {
     'who_can_reserve'         => $area->who_can_reserve,
     'cancel_deadline_minutes' => $area->cancel_deadline_minutes !== NULL ? (int) $area->cancel_deadline_minutes : NULL,
     'category'                => $area->category,
+    'notes'                   => $area->notes,
   ];
 }
