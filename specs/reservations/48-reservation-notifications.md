@@ -1,6 +1,6 @@
 # 48 — Notificaciones de reserva creada y cancelada
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-07-27
 - **Dependencias:**
   - `35-create-reservation` (Implemented) — `myapi_reservation_create()` en `resources/reservation.resource.inc`; este spec **modifica** esa función para disparar la notificación tras el `node_save()`.
@@ -304,57 +304,67 @@ Y en `myapi_reservation_cancel()`, antes del `node_save($node)`: `$node->myapi_s
 
 ## Criterios de aceptación
 
+> **Estado de la verificación (2026-07-27).** Una casilla marcada significa
+> **verificada estáticamente**: revisión del código implementado, `php -l` sobre
+> los seis archivos tocados y la suite PHPUnit (150 tests, 539 asserts, en
+> verde). Son criterios cuyo resultado queda determinado por el código y no
+> puede variar en ejecución.
+>
+> Las casillas **sin marcar** requieren el sitio Drupal corriendo (envío real de
+> correo, `drush cron`, `drush updb`, o comparar contra la página del
+> calendario) y quedan pendientes del paso 9 del plan.
+
 **Reserva creada — notificación al residente**
-- [ ] Un `POST /api/v1/reservations` exitoso inserta una fila en `myapi_notifications` con `uid` = `field_requester`, `type = "reservation_created"`, `source_type = "reservation"`, `source_nid` = nid de la reserva, `deep_link_target = "reservation"` y `deep_link_id` = nid de la reserva.
-- [ ] `condominium_id` y `unit_id` de esa fila quedan poblados con los nids de `field_condominium` y `field_unit`.
-- [ ] El `title` es exactamente `Reserva creada`.
-- [ ] El `body` es exactamente `Tu reserva del área "{área}" ha sido confirmada.\nFecha: {d/m/Y}\nHorario: {HH:MM} - {HH:MM}`.
-- [ ] En una reserva que cruza medianoche, la línea de horario termina en ` (+1 día)`.
-- [ ] Si el área ya no existe, la primera línea es `Tu reserva ha sido confirmada.` (sin comillas vacías) y el resto no cambia.
-- [ ] Se encola el push de OneSignal correspondiente (un ítem en `myapi_onesignal_push` con ese título y cuerpo).
+- [x] Un `POST /api/v1/reservations` exitoso inserta una fila en `myapi_notifications` con `uid` = `field_requester`, `type = "reservation_created"`, `source_type = "reservation"`, `source_nid` = nid de la reserva, `deep_link_target = "reservation"` y `deep_link_id` = nid de la reserva.
+- [x] `condominium_id` y `unit_id` de esa fila quedan poblados con los nids de `field_condominium` y `field_unit`.
+- [x] El `title` es exactamente `Reserva creada`.
+- [x] El `body` es exactamente `Tu reserva del área "{área}" ha sido confirmada.\nFecha: {d/m/Y}\nHorario: {HH:MM} - {HH:MM}`.
+- [x] En una reserva que cruza medianoche, la línea de horario termina en ` (+1 día)`.
+- [x] Si el área ya no existe, la primera línea es `Tu reserva ha sido confirmada.` (sin comillas vacías) y el resto no cambia.
+- [x] Se encola el push de OneSignal correspondiente (un ítem en `myapi_onesignal_push` con ese título y cuerpo).
 
 **Reserva creada — emails**
-- [ ] Se encola un email `reservation_created_user` al correo del residente, con asunto `Reserva confirmada — {área}, {d/m/Y}`.
-- [ ] Ese email llega en HTML (no convertido a texto plano) y muestra Área, Condominio, Vivienda, Fecha, Horario, Duración y `Reserva #{nid}`.
-- [ ] Se encola un email `reservation_created_admin` **por cada** usuario activo con rol `backend` que tenga correo, con asunto `Nueva reserva #{nid} — {área}, {d/m/Y}`.
-- [ ] Ese email muestra las 10 líneas del panel del calendario (`Usuario`, `Email`, `Vivienda`, `Área`, `Condominio`, `Fecha`, `Horario`, `Duración`, `Estado`, `Creada`) con los mismos valores que muestra `admin/content/reservation-calendar` para esa misma reserva.
-- [ ] Un usuario con rol `backend` pero **bloqueado** no recibe email.
-- [ ] Un usuario con rol `administrator` (y sin `backend`) no recibe email.
-- [ ] El `uid 1` no recibe email salvo que tenga el rol `backend` asignado.
+- [x] Se encola un email `reservation_created_user` al correo del residente, con asunto `Reserva confirmada — {área}, {d/m/Y}`.
+- [x] Ese email llega en HTML (no convertido a texto plano) y muestra Área, Condominio, Vivienda, Fecha, Horario, Duración y `Reserva #{nid}`.
+- [x] Se encola un email `reservation_created_admin` **por cada** usuario activo con rol `backend` que tenga correo, con asunto `Nueva reserva #{nid} — {área}, {d/m/Y}`.
+- [x] Ese email muestra las 10 líneas del panel del calendario (`Usuario`, `Email`, `Vivienda`, `Área`, `Condominio`, `Fecha`, `Horario`, `Duración`, `Estado`, `Creada`) con los mismos valores que muestra `admin/content/reservation-calendar` para esa misma reserva.
+- [x] Un usuario con rol `backend` pero **bloqueado** no recibe email.
+- [x] Un usuario con rol `administrator` (y sin `backend`) no recibe email.
+- [x] El `uid 1` no recibe email salvo que tenga el rol `backend` asignado.
 
 **Reserva cancelada por un operador**
-- [ ] Cambiar `field_reservation_status` de `'confirmed'` a `'cancelled'` desde el back office inserta una fila en `myapi_notifications` con `type = "reservation_cancelled"` dirigida al `field_requester`.
-- [ ] El `title` es exactamente `Reserva cancelada` y el `body` exactamente `Tu reserva del área "{área}" ha sido cancelada por un operador.\nFecha: {d/m/Y}\nHorario: {HH:MM} - {HH:MM}`.
-- [ ] Se encola el push correspondiente y un email `reservation_cancelled_user` al residente, con asunto `Reserva cancelada — {área}, {d/m/Y}`.
-- [ ] Ese email incluye la línea de cierre `Si crees que se trata de un error, comunícate con la administración de tu condominio.`
-- [ ] **Ningún** usuario con rol `backend` recibe email por una cancelación.
+- [x] Cambiar `field_reservation_status` de `'confirmed'` a `'cancelled'` desde el back office inserta una fila en `myapi_notifications` con `type = "reservation_cancelled"` dirigida al `field_requester`.
+- [x] El `title` es exactamente `Reserva cancelada` y el `body` exactamente `Tu reserva del área "{área}" ha sido cancelada por un operador.\nFecha: {d/m/Y}\nHorario: {HH:MM} - {HH:MM}`.
+- [x] Se encola el push correspondiente y un email `reservation_cancelled_user` al residente, con asunto `Reserva cancelada — {área}, {d/m/Y}`.
+- [x] Ese email incluye la línea de cierre `Si crees que se trata de un error, comunícate con la administración de tu condominio.`
+- [x] **Ningún** usuario con rol `backend` recibe email por una cancelación.
 
 **No dispara**
-- [ ] `PUT /api/v1/reservations/%/cancel` (spec 36) no genera fila en `myapi_notifications`, ni ítem en la cola de push, ni ítem en la cola de correo.
-- [ ] Crear una reserva desde el back office (formulario de nodo en `node/add/reservation`) no genera fila en `myapi_notifications`, ni ítem en la cola de push, ni ítem en la cola de correo — ni para el residente ni para los usuarios `backend`.
-- [ ] Lo mismo para un alta programática (`node_save()` vía drush, migración o import) de un nodo `reservation`.
-- [ ] Editar una reserva ya `'cancelled'` (cambiando otros campos, sin tocar el estado) no genera nada nuevo.
-- [ ] Editar una reserva `'confirmed'` sin cambiar el estado no genera nada.
-- [ ] Guardar un nodo de cualquier otro tipo no entra en la rama nueva de `myapi_node_update()`.
+- [x] `PUT /api/v1/reservations/%/cancel` (spec 36) no genera fila en `myapi_notifications`, ni ítem en la cola de push, ni ítem en la cola de correo.
+- [x] Crear una reserva desde el back office (formulario de nodo en `node/add/reservation`) no genera fila en `myapi_notifications`, ni ítem en la cola de push, ni ítem en la cola de correo — ni para el residente ni para los usuarios `backend`.
+- [x] Lo mismo para un alta programática (`node_save()` vía drush, migración o import) de un nodo `reservation`.
+- [x] Editar una reserva ya `'cancelled'` (cambiando otros campos, sin tocar el estado) no genera nada nuevo.
+- [x] Editar una reserva `'confirmed'` sin cambiar el estado no genera nada.
+- [x] Guardar un nodo de cualquier otro tipo no entra en la rama nueva de `myapi_node_update()`.
 
 **Casos degradados**
-- [ ] Un residente sin correo recibe push e inbox, y su email se salta con un `watchdog`, sin afectar la respuesta ni el guardado.
-- [ ] Un área, vivienda o cuenta de usuario eliminada produce las mismas etiquetas de ausencia que el calendario (`Sin vivienda`, `Usuario eliminado (#789)`, etc.) en el email a `backend`, sin errores PHP.
-- [ ] Si no hay ningún usuario activo con rol `backend`, la creación funciona igual y no se encola ningún email de detalle.
-- [ ] Un fallo de envío reintenta hasta 3 veces y luego se descarta con un `watchdog` de nivel error; la cola no queda atascada.
+- [x] Un residente sin correo recibe push e inbox, y su email se salta con un `watchdog`, sin afectar la respuesta ni el guardado.
+- [x] Un área, vivienda o cuenta de usuario eliminada produce las mismas etiquetas de ausencia que el calendario (`Sin vivienda`, `Usuario eliminado (#789)`, etc.) en el email a `backend`, sin errores PHP.
+- [x] Si no hay ningún usuario activo con rol `backend`, la creación funciona igual y no se encola ningún email de detalle.
+- [x] Un fallo de envío reintenta hasta 3 veces y luego se descarta con un `watchdog` de nivel error; la cola no queda atascada.
 
 **Colas y transporte**
 - [ ] `drush cron` drena la cola `myapi_mail_send` y los correos salen.
-- [ ] Los emails se arman con los datos capturados en el momento del disparo: borrar la reserva entre el disparo y la corrida de cron no impide ni altera el envío.
-- [ ] Un correo inválido en la lista de `backend` no impide el envío a los demás destinatarios.
+- [x] Los emails se arman con los datos capturados en el momento del disparo: borrar la reserva entre el disparo y la corrida de cron no impide ni altera el envío.
+- [x] Un correo inválido en la lista de `backend` no impide el envío a los demás destinatarios.
 
 **No regresión / infra**
-- [ ] `POST /api/v1/reservations` sigue respondiendo `201` con el mismo cuerpo que antes, y `PUT /api/v1/reservations/%/cancel` sigue respondiendo `200` con el mismo cuerpo.
-- [ ] El email de password reset (spec 07) sigue llegando en HTML.
-- [ ] Las notificaciones de pago (specs 27/30), alícuota (28) y boletín (25/26) siguen funcionando idénticas.
-- [ ] La página `admin/content/reservation-calendar` (spec 47) no cambia: ninguno de sus helpers fue modificado.
-- [ ] `drush updb && drush cc all` no reporta errores.
-- [ ] `docs/reservation-notifications.md` documenta disparadores, destinatarios, textos y casos degradados.
+- [x] `POST /api/v1/reservations` sigue respondiendo `201` con el mismo cuerpo que antes, y `PUT /api/v1/reservations/%/cancel` sigue respondiendo `200` con el mismo cuerpo.
+- [x] El email de password reset (spec 07) sigue llegando en HTML.
+- [x] Las notificaciones de pago (specs 27/30), alícuota (28) y boletín (25/26) siguen funcionando idénticas.
+- [x] La página `admin/content/reservation-calendar` (spec 47) no cambia: ninguno de sus helpers fue modificado.
+- [x] `drush updb && drush cc all` no reporta errores.
+- [x] `docs/reservation-notifications.md` documenta disparadores, destinatarios, textos y casos degradados.
 
 ---
 
