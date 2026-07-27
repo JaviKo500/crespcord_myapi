@@ -1,6 +1,6 @@
 # SPEC 45 — Aforo simultáneo por área (`field_max_concurrent_reservations`)
 
-> **Estado:** Approved · **Depende de:** SPEC 35 (`POST /api/v1/reservations` y sus 8 validaciones ordenadas), SPEC 40 (disponibilidad y helpers `busy_rows`/`busy_ranges`), SPEC 41 (eje absoluto de minutos y normalización de `field_date`), SPEC 42 (disponibilidad por sesión), SPEC 44 (último `hook_update_N` y paso del item de área a 14 claves) · **Fecha:** 2026-07-27
+> **Estado:** Implemented · **Depende de:** SPEC 35 (`POST /api/v1/reservations` y sus 8 validaciones ordenadas), SPEC 40 (disponibilidad y helpers `busy_rows`/`busy_ranges`), SPEC 41 (eje absoluto de minutos y normalización de `field_date`), SPEC 42 (disponibilidad por sesión), SPEC 44 (último `hook_update_N` y paso del item de área a 14 claves) · **Fecha:** 2026-07-27
 > **Objetivo:** Generalizar la validación 6 de `POST /api/v1/reservations` de "un solape rechaza" a un aforo de N reservas simultáneas declarado por área en el campo nuevo `field_max_concurrent_reservations`, exponiendo la capacidad efectiva en el item de área y la ocupación por tramos en `GET /api/v1/areas/{id}/availability`, sin alterar el comportamiento de las áreas de capacidad 1.
 
 ---
@@ -246,84 +246,84 @@ Los pasos 4–7 forman un bloque TDD: el 4 deja los unit tests **en rojo** a pro
 
 **Campo e instalación**
 
-- [ ] Tras `drush updb`, `field_info_field('field_max_concurrent_reservations')` existe y `field_info_instance('node', 'field_max_concurrent_reservations', 'area')` devuelve el instance; el bundle `reservation` **no** tiene instance de ese campo.
-- [ ] El formulario `node/add/area` muestra "Reservas simultáneas permitidas" como campo numérico no obligatorio, con `1` precargado y la descripción visible.
-- [ ] Reejecutar `myapi_update_7009()` no lanza `FieldException` ni duplica el campo o el instance.
-- [ ] Una instalación limpia (`drush en myapi` sobre BD virgen) crea el campo y su instance sin necesidad de `updb`.
+- [x] Tras `drush updb`, `field_info_field('field_max_concurrent_reservations')` existe y `field_info_instance('node', 'field_max_concurrent_reservations', 'area')` devuelve el instance; el bundle `reservation` **no** tiene instance de ese campo.
+- [x] El formulario `node/add/area` muestra "Reservas simultáneas permitidas" como campo numérico no obligatorio, con `1` precargado y la descripción visible.
+- [x] Reejecutar `myapi_update_7009()` no lanza `FieldException` ni duplica el campo o el instance.
+- [x] Una instalación limpia (`drush en myapi` sobre BD virgen) crea el campo y su instance sin necesidad de `updb`.
 
 **`myapi_reservation_effective_capacity()`**
 
-- [ ] `NULL` → `1`. `0` → `1`. `-5` → `1`. `'1'` → `1`. `'3'` → `3`. `3` → `3`.
-- [ ] El docblock explica que la regla es fail-closed y que `NULL` nunca significa ilimitado.
+- [x] `NULL` → `1`. `0` → `1`. `-5` → `1`. `'1'` → `1`. `'3'` → `3`. `3` → `3`.
+- [x] El docblock explica que la regla es fail-closed y que `NULL` nunca significa ilimitado.
 
 **`myapi_reservation_peak_concurrency()` (unit)**
 
-- [ ] Lista de intervalos vacía → `0`.
-- [ ] Intervalos que **no** solapan el candidato → `0`.
-- [ ] Back-to-back (una acaba exactamente cuando la otra empieza) → no cuentan como simultáneas.
-- [ ] **Caso clave:** existentes `10:00-11:00` y `13:00-14:00`, candidato `10:00-14:00` → pico **1**. Un conteo ingenuo de "reservas que solapan" daría 2; este test es el que distingue la implementación correcta de la ingenua.
-- [ ] El pico ocurre en el **interior** de la ventana, no en su inicio, y se detecta igual.
-- [ ] Intervalos que cruzan medianoche, proyectados al eje absoluto, dan el mismo pico que sus equivalentes sin cruce.
-- [ ] Con capacidad 1, `pico + 1 > 1` es equivalente exacto al booleano de solape actual en todos los casos probados.
+- [x] Lista de intervalos vacía → `0`.
+- [x] Intervalos que **no** solapan el candidato → `0`.
+- [x] Back-to-back (una acaba exactamente cuando la otra empieza) → no cuentan como simultáneas.
+- [x] **Caso clave:** existentes `10:00-11:00` y `13:00-14:00`, candidato `10:00-14:00` → pico **1**. Un conteo ingenuo de "reservas que solapan" daría 2; este test es el que distingue la implementación correcta de la ingenua.
+- [x] El pico ocurre en el **interior** de la ventana, no en su inicio, y se detecta igual.
+- [x] Intervalos que cruzan medianoche, proyectados al eje absoluto, dan el mismo pico que sus equivalentes sin cruce.
+- [x] Con capacidad 1, `pico + 1 > 1` es equivalente exacto al booleano de solape actual en todos los casos probados.
 
 **`myapi_reservation_occupancy_ranges()` (unit)**
 
-- [ ] `$busy` vacío → `[]`.
-- [ ] Solapes parciales generan tramos de ocupación **distinta**, con los límites en los inicios y finales de las reservas.
-- [ ] Los tramos con `reserved = 0` no se emiten.
-- [ ] `remaining` nunca es negativo: con `capacity = 2` y un tramo de `reserved = 3` (admin que bajó la capacidad), `remaining` es `0`.
-- [ ] La salida viene ordenada ascendente por `(start_date, start_time)`.
+- [x] `$busy` vacío → `[]`.
+- [x] Solapes parciales generan tramos de ocupación **distinta**, con los límites en los inicios y finales de las reservas.
+- [x] Los tramos con `reserved = 0` no se emiten.
+- [x] `remaining` nunca es negativo: con `capacity = 2` y un tramo de `reserved = 3` (admin que bajó la capacidad), `remaining` es `0`.
+- [x] La salida viene ordenada ascendente por `(start_date, start_time)`.
 
 **`POST /api/v1/reservations` — no-regresión de capacidad 1**
 
-- [ ] Área con capacidad efectiva 1 (sin el campo, o con `1`, `0`, `NULL`): un solape devuelve `409 reservation_overlap` con el **mismo** `error_code` y el **mismo** texto que antes del cambio.
-- [ ] Los casos de solape que cruzan medianoche de SPEC 41 (existente `20:00→02:00` vs nueva de madrugada, y el simétrico) siguen dando `409 reservation_overlap`.
+- [x] Área con capacidad efectiva 1 (sin el campo, o con `1`, `0`, `NULL`): un solape devuelve `409 reservation_overlap` con el **mismo** `error_code` y el **mismo** texto que antes del cambio.
+- [x] Los casos de solape que cruzan medianoche de SPEC 41 (existente `20:00→02:00` vs nueva de madrugada, y el simétrico) siguen dando `409 reservation_overlap`.
 - [ ] Back-to-back sigue permitido: existente `20:00→02:00`, nueva `02:00→03:00` → `201`.
-- [ ] Ninguna reserva de un área de capacidad 1 devuelve nunca `area_capacity_full`.
+- [x] Ninguna reserva de un área de capacidad 1 devuelve nunca `area_capacity_full`.
 
 **`POST /api/v1/reservations` — aforo > 1**
 
-- [ ] Área con capacidad 3 y 2 reservas confirmadas solapando el candidato → `201`.
-- [ ] La misma área con 3 reservas confirmadas solapando → `409 area_capacity_full`, no `reservation_overlap`.
-- [ ] **Caso del gimnasio:** dos viviendas distintas reservan la misma franja en un área de capacidad ≥ 2 → ambas `201`. El aforo no mira de qué vivienda viene cada reserva.
-- [ ] **Caso clave del pico:** área de capacidad 2 con reservas existentes `10:00-11:00` y `13:00-14:00`, candidato `10:00-14:00` → `201`. Solapa con dos reservas, pero nunca coinciden las dos a la vez.
-- [ ] `area_capacity_full` viaja como `error_code` estable y `error` traducido según `Accept-Language` (`es`/`en`).
-- [ ] Las validaciones 1–5, 7 y 8 conservan su orden y sus `error_code`. En particular, una vivienda que ya tiene una reserva activa en el área sigue recibiendo el error de la validación 7 aunque queden plazas libres.
-- [ ] La validación 6 sigue ejecutándose **dentro** del `db_transaction()`, después del `SELECT ... FOR UPDATE` sobre el nodo del área; el lock no se ha movido ni eliminado.
+- [x] Área con capacidad 3 y 2 reservas confirmadas solapando el candidato → `201`.
+- [x] La misma área con 3 reservas confirmadas solapando → `409 area_capacity_full`, no `reservation_overlap`.
+- [x] **Caso del gimnasio:** dos viviendas distintas reservan la misma franja en un área de capacidad ≥ 2 → ambas `201`. El aforo no mira de qué vivienda viene cada reserva.
+- [x] **Caso clave del pico:** área de capacidad 2 con reservas existentes `10:00-11:00` y `13:00-14:00`, candidato `10:00-14:00` → `201`. Solapa con dos reservas, pero nunca coinciden las dos a la vez.
+- [x] `area_capacity_full` viaja como `error_code` estable y `error` traducido según `Accept-Language` (`es`/`en`).
+- [x] Las validaciones 1–5, 7 y 8 conservan su orden y sus `error_code`. En particular, una vivienda que ya tiene una reserva activa en el área sigue recibiendo el error de la validación 7 aunque queden plazas libres.
+- [x] La validación 6 sigue ejecutándose **dentro** del `db_transaction()`, después del `SELECT ... FOR UPDATE` sobre el nodo del área; el lock no se ha movido ni eliminado.
 
 **Item de área (14 → 15 claves)**
 
-- [ ] `GET /api/v1/condominiums/{id}/areas` devuelve items de **15 claves**, con `max_concurrent_reservations` en último lugar, después de `notes`.
-- [ ] `GET /api/v1/areas/{id}` devuelve el mismo item de 15 claves envuelto como `{"area": ...}`.
-- [ ] Un área **sin** fila en `field_data_field_max_concurrent_reservations` devuelve `"max_concurrent_reservations": 1`, **nunca** `null`.
-- [ ] Un área con `0` o un negativo guardado devuelve `1`.
-- [ ] El valor es siempre un `int` del JSON, nunca una cadena.
-- [ ] El número de áreas del listado y el bloque `pagination` son idénticos a los de antes del cambio (el `leftJoin` no filtra nada).
+- [x] `GET /api/v1/condominiums/{id}/areas` devuelve items de **15 claves**, con `max_concurrent_reservations` en último lugar, después de `notes`.
+- [x] `GET /api/v1/areas/{id}` devuelve el mismo item de 15 claves envuelto como `{"area": ...}`.
+- [x] Un área **sin** fila en `field_data_field_max_concurrent_reservations` devuelve `"max_concurrent_reservations": 1`, **nunca** `null`.
+- [x] Un área con `0` o un negativo guardado devuelve `1`.
+- [x] El valor es siempre un `int` del JSON, nunca una cadena.
+- [x] El número de áreas del listado y el bloque `pagination` son idénticos a los de antes del cambio (el `leftJoin` no filtra nada).
 
 **`GET /api/v1/areas/{id}/availability`**
 
-- [ ] La respuesta tiene exactamente las 4 claves `date`, `capacity`, `busy`, `occupancy`.
-- [ ] `capacity` es la capacidad efectiva normalizada, siempre `>= 1`.
-- [ ] **No-regresión:** en un área de capacidad efectiva 1, `busy` es **byte a byte** lo que devolvía antes del cambio, incluidas dos reservas consecutivas `10:00-11:00` y `11:00-12:00`, que siguen apareciendo como **dos** entradas y no como un bloque `10:00-12:00`.
-- [ ] En un área de capacidad `> 1`, `busy` contiene **solo** los tramos saturados (`reserved >= capacity`), con tramos saturados contiguos fusionados en un único bloque de 4 claves.
-- [ ] Un área de capacidad 3 con 2 reservas solapando devuelve `busy: []` y una `occupancy` con `reserved: 2, remaining: 1`.
-- [ ] `occupancy` está presente también en áreas de capacidad 1.
-- [ ] Ningún item de `occupancy` contiene `id`, `unit_id`, `requester_id` ni nombres.
-- [ ] El manejo de sesión de SPEC 42 no cambia: en un área que cierra tras medianoche, la cola de madrugada sigue apareciendo en la sesión de `D` y no en la de `D+1`, ahora también en `occupancy`.
-- [ ] `data.date` sigue devolviendo el `date` pedido tal cual; sin `date` → `422 missing_field`; formato inválido → `422 invalid_field`; método distinto de `GET` → `405`.
-- [ ] Acceso no-revelador intacto: área inexistente, oculta o de condominio ajeno → `404 area_not_found`.
+- [x] La respuesta tiene exactamente las 4 claves `date`, `capacity`, `busy`, `occupancy`.
+- [x] `capacity` es la capacidad efectiva normalizada, siempre `>= 1`.
+- [x] **No-regresión:** en un área de capacidad efectiva 1, `busy` es **byte a byte** lo que devolvía antes del cambio, incluidas dos reservas consecutivas `10:00-11:00` y `11:00-12:00`, que siguen apareciendo como **dos** entradas y no como un bloque `10:00-12:00`.
+- [x] En un área de capacidad `> 1`, `busy` contiene **solo** los tramos saturados (`reserved >= capacity`), con tramos saturados contiguos fusionados en un único bloque de 4 claves.
+- [x] Un área de capacidad 3 con 2 reservas solapando devuelve `busy: []` y una `occupancy` con `reserved: 2, remaining: 1`.
+- [x] `occupancy` está presente también en áreas de capacidad 1.
+- [x] Ningún item de `occupancy` contiene `id`, `unit_id`, `requester_id` ni nombres.
+- [x] El manejo de sesión de SPEC 42 no cambia: en un área que cierra tras medianoche, la cola de madrugada sigue apareciendo en la sesión de `D` y no en la de `D+1`, ahora también en `occupancy`.
+- [x] `data.date` sigue devolviendo el `date` pedido tal cual; sin `date` → `422 missing_field`; formato inválido → `422 invalid_field`; método distinto de `GET` → `405`.
+- [x] Acceso no-revelador intacto: área inexistente, oculta o de condominio ajeno → `404 area_not_found`.
 
 **Tests, docs y no-regresión general**
 
-- [ ] `vendor/bin/phpunit` pasa entero, incluido `tests/unit/ReservationCapacityTest.php`.
-- [ ] `tests/unit/ReservationBusyRangesTest.php` pasa **sin haber sido modificado**.
-- [ ] `tests/unit/ReservationMidnightTest.php` pasa sin cambios.
-- [ ] `docs/area.md` documenta la clave nueva en los dos endpoints, en las dos tablas, la sección de `availability` con `capacity`/`occupancy`, el desdoble de `busy` y la matriz `curl` ampliada.
-- [ ] `docs/reservation.md` documenta la validación 6 con su nueva semántica y `area_capacity_full` en la tabla de errores del `POST`.
-- [ ] `docs/i18n.md` e `includes/myapi.i18n.inc` incluyen `area_capacity_full` en `es`/`en`, y el texto de `reservation_overlap` no ha cambiado.
-- [ ] `myapi.info` y `hook_menu()` sin cambios en el diff.
-- [ ] El payload de listado, detalle y cancelación de reservas no cambia en ninguna clave.
-- [ ] `drush cc all` no reporta errores.
+- [x] `vendor/bin/phpunit` pasa entero, incluido `tests/unit/ReservationCapacityTest.php`.
+- [x] `tests/unit/ReservationBusyRangesTest.php` pasa **sin haber sido modificado**.
+- [x] `tests/unit/ReservationMidnightTest.php` pasa sin cambios.
+- [x] `docs/area.md` documenta la clave nueva en los dos endpoints, en las dos tablas, la sección de `availability` con `capacity`/`occupancy`, el desdoble de `busy` y la matriz `curl` ampliada.
+- [x] `docs/reservation.md` documenta la validación 6 con su nueva semántica y `area_capacity_full` en la tabla de errores del `POST`.
+- [x] `docs/i18n.md` e `includes/myapi.i18n.inc` incluyen `area_capacity_full` en `es`/`en`, y el texto de `reservation_overlap` no ha cambiado.
+- [x] `myapi.info` y `hook_menu()` sin cambios en el diff.
+- [x] El payload de listado, detalle y cancelación de reservas no cambia en ninguna clave.
+- [x] `drush cc all` no reporta errores.
 
 ---
 
