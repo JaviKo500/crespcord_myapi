@@ -6,8 +6,14 @@
  *
  * These helpers read confirmed reservations of an area without any requester
  * filter, so read-only endpoints (e.g. area availability) can report the busy
- * time ranges of an area for a given day. They never touch the write path:
- * myapi_reservation_has_overlap() and POST /api/v1/reservations are untouched.
+ * time ranges of an area for a given day.
+ *
+ * Since SPEC 45 the file also hosts the pure concurrent-capacity helpers
+ * (effective_capacity, peak_concurrency, occupancy_ranges), which the write
+ * path shares with availability: both must answer "how many reservations may
+ * coincide here?" with the same rule, and duplicating it is exactly what rule 5
+ * of CLAUDE.md forbids. They remain pure — no DB, no Drupal — so the whole file
+ * stays unit-testable without bootstrapping the site.
  */
 
 /**
@@ -24,6 +30,121 @@
 function myapi_reservation_time_to_minutes($hhmm) {
   list($hours, $minutes) = explode(':', $hhmm);
   return ((int) $hours) * 60 + (int) $minutes;
+}
+
+/**
+ * Normalises the raw field_max_concurrent_reservations value of an area into
+ * its EFFECTIVE capacity: how many reservations may coincide in the same slot.
+ *
+ * The rule is deliberately FAIL-CLOSED:
+ *   - No row in the field table, or NULL  -> 1.
+ *   - 0 or a negative value               -> 1.
+ *   - n >= 1                              -> n.
+ *
+ * NULL never means "unlimited". Every area that existed before SPEC 45 has no
+ * value stored, and reading that as unlimited would turn an admin forgetting to
+ * fill the field into the silent disappearance of the overlap check in
+ * production. Capacity 1 is exactly the single-reservation behaviour those
+ * areas already had, so an empty field is a no-op.
+ *
+ * A 0 does not close the area either: closing is what field_area_status is for
+ * (SPEC 33/39), and the field description says so to the admin.
+ *
+ * This is the ONLY place the rule lives. Its three callers — validation 6 of
+ * POST /api/v1/reservations, myapi_area_build_item() and
+ * myapi_area_availability() — must never re-implement the ternary, and neither
+ * must the Flutter client: the item exposes the value already normalised so
+ * server and app can never disagree.
+ *
+ * @param mixed $raw  Raw column value (int, numeric string or NULL).
+ *
+ * @return int  Effective capacity, always >= 1.
+ */
+function myapi_reservation_effective_capacity($raw) {
+  return ($raw === NULL || (int) $raw < 1) ? 1 : (int) $raw;
+}
+
+/**
+ * Returns the MAXIMUM number of existing reservations active at the same
+ * instant at some point inside the candidate's window.
+ *
+ * This is the question validation 6 really has to answer. Counting how many
+ * existing reservations overlap the candidate is NOT the same thing and is
+ * wrong: with 10:00-11:00 and 13:00-14:00 already booked, a 10:00-14:00
+ * candidate overlaps two of them, yet those two are never active together, so
+ * the peak is 1 and one free slot is enough to accept it.
+ *
+ * Algorithm:
+ *   1. Keep only the intervals overlapping the candidate, with the module's
+ *      HALF-OPEN criterion: s < cand_end && e > cand_start.
+ *   2. None left -> 0.
+ *   3. Points to evaluate: cand_start, plus the start of every overlapping
+ *      interval strictly inside the window.
+ *   4. For each point t, count the intervals with s <= t && e > t.
+ *   5. Return the maximum.
+ *
+ * Half-open means a reservation ending exactly when another starts is NOT
+ * simultaneous, the same rule under which back-to-back bookings have been
+ * accepted since SPEC 35 and which SPEC 41 kept across midnight.
+ *
+ * Evaluating only the starts is exact, not an approximation: concurrency goes
+ * UP only at a start and DOWN only at an end, so the maximum inside the window
+ * necessarily happens either at cand_start or right at one of those starts.
+ *
+ * O(n^2) on purpose: n is a handful of rows per area and day, and this version
+ * is far easier to reason about and to test than an event queue.
+ *
+ * Pure function (no DB, no Drupal). It receives intervals ALREADY projected
+ * onto the absolute-minute axis of SPEC 41 — see
+ * myapi_reservation_abs_interval() in resources/reservation.resource.inc — so
+ * midnight crossings are already resolved and need no special case here.
+ *
+ * @param array $intervals   List of [start_abs, end_abs] pairs, absolute
+ *                           minutes, of the existing confirmed reservations.
+ * @param int   $cand_start  Candidate start, absolute minutes.
+ * @param int   $cand_end    Candidate end, absolute minutes.
+ *
+ * @return int  Peak of simultaneous existing reservations, 0 when none
+ *              overlaps. The candidate itself is NOT counted.
+ */
+function myapi_reservation_peak_concurrency($intervals, $cand_start, $cand_end) {
+  // (1) Overlapping intervals only, half-open criterion.
+  $overlapping = array();
+  foreach ($intervals as $interval) {
+    list($start, $end) = $interval;
+    if ($start < $cand_end && $end > $cand_start) {
+      $overlapping[] = $interval;
+    }
+  }
+
+  // (2) Nothing overlaps the window: the slot is free.
+  if (!$overlapping) {
+    return 0;
+  }
+
+  // (3) The window start, plus every start strictly inside it.
+  $points = array($cand_start);
+  foreach ($overlapping as $interval) {
+    if ($interval[0] > $cand_start && $interval[0] < $cand_end) {
+      $points[] = $interval[0];
+    }
+  }
+
+  // (4)-(5) Highest count over the evaluated points.
+  $peak = 0;
+  foreach ($points as $point) {
+    $active = 0;
+    foreach ($overlapping as $interval) {
+      if ($interval[0] <= $point && $interval[1] > $point) {
+        $active++;
+      }
+    }
+    if ($active > $peak) {
+      $peak = $active;
+    }
+  }
+
+  return $peak;
 }
 
 /**
@@ -159,4 +280,98 @@ function myapi_reservation_busy_range_compare($a, $b) {
     return strcmp($a['start_date'], $b['start_date']);
   }
   return strcmp($a['start_time'], $b['start_time']);
+}
+
+/**
+ * Splits an area's session into ranges of CONSTANT occupancy, each carrying how
+ * many reservations are active in it and how many slots are left.
+ *
+ * Input is the output of myapi_reservation_busy_ranges(): items of exactly 4
+ * keys (start_date, start_time, end_date, end_time), already filtered to the
+ * session and sorted. The axis is cut at every boundary — every start and every
+ * end — and each resulting range is emitted with its own counters:
+ *
+ *   {start_date, start_time, end_date, end_time, reserved, remaining}
+ *
+ *   - reserved  — number of reservations active in that range.
+ *   - remaining — max(0, capacity - reserved). NEVER negative: an admin may
+ *     lower the capacity of an area that already has reservations, and those
+ *     are respected until they pass; the area simply accepts no new ones until
+ *     occupancy drops.
+ *
+ * Ranges with reserved = 0 are not emitted (a gap between bookings is not
+ * occupancy), so the output is not necessarily contiguous. An empty input gives
+ * an empty list. Output is sorted ascending by (start_date, start_time).
+ *
+ * Only counters travel out: no id, no unit_id, no requester_id, no names. The
+ * privacy rule of SPEC 40 stands — the requester learns THAT a slot is taken,
+ * never by whom.
+ *
+ * Boundaries are compared on the absolute-minute axis so a session crossing
+ * midnight orders correctly, but each boundary is labelled back with the exact
+ * date/time strings it came from, which keeps the output free of any date
+ * arithmetic (and therefore of DST edge cases).
+ *
+ * Pure function (no DB, no Drupal).
+ *
+ * @param array $busy      Busy ranges of the session, as returned by
+ *                         myapi_reservation_busy_ranges().
+ * @param int   $capacity  Effective capacity of the area, always >= 1 (see
+ *                         myapi_reservation_effective_capacity()).
+ *
+ * @return array  List of occupancy ranges with 6 keys each. Empty array when
+ *                the session has no reservations.
+ */
+function myapi_reservation_occupancy_ranges($busy, $capacity) {
+  if (!$busy) {
+    return array();
+  }
+
+  // Project every range onto the absolute axis, remembering which date/time
+  // strings each boundary came from so the output needs no date arithmetic.
+  $intervals = array();
+  $labels = array();
+  foreach ($busy as $range) {
+    $start_abs = intdiv(strtotime($range['start_date'] . ' 00:00:00'), 60)
+      + myapi_reservation_time_to_minutes($range['start_time']);
+    $end_abs = intdiv(strtotime($range['end_date'] . ' 00:00:00'), 60)
+      + myapi_reservation_time_to_minutes($range['end_time']);
+
+    $intervals[] = array($start_abs, $end_abs);
+    $labels[$start_abs] = array('date' => $range['start_date'], 'time' => $range['start_time']);
+    $labels[$end_abs] = array('date' => $range['end_date'], 'time' => $range['end_time']);
+  }
+
+  $boundaries = array_keys($labels);
+  sort($boundaries, SORT_NUMERIC);
+
+  $ranges = array();
+  for ($i = 0; $i < count($boundaries) - 1; $i++) {
+    $from = $boundaries[$i];
+    $to = $boundaries[$i + 1];
+
+    // Half-open, same criterion as everywhere else: a reservation ending at
+    // $from is no longer active in [$from, $to).
+    $reserved = 0;
+    foreach ($intervals as $interval) {
+      if ($interval[0] <= $from && $interval[1] > $from) {
+        $reserved++;
+      }
+    }
+
+    if ($reserved < 1) {
+      continue;
+    }
+
+    $ranges[] = array(
+      'start_date' => $labels[$from]['date'],
+      'start_time' => $labels[$from]['time'],
+      'end_date' => $labels[$to]['date'],
+      'end_time' => $labels[$to]['time'],
+      'reserved' => $reserved,
+      'remaining' => max(0, $capacity - $reserved),
+    );
+  }
+
+  return $ranges;
 }
