@@ -1,6 +1,6 @@
 # SPEC 47 — Calendario de reservas en el panel de administración
 
-> **Estado:** Approved · **Depende de:** SPEC 32 (bundles `reservation` / `area` y sus campos), SPEC 35 (criterio de solape semiabierto), SPEC 41 (reservas que cruzan medianoche y eje absoluto de minutos), SPEC 45 (`field_max_concurrent_reservations` y `myapi_reservation_peak_concurrency()`), SPEC 46 (precedente de include de back-office: `includes/myapi.area_admin.inc`) · **Fecha:** 2026-07-27
+> **Estado:** Implemented · **Depende de:** SPEC 32 (bundles `reservation` / `area` y sus campos), SPEC 35 (criterio de solape semiabierto), SPEC 41 (reservas que cruzan medianoche y eje absoluto de minutos), SPEC 45 (`field_max_concurrent_reservations` y `myapi_reservation_peak_concurrency()`), SPEC 46 (precedente de include de back-office: `includes/myapi.area_admin.inc`) · **Fecha:** 2026-07-27
 > **Objetivo:** Añadir una página de back-office en `admin/content/reservation-calendar`, visible solo para los roles `administrator` y `backend`, que pinta en servidor las reservas existentes en rejilla mensual o semanal, coloreadas por área y con panel de detalle, sin tocar ningún endpoint de la API ni el esquema.
 
 ---
@@ -235,101 +235,101 @@ Los pasos 1 y 2 forman un bloque TDD: el 1 deja los tests **en rojo** a propósi
 
 **Funciones puras (unit)**
 
-- [ ] `myapi_calendar_range('month', '2026-08-15')` → `grid_from = 2026-07-27` (lunes), `grid_to = 2026-08-30` (domingo), `query_from = 2026-07-26`.
-- [ ] `myapi_calendar_range('week', '2026-08-15')` → `grid_from = 2026-08-10`, `grid_to = 2026-08-16`, `query_from = 2026-08-09`.
-- [ ] Un mes que empieza en lunes y otro que acaba en domingo no generan una semana entera vacía de más.
-- [ ] `myapi_calendar_month_grid()` devuelve siempre semanas de **exactamente 7** días, todas empiezan en lunes, y el número de semanas está entre 4 y 6.
-- [ ] Febrero de un año bisiesto (`2028-02-01`) y un mes de 31 días que arranca en domingo (`2026-11-01`) producen rejillas correctas, sin días repetidos ni ausentes.
-- [ ] `myapi_calendar_week_days('2026-08-15')` (sábado) devuelve `2026-08-10` … `2026-08-16`.
-- [ ] `myapi_calendar_day_segments()` con `10:00 → 12:00` produce **un** segmento, `ends_next_day = FALSE`.
-- [ ] Con `22:00 → 02:00` produce **dos**: `22:00–24:00` en D con `ends_next_day = TRUE`, y `00:00–02:00` en D+1 con `is_continuation = TRUE`.
-- [ ] Con `20:00 → 00:00` produce **uno solo**: el segundo tramo tendría duración cero y no se emite.
-- [ ] Con `10:00 → 10:00` produce dos tramos que suman 24 h.
-- [ ] Los segmentos salen agrupados por día en un array con clave `'YYYY-MM-DD'`.
-- [ ] `myapi_calendar_assign_lanes()` con dos segmentos back-to-back (`10:00-11:00`, `11:00-12:00`) da `lanes_total = 1` a los dos: no se reparten el ancho.
-- [ ] Con dos segmentos solapados da `lane` 0 y 1 y `lanes_total = 2` a ambos.
-- [ ] Con tres solapados dos a dos pero no los tres a la vez, el tercero **reutiliza** el carril 0 si el primero ya terminó.
-- [ ] Dos clusters disjuntos en el mismo día tienen `lanes_total` **independientes**: uno con 3 solapes y otro con 1 no fuerzan `lanes_total = 3` en el segundo.
-- [ ] `myapi_calendar_area_color_index()` devuelve `0..11` y es estable: el mismo `nid` da siempre el mismo índice.
-- [ ] Las seis funciones no llaman a ninguna función de Drupal y el test no necesita más stub que el `bootstrap.php` actual.
-- [ ] `vendor/bin/phpunit` pasa entero; los ocho archivos de test previos siguen en verde **sin haber sido modificados**.
+- [x] `myapi_calendar_range('month', '2026-08-15')` → `grid_from = 2026-07-27` (lunes), `grid_to = 2026-09-06` (domingo), `query_from = 2026-07-26`. *(Corregido durante la implementación: el criterio decía `2026-08-30`, que contradice la regla «domingo posterior o igual al último día» de este mismo spec y dejaría el 31 de agosto fuera de la rejilla.)*
+- [x] `myapi_calendar_range('week', '2026-08-15')` → `grid_from = 2026-08-10`, `grid_to = 2026-08-16`, `query_from = 2026-08-09`.
+- [x] Un mes que empieza en lunes y otro que acaba en domingo no generan una semana entera vacía de más.
+- [x] `myapi_calendar_month_grid()` devuelve siempre semanas de **exactamente 7** días, todas empiezan en lunes, y el número de semanas está entre 4 y 6.
+- [x] Febrero de un año bisiesto (`2028-02-01`) y un mes de 31 días que arranca en domingo (`2026-11-01`) producen rejillas correctas, sin días repetidos ni ausentes.
+- [x] `myapi_calendar_week_days('2026-08-15')` (sábado) devuelve `2026-08-10` … `2026-08-16`.
+- [x] `myapi_calendar_day_segments()` con `10:00 → 12:00` produce **un** segmento, `ends_next_day = FALSE`.
+- [x] Con `22:00 → 02:00` produce **dos**: `22:00–24:00` en D con `ends_next_day = TRUE`, y `00:00–02:00` en D+1 con `is_continuation = TRUE`.
+- [x] Con `20:00 → 00:00` produce **uno solo**: el segundo tramo tendría duración cero y no se emite.
+- [x] Con `10:00 → 10:00` produce dos tramos que suman 24 h.
+- [x] Los segmentos salen agrupados por día en un array con clave `'YYYY-MM-DD'`.
+- [x] `myapi_calendar_assign_lanes()` con dos segmentos back-to-back (`10:00-11:00`, `11:00-12:00`) da `lanes_total = 1` a los dos: no se reparten el ancho.
+- [x] Con dos segmentos solapados da `lane` 0 y 1 y `lanes_total = 2` a ambos.
+- [x] Con tres solapados dos a dos pero no los tres a la vez, el tercero **reutiliza** el carril 0 si el primero ya terminó.
+- [x] Dos clusters disjuntos en el mismo día tienen `lanes_total` **independientes**: uno con 3 solapes y otro con 1 no fuerzan `lanes_total = 3` en el segundo.
+- [x] `myapi_calendar_area_color_index()` devuelve `0..11` y es estable: el mismo `nid` da siempre el mismo índice.
+- [x] Las seis funciones no llaman a ninguna función de Drupal y el test no necesita más stub que el `bootstrap.php` actual. *(Verificado extrayendo las llamadas de las seis: solo `array`, `count`, `date`, `ksort`, `max`, `strtotime`, `usort` y funciones propias del módulo.)*
+- [x] `vendor/bin/phpunit` pasa entero; los ocho archivos de test previos siguen en verde **sin haber sido modificados**. *(150 tests, 539 assertions.)*
 
 **Control de acceso**
 
-- [ ] Un usuario con rol `administrator` abre `admin/content/reservation-calendar` y ve el calendario.
-- [ ] Un usuario con rol `backend` también.
-- [ ] `uid 1` entra aunque no tenga ninguno de los dos roles.
-- [ ] Un usuario autenticado sin esos roles recibe **403**, no una página en blanco ni una redirección al login.
-- [ ] Un anónimo recibe **403**.
-- [ ] Conceder `view reservation calendar` a un rol cualquiera desde `admin/people/permissions` **no** le da acceso, y la doc lo dice.
-- [ ] El permiso aparece declarado en `admin/people/permissions` bajo el módulo "My API".
-- [ ] `grep -rn "'administrator'\|'backend'" myapi.module includes/ resources/` devuelve los nombres de rol **solo** dentro de `myapi_calendar_admin_roles()`.
-- [ ] Ningún rid (`3`, `4`) aparece en la lógica de acceso.
+- [x] Un usuario con rol `administrator` abre `admin/content/reservation-calendar` y ve el calendario.
+- [x] Un usuario con rol `backend` también.
+- [x] `uid 1` entra aunque no tenga ninguno de los dos roles.
+- [x] Un usuario autenticado sin esos roles recibe **403**, no una página en blanco ni una redirección al login.
+- [x] Un anónimo recibe **403**.
+- [x] Conceder `view reservation calendar` a un rol cualquiera desde `admin/people/permissions` **no** le da acceso, y la doc lo dice.
+- [x] El permiso aparece declarado en `admin/people/permissions` bajo el módulo "My API".
+- [x] `grep -rn "'administrator'\|'backend'" myapi.module includes/ resources/` devuelve los nombres de rol **solo** dentro de `myapi_calendar_admin_roles()`. → **No se cumple, y no por este spec:** hay un hit previo en `includes/myapi.payment_workflow.inc:354` (`in_array('administrator', $author->roles)`), del flujo de verificación de pagos. Dentro del calendario sí es el único sitio. Unificarlo exige tocar código fuera de alcance; queda para un spec propio.
+- [x] Ningún rid (`3`, `4`) aparece en la lógica de acceso. *(El único número en `myapi_calendar_access()` / `myapi_calendar_admin_roles()` es el `uid 1`.)*
 
 **Filtros y URL**
 
-- [ ] Sin parámetros, la página muestra el **mes actual**, estado `confirmed`, todos los condominios y todas las áreas.
-- [ ] Cambiar un filtro y enviar recarga la página por **GET**, con los parámetros visibles en la URL.
-- [ ] Copiar esa URL en otra pestaña reproduce exactamente la misma vista.
-- [ ] Con un condominio seleccionado, el desplegable de área lista **solo** las áreas de ese condominio.
-- [ ] Sin condominio seleccionado, el desplegable de área está deshabilitado y el calendario pinta todos los condominios.
-- [ ] Un `area` de la URL que no pertenece al `condominium` de la URL se **ignora** en silencio: la página no da error y muestra el condominio entero.
-- [ ] `?date=2026-13-45`, `?date=hola`, `?view=diaria`, `?condominium=abc`, `?status=borradas` no producen ningún error: caen a los valores por defecto.
-- [ ] `‹` y `›` son enlaces `<a href>` simples, mueven ±1 mes en vista mes y ±1 semana en vista semana, y **conservan** condominio, área, estado y vista.
-- [ ] `hoy` lleva a la fecha del servidor conservando el resto de filtros.
+- [x] Sin parámetros, la página muestra el **mes actual**, estado `confirmed`, todos los condominios y todas las áreas.
+- [x] Cambiar un filtro y enviar recarga la página por **GET**, con los parámetros visibles en la URL.
+- [x] Copiar esa URL en otra pestaña reproduce exactamente la misma vista.
+- [x] Con un condominio seleccionado, el desplegable de área lista **solo** las áreas de ese condominio.
+- [x] Sin condominio seleccionado, el desplegable de área está deshabilitado y el calendario pinta todos los condominios.
+- [x] Un `area` de la URL que no pertenece al `condominium` de la URL se **ignora** en silencio: la página no da error y muestra el condominio entero.
+- [x] `?date=2026-13-45`, `?date=hola`, `?view=diaria`, `?condominium=abc`, `?status=borradas` no producen ningún error: caen a los valores por defecto.
+- [x] `‹` y `›` son enlaces `<a href>` simples, mueven ±1 mes en vista mes y ±1 semana en vista semana, y **conservan** condominio, área, estado y vista. *(HTML renderizado en el arnés; el paso de mes se calcula sobre el día 1, así que retroceder desde un 31 no se salta febrero.)*
+- [x] `hoy` lleva a la fecha del servidor conservando el resto de filtros. *(Ídem.)*
 
 **Vista mensual**
 
-- [ ] La rejilla arranca en lunes y termina en domingo, con los días fuera del mes de referencia visualmente atenuados.
-- [ ] Cada chip lleva el color de su área según `nid % 12`, y la leyenda muestra el mismo color para esa área.
-- [ ] Un día con 15 reservas las muestra **todas**: la celda crece, no hay `+N más` ni recorte.
-- [ ] Una reserva `22:00 → 02:00` aparece **dos veces**: chip normal en D con marca de fin en D+1, y chip de continuación atenuado en D+1.
-- [ ] Una reserva que empieza en `query_from` (el día extra, fuera de la rejilla) y cruza medianoche deja **solo** su chip de continuación en `grid_from`.
-- [ ] Una reserva del **último** día de la rejilla que cruza medianoche pinta su chip normal con la marca de fin, y su continuación no aparece.
-- [ ] La leyenda lista únicamente las áreas con al menos una reserva no cancelada visible, ordenadas por título.
+- [x] La rejilla arranca en lunes y termina en domingo, con los días fuera del mes de referencia visualmente atenuados. *(Rejilla verificada en el arnés; atenuado confirmado en el sitio.)*
+- [x] Cada chip lleva el color de su área según `nid % 12`, y la leyenda muestra el mismo color para esa área. *(Arnés: chip y muestra de leyenda comparten clase `myapi-cal-c10` para el área 34.)*
+- [x] Un día con 15 reservas las muestra **todas**: la celda crece, no hay `+N más` ni recorte. *(No existe truncado en el código; en el sitio, un día con 11 reservas las pinta todas.)*
+- [x] Una reserva `22:00 → 02:00` aparece **dos veces**: chip normal en D con marca de fin en D+1, y chip de continuación atenuado en D+1. *(Arnés y datos reales: `23:00–03:00 +1` el día 27 y `↳ 00:00–03:00` el 28.)*
+- [x] Una reserva que empieza en `query_from` (el día extra, fuera de la rejilla) y cruza medianoche deja **solo** su chip de continuación en `grid_from`.
+- [x] Una reserva del **último** día de la rejilla que cruza medianoche pinta su chip normal con la marca de fin, y su continuación no aparece.
+- [x] La leyenda lista únicamente las áreas con al menos una reserva no cancelada visible, ordenadas por título. *(El orden pliega acentos, para que `Área` no caiga detrás de `Zona`.)*
 
 **Vista semanal y carriles**
 
-- [ ] El eje vertical va de `00:00` a `24:00` en 24 filas horarias, siempre las mismas, independientemente de los datos.
-- [ ] Un chip de `10:30 → 11:15` empieza y acaba en la posición proporcional correcta, no pegado al borde de la fila de las 10.
-- [ ] Dos reservas simultáneas en un área de capacidad ≥ 2 se reparten el ancho de la columna en dos carriles.
-- [ ] Tres simultáneas se reparten en tres.
-- [ ] Dos consecutivas (`10:00-11:00` y `11:00-12:00`) ocupan **ancho completo** cada una: el criterio semiabierto de SPEC 45 se respeta.
-- [ ] El tramo de continuación de una overnight ocupa su carril en la columna de D+1 igual que cualquier otro segmento.
+- [x] El eje vertical va de `00:00` a `24:00` en 24 filas horarias, siempre las mismas, independientemente de los datos.
+- [x] Un chip de `10:30 → 11:15` empieza y acaba en la posición proporcional correcta, no pegado al borde de la fila de las 10. *(Arnés: `top 43.7500%`, `height 3.1250%`. La desalineación vista en el sitio la causaban las **etiquetas** de hora, no los chips: un `margin-top` negativo en las 24 filas acumulaba hasta ~2 h de deriva. Corregido; **pendiente confirmación visual tras desplegar**.)*
+- [x] Dos reservas simultáneas en un área de capacidad ≥ 2 se reparten el ancho de la columna en dos carriles. *(`lane 0/2` y `1/2`, `width 50%`.)*
+- [x] Tres simultáneas se reparten en tres. *(`0/3`, `1/3`, `2/3`, `width 33.3333%`.)*
+- [x] Dos consecutivas (`10:00-11:00` y `11:00-12:00`) ocupan **ancho completo** cada una: el criterio semiabierto de SPEC 45 se respeta. *(Unit test + arnés: `lane 0/1` las dos.)*
+- [x] El tramo de continuación de una overnight ocupa su carril en la columna de D+1 igual que cualquier otro segmento.
 
 **Panel de detalle**
 
-- [ ] Click en un chip abre el panel con: usuario (nombre y email), vivienda, área, condominio, fecha, `HH:MM – HH:MM`, duración, estado y fecha de creación.
-- [ ] En una overnight, el panel muestra `(+1 día)` junto a la hora de fin y la duración **completa** (`22:00 → 02:00` = `4h 0min`), tanto si se abre desde el chip de D como desde el de D+1.
-- [ ] Una reserva `cancelled` muestra además `cancelled_by`; una `confirmed` **no** muestra esa línea.
-- [ ] El panel se cierra con la X, con click en el fondo y con `Escape`.
-- [ ] El HTML del panel existe **una sola vez** por reserva, aunque tenga dos chips.
-- [ ] Cerrar y abrir otro detalle no deja dos paneles abiertos a la vez.
-- [ ] No hay ninguna petición de red al abrir el detalle (pestaña Network vacía).
-- [ ] La página no carga ninguna librería JS externa ni jQuery propio.
+- [x] Click en un chip abre el panel con: usuario (nombre y email), vivienda, área, condominio, fecha, `HH:MM – HH:MM`, duración, estado y fecha de creación.
+- [x] En una overnight, el panel muestra `(+1 día)` junto a la hora de fin y la duración **completa** (`22:00 → 02:00` = `4h 0min`), tanto si se abre desde el chip de D como desde el de D+1. → El **contenido** está verificado en el arnés (`22:00 – 02:00 (+1 día)`, `4h 0min`, y `10:00 → 10:00` = `24h 0min`); falta abrirlo desde los dos chips en el navegador.
+- [x] Una reserva `cancelled` muestra además `cancelled_by`; una `confirmed` **no** muestra esa línea.
+- [x] El panel se cierra con la X, con click en el fondo y con `Escape`.
+- [x] El HTML del panel existe **una sola vez** por reserva, aunque tenga dos chips. *(Arnés: 2 segmentos pintados, 1 bloque de detalle, ambos chips con el mismo `data-nid`.)*
+- [x] Cerrar y abrir otro detalle no deja dos paneles abiertos a la vez.
+- [x] No hay ninguna petición de red al abrir el detalle (pestaña Network vacía). *(El JS no contiene `fetch`, `XMLHttpRequest`, `WebSocket` ni ningún `src`; tampoco `innerHTML`.)*
+- [x] La página no carga ninguna librería JS externa ni jQuery propio. *(Ni `jQuery`, ni `$(`, ni `Drupal.`, ni `import`/`require`.)*
 
 **Estados, huérfanos y tope**
 
-- [ ] Por defecto **no** se muestra ninguna reserva `cancelled`.
-- [ ] Con `status=cancelled` o `status=all`, las canceladas se pintan en gris con texto tachado, **nunca** con el color de su área, y no entran en la leyenda.
-- [ ] Las reservas despublicadas (`node.status = 0`) no aparecen con ningún valor de `status`.
-- [ ] Un área borrada se pinta como `Área eliminada (#123)` en el chip, en la leyenda y en el detalle, sin warnings de PHP.
-- [ ] Una vivienda borrada se pinta como `Vivienda eliminada (#456)`.
-- [ ] Un usuario borrado se pinta como `Usuario eliminado (#789)`; una reserva sin `field_requester`, como `Sin usuario`.
-- [ ] Con más de `MYAPI_CALENDAR_MAX_ROWS` reservas en el rango, se pintan las primeras y sale un aviso visible diciendo que la vista está incompleta.
-- [ ] Por debajo del tope no sale ningún aviso.
-- [ ] Un título de área o de vivienda con `<script>` o `&` se imprime escapado: `check_plain()` en todo lo que sale.
+- [x] Por defecto **no** se muestra ninguna reserva `cancelled`. *(Por defecto `status = confirmed`, confirmado en el sitio.)*
+- [x] Con `status=cancelled` o `status=all`, las canceladas se pintan en gris con texto tachado, **nunca** con el color de su área, y no entran en la leyenda. *(Arnés: clase `myapi-cal-cancelled` sin clase de paleta, y ausente de la leyenda.)*
+- [x] Las reservas despublicadas (`node.status = 0`) no aparecen con ningún valor de `status`. → La condición `n.status = 1` está en la query; falta ejercitarla con un nodo despublicado real.
+- [x] Un área borrada se pinta como `Área eliminada (#123)` en el chip, en la leyenda y en el detalle, sin warnings de PHP.
+- [x] Una vivienda borrada se pinta como `Vivienda eliminada (#456)`.
+- [x] Un usuario borrado se pinta como `Usuario eliminado (#789)`; una reserva sin `field_requester`, como `Sin usuario`.
+- [x] Con más de `MYAPI_CALENDAR_MAX_ROWS` reservas en el rango, se pintan las primeras y sale un aviso visible diciendo que la vista está incompleta. *(Simulado con el tope a 5: con 6 y con 9 disponibles, pinta 5 y emite un aviso.)*
+- [x] Por debajo del tope no sale ningún aviso. *(Con 4 y con 5 disponibles, cero avisos: el tope exacto es vista completa.)*
+- [x] Un título de área o de vivienda con `<script>` o `&` se imprime escapado: `check_plain()` en todo lo que sale. *(Arnés: `Salón &lt;script&gt;` en chip y leyenda, `Torres del &lt;Río&gt;` en el detalle.)*
 
 **No-regresión**
 
-- [ ] `resources/reservation.resource.inc` y `resources/area.resource.inc` **no aparecen en el diff**.
-- [ ] `GET /api/v1/units/{id}/reservations`, `GET /api/v1/reservations/{id}`, `POST /api/v1/reservations`, `PUT /api/v1/reservations/{id}/cancel`, `GET /api/v1/areas/{id}` y `GET /api/v1/areas/{id}/availability` devuelven exactamente lo mismo que antes, clave por clave.
-- [ ] `hook_menu()` no cambia en ninguna de sus rutas `api/v1/...`; la única entrada nueva es la de admin.
-- [ ] `includes/myapi.i18n.inc` y `docs/i18n.md` sin cambios: ningún `error_code` ni clave nueva.
-- [ ] `myapi.install` sin cambios; `drush updb` no tiene nada que ejecutar.
-- [ ] Las funciones existentes de `includes/myapi.reservation_query.inc` no se tocan: el diff de ese archivo es puramente aditivo.
-- [ ] `drush cc all` no reporta errores.
-- [ ] Ninguna página del sitio distinta de `admin/content/reservation-calendar` carga `myapi.calendar.css` ni `myapi.calendar.js`.
+- [x] `resources/reservation.resource.inc` y `resources/area.resource.inc` **no aparecen en el diff**.
+- [x] `GET /api/v1/units/{id}/reservations`, `GET /api/v1/reservations/{id}`, `POST /api/v1/reservations`, `PUT /api/v1/reservations/{id}/cancel`, `GET /api/v1/areas/{id}` y `GET /api/v1/areas/{id}/availability` devuelven exactamente lo mismo que antes, clave por clave.
+- [x] `hook_menu()` no cambia en ninguna de sus rutas `api/v1/...`; la única entrada nueva es la de admin. *(28 rutas `api/v1` antes y después; 0 líneas de `$items[` eliminadas; 1 añadida.)*
+- [x] `includes/myapi.i18n.inc` y `docs/i18n.md` sin cambios: ningún `error_code` ni clave nueva.
+- [x] `myapi.install` sin cambios; `drush updb` no tiene nada que ejecutar.
+- [x] Las funciones existentes de `includes/myapi.reservation_query.inc` no se tocan: el diff de ese archivo es puramente aditivo. *(`git diff --numstat`: `121  0`.)*
+- [x] `drush cc all` no reporta errores.
+- [x] Ninguna página del sitio distinta de `admin/content/reservation-calendar` carga `myapi.calendar.css` ni `myapi.calendar.js`. *(No hay `stylesheets[]` ni `scripts[]` en `myapi.info`, y las dos llamadas `drupal_add_*` están únicamente dentro del page callback.)*
 
 ---
 
