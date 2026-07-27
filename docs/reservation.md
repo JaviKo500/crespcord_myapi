@@ -338,8 +338,8 @@ these "wrapping" areas:
   with `reservation_outside_hours`. A start in the dead gap between `close` and
   `open` (e.g. `05:00` in a `12:00–02:00` area) is **not** normalized and also
   fails as out of hours.
-- **Overlap on an absolute axis (validation 6).** See the overlap criterion
-  below.
+- **Concurrent capacity on an absolute axis (validation 6).** See the capacity
+  criterion below.
 
 For a **normal** area (`field_close_time` strictly after `field_open_time`)
 nothing changes: `field_date` is never normalized, and a range that would
@@ -363,7 +363,7 @@ before the node is ever touched:
 | 3 | `date` + `start_time` is not in the past (site timezone; evaluated on the normalized `field_date`) | `422 invalid_field` (`@field = date`) |
 | 4 | Range does not cross midnight in a same-day area, and is within the area's opening hours (extended `[open, close+24h]` window for areas that close after midnight) | `422 reservation_crosses_midnight` / `422 reservation_outside_hours` |
 | 5 | `duration_minutes` does not exceed the area's maximum | `422 reservation_duration_exceeded` |
-| 6 | No overlap with another `confirmed` reservation of the same area (absolute axis across `D−1`/`D`/`D+1`) | `409 reservation_overlap` |
+| 6 | The area's concurrent capacity is not exceeded: the peak of simultaneous `confirmed` reservations inside the requested window, plus this one, fits in `max_concurrent_reservations` (absolute axis across `D−1`/`D`/`D+1`) | `409 reservation_overlap` (capacity 1) / `409 area_capacity_full` (capacity > 1) |
 | 7 | Unit has no other `confirmed` reservation for the same area whose start has not passed | `409 reservation_already_active` |
 | 8 | Unit's balance allows reserving (see below) | `403 insufficient_balance` |
 
@@ -379,7 +379,17 @@ before the node is ever touched:
    anything else — `<= 0`, a missing row, or no `Enviado` receipt at all —
    allows it.
 
-**Overlap criterion (validation 6)**
+**Concurrent capacity criterion (validation 6)**
+
+An area declares in `field_max_concurrent_reservations` how many reservations
+may **coincide** in the same time slot — a gym that fits three groups at once
+has capacity `3`. The value is read-only through the API and exposed as
+`max_concurrent_reservations` in the area item (see [area.md](area.md)).
+
+The **effective** capacity is fail-closed: no row, `NULL`, `0` or a negative
+value all mean `1`. So an area whose admin never filled the field behaves
+exactly as before this field existed — one reservation per slot. `NULL` never
+means "unlimited".
 
 Each reservation — the candidate and every existing `confirmed` one — is
 projected onto an absolute minute axis anchored at the midnight of its own
@@ -390,7 +400,35 @@ midnight, or a next-day early-morning booking, is compared too.
 
 Half-open interval: `new_start_abs < existing_end_abs AND
 new_end_abs > existing_start_abs`. A reservation that ends exactly when
-another begins is **not** an overlap (back-to-back bookings are allowed).
+another begins is **not** simultaneous (back-to-back bookings are allowed).
+
+What is compared against the capacity is the **peak** of simultaneous existing
+reservations inside the candidate's window — the answer to "at some instant,
+would there be more than N?" — plus the candidate itself. The request is
+rejected when `peak + 1 > capacity`.
+
+Counting how many reservations *overlap* the candidate would be a different,
+wrong question. With capacity `2` and `10:00-11:00` and `13:00-14:00` already
+booked, a `10:00-14:00` candidate overlaps **two** of them, yet those two are
+never active at the same time: the peak is `1`, there is room, and the request
+is accepted.
+
+Which `error_code` comes back depends on the capacity:
+
+| Effective capacity | Rejection |
+|---|---|
+| `1` | `409 reservation_overlap` — the exact error, code and text, that this endpoint has always returned. Nothing changed for these areas. |
+| `> 1` | `409 area_capacity_full` — the slot has no seats left. A capacity-1 area **never** returns this code. |
+
+The capacity is checked **inside** the same transaction and after the same
+`SELECT ... FOR UPDATE` row lock on the area node as before: without that lock
+two concurrent requests would both read "there is still room" and both insert,
+making the capacity trivially exceedable.
+
+The capacity is a property of the **area**, not of the unit. Validation 7 is
+unchanged and orthogonal: a unit that already has an active reservation for the
+area still gets `409 reservation_already_active`, even when seats are free.
+The capacity counts **reservations**, not people — there is no attendee count.
 
 **Success response (201)**
 
@@ -448,8 +486,9 @@ Notes:
 | 422  | `reservation_outside_hours` | The requested range falls outside the area's `open_time`–`close_time` window (the extended `[open, close+24h]` window for areas that close after midnight). |
 | 422  | `reservation_crosses_midnight` | The requested range would cross midnight (`end >= 24:00`) but the area closes the same clock day (its `close_time` is after `open_time`). |
 | 422  | `reservation_duration_exceeded` | `duration_minutes` exceeds the area's `max_minutes`. |
-| 409  | `reservation_overlap` | The requested range overlaps another `confirmed` reservation of the same area, compared on an absolute axis across the previous/current/next day. |
-| 409  | `reservation_already_active` | The unit already has a `confirmed` reservation for the same area whose start has not passed. |
+| 409  | `reservation_overlap` | **Capacity-1 areas only** (no `max_concurrent_reservations` set, or set to `1`/`0`/a negative). The requested range overlaps another `confirmed` reservation of the same area, compared on an absolute axis across the previous/current/next day. |
+| 409  | `area_capacity_full` | **Capacity > 1 only.** At some instant inside the requested range the area would exceed `max_concurrent_reservations` simultaneous reservations. A capacity-1 area never returns this code. |
+| 409  | `reservation_already_active` | The unit already has a `confirmed` reservation for the same area whose start has not passed. Returned even when the area still has free seats — validation 7 limits the **unit**, validation 6 the **area**. |
 | 403  | `insufficient_balance` | The unit's balance is positive and its most recent sent receipt shows a positive previous balance. |
 | 405  | `method_not_allowed` | Any HTTP method other than `POST`. |
 
@@ -503,6 +542,38 @@ curl -i -X POST 'https://host/api/v1/reservations' \
   -H 'Authorization: Bearer <access_token>' \
   -H 'Content-Type: application/json' \
   -d '{"unit_id":21,"area_id":50,"date":"2026-07-25","start_time":"21:00","duration_minutes":240}'
+```
+
+**Concurrent-capacity acceptance matrix (SPEC 45)**
+
+Assumes `area_id=50` is a normal area open `08:00`–`22:00` with **no**
+`max_concurrent_reservations` set (effective capacity `1`), and `area_id=77` the
+same hours with capacity `3`. `D = 2026-08-01`.
+
+| Case | `area_id` | Existing `confirmed` reservations overlapping | Request | Result |
+|---|---|---|---|---|
+| No-regression: capacity 1, overlap | 50 | one `10:00-11:00` | `10:30`, 60 min | `409 reservation_overlap` — same code and text as before SPEC 45 |
+| No-regression: capacity 1, back-to-back | 50 | one `10:00-11:00` | `11:00`, 60 min | `201` |
+| Capacity 1 never returns the new code | 50 | any | any | never `area_capacity_full` |
+| Seats left | 77 | two overlapping `10:00-11:00` | `10:00`, 60 min | `201` |
+| Full | 77 | three overlapping `10:00-11:00` | `10:00`, 60 min | `409 area_capacity_full` |
+| The gym case | 77 | one from another unit, `10:00-11:00` | `10:00`, 60 min from a **different** unit | `201` — capacity ignores which unit each reservation comes from |
+| Peak vs naive count | 77 (as capacity 2) | `10:00-11:00` and `13:00-14:00` | `10:00`, 240 min | `201` — overlaps two, but they never coincide |
+| Validation 7 still applies | 77 | one from the **same** unit, still active | any | `409 reservation_already_active`, even with free seats |
+
+```bash
+# Capacity 3 with two overlapping reservations → 201
+curl -i -X POST 'https://host/api/v1/reservations' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"unit_id":21,"area_id":77,"date":"2026-08-01","start_time":"10:00","duration_minutes":60}'
+
+# Same area once full → 409 area_capacity_full, translated per Accept-Language
+curl -i -X POST 'https://host/api/v1/reservations' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Accept-Language: en' \
+  -H 'Content-Type: application/json' \
+  -d '{"unit_id":22,"area_id":77,"date":"2026-08-01","start_time":"10:00","duration_minutes":60}'
 ```
 
 ---
