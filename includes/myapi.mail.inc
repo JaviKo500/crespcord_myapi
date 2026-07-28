@@ -146,8 +146,8 @@ function myapi_mail_format_reservation_user(&$message, $params, $key) {
  *
  * @param array $message  Mail message array, altered by reference.
  * @param array $params   'nid', 'user', 'email', 'unit', 'area', 'condominium',
- *                        'date', 'schedule', 'duration', 'status' and 'created',
- *                        already escaped.
+ *                        'date', 'schedule', 'duration', 'status', 'created'
+ *                        and 'node_url', already escaped.
  */
 function myapi_mail_format_reservation_created_admin(&$message, $params) {
   $message['subject'] = 'Nueva reserva #' . $params['nid'] . ' — '
@@ -224,7 +224,8 @@ function myapi_mail_reservation_admin_html($params) {
     'Nueva reserva',
     'Se ha registrado una nueva reserva desde la aplicación.',
     $lines,
-    'Puedes verla en el calendario de reservas del panel de administración.'
+    'Puedes verla en el calendario de reservas del panel de administración.',
+    array('label' => 'Ver reserva', 'url' => $params['node_url'])
   );
 }
 
@@ -236,15 +237,18 @@ function myapi_mail_reservation_admin_html($params) {
  * value is printed as-is because the caller escaped it (see the block comment
  * above); the labels are literals authored here.
  *
- * @param string $title   Document title and card heading.
- * @param string $heading Greeting or heading line above the intro.
- * @param string $intro   Context sentence.
- * @param array  $lines   Label => already-escaped value, in display order.
- * @param string $footer  Footer copy; may contain a literal <br>.
+ * @param string     $title   Document title and card heading.
+ * @param string     $heading Greeting or heading line above the intro.
+ * @param string     $intro   Context sentence.
+ * @param array      $lines   Label => already-escaped value, in display order.
+ * @param string     $footer  Footer copy; may contain a literal <br>.
+ * @param array|NULL $button  Optional 'label' and 'url' (already escaped) for
+ *   a call-to-action button printed between the data table and the footer.
+ *   NULL (the default) omits it, which is what the two resident emails do.
  *
  * @return string  Full HTML document.
  */
-function myapi_mail_reservation_html($title, $heading, $intro, array $lines, $footer) {
+function myapi_mail_reservation_html($title, $heading, $intro, array $lines, $footer, $button = NULL) {
   $font = "font-family:Arial,Helvetica,sans-serif;";
 
   $rows = '';
@@ -253,6 +257,15 @@ function myapi_mail_reservation_html($title, $heading, $intro, array $lines, $fo
       . '<td style="' . $font . 'padding:8px 12px;font-size:13px;color:#907050;border-bottom:1px solid #E7DED3;white-space:nowrap;vertical-align:top;">' . $label . '</td>'
       . '<td style="' . $font . 'padding:8px 12px;font-size:14px;color:#2B1D14;border-bottom:1px solid #E7DED3;">' . $value . '</td>'
       . '</tr>';
+  }
+
+  $button_markup = '';
+  if ($button !== NULL) {
+    $button_markup = '<table role="presentation" cellpadding="0" cellspacing="0" style="margin:20px auto 0;">'
+      . '<tr><td style="border-radius:10px;background-color:#4A3326;">'
+      . '<a href="' . $button['url'] . '" style="' . $font . 'display:inline-block;padding:12px 28px;font-size:14px;font-weight:bold;color:#F7F1EA;text-decoration:none;border-radius:10px;">' . $button['label'] . '</a>'
+      . '</td></tr>'
+      . '</table>';
   }
 
   return '<!DOCTYPE html><html lang="es"><head>'
@@ -272,6 +285,7 @@ function myapi_mail_reservation_html($title, $heading, $intro, array $lines, $fo
     . '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background-color:#F7F1EA;border-radius:10px;overflow:hidden;">'
     . $rows
     . '</table>'
+    . $button_markup
     . '</td></tr>'
     . '<tr><td style="padding:20px 32px;background-color:#F1EBE3;text-align:center;">'
     . '<p style="' . $font . 'margin:0;font-size:13px;line-height:1.5;color:#6B5D52;">' . $footer . '</p>'

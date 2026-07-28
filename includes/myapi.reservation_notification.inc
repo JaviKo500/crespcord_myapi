@@ -329,6 +329,9 @@ function myapi_reservation_enqueue_admin_mails($row) {
     'duration'    => myapi_calendar_duration_label($row),
     'status'      => $row->status === MYAPI_RESERVATION_STATUS_CANCELLED ? 'Cancelada' : 'Confirmada',
     'created'     => check_plain(format_date($row->created, 'custom', 'd/m/Y H:i')),
+    // Absolute so the link works from any mail client; check_plain() because
+    // url() does not encode the '&' between query arguments for HTML output.
+    'node_url'    => check_plain(url('node/' . $row->nid, array('absolute' => TRUE))),
   ];
 
   foreach (user_load_multiple($uids) as $account) {

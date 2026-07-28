@@ -264,6 +264,11 @@ The panel shows personal data (name and email of the requester). That is
 deliberate and it is what the access control above is for: the page is limited
 to the operator of the condominium.
 
+A **`Ver más`** button at the bottom of the panel links to the reservation's
+own node page, `/?q=node/<nid>` (absolute URL, opens in a new tab). It is the
+same node link the `reservation_created_admin` email carries — see
+`docs/reservation-notifications.md`.
+
 ---
 
 ## Row ceiling

@@ -185,6 +185,11 @@ hyphen (`-`).
 `Cancelada por` never appears: this email only exists on creation, where the
 status is always `Confirmada`.
 
+Below the data block, a **`Ver reserva`** button links to the reservation's own
+node page (`node_url`, built with `url('node/<nid>', ['absolute' => TRUE])`,
+i.e. `/?q=node/<nid>` on a site with clean URLs off). Same destination as the
+`Ver más` button of the calendar detail panel (`docs/reservation-calendar.md`).
+
 ### Who exactly is a `backend` recipient
 
 `myapi_reservation_backend_uids()` crosses `users` ⨝ `users_roles` ⨝ `role`:
@@ -231,6 +236,14 @@ Drain it like the push queue:
 drush cron                       # drains every queue
 drush queue-run myapi_mail_send  # drains only this one
 ```
+
+**Production must have a cron entry that actually reaches this queue.** The
+dedicated push cron in `docs/notifications-produccion.md` (Option B) only runs
+`queue-run myapi_onesignal_push` — it does **not** touch `myapi_mail_send`. If
+that is the only cron configured on the server, these emails get enqueued and
+never sent. See the updated crontab in `docs/notifications-produccion.md` step 6,
+which adds a dedicated `queue-run myapi_mail_send` line (or relies on a general
+`drush cron` if one is already scheduled).
 
 ---
 

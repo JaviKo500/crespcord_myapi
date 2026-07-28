@@ -1169,11 +1169,17 @@ function myapi_calendar_render_details($rows, $condominium_options) {
       $definitions .= '<dt>' . $label . '</dt><dd>' . $value . '</dd>';
     }
 
+    // Absolute so the link works the same whether the panel is read on this
+    // page or copied elsewhere; check_plain() because url() does not encode
+    // the '&' between query arguments for HTML output.
+    $node_url = check_plain(url('node/' . $row->nid, array('absolute' => TRUE)));
+
     $blocks .= '<div class="myapi-cal-detail" id="myapi-cal-detail-' . (int) $row->nid . '" hidden>'
       . '<div class="myapi-cal-detail-box">'
       . '<button type="button" class="myapi-cal-detail-close" title="' . t('Cerrar') . '">×</button>'
       . '<h3 class="myapi-cal-detail-title">' . t('Reserva #@nid', array('@nid' => $row->nid)) . '</h3>'
       . '<dl class="myapi-cal-detail-list">' . $definitions . '</dl>'
+      . '<a class="myapi-cal-detail-link" href="' . $node_url . '" target="_blank" rel="noopener">' . t('Ver más') . '</a>'
       . '</div>'
       . '</div>';
   }

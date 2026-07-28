@@ -438,6 +438,24 @@
   color: #b06000;
 }
 
+.myapi-cal-detail-link {
+  display: inline-block;
+  clear: both;
+  margin-top: 14px;
+  padding: 6px 14px;
+  border-radius: 3px;
+  background: #4c6ef5;
+  color: #fff;
+  font-size: 0.85em;
+  font-weight: bold;
+  text-decoration: none;
+}
+
+.myapi-cal-detail-link:hover {
+  background: #3b5bdb;
+  color: #fff;
+}
+
 /* ---- Legend ---- */
 
 .myapi-cal-legend {

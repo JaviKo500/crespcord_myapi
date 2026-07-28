@@ -129,10 +129,11 @@ Programa el comando clave como tarea recurrente del sistema, **bajo el usuario
 sudo crontab -u www-data -e
 ```
 
-Añade esta única línea (verifica antes la ruta real de drush con `which drush`):
+Añade estas líneas (verifica antes la ruta real de drush con `which drush`):
 
 ```cron
 * * * * * /usr/local/bin/drush -r /var/www/html queue-run myapi_onesignal_push >/dev/null 2>&1
+* * * * * /usr/local/bin/drush -r /var/www/html queue-run myapi_mail_send >/dev/null 2>&1
 ```
 
 Desglose de la línea:
@@ -143,17 +144,25 @@ Desglose de la línea:
 | `/usr/local/bin/drush` | Ruta absoluta a drush (la que dé `which drush`). |
 | `-r /var/www/html` | Raíz de la instalación de Drupal. |
 | `queue-run myapi_onesignal_push` | Procesa solo la cola de push (Drush 9+: `queue:run`). |
+| `queue-run myapi_mail_send` | Procesa solo la cola de correo diferido (spec 48: password reset ya no la usa, pero las notificaciones de reserva sí). Drush 9+: `queue:run`. |
 | `>/dev/null 2>&1` | Descarta la salida. Para depurar, cámbialo por `>> /var/log/myapi-push.log 2>&1` (el archivo debe ser escribible por `www-data`). |
 
 - **Por qué `www-data`:** es el dueño de los archivos y el usuario del web server;
   puede leer `includes/` y no genera archivos de otro propietario.
 - **Es por servidor:** el crontab es config del sistema operativo, **no** viaja con el
   deploy. Repite este paso en cada entorno (pruebas, producción).
+- **La cola `myapi_mail_send` no tiene cron propio por defecto.** Si solo se configuró
+  la línea de `myapi_onesignal_push` (como indicaba una versión anterior de esta guía),
+  los emails de spec 48 (confirmación/cancelación de reserva, aviso a `backend`) quedan
+  encolados en `myapi_mail_send` pero **nunca se envían** hasta que algo drene esa cola.
+  Añade la segunda línea de arriba para que salgan igual de rápido que el push.
 
-> **Sobre el cron general del sitio:** este cron dedicado NO cubre las demás tareas de
-> Drupal (limpieza de caché, sesiones, búsqueda, etc.). Si el sitio no tiene ya un
-> `drush cron` programado, conviene añadir uno aparte y menos frecuente:
+> **Sobre el cron general del sitio:** estos dos crons dedicados NO cubren las demás
+> tareas de Drupal (limpieza de caché, sesiones, búsqueda, etc.). Si el sitio no tiene
+> ya un `drush cron` programado, conviene añadir uno aparte y menos frecuente:
 > `0 * * * * /usr/local/bin/drush -r /var/www/html cron >/dev/null 2>&1` (cada hora).
+> Ese `drush cron` general también drena `myapi_mail_send`, así que si ya lo tenés
+> configurado no hace falta la línea dedicada — basta con confirmar que corre.
 
 ---
 
