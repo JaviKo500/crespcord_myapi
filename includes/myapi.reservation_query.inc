@@ -403,11 +403,13 @@ function myapi_reservation_occupancy_ranges($busy, $capacity) {
  *   incoherent (same criterion as myapi_reservation_busy_rows()). Excluding it
  *   here keeps the calendar and the API telling the same story.
  * - LEFT on field_area, field_unit, field_condominium, field_requester and
- *   their node/users rows. A deleted area or unit must NOT remove the
- *   reservation from the calendar: it existed and it occupied a slot. The
- *   target_id survives in the field table while the title arrives NULL, and
- *   the render degrades to 'Área eliminada (#123)'. field_cancelled_by is left
- *   too because a confirmed reservation simply has no row there.
+ *   their node/users rows, plus the requester's field_nombre and
+ *   field_apellidos (same profile fields as myapi_user_fetch_profile_fields()).
+ *   A deleted area or unit must NOT remove the reservation from the calendar:
+ *   it existed and it occupied a slot. The target_id survives in the field
+ *   table while the title arrives NULL, and the render degrades to 'Área
+ *   eliminada (#123)'. field_cancelled_by is left too because a confirmed
+ *   reservation simply has no row there.
  *
  * $limit + 1 rows are requested on purpose: if the caller gets more than
  * $limit back it knows the view is truncated, without a second COUNT() query.
@@ -428,8 +430,9 @@ function myapi_reservation_occupancy_ranges($busy, $capacity) {
  *
  * @return array  Raw rows (stdClass) ordered by date, start_time and nid, with
  *   nid, created, date, start_time, end_time, status, cancelled_by, area_id,
- *   area_title, unit_id, unit_title, condominium_id, uid, user_name and
- *   user_mail. Empty array when nothing matches.
+ *   area_title, unit_id, unit_title, condominium_id, uid, user_name,
+ *   user_mail, user_first_name and user_last_name. Empty array when nothing
+ *   matches.
  */
 function myapi_reservation_calendar_rows($from, $to, $condominium_id, $area_id, array $statuses, $limit) {
   $query = db_select('node', 'n')
@@ -471,6 +474,10 @@ function myapi_reservation_calendar_rows($from, $to, $condominium_id, $area_id, 
   $query->leftJoin('users', 'u', 'u.uid = fr.field_requester_target_id');
   $query->addField('u', 'name', 'user_name');
   $query->addField('u', 'mail', 'user_mail');
+  $query->leftJoin('field_data_field_nombre', 'fn', "fn.entity_id = u.uid AND fn.entity_type = 'user' AND fn.deleted = 0");
+  $query->addField('fn', 'field_nombre_value', 'user_first_name');
+  $query->leftJoin('field_data_field_apellidos', 'fap', "fap.entity_id = u.uid AND fap.entity_type = 'user' AND fap.deleted = 0");
+  $query->addField('fap', 'field_apellidos_value', 'user_last_name');
 
   $query->leftJoin('field_data_field_cancelled_by', 'fcb', "fcb.entity_id = n.nid AND fcb.entity_type = 'node' AND fcb.deleted = 0");
   $query->addField('fcb', 'field_cancelled_by_value', 'cancelled_by');

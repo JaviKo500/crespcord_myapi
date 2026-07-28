@@ -1054,7 +1054,10 @@ function myapi_calendar_unit_label($row) {
  *
  * Two different absences: a reservation with no field_requester at all ('Sin
  * usuario') and one whose user account was deleted, which still has the uid
- * ('Usuario eliminado (#789)').
+ * ('Usuario eliminado (#789)'). When the account is present, the label leads
+ * with the profile's first and last name ('field_nombre' / 'field_apellidos')
+ * and shows the account username in parentheses; a user with no profile name
+ * set falls back to the username alone.
  *
  * @param object $row  Reservation row.
  *
@@ -1067,7 +1070,15 @@ function myapi_calendar_user_label($row) {
   if ($row->user_name === NULL) {
     return t('Usuario eliminado (#@uid)', array('@uid' => $row->uid));
   }
-  return check_plain($row->user_name);
+  $full_name = trim(
+    ($row->user_first_name !== NULL ? $row->user_first_name : '')
+    . ' '
+    . ($row->user_last_name !== NULL ? $row->user_last_name : '')
+  );
+  if ($full_name === '') {
+    return check_plain($row->user_name);
+  }
+  return check_plain($full_name) . ' (' . check_plain($row->user_name) . ')';
 }
 
 /**
@@ -1126,9 +1137,11 @@ function myapi_calendar_duration_label($row) {
  * Exactly ONE block per reservation even when it has two chips: the blocks are
  * keyed by nid and both chips of an overnight point at the same id.
  *
- * The panel prints the requester's name and email. That is deliberate: this is
- * a back-office page whose access callback limits it to the operator of the
- * condominium, and it answers the question the operator actually has.
+ * The panel prints the requester's full name with their username in
+ * parentheses (see myapi_calendar_user_label()), never the email. That is
+ * deliberate: this is a back-office page whose access callback limits it to
+ * the operator of the condominium, and it answers the question the operator
+ * actually has without exposing the account's email address.
  *
  * @param array $rows                 Reservation rows to emit, keyed by nid.
  * @param array $condominium_options  nid => title.
@@ -1146,7 +1159,6 @@ function myapi_calendar_render_details($rows, $condominium_options) {
 
     $lines = array(
       t('Usuario') => myapi_calendar_user_label($row),
-      t('Email') => $row->user_mail === NULL ? '—' : check_plain($row->user_mail),
       t('Vivienda') => myapi_calendar_unit_label($row),
       t('Área') => myapi_calendar_area_label($row),
       t('Condominio') => myapi_calendar_condominium_label($row, $condominium_options),

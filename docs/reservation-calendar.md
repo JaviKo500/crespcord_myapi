@@ -73,7 +73,7 @@ looks for it.
 > calendar.** The access callback does not read it. This is counter-intuitive
 > and it is intentional: with an "either the permission or the role" rule,
 > granting the permission to *authenticated user* by mistake would open the
-> names and email addresses of every resident to the whole site.
+> names of every resident to the whole site.
 
 The permission is declared and never checked. If a role must see the calendar,
 give it the role, not the permission.
@@ -242,10 +242,11 @@ sort, so `Área` does not land after `Zona`).
 
 ## Detail panel
 
-Clicking any chip opens a panel with: requester name and email, unit, area,
-condominium, date, `HH:MM – HH:MM`, duration, status and creation date. A
-cancelled reservation also shows `cancelled_by`; a confirmed one does not show
-that line at all.
+Clicking any chip opens a panel with: requester full name and username in
+parentheses (e.g. `Juan Pérez (jperez)`), unit, area, condominium, date,
+`HH:MM – HH:MM`, duration, status and creation date. A cancelled reservation
+also shows `cancelled_by`; a confirmed one does not show that line at all.
+The requester's email is never shown in the panel.
 
 - The panel closes with the X, with a click on the backdrop and with `Escape`.
 - Opening another detail closes the previous one; two panels are never open at
@@ -260,9 +261,10 @@ that line at all.
   the chip that was clicked: opening the detail from the continuation chip of a
   `22:00 → 02:00` still reports `4h 0min`.
 
-The panel shows personal data (name and email of the requester). That is
-deliberate and it is what the access control above is for: the page is limited
-to the operator of the condominium.
+The panel shows personal data (the requester's full name and username). That
+is deliberate and it is what the access control above is for: the page is
+limited to the operator of the condominium. The email address is deliberately
+left out, even from this restricted audience.
 
 A **`Ver más`** button at the bottom of the panel links to the reservation's
 own node page, `/?q=node/<nid>` (absolute URL, opens in a new tab). It is the
