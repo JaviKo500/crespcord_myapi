@@ -245,8 +245,8 @@ sort, so `Área` does not land after `Zona`).
 Clicking any chip opens a panel with: requester full name and username in
 parentheses (e.g. `Juan Pérez (jperez)`), unit, area, condominium, date,
 `HH:MM – HH:MM`, duration, status and creation date. A cancelled reservation
-also shows `cancelled_by`; a confirmed one does not show that line at all.
-The requester's email is never shown in the panel.
+also shows `Cancelada por` and, right below it, `Motivo`; a confirmed one shows
+neither line at all. The requester's email is never shown in the panel.
 
 - The panel closes with the X, with a click on the backdrop and with `Escape`.
 - Opening another detail closes the previous one; two panels are never open at
@@ -260,6 +260,13 @@ The requester's email is never shown in the panel.
 - The duration and the `(+1 día)` mark are computed on the reservation, not on
   the chip that was clicked: opening the detail from the continuation chip of a
   `22:00 → 02:00` still reports `4h 0min`.
+- **`Motivo`** (SPEC 50) is the optional cancellation reason, written either by
+  the resident when cancelling from the app or by an operator in the
+  `Motivo de cancelación` field of the node form. The line is drawn only when
+  the reservation is cancelled **and** has a reason — same criterion as
+  `Cancelada por` on a confirmed reservation: a line that does not apply is not
+  drawn. It is free text written by a resident, so it is escaped with
+  `check_plain()` at the point of output.
 
 The panel shows personal data (the requester's full name and username). That
 is deliberate and it is what the access control above is for: the page is
@@ -268,7 +275,8 @@ left out, even from this restricted audience.
 
 A **`Ver más`** button at the bottom of the panel links to the reservation's
 own node page, `/?q=node/<nid>` (absolute URL, opens in a new tab). It is the
-same node link the `reservation_created_admin` email carries — see
+same node link the `reservation_created_admin` and
+`reservation_cancelled_admin` emails carry — see
 `docs/reservation-notifications.md`.
 
 ---
@@ -356,6 +364,9 @@ drush cc all
 | Back to back | `10:00-11:00` and `11:00-12:00` | Week view: two chips at **full width** |
 | Cancelled, hidden | A `cancelled` in range, default filter | Does not appear |
 | Cancelled, visible | Same with `status=all` | Grey struck-through chip, outside the legend |
+| Cancelled with a reason | Same, with `Motivo de cancelación` filled | The detail shows `Motivo` right below `Cancelada por` |
+| Cancelled without a reason | Same, field left empty | No `Motivo` line; the rest of the panel unchanged |
+| Confirmed with a reason typed | Reason filled, status `confirmed` | Neither `Cancelada por` nor `Motivo`; the value stays stored |
 | Unpublished | `node.status = 0` | Never appears, with any `status` |
 | Deleted area | Delete the `area` node of a reservation | `Área eliminada (#nid)` in chip, legend and detail |
 | Deleted user | Delete the requester account | `Usuario eliminado (#uid)` in the detail |

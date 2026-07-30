@@ -49,6 +49,7 @@ single-reservation detail endpoint, no availability/conflict check.
         "end_time": "12:00",
         "status": "confirmed",
         "cancelled_by": null,
+        "cancel_reason": null,
         "created": "2026-07-22T14:30:00"
       }
     ],
@@ -83,14 +84,19 @@ Notes:
 - Only published (`status = 1`) `reservation` nodes are returned.
 - Both `confirmed` and `cancelled` reservations are returned; `status` travels
   in each item so the client can distinguish them.
-- Every reservation includes exactly 14 keys: `id`, `condominium_id`,
+- Every reservation includes exactly 15 keys: `id`, `condominium_id`,
   `unit_id`, `requester_id`, `area_id`, `area_name`, `area_category`,
   `cancel_deadline_minutes`, `date`, `start_time`, `end_time`, `status`,
-  `cancelled_by`, `created` (see mapping table below). `condominium_id`,
-  `requester_id`, `area_id`, `area_name`, `area_category`,
-  `cancel_deadline_minutes`, `date`, `start_time`, `end_time`, `cancelled_by`
-  are `null` when the node has no row in that field's storage table — no other
-  transformation or business validation is applied.
+  `cancelled_by`, `cancel_reason`, `created` (see mapping table below).
+  `condominium_id`, `requester_id`, `area_id`, `area_name`, `area_category`,
+  `cancel_deadline_minutes`, `date`, `start_time`, `end_time`, `cancelled_by`,
+  `cancel_reason` are `null` when the node has no row in that field's storage
+  table — no other transformation or business validation is applied.
+- `cancel_reason` is the optional free text explaining why the reservation was
+  cancelled, written either by the resident in the body of
+  `PUT /api/v1/reservations/%/cancel` or by an operator in the node form. It is
+  `null` on every confirmed reservation, on every cancellation where nobody
+  typed one, and on every reservation cancelled before the field existed.
 - `area_name` is the `title` of the `area` node referenced by `field_area`,
   resolved via a join; it is `null` when the reservation has no area row or
   the referenced area node is missing (e.g. deleted).
@@ -222,6 +228,7 @@ full schema definition.
 | `field_end_time_value` | `end_time` | string | `NULL` if no row |
 | `field_reservation_status_value` | `status` | string | `NULL` if no row |
 | `field_cancelled_by_value` | `cancelled_by` | string | `NULL` if no row |
+| `field_cancel_reason_value` | `cancel_reason` | string | `NULL` if no row |
 | `created` | `created` | string (ISO 8601) | never `NULL` |
 
 | Table | Relevant columns | Use |
@@ -239,6 +246,7 @@ full schema definition.
 | `field_data_field_end_time` | `entity_id`, `field_end_time_value` | `end_time`, text. Left join. |
 | `field_data_field_reservation_status` | `entity_id`, `field_reservation_status_value` | `status`. Left join; also the `status` filter column. |
 | `field_data_field_cancelled_by` | `entity_id`, `field_cancelled_by_value` | `cancelled_by`, text. Left join. |
+| `field_data_field_cancel_reason` | `entity_id`, `field_cancel_reason_value` | `cancel_reason`, text. Left join. |
 
 **Possible errors**
 | Code | `error_code` | When |
@@ -452,6 +460,7 @@ Same shape as an item from `GET /api/v1/units/{unit_id}/reservations`.
       "end_time": "12:00",
       "status": "confirmed",
       "cancelled_by": null,
+      "cancel_reason": null,
       "created": "2026-07-22T14:30:00"
     }
   },
@@ -468,7 +477,8 @@ Notes:
   This distinguishes `field_condominio` (on `vivienda`/unit nodes) from
   `field_condominium` (on `area` and `reservation` nodes) — a legacy naming
   difference that predates this endpoint.
-- `field_cancelled_by` is left unset on creation.
+- `field_cancelled_by` and `field_cancel_reason` are left unset on creation, so
+  both travel back as `null`.
 - The created reservation is immediately visible through
   `GET /api/v1/units/{unit_id}/reservations`.
 
@@ -581,11 +591,16 @@ curl -i -X POST 'https://host/api/v1/reservations' \
 ## PUT /api/v1/reservations/{id}/cancel
 
 Cancels a `confirmed` reservation on behalf of the authenticated user.
-Soft-cancel only: `field_reservation_status` is rewritten to `cancelled` and
-`field_cancelled_by` to `user`, every other field on the node is left
-untouched (no `node_delete()`). Only the reservation's own `field_requester`
-may cancel it — unlike `payment.resource.inc`, no other owner/occupant of the
-unit is allowed. No reactivation endpoint exists.
+Soft-cancel only: `field_reservation_status` is rewritten to `cancelled`,
+`field_cancelled_by` to `user` and, when the body carries one,
+`field_cancel_reason`; every other field on the node is left untouched (no
+`node_delete()`). Only the reservation's own `field_requester` may cancel it —
+unlike `payment.resource.inc`, no other owner/occupant of the unit is allowed.
+No reactivation endpoint exists.
+
+A successful cancellation emails the reservation detail to every active
+`backend` user and sends the resident nothing — see
+[reservation-notifications.md](reservation-notifications.md).
 
 **Authentication:** required (Bearer access token)
 
@@ -594,9 +609,23 @@ unit is allowed. No reactivation endpoint exists.
 |--------|-------|
 | Authorization | Bearer `<access_token>` |
 
+**Headers (only when sending a body)**
+| Header | Value |
+|--------|-------|
+| Content-Type | application/json |
+
 **Request body**
 
-None. The reservation id travels in the path; any body sent is ignored.
+Optional. A request with no body at all is valid and behaves exactly as it did
+before the field existed.
+
+```json
+{ "cancel_reason": "El evento se pospuso para el mes que viene" }
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `cancel_reason` | string | no | Free text, max **255 characters**, stored `trim()`ed. Shown to the resident in the cancellation email and to operators in the calendar detail panel. Any other key in the body is ignored. |
 
 **Validation order**
 
@@ -610,6 +639,23 @@ before the node is ever touched:
 | 3 | Authenticated user is exactly the reservation's `field_requester` | `403 reservation_forbidden` |
 | 4 | `field_reservation_status` is exactly `confirmed` | `409 reservation_not_confirmed` |
 | 5 | Cancellation window has not closed (see below) | `409 reservation_cancel_window_expired` |
+| 6 | `cancel_reason`, when present, is a string of at most 255 characters | `422 invalid_field` / `422 field_too_long` |
+
+The reason is validated **last**, so a reservation the caller may not cancel
+keeps answering `403`/`409` even when the body carries an invalid reason.
+
+**`cancel_reason` rules (validation 6)**
+
+| Case | Result |
+|---|---|
+| No body, empty body, or body without the key | No reason. No error. |
+| `cancel_reason` is not a string (array, number, boolean, `null`) | `422 invalid_field` with `@field = cancel_reason`; the reservation is **not** cancelled |
+| `trim()` leaves an empty string | No reason. No error, and the field stays empty in the database |
+| More than 255 characters after `trim()` | `422 field_too_long` with `@field = cancel_reason`; the reservation is **not** cancelled |
+| Anything else | The `trim()`ed value is stored in `field_cancel_reason` |
+
+The limit counts **characters**, not bytes (`drupal_strlen()`): the column is
+`varchar(255)` in utf8, so a 255-character reason full of `á`/`ñ` is valid.
 
 **Cancellation window (validation 5)**
 
@@ -646,6 +692,7 @@ Same shape as an item from `GET /api/v1/units/{unit_id}/reservations`.
       "end_time": "12:00",
       "status": "cancelled",
       "cancelled_by": "user",
+      "cancel_reason": "El evento se pospuso para el mes que viene",
       "created": "2026-07-22T14:30:00"
     }
   },
@@ -658,9 +705,11 @@ Notes:
   `409 reservation_not_confirmed` (idempotency: the second call always fails).
 - The cancelled reservation remains visible through
   `GET /api/v1/units/{unit_id}/reservations` with `status: "cancelled"`.
+- `cancel_reason` travels back in the response, and in every other reservation
+  endpoint, as one more key of the item shape.
 - Not in scope: cancellation by an administrator or by another
-  owner/occupant of the unit, reactivation of a cancelled reservation, a
-  cancellation `reason`, and cancellation notifications.
+  owner/occupant of the unit (operators use the node form), reactivation of a
+  cancelled reservation, and making the reason mandatory.
 
 **Possible errors**
 | Code | `error_code` | When |
@@ -671,6 +720,8 @@ Notes:
 | 403  | `reservation_forbidden` | The authenticated user is not the reservation's `field_requester`. |
 | 409  | `reservation_not_confirmed` | `field_reservation_status` is not `confirmed` (e.g. already `cancelled`). |
 | 409  | `reservation_cancel_window_expired` | Fewer minutes than (or exactly) the area's `field_cancel_deadline_minutes` remain until the start, the reservation already started/passed, or the area is missing/has no deadline row. |
+| 422  | `invalid_field` | `cancel_reason` is present in the body but is not a string. |
+| 422  | `field_too_long` | `cancel_reason` is longer than 255 characters after `trim()`. |
 | 405  | `method_not_allowed` | Any HTTP method other than `PUT`. |
 
 Error envelope:
@@ -688,8 +739,15 @@ according to the `Accept-Language` header (`es`/`en`, default `es`). See
 
 **Example:**
 ```bash
+# Without a reason
 curl -i -X PUT 'https://host/api/v1/reservations/91/cancel' \
   -H 'Authorization: Bearer <access_token>'
+
+# With a reason
+curl -i -X PUT 'https://host/api/v1/reservations/91/cancel' \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"cancel_reason":"El evento se pospuso para el mes que viene"}'
 ```
 
 ---
@@ -739,7 +797,7 @@ reservation id exists or whom it belongs to. This differs on purpose from
 **Success response (200)**
 
 Same shape as an item from `GET /api/v1/units/{unit_id}/reservations` — the same
-14 keys, with the identical `NULL` rules (see the mapping table under that
+15 keys, with the identical `NULL` rules (see the mapping table under that
 endpoint). `area_name`, `area_category` and `cancel_deadline_minutes` are read
 live from the referenced `area` node and are `null` when the area is missing
 (deleted).
@@ -762,6 +820,7 @@ live from the referenced `area` node and are `null` when the area is missing
       "end_time": "12:00",
       "status": "confirmed",
       "cancelled_by": null,
+      "cancel_reason": null,
       "created": "2026-07-22T14:30:00"
     }
   }
