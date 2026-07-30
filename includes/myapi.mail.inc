@@ -121,7 +121,8 @@ function myapi_mail_password_reset_html($params) {
  *
  * @param array  $message  Mail message array, altered by reference.
  * @param array  $params   'name', 'area', 'condominium', 'unit', 'date',
- *                         'schedule', 'duration' and 'nid', already escaped.
+ *                         'schedule', 'duration', 'nid' and the optional
+ *                         'cancel_reason', already escaped.
  * @param string $key      The mail key being formatted.
  */
 function myapi_mail_format_reservation_user(&$message, $params, $key) {
@@ -140,19 +141,27 @@ function myapi_mail_format_reservation_user(&$message, $params, $key) {
 /**
  * Formats the reservation detail email sent to the 'backend' role.
  *
- * Called from myapi_mail() (in myapi.module) for the
- * 'reservation_created_admin' key. Only exists on creation, so the reservation
- * is always 'Confirmada' and there is never a 'Cancelada por' line.
+ * Called from myapi_mail() (in myapi.module) for the two 'backend' keys
+ * (SPEC 50): 'reservation_created_admin', where the reservation is always
+ * 'Confirmada' and there is no 'Cancelada por' line, and
+ * 'reservation_cancelled_admin', which adds 'Cancelada por' and the optional
+ * 'Motivo'. Only the subject and those two lines differ, so both share this
+ * formatter and the HTML builder below.
  *
- * @param array $message  Mail message array, altered by reference.
- * @param array $params   'nid', 'user', 'email', 'unit', 'area', 'condominium',
- *                        'date', 'schedule', 'duration', 'status', 'created'
- *                        and 'node_url', already escaped.
+ * @param array  $message  Mail message array, altered by reference.
+ * @param array  $params   'nid', 'user', 'email', 'unit', 'area',
+ *                         'condominium', 'date', 'schedule', 'duration',
+ *                         'status', 'created' and 'node_url', already escaped;
+ *                         plus 'cancelled_by' and the optional 'cancel_reason'
+ *                         on the cancellation key.
+ * @param string $key      The mail key being formatted.
  */
-function myapi_mail_format_reservation_created_admin(&$message, $params) {
-  $message['subject'] = 'Nueva reserva #' . $params['nid'] . ' — '
+function myapi_mail_format_reservation_admin(&$message, $params, $key) {
+  $cancelled = ($key === 'reservation_cancelled_admin');
+
+  $message['subject'] = ($cancelled ? 'Reserva cancelada #' : 'Nueva reserva #') . $params['nid'] . ' — '
     . decode_entities($params['area']) . ', ' . decode_entities($params['date']);
-  $message['body'][] = myapi_mail_reservation_admin_html($params);
+  $message['body'][] = myapi_mail_reservation_admin_html($params, $cancelled);
 
   $message['headers']['Content-Type'] = 'text/html; charset=UTF-8';
 }
@@ -183,6 +192,13 @@ function myapi_mail_reservation_user_html($params, $cancelled) {
     'Duración'   => $params['duration'],
   ];
 
+  // SPEC 50: last line of the data block, only when there is a reason. The
+  // isset() also covers the items enqueued before that spec, which carry no
+  // such key and must keep rendering exactly as they did.
+  if (isset($params['cancel_reason']) && $params['cancel_reason'] !== '') {
+    $lines['Motivo'] = $params['cancel_reason'];
+  }
+
   // The closing line only makes sense on a cancellation the resident did not
   // ask for; on a confirmation there is nothing to dispute.
   $footer = 'Reserva #' . $params['nid'];
@@ -196,16 +212,21 @@ function myapi_mail_reservation_user_html($params, $cancelled) {
 /**
  * Builds the HTML body of the detail email sent to the 'backend' role.
  *
- * The ten lines are the ones the calendar detail panel shows (SPEC 47), in the
- * same order and with the same labels, so an operator reading the email and an
- * operator reading admin/content/reservation-calendar see the same reservation
- * described identically.
+ * The ten common lines are the ones the calendar detail panel shows (SPEC 47),
+ * in the same order and with the same labels, so an operator reading the email
+ * and an operator reading admin/content/reservation-calendar see the same
+ * reservation described identically.
  *
- * @param array $params  Already-escaped values (see the formatter).
+ * The cancellation variant (SPEC 50) appends 'Cancelada por' and, only when
+ * there is one, 'Motivo' — same criterion as the calendar panel, where a line
+ * that does not apply is not drawn at all.
+ *
+ * @param array $params     Already-escaped values (see the formatter).
+ * @param bool  $cancelled  TRUE for the cancellation variant.
  *
  * @return string  Full HTML document.
  */
-function myapi_mail_reservation_admin_html($params) {
+function myapi_mail_reservation_admin_html($params, $cancelled = FALSE) {
   $lines = [
     'Usuario'    => $params['user'],
     'Email'      => $params['email'],
@@ -219,10 +240,19 @@ function myapi_mail_reservation_admin_html($params) {
     'Creada'     => $params['created'],
   ];
 
+  if ($cancelled) {
+    $lines['Cancelada por'] = isset($params['cancelled_by']) ? $params['cancelled_by'] : 'Usuario';
+    if (isset($params['cancel_reason']) && $params['cancel_reason'] !== '') {
+      $lines['Motivo'] = $params['cancel_reason'];
+    }
+  }
+
   return myapi_mail_reservation_html(
     'Reserva #' . $params['nid'],
-    'Nueva reserva',
-    'Se ha registrado una nueva reserva desde la aplicación.',
+    $cancelled ? 'Reserva cancelada' : 'Nueva reserva',
+    $cancelled
+      ? 'Un residente ha cancelado su reserva desde la aplicación.'
+      : 'Se ha registrado una nueva reserva desde la aplicación.',
     $lines,
     'Puedes verla en el calendario de reservas del panel de administración.',
     array('label' => 'Ver reserva', 'url' => $params['node_url'])

@@ -4,7 +4,7 @@
  * @file
  * Reservation notification helpers for the myapi module (SPEC 48).
  *
- * Two events, and only two:
+ * Three events, and only three:
  * - A reservation created through POST /api/v1/reservations notifies the
  *   resident (push + inbox + email) and emails the detail to every active user
  *   with the 'backend' role. The trigger lives inside myapi_reservation_create()
@@ -12,9 +12,13 @@
  *   a reservation created by an operator from the node form — or by drush, a
  *   migration or an import — notifies nobody.
  * - A back-office update that moves field_reservation_status to 'cancelled'
- *   notifies the resident (push + inbox + email). The cancellation the resident
- *   performs from the app opts out through a transient node flag, so it notifies
- *   nobody either.
+ *   notifies the resident (push + inbox + email) and nobody else. The
+ *   cancellation the resident performs from the app opts out of this branch
+ *   through a transient node flag.
+ * - The cancellation the resident performs through
+ *   PUT /api/v1/reservations/%/cancel emails the detail to the 'backend' role
+ *   and sends the resident nothing (SPEC 50). Fired by the endpoint itself, not
+ *   by a hook, for the same reason as the creation one.
  *
  * The email to 'backend' reuses the label helpers of the reservation calendar
  * (SPEC 47) instead of re-deriving the ten values here: this file builds a row
@@ -88,8 +92,8 @@ define('MYAPI_RESERVATION_NOTIFY_ROLE', 'backend');
  * @param object $node  A 'reservation' node.
  *
  * @return object  Row with nid, created, date, start_time, end_time, status,
- *   cancelled_by, area_id, area_title, unit_id, unit_title, condominium_id, uid,
- *   user_name and user_mail.
+ *   cancelled_by, cancel_reason, area_id, area_title, unit_id, unit_title,
+ *   condominium_id, uid, user_name and user_mail.
  */
 function myapi_reservation_notification_row($node) {
   $row = new stdClass();
@@ -102,6 +106,10 @@ function myapi_reservation_notification_row($node) {
   $row->end_time = myapi_reservation_node_value($node, 'field_end_time');
   $row->status = myapi_reservation_node_value($node, 'field_reservation_status');
   $row->cancelled_by = myapi_reservation_node_value($node, 'field_cancelled_by');
+  // SPEC 50. Read from the incoming node and never from $node->original, so an
+  // operator who types the reason and flips the status in the same save sees
+  // that reason travel in the very notification of that save.
+  $row->cancel_reason = myapi_reservation_node_value($node, 'field_cancel_reason');
 
   // Area and unit: the title is resolved with node_load() and stays NULL when
   // the referenced node no longer exists, which is the deleted-entity case the
@@ -211,10 +219,15 @@ function myapi_reservation_schedule_label($row, $dash = '-') {
  * area no longer exists the first line drops the quoted name altogether rather
  * than printing empty quotes.
  *
+ * The three fixed lines stay well under the 200-character push cut; the
+ * optional fourth one (the cancellation reason, SPEC 50) may push past it, and
+ * what myapi_onesignal_truncate_body() then trims is the tail of that reason.
+ * The inbox row and the email always carry it in full.
+ *
  * @param object $row        Reservation row.
  * @param bool   $cancelled  TRUE for the cancellation wording.
  *
- * @return string  Notification body, well under the 200-character push cut.
+ * @return string  Notification body: three lines, four with a reason.
  */
 function myapi_reservation_notification_body($row, $cancelled) {
   $action = $cancelled ? 'ha sido cancelada por un operador.' : 'ha sido confirmada.';
@@ -223,9 +236,19 @@ function myapi_reservation_notification_body($row, $cancelled) {
     ? 'Tu reserva del área "' . $row->area_title . '" ' . $action
     : 'Tu reserva ' . $action;
 
-  return $first
+  $body = $first
     . "\nFecha: " . decode_entities(myapi_reservation_date_label($row))
     . "\nHorario: " . decode_entities(myapi_reservation_schedule_label($row));
+
+  // SPEC 50: fourth line, cancellations only and only when there is a reason.
+  // Without one the body stays byte for byte the three-line text of SPEC 48.
+  // The raw stored value is used, like the area title above: this text is
+  // rendered by the app as plain text, not as HTML.
+  if ($cancelled && isset($row->cancel_reason) && trim($row->cancel_reason) !== '') {
+    $body .= "\nMotivo: " . $row->cancel_reason;
+  }
+
+  return $body;
 }
 
 /**
@@ -288,6 +311,11 @@ function myapi_reservation_enqueue_user_mail($row, $cancelled) {
     'schedule'    => myapi_reservation_schedule_label($row),
     'duration'    => myapi_calendar_duration_label($row),
     'nid'         => $row->nid,
+    // SPEC 50. Empty string on a creation and on a cancellation with no
+    // reason, which is what keeps the 'Motivo' line out of the email.
+    'cancel_reason' => $cancelled && isset($row->cancel_reason) && trim($row->cancel_reason) !== ''
+      ? check_plain($row->cancel_reason)
+      : '',
   ];
 
   $key = $cancelled ? 'reservation_cancelled_user' : 'reservation_created_user';
@@ -298,16 +326,23 @@ function myapi_reservation_enqueue_user_mail($row, $cancelled) {
  * Enqueues the detail email to every active user holding the 'backend' role.
  *
  * One queue item per recipient, so an invalid address never drags the rest
- * down. With nobody holding the role nothing is enqueued and the creation
- * behaves exactly the same.
+ * down. With nobody holding the role nothing is enqueued and the event behaves
+ * exactly the same.
  *
- * The ten lines are the ones of the calendar detail panel, resolved through the
- * same helpers. 'Cancelada por' is deliberately absent: this email only exists
- * on creation, where the reservation is always confirmed.
+ * Serves the two 'backend' keys (SPEC 50), which share ten of their twelve
+ * lines: 'reservation_created_admin', fired by POST /api/v1/reservations, and
+ * 'reservation_cancelled_admin', fired by PUT /api/v1/reservations/%/cancel.
+ * The ten common lines are the ones of the calendar detail panel, resolved
+ * through the same helpers; the cancellation variant adds 'Cancelada por' and,
+ * when there is one, 'Motivo'. Duplicating the function for the second key
+ * would guarantee both drift apart at the first layout change (rule 3 of
+ * CLAUDE.md).
  *
  * @param object $row  Reservation row.
+ * @param string $key  Mail key to enqueue. Defaults to the creation one, so
+ *   every pre-SPEC-50 call site keeps its exact behaviour.
  */
-function myapi_reservation_enqueue_admin_mails($row) {
+function myapi_reservation_enqueue_admin_mails($row, $key = 'reservation_created_admin') {
   $uids = myapi_reservation_backend_uids();
   if (empty($uids)) {
     return;
@@ -334,8 +369,20 @@ function myapi_reservation_enqueue_admin_mails($row) {
     'node_url'    => check_plain(url('node/' . $row->nid, array('absolute' => TRUE))),
   ];
 
+  // The two extra lines of the cancellation variant. 'Cancelada por' is fixed
+  // to 'Usuario' because this key only fires from the resident's endpoint; the
+  // raw stored value there is always 'user', and 'Cancelada por: user' reads as
+  // a bug in an email. 'Motivo' is empty when nobody typed one, which is what
+  // keeps the line out of the message.
+  if ($key === 'reservation_cancelled_admin') {
+    $params['cancelled_by'] = 'Usuario';
+    $params['cancel_reason'] = isset($row->cancel_reason) && trim($row->cancel_reason) !== ''
+      ? check_plain($row->cancel_reason)
+      : '';
+  }
+
   foreach (user_load_multiple($uids) as $account) {
-    myapi_mail_queue_enqueue('reservation_created_admin', (string) $account->mail, $params);
+    myapi_mail_queue_enqueue($key, (string) $account->mail, $params);
   }
 }
 
@@ -437,6 +484,45 @@ function myapi_reservation_notify_cancelled($node) {
 
     myapi_reservation_notify_inbox($row, TRUE);
     myapi_reservation_enqueue_user_mail($row, TRUE);
+  }
+  catch (Exception $e) {
+    watchdog_exception('myapi', $e);
+  }
+}
+
+/**
+ * Notifies a reservation cancelled by its own resident from the app (SPEC 50).
+ *
+ * The exact mirror image of myapi_reservation_notify_cancelled(): 'backend'
+ * users get the detail email and the resident gets NOTHING — no inbox row, no
+ * push, no email. They just cancelled it on screen, so confirming it back to
+ * them adds nothing; the operators, who did not, are the ones who need to know.
+ *
+ * Called from myapi_reservation_cancel() only, right after node_save(). It is
+ * deliberately NOT hooked to node update: the endpoint is the resident's only
+ * cancellation path, and hooking the transition would also mail on any
+ * programmatic save that happened to set field_cancelled_by to 'user'. The
+ * transient myapi_skip_reservation_notification flag on the node keeps
+ * hook_node_update() silent, exactly as before — it only ever silenced the
+ * channels aimed at the resident, which are still silent here.
+ *
+ * Same guard and same best-effort contract as the other two notifiers: once per
+ * node per request, and no exception may escape and turn a saved cancellation
+ * into a 500. Enqueuing is a write to the mail queue, never an SMTP round trip.
+ *
+ * @param object $node  The reservation node the resident just cancelled.
+ */
+function myapi_reservation_notify_user_cancelled($node) {
+  $notified = &drupal_static(__FUNCTION__, []);
+  if (isset($notified[$node->nid])) {
+    return;
+  }
+  $notified[$node->nid] = TRUE;
+
+  try {
+    $row = myapi_reservation_notification_row($node);
+
+    myapi_reservation_enqueue_admin_mails($row, 'reservation_cancelled_admin');
   }
   catch (Exception $e) {
     watchdog_exception('myapi', $e);

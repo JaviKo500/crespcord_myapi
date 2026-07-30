@@ -467,7 +467,15 @@ function myapi_reservation_cancel($reservation_id) {
   $node->myapi_skip_reservation_notification = TRUE;
   node_save($node);
 
-  // 8. Respond 200 with the updated reservation.
+  // 8. Email the detail to the 'backend' role (SPEC 50). Only this path fires
+  // it: an operator cancelling from the node form notifies the resident and
+  // nobody else. After node_save() and best-effort by contract — the
+  // cancellation is already stored, so nothing here may turn the 200 into a
+  // 500.
+  module_load_include('inc', 'myapi', 'includes/myapi.reservation_notification');
+  myapi_reservation_notify_user_cancelled($node);
+
+  // 9. Respond 200 with the updated reservation.
   myapi_respond(['reservation' => myapi_reservation_build_item_from_node($node, $area->title, myapi_reservation_node_value($area, 'field_area_category'), $deadline_minutes)], 200, 'reservation_cancelled');
 }
 

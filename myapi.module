@@ -360,8 +360,11 @@ function myapi_mail($key, &$message, $params) {
       myapi_mail_format_reservation_user($message, $params, $key);
       break;
 
+    // Both 'backend' keys share a formatter too: they differ only in the
+    // subject, the heading and the two extra lines of the cancellation.
     case 'reservation_created_admin':
-      myapi_mail_format_reservation_created_admin($message, $params);
+    case 'reservation_cancelled_admin':
+      myapi_mail_format_reservation_admin($message, $params, $key);
       break;
   }
 }
