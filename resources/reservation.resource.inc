@@ -380,11 +380,15 @@ function myapi_reservation_create() {
  * only when that user is exactly the reservation's field_requester and the
  * cancellation window (field_cancel_deadline_minutes of the area) has not
  * closed yet. Soft-cancel only: field_reservation_status is rewritten to
- * 'cancelled' and field_cancelled_by to 'user', every other field is left
- * untouched. Every check aborts with its own error before the node is ever
- * modified.
+ * 'cancelled', field_cancelled_by to 'user' and, when the body carries one,
+ * field_cancel_reason; every other field is left untouched. Every check aborts
+ * with its own error before the node is ever modified.
  *
- * See the ordered plan in specs/reservations/36-cancel-reservation.md, step 3.
+ * The body is optional (SPEC 50): a request with no body at all behaves exactly
+ * as it did before that spec.
+ *
+ * See the ordered plan in specs/reservations/36-cancel-reservation.md, step 3,
+ * and specs/reservations/50-reservation-cancel-reason.md, step 2.
  *
  * @param mixed $reservation_id  The 'reservation' nid from the route.
  */
@@ -437,9 +441,23 @@ function myapi_reservation_cancel($reservation_id) {
     myapi_error('reservation_cancel_window_expired', 409);
   }
 
-  // 6. Apply the cancellation.
+  // 6. Optional cancellation reason (SPEC 50). Validated only after the five
+  // checks above have passed, so an invalid reason never masks a 403/409: a
+  // reservation the caller may not cancel keeps answering 403 even when the
+  // body carries garbage. The reason is optional in both paths (endpoint and
+  // node form), so an absent body, an absent key or a whitespace-only string
+  // are all "no reason" and not an error.
+  $reason = myapi_reservation_validate_cancel_reason(myapi_request_body());
+  if (!$reason['ok']) {
+    myapi_error($reason['error_code'], 422, $reason['replacements']);
+  }
+
+  // 7. Apply the cancellation.
   $node->field_reservation_status[LANGUAGE_NONE][0]['value'] = 'cancelled';
   $node->field_cancelled_by[LANGUAGE_NONE][0]['value'] = 'user';
+  if ($reason['value'] !== NULL) {
+    $node->field_cancel_reason[LANGUAGE_NONE][0]['value'] = $reason['value'];
+  }
   // Transient opt-out flag (SPEC 48): the resident is cancelling their own
   // reservation, so nobody is notified. myapi_node_update() sees this same
   // $node object and myapi_reservation_is_cancellation_transition() returns
@@ -449,15 +467,56 @@ function myapi_reservation_cancel($reservation_id) {
   $node->myapi_skip_reservation_notification = TRUE;
   node_save($node);
 
-  // 7. Respond 200 with the updated reservation.
+  // 8. Respond 200 with the updated reservation.
   myapi_respond(['reservation' => myapi_reservation_build_item_from_node($node, $area->title, myapi_reservation_node_value($area, 'field_area_category'), $deadline_minutes)], 200, 'reservation_cancelled');
+}
+
+/**
+ * Validates the optional 'cancel_reason' of a cancellation request (SPEC 50).
+ *
+ * Pure: takes the already-decoded body and returns a verdict, never touching
+ * HTTP output nor the node, so the caller decides when to abort. Absent body,
+ * absent key and whitespace-only text all resolve to "no reason" without an
+ * error — an optional field left blank is not a format error, and returning
+ * 422 there would force the app to clean the string before sending it.
+ *
+ * Length is measured with drupal_strlen() (characters) and not strlen()
+ * (bytes): the column is varchar(255) in utf8, so 255 accented characters fit
+ * and strlen() would reject them for nothing.
+ *
+ * @param mixed $body  Decoded request body, or NULL when there was none.
+ *
+ * @return array  ['ok' => TRUE, 'value' => string|NULL] when accepted, or
+ *                ['ok' => FALSE, 'error_code' => '...', 'replacements' => [...]]
+ *                when it must answer 422.
+ */
+function myapi_reservation_validate_cancel_reason($body) {
+  if (!is_array($body) || !array_key_exists('cancel_reason', $body)) {
+    return ['ok' => TRUE, 'value' => NULL];
+  }
+
+  // Present but not a string (array, number, boolean, NULL): the client sent
+  // the key on purpose with the wrong type, so this one IS an error.
+  if (!is_string($body['cancel_reason'])) {
+    return ['ok' => FALSE, 'error_code' => 'invalid_field', 'replacements' => ['@field' => 'cancel_reason']];
+  }
+
+  $value = trim($body['cancel_reason']);
+  if ($value === '') {
+    return ['ok' => TRUE, 'value' => NULL];
+  }
+  if (drupal_strlen($value) > 255) {
+    return ['ok' => FALSE, 'error_code' => 'field_too_long', 'replacements' => ['@field' => 'cancel_reason']];
+  }
+
+  return ['ok' => TRUE, 'value' => $value];
 }
 
 /**
  * Handles GET /api/v1/reservations/%/details.
  *
  * Returns the single 'reservation' node identified by $reservation_id, in the
- * same 14-key item shape as the list (GET /api/v1/units/%/reservations),
+ * same 15-key item shape as the list (GET /api/v1/units/%/reservations),
  * wrapped as {"reservation": ...}. The reservation is only visible when it
  * would also appear in the caller's own list: it must exist, be a published
  * 'reservation' node, belong to a unit the caller owns or occupies, and have
@@ -708,7 +767,7 @@ function myapi_reservation_build_node($condominium_id, $unit_id, $uid, $area_id,
  * Maps a loaded/in-memory 'reservation' node into the single-item response
  * shape, wrapped by the caller as {"reservation": ...}.
  *
- * Same 14-key shape as myapi_reservation_build_item()
+ * Same 15-key shape as myapi_reservation_build_item()
  * (GET /api/v1/units/%/reservations, SPEC 34), but reads straight from a node
  * object instead of a DB fetch row. Used by three by-node responses: create
  * (201), cancel (200) and detail (GET /api/v1/reservations/%/details, 200).
@@ -717,12 +776,16 @@ function myapi_reservation_build_node($condominium_id, $unit_id, $uid, $area_id,
  * itself only stores the area's nid; each is NULL when the caller could not
  * resolve the area (e.g. it was deleted).
  *
+ * 'cancel_reason' (SPEC 50) is always present and NULL when the reservation
+ * carries no reason, which is every reservation cancelled before that spec and
+ * every cancellation where nobody typed one.
+ *
  * @param object      $node                     The reservation node.
  * @param string      $area_title               The reserved area's title.
  * @param string|NULL $area_category            The reserved area's category.
  * @param int|NULL    $cancel_deadline_minutes  The area's cancellation window.
  *
- * @return array  Response item with all 14 mapped keys.
+ * @return array  Response item with all 15 mapped keys.
  */
 function myapi_reservation_build_item_from_node($node, $area_title, $area_category = NULL, $cancel_deadline_minutes = NULL) {
   return [
@@ -739,6 +802,7 @@ function myapi_reservation_build_item_from_node($node, $area_title, $area_catego
     'end_time'       => myapi_reservation_node_value($node, 'field_end_time'),
     'status'         => myapi_reservation_node_value($node, 'field_reservation_status'),
     'cancelled_by'   => myapi_reservation_node_value($node, 'field_cancelled_by'),
+    'cancel_reason'  => myapi_reservation_node_value($node, 'field_cancel_reason'),
     'created'        => format_date($node->created, 'custom', 'Y-m-d\TH:i:s'),
   ];
 }
@@ -1282,6 +1346,12 @@ function myapi_reservation_fetch($unit_id, $page, $limit, $sort, $from = NULL, $
   $query->leftJoin('field_data_field_cancelled_by', 'fcancel', "fcancel.entity_id = n.nid AND fcancel.entity_type = 'node' AND fcancel.deleted = 0");
   $query->addField('fcancel', 'field_cancelled_by_value', 'cancelled_by');
 
+  // SPEC 50: same left join idiom, so the list item carries the very same
+  // 'cancel_reason' the by-node responses build. NULL for every reservation
+  // with no reason, including all of those cancelled before that spec.
+  $query->leftJoin('field_data_field_cancel_reason', 'freason', "freason.entity_id = n.nid AND freason.entity_type = 'node' AND freason.deleted = 0");
+  $query->addField('freason', 'field_cancel_reason_value', 'cancel_reason');
+
   $query->orderBy('fdate.field_date_value', $sort === 'asc' ? 'ASC' : 'DESC');
   // Second key (SPEC 43): reservations of the same day come back in clock
   // order, so an ascending list reads as a real timeline instead of jumping
@@ -1310,9 +1380,9 @@ function myapi_reservation_fetch($unit_id, $page, $limit, $sort, $from = NULL, $
  * 'date' is truncated to its 'Y-m-d' portion, NULL when the reservation has
  * no date row. 'created' is the node's native creation timestamp, formatted
  * as an ISO 8601 string in the site's timezone. Text fields (area_name,
- * start_time, end_time, status, cancelled_by) pass through as stored, with
- * no business interpretation, and stay NULL when the node has no row for
- * that field. 'area_category' is the referenced area's category, NULL when
+ * start_time, end_time, status, cancelled_by, cancel_reason) pass through as
+ * stored, with no business interpretation, and stay NULL when the node has no
+ * row for that field. 'area_category' is the referenced area's category, NULL when
  * the area has no category row or the reservation has no area.
  * 'cancel_deadline_minutes' is the referenced area's cancellation window, cast
  * to int, NULL under the same conditions; it is a client-side UX hint (the
@@ -1320,7 +1390,7 @@ function myapi_reservation_fetch($unit_id, $page, $limit, $sort, $from = NULL, $
  *
  * @param object $reservation  One row from myapi_reservation_fetch().
  *
- * @return array  Response item with all 14 mapped keys.
+ * @return array  Response item with all 15 mapped keys.
  */
 function myapi_reservation_build_item($reservation) {
   return [
@@ -1337,6 +1407,7 @@ function myapi_reservation_build_item($reservation) {
     'end_time'       => $reservation->end_time,
     'status'         => $reservation->status,
     'cancelled_by'   => $reservation->cancelled_by,
+    'cancel_reason'  => $reservation->cancel_reason,
     'created'        => format_date($reservation->created, 'custom', 'Y-m-d\TH:i:s'),
   ];
 }

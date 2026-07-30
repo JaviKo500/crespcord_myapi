@@ -409,7 +409,8 @@ function myapi_reservation_occupancy_ranges($busy, $capacity) {
  *   it existed and it occupied a slot. The target_id survives in the field
  *   table while the title arrives NULL, and the render degrades to 'Área
  *   eliminada (#123)'. field_cancelled_by is left too because a confirmed
- *   reservation simply has no row there.
+ *   reservation simply has no row there, and the same holds for
+ *   field_cancel_reason, which is optional even on a cancelled one.
  *
  * $limit + 1 rows are requested on purpose: if the caller gets more than
  * $limit back it knows the view is truncated, without a second COUNT() query.
@@ -429,10 +430,10 @@ function myapi_reservation_occupancy_ranges($busy, $capacity) {
  *                                  fetched.
  *
  * @return array  Raw rows (stdClass) ordered by date, start_time and nid, with
- *   nid, created, date, start_time, end_time, status, cancelled_by, area_id,
- *   area_title, unit_id, unit_title, condominium_id, uid, user_name,
- *   user_mail, user_first_name and user_last_name. Empty array when nothing
- *   matches.
+ *   nid, created, date, start_time, end_time, status, cancelled_by,
+ *   cancel_reason, area_id, area_title, unit_id, unit_title, condominium_id,
+ *   uid, user_name, user_mail, user_first_name and user_last_name. Empty array
+ *   when nothing matches.
  */
 function myapi_reservation_calendar_rows($from, $to, $condominium_id, $area_id, array $statuses, $limit) {
   $query = db_select('node', 'n')
@@ -481,6 +482,11 @@ function myapi_reservation_calendar_rows($from, $to, $condominium_id, $area_id, 
 
   $query->leftJoin('field_data_field_cancelled_by', 'fcb', "fcb.entity_id = n.nid AND fcb.entity_type = 'node' AND fcb.deleted = 0");
   $query->addField('fcb', 'field_cancelled_by_value', 'cancelled_by');
+
+  // SPEC 50: the cancellation reason, for the detail panel. LEFT for the same
+  // reason as field_cancelled_by — most reservations have no row there.
+  $query->leftJoin('field_data_field_cancel_reason', 'fcr', "fcr.entity_id = n.nid AND fcr.entity_type = 'node' AND fcr.deleted = 0");
+  $query->addField('fcr', 'field_cancel_reason_value', 'cancel_reason');
 
   // Optional filters. Applied on the left-joined columns, so a reservation
   // with no condominium or no area row is also excluded when filtering by

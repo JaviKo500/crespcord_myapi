@@ -1172,6 +1172,14 @@ function myapi_calendar_render_details($rows, $condominium_options) {
     // one the line is absent, not empty.
     if ($row->status === 'cancelled') {
       $lines[t('Cancelada por')] = $row->cancelled_by === NULL ? '—' : check_plain($row->cancelled_by);
+
+      // SPEC 50: the reason is optional even on a cancelled reservation, so a
+      // missing one drops the line instead of printing a placeholder — same
+      // criterion as 'Cancelada por' on a confirmed reservation. It is free
+      // text written by the resident, hence check_plain() at the output point.
+      if (isset($row->cancel_reason) && trim($row->cancel_reason) !== '') {
+        $lines[t('Motivo')] = check_plain($row->cancel_reason);
+      }
     }
 
     $lines[t('Creada')] = check_plain(format_date($row->created, 'custom', 'd/m/Y H:i'));

@@ -298,6 +298,7 @@ function _myapi_reservations_uninstall_destructive() {
     'field_end_time',
     'field_reservation_status',
     'field_cancelled_by',
+    'field_cancel_reason',
   ];
   foreach ($fields as $field_name) {
     if (field_info_field($field_name)) {
@@ -327,6 +328,7 @@ function myapi_html_mail_keys() {
     'myapi_reservation_created_user',
     'myapi_reservation_cancelled_user',
     'myapi_reservation_created_admin',
+    'myapi_reservation_cancelled_admin',
   ];
 }
 
@@ -637,6 +639,14 @@ function _myapi_reservations_install() {
       ],
     ],
   ]);
+  // Single-line text on purpose: the reason travels in a push notification, an
+  // email and the calendar detail panel, all of which render one short line.
+  _myapi_reservations_ensure_field('field_cancel_reason', [
+    'field_name'  => 'field_cancel_reason',
+    'type'        => 'text',
+    'cardinality' => 1,
+    'settings'    => ['max_length' => 255],
+  ]);
 
   // (c) Instances of the 'area' bundle.
   _myapi_reservations_ensure_instance('field_condominium', 'area', [
@@ -873,6 +883,15 @@ function _myapi_reservations_install() {
     'required'    => 0,
     'widget'      => ['type' => 'options_select'],
   ]);
+  _myapi_reservations_ensure_instance('field_cancel_reason', 'reservation', [
+    'field_name'  => 'field_cancel_reason',
+    'entity_type' => 'node',
+    'bundle'      => 'reservation',
+    'label'       => 'Motivo de cancelación',
+    'required'    => 0,
+    'description' => 'Opcional. Se muestra al residente cuando la reserva se cancela.',
+    'widget'      => ['type' => 'text_textfield'],
+  ]);
 }
 
 /**
@@ -1067,5 +1086,22 @@ function myapi_update_7009() {
  * body would arrive converted to plain text.
  */
 function myapi_update_7010() {
+  myapi_mail_system_register();
+}
+
+/**
+ * SPEC 50: adds the field_cancel_reason field and registers the fourth mail key.
+ *
+ * Runs the same idempotent _myapi_reservations_install() used by hook_install(),
+ * so on a site that already has every other reservations field only the new
+ * field and its 'reservation' instance are created; nothing else is touched and
+ * re-running the update is a no-op.
+ *
+ * myapi_mail_system_register() maps 'myapi_reservation_cancelled_admin' to
+ * MyapiHtmlMailSystem. Without it the new admin email would fall back to
+ * DefaultMailSystem and arrive converted to plain text.
+ */
+function myapi_update_7011() {
+  _myapi_reservations_install();
   myapi_mail_system_register();
 }
