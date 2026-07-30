@@ -16,8 +16,11 @@ documented in [`docs/auth.md`](../docs/auth.md). The HTML page
 
 Covers only the functions that don't touch the database or Drupal APIs:
 token generation/hashing (`includes/myapi.token.inc`), bearer header parsing
-(`includes/myapi.auth.inc`), and the length-validation early-returns of
-`myapi_auth_password_reset_execute()` (`resources/auth.resource.inc`).
+(`includes/myapi.auth.inc`), the length-validation early-returns of
+`myapi_auth_password_reset_execute()` (`resources/auth.resource.inc`), the
+reservation grid/availability arithmetic (`includes/myapi.reservation_*.inc`)
+and, since SPEC 50, the cancellation-reason validation plus the notification
+and email texts that carry the reason.
 
 **Prerequisites:** PHP 7.4, Composer.
 
@@ -37,6 +40,17 @@ Drupal-level call any of them makes at file scope (not inside a function) is
 change adds another file-scope call to a Drupal function** in one of the
 `.inc` files exercised here, this stub needs to grow to cover it too, or the
 `require` will fatal.
+
+`bootstrap.php` also stubs four text helpers Drupal would provide —
+`drupal_strlen()`, `check_plain()`, `decode_entities()` and `format_date()`
+with the `'custom'` type — each a faithful one-liner over the PHP function
+Drupal itself wraps. Unlike the one above, these are called from *inside* the
+functions under test (the cancellation-reason validation and the notification
+and email texts of SPEC 50). They keep the suite's rule intact: still no
+database, still pure logic. Anything that runs `db_select()`, `node_load()` or
+the mail queue stays out of `tests/unit` — that is why
+`myapi_reservation_calendar_rows()` and
+`myapi_reservation_enqueue_admin_mails()` have no unit test.
 
 ---
 

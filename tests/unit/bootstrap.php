@@ -14,10 +14,46 @@
  * If a future change adds another file-scope call to a Drupal function in one
  * of the .inc files exercised by tests/unit, this stub needs to grow to cover
  * it too — see tests/README.md.
+ *
+ * The four text helpers below (SPEC 50) are a different kind of stub: they are
+ * called from INSIDE the functions under test, not at file scope, and each one
+ * is a faithful one-line equivalent of the Drupal function for the only use
+ * the tested code makes of it. They exist so the cancellation-reason texts can
+ * be asserted character by character. Nothing here touches the database: the
+ * suite still covers pure logic only.
  */
 
 if (!function_exists('module_load_include')) {
   function module_load_include($type, $module, $name = NULL) {
     // No-op: unit tests require the relevant includes/*.inc files themselves.
+  }
+}
+
+if (!function_exists('drupal_strlen')) {
+  function drupal_strlen($text) {
+    return mb_strlen($text, 'UTF-8');
+  }
+}
+
+if (!function_exists('check_plain')) {
+  function check_plain($text) {
+    return htmlspecialchars($text, ENT_QUOTES, 'UTF-8');
+  }
+}
+
+if (!function_exists('decode_entities')) {
+  function decode_entities($text) {
+    return html_entity_decode($text, ENT_QUOTES, 'UTF-8');
+  }
+}
+
+if (!function_exists('format_date')) {
+  /**
+   * Only the 'custom' type is stubbed: it is the only one myapi calls, and it
+   * maps straight onto date(). The site timezone is irrelevant here because
+   * every fixture builds its timestamp with mktime() in the same one.
+   */
+  function format_date($timestamp, $type = 'medium', $format = '', $timezone = NULL, $langcode = NULL) {
+    return date($format, $timestamp);
   }
 }
