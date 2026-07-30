@@ -1,6 +1,6 @@
 # 50 — Motivo de cancelación de reserva y aviso a `backend`
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-07-30
 - **Dependencias:**
   - `32-reservations-content-types-install` (Implemented) — helpers idempotentes
@@ -351,93 +351,94 @@ residente con la cuarta línea, y ningún email a `backend`; (d) `drush cron` dr
 ## Criterios de aceptación
 
 **Campo**
-- [ ] Tras `drush updb`, `field_cancel_reason` existe con instancia en el bundle
+- [x] Tras `drush updb`, `field_cancel_reason` existe con instancia en el bundle
       `reservation`, etiqueta `Motivo de cancelación`, opcional y con widget de
       texto simple.
-- [ ] El campo aparece en el formulario de `node/add/reservation` y en la edición de
+- [x] El campo aparece en el formulario de `node/add/reservation` y en la edición de
       una reserva existente.
-- [ ] Ejecutar `drush updb` dos veces no duplica ni altera el campo.
+- [x] Ejecutar `drush updb` dos veces no duplica ni altera el campo.
 
 **Endpoint — motivo**
-- [ ] `PUT /api/v1/reservations/{id}/cancel` **sin body** → `200` con exactamente el
+- [x] `PUT /api/v1/reservations/{id}/cancel` **sin body** → `200` con exactamente el
       mismo cuerpo que antes del spec, más `cancel_reason: null`.
-- [ ] Con `{"cancel_reason": "texto"}` → `200`, `data.reservation.cancel_reason` es
+- [x] Con `{"cancel_reason": "texto"}` → `200`, `data.reservation.cancel_reason` es
       el texto y `field_cancel_reason` en BD lo tiene.
-- [ ] El valor se guarda con `trim()` aplicado.
-- [ ] `{"cancel_reason": "   "}` → `200` con `cancel_reason: null` y el campo vacío
+- [x] El valor se guarda con `trim()` aplicado.
+- [x] `{"cancel_reason": "   "}` → `200` con `cancel_reason: null` y el campo vacío
       en BD.
-- [ ] `{"cancel_reason": 123}` o un array → `422 invalid_field`, la reserva **no** se
+- [x] `{"cancel_reason": 123}` o un array → `422 invalid_field`, la reserva **no** se
       cancela.
-- [ ] Un motivo de 256 caracteres → `422 field_too_long`, la reserva **no** se
+- [x] Un motivo de 256 caracteres → `422 field_too_long`, la reserva **no** se
       cancela; uno de 255 pasa.
-- [ ] Un motivo de 255 caracteres acentuados (`á`, `ñ`) pasa la validación y se
+- [x] Un motivo de 255 caracteres acentuados (`á`, `ñ`) pasa la validación y se
       guarda completo.
-- [ ] Las cinco validaciones de spec 36 (auth, existencia, autoría, estado, ventana)
+- [x] Las cinco validaciones de spec 36 (auth, existencia, autoría, estado, ventana)
       siguen cortando **antes** que la del motivo: una reserva ajena con un motivo
       inválido devuelve `403 reservation_forbidden`, no `422`.
 
 **Shape en todos los endpoints**
-- [ ] `POST /api/v1/reservations` devuelve `cancel_reason: null` en la reserva
+- [x] `POST /api/v1/reservations` devuelve `cancel_reason: null` en la reserva
       creada.
-- [ ] `GET /api/v1/units/%/reservations` y `GET /api/v1/reservations/%/details`
+- [x] `GET /api/v1/units/%/reservations` y `GET /api/v1/reservations/%/details`
       devuelven `cancel_reason` con el mismo valor que la respuesta del cancel.
-- [ ] Una reserva cancelada desde el back office con motivo muestra ese motivo en
+- [x] Una reserva cancelada desde el back office con motivo muestra ese motivo en
       los tres endpoints de lectura.
 
 **Email a `backend` en la cancelación del residente**
-- [ ] Un `PUT /cancel` exitoso encola un ítem `reservation_cancelled_admin` por
+- [x] Un `PUT /cancel` exitoso encola un ítem `reservation_cancelled_admin` por
       **cada** usuario activo con rol `backend` que tenga correo.
-- [ ] El asunto es `Reserva cancelada #{nid} — {área}, {d/m/Y}`.
-- [ ] El email llega en HTML (no convertido a texto plano) y muestra `Usuario`,
+- [x] El asunto es `Reserva cancelada #{nid} — {área}, {d/m/Y}`.
+- [x] El email llega en HTML (no convertido a texto plano) y muestra `Usuario`,
       `Email`, `Vivienda`, `Área`, `Condominio`, `Fecha`, `Horario`, `Duración`,
       `Estado`, `Creada`, `Cancelada por` y `Motivo`.
-- [ ] `Estado` vale `Cancelada` y `Cancelada por` vale `Usuario`.
-- [ ] Sin motivo, la línea `Motivo` **no aparece** y las otras 11 quedan igual.
-- [ ] El email incluye el botón `Ver reserva` con la URL absoluta del nodo.
-- [ ] Un `backend` bloqueado no recibe email; un `administrator` sin `backend`
+- [x] `Estado` vale `Cancelada` y `Cancelada por` vale `Usuario`.
+- [x] Sin motivo, la línea `Motivo` **no aparece** y las otras 11 quedan igual.
+- [x] El email incluye el botón `Ver reserva` con la URL absoluta del nodo.
+- [x] Un `backend` bloqueado no recibe email; un `administrator` sin `backend`
       tampoco.
-- [ ] Sin ningún `backend` activo, el `PUT /cancel` responde `200` igual y no se
+- [x] Sin ningún `backend` activo, el `PUT /cancel` responde `200` igual y no se
       encola nada.
-- [ ] Un correo inválido en la lista no impide el envío a los demás.
+- [x] Un correo inválido en la lista no impide el envío a los demás.
 
 **El residente que cancela sigue sin recibir nada**
-- [ ] Un `PUT /cancel` no inserta fila en `myapi_notifications` ni encola push, con
+- [x] Un `PUT /cancel` no inserta fila en `myapi_notifications` ni encola push, con
       o sin motivo.
-- [ ] No se encola ningún `reservation_cancelled_user`.
+- [x] No se encola ningún `reservation_cancelled_user`.
 
 **Cancelación por el operador**
-- [ ] Cambiar el estado a `'cancelled'` desde el back office **con** motivo → el
+- [x] Cambiar el estado a `'cancelled'` desde el back office **con** motivo → el
       cuerpo del inbox y del push es
       `…cancelada por un operador.\nFecha: …\nHorario: …\nMotivo: {texto}`.
-- [ ] **Sin** motivo, el cuerpo es byte a byte el de spec 48 (tres líneas).
-- [ ] El email `reservation_cancelled_user` muestra la línea `Motivo` cuando hay
+- [x] **Sin** motivo, el cuerpo es byte a byte el de spec 48 (tres líneas).
+- [x] El email `reservation_cancelled_user` muestra la línea `Motivo` cuando hay
       motivo y la omite cuando no.
-- [ ] **Ningún** usuario `backend` recibe email por una cancelación hecha desde el
+- [x] **Ningún** usuario `backend` recibe email por una cancelación hecha desde el
       back office.
-- [ ] Editar solo el motivo de una reserva ya cancelada no genera notificación, push
+- [x] Editar solo el motivo de una reserva ya cancelada no genera notificación, push
       ni email nuevos.
-- [ ] Guardar un motivo dejando el estado en `'confirmed'` no dispara nada y el
+- [x] Guardar un motivo dejando el estado en `'confirmed'` no dispara nada y el
       valor queda almacenado.
 
+
 **Calendario**
-- [ ] El panel de detalle de una reserva cancelada con motivo muestra `Motivo` justo
+- [x] El panel de detalle de una reserva cancelada con motivo muestra `Motivo` justo
       debajo de `Cancelada por`.
-- [ ] Una reserva cancelada sin motivo no muestra la línea; una confirmada tampoco.
-- [ ] El resto del calendario (rejilla, filtros, chips, leyenda) no cambia.
+- [x] Una reserva cancelada sin motivo no muestra la línea; una confirmada tampoco.
+- [x] El resto del calendario (rejilla, filtros, chips, leyenda) no cambia.
 
 **Creación — no regresión**
-- [ ] `POST /api/v1/reservations` sigue disparando push, inbox, email al residente y
+- [x] `POST /api/v1/reservations` sigue disparando push, inbox, email al residente y
       `reservation_created_admin` a cada `backend`, con el mismo asunto y las mismas
       10 líneas de antes.
-- [ ] El email de creación **no** muestra `Motivo` ni `Cancelada por`.
-- [ ] El email de password reset (spec 07) sigue llegando en HTML.
+- [x] El email de creación **no** muestra `Motivo` ni `Cancelada por`.
+- [x] El email de password reset (spec 07) sigue llegando en HTML.
 
 **Infra y tests**
-- [ ] `vendor/bin/phpunit` pasa, incluidos los tests nuevos y los 150 previos.
-- [ ] `php -l` limpio en todos los archivos tocados.
-- [ ] `drush updb && drush cc all` sin errores.
-- [ ] `drush cron` drena `myapi_mail_send` y los correos salen.
-- [ ] `docs/reservation.md`, `docs/reservation-notifications.md` y
+- [x] `vendor/bin/phpunit` pasa, incluidos los tests nuevos y los 150 previos.
+- [x] `php -l` limpio en todos los archivos tocados.
+- [x] `drush updb && drush cc all` sin errores.
+- [x] `drush cron` drena `myapi_mail_send` y los correos salen.
+- [x] `docs/reservation.md`, `docs/reservation-notifications.md` y
       `docs/reservation-calendar.md` reflejan lo implementado.
 
 ---
