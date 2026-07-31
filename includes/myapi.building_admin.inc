@@ -39,7 +39,7 @@
 //
 // Every define() here is guarded so a PHPUnit require_once of this file next
 // to one that already defined it does not emit a redefinition notice (same
-// pattern as MYAPI_AREA_TIME_PATTERN in includes/myapi.area_admin.inc).
+// pattern as MYAPI_TIME_FORMAT_PATTERN in includes/myapi.time_format.inc).
 if (!defined('MYAPI_BUILDING_ADMIN_ROLE')) {
   define('MYAPI_BUILDING_ADMIN_ROLE', 'administrador edificio');
 }

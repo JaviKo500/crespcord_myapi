@@ -714,9 +714,15 @@ function myapi_form_boletin_node_form_alter(&$form, &$form_state, $form_id) {
  * - 'boletin' — a building admin may only publish 'Condominio' bulletins of
  *   their assigned condominiums (SPEC 49), in
  *   includes/myapi.building_admin.inc. Every other user passes through.
- * - 'reservation' — a building admin may only book for a person they can see
- *   and on a unit of their condominiums (SPEC 51), in
- *   includes/myapi.building_admin_user.inc. Every other user passes through.
+ * - 'reservation' — two validations, in this order:
+ *   1. HH:MM format of field_start_time / field_end_time (SPEC 52), in
+ *      includes/myapi.reservation_admin.inc. Applies to EVERY user.
+ *   2. a building admin may only book for a person they can see and on a unit
+ *      of their condominiums (SPEC 51), in
+ *      includes/myapi.building_admin_user.inc. Every other user passes through.
+ *   Format goes first because it is the one that applies to everybody:
+ *   form_set_error() accumulates, so a building admin who submits a malformed
+ *   time AND a unit outside their condominiums sees both messages at once.
  *
  * This hook is reached from node_form_validate() only, so it guards the admin
  * node form (node/add/... and node/%/edit) and nothing else: a programmatic
@@ -736,6 +742,9 @@ function myapi_node_validate($node, $form, &$form_state) {
       return;
 
     case 'reservation':
+      module_load_include('inc', 'myapi', 'includes/myapi.reservation_admin');
+      myapi_reservation_validate_times($node, $form, $form_state);
+
       module_load_include('inc', 'myapi', 'includes/myapi.building_admin_user');
       myapi_building_admin_validate_reservation($node, $form, $form_state);
       return;

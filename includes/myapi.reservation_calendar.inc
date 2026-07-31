@@ -43,7 +43,7 @@ module_load_include('inc', 'myapi', 'includes/myapi.reservation_query');
 //
 // Guarded so a PHPUnit require_once of this file next to one that already
 // defined it does not emit a redefinition notice (same pattern as
-// MYAPI_AREA_TIME_PATTERN in includes/myapi.area_admin.inc).
+// MYAPI_TIME_FORMAT_PATTERN in includes/myapi.time_format.inc).
 if (!defined('MYAPI_CALENDAR_PALETTE_SIZE')) {
   define('MYAPI_CALENDAR_PALETTE_SIZE', 12);
 }
