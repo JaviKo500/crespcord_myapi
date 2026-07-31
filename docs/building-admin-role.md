@@ -273,9 +273,21 @@ endpoints are untouched.
 
 ## Bulletins: only `Condominio`, only yours
 
-`hook_node_validate()` blocks a building admin from saving a `boletin` that is
-not of scope **`Condominio`**, and from picking a `field_condominio` outside
-their assignment. Both produce a form error and the node is not created.
+Two layers, and both stay:
+
+1. **The form** — `hook_form_boletin_node_form_alter()` removes `General` and
+   `Personalizado` from the `field_tipo_de_boletin` widget, so a building admin
+   is only ever offered `Condominio`. An option that cannot be used should not
+   be shown; rejecting a choice after the fact reads as a bug to whoever made
+   it.
+2. **The submission** — `hook_node_validate()` blocks saving a `boletin` that
+   is not of scope `Condominio`, or whose `field_condominio` falls outside the
+   assignment. Both produce a form error and the node is not created.
+
+The second is not redundant: shaping a form is not enforcing a rule, and a
+hand-crafted POST never goes through the first. If the widget ever changes to a
+shape the form alter does not recognise, the worst case is the old behaviour —
+the option shows and the validation rejects it. Nothing opens up.
 
 `General` is the one action of this role that reaches outside its own building:
 it pushes and mails **every condominium of the site**, and it is irreversible

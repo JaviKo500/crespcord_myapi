@@ -512,6 +512,43 @@ function myapi_building_admin_bulletin_errors($scope, $condominium, array $assig
 }
 
 /**
+ * Narrows the field_tipo_de_boletin options to the only scope this role may
+ * publish.
+ *
+ * Pure counterpart of myapi_building_admin_restrict_bulletin_form(): it takes
+ * the widget's #options and gives back the subset the building admin is
+ * allowed to choose from.
+ *
+ * The empty '_none' option is preserved when the widget offers it. Dropping it
+ * would silently pre-select 'Condominio' on a non-required field and hide from
+ * the operator that a choice was made on their behalf; leaving it means the
+ * select still asks, but the only real answer is the right one.
+ *
+ * An options array that turns out not to contain 'Condominio' at all — a site
+ * where the allowed values of that pre-existing field were renamed — comes back
+ * with just '_none', or empty. That is deliberate: the operator cannot publish
+ * anything until somebody looks at it, which is the same fail-closed direction
+ * the rest of this feature takes.
+ *
+ * @param array $options
+ *   The widget's #options, key => label.
+ *
+ * @return array
+ *   The subset this role may pick, in the original order.
+ */
+function myapi_building_admin_filter_bulletin_scope_options(array $options) {
+  $allowed = [];
+
+  foreach ($options as $key => $label) {
+    if ($key === '_none' || $key === MYAPI_BUILDING_ADMIN_BULLETIN_SCOPE) {
+      $allowed[$key] = $label;
+    }
+  }
+
+  return $allowed;
+}
+
+/**
  * Keeps only the permissions that actually exist on this site.
  *
  * Crossed against module_invoke_all('permission') by the installer. Two cases
@@ -656,6 +693,51 @@ function myapi_building_admin_node_condominium($node) {
   }
 
   return $cache[$nid];
+}
+
+/**
+ * Removes 'General' and 'Personalizado' from the bulletin form for this role.
+ *
+ * Called from myapi_form_boletin_node_form_alter(). Cosmetic in the strict
+ * sense — myapi_building_admin_validate_bulletin() already refuses those two
+ * scopes — but the right kind of cosmetic: an option that cannot be used should
+ * not be offered, and rejecting a choice after the fact reads as a bug to the
+ * operator who made it.
+ *
+ * The two layers are deliberately kept: this one shapes the form, the
+ * validation guards the submission. A hand-crafted POST bypasses the first and
+ * still hits the second, and if the widget ever changes to a shape this
+ * function does not recognise, the worst case is the old behaviour — the option
+ * shows and the validation rejects it. Nothing opens up.
+ *
+ * Walks langcode by langcode instead of assuming LANGUAGE_NONE, the same
+ * reasoning as everywhere else in this file.
+ *
+ * @param array $form
+ *   The node form, by reference.
+ * @param array $form_state
+ *   The form state, by reference. Unused; kept to mirror the hook's signature.
+ */
+function myapi_building_admin_restrict_bulletin_form(&$form, &$form_state) {
+  if (!myapi_building_admin_is()) {
+    return;
+  }
+
+  if (empty($form['field_tipo_de_boletin']) || !is_array($form['field_tipo_de_boletin'])) {
+    return;
+  }
+
+  foreach (element_children($form['field_tipo_de_boletin']) as $langcode) {
+    if (!isset($form['field_tipo_de_boletin'][$langcode]['#options'])
+      || !is_array($form['field_tipo_de_boletin'][$langcode]['#options'])) {
+      continue;
+    }
+
+    $form['field_tipo_de_boletin'][$langcode]['#options'] =
+      myapi_building_admin_filter_bulletin_scope_options(
+        $form['field_tipo_de_boletin'][$langcode]['#options']
+      );
+  }
 }
 
 /**

@@ -297,6 +297,7 @@ Para que sean testeables, la lógica decidible se extrae a funciones sin depende
 
 **Boletines**
 
+- [ ] **Añadido tras la aprobación:** con el rol activo, el selector `field_tipo_de_boletin` del formulario ofrece **solo** `Condominio` — `General` y `Personalizado` no aparecen (`hook_form_boletin_node_form_alter()`). La validación del paso 5 se mantiene como red de seguridad y los dos criterios siguientes se comprueban enviando el formulario a mano.
 - [ ] Con el rol activo, guardar un boletín con `field_tipo_de_boletin = General` muestra error de formulario y no crea el nodo.
 - [ ] Lo mismo con `field_tipo_de_boletin = Personalizado`.
 - [ ] Guardar un boletín `Condominio` con `field_condominio = B` (no asignado) muestra error de formulario y no crea el nodo.

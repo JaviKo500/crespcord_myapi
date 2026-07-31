@@ -427,6 +427,46 @@ class BuildingAdminTest extends TestCase {
     $this->assertSame(array(), myapi_building_admin_bulletin_errors(NULL, NULL, array()));
   }
 
+  /**
+   * The form offers only 'Condominio', and keeps the empty option when the
+   * widget had one so the select still asks rather than choosing for the
+   * operator.
+   */
+  public function testBulletinScopeOptionsAreNarrowedToCondominio() {
+    $options = array(
+      '_none'         => '- Seleccione un valor -',
+      'General'       => 'General',
+      'Condominio'    => 'Condominio',
+      'Personalizado' => 'Personalizado',
+    );
+
+    $this->assertSame(
+      array('_none' => '- Seleccione un valor -', 'Condominio' => 'Condominio'),
+      myapi_building_admin_filter_bulletin_scope_options($options)
+    );
+  }
+
+  /**
+   * A widget with no empty option keeps none, and a site whose allowed values
+   * were renamed comes back with nothing to pick — fail closed, never with an
+   * unusable scope left in.
+   */
+  public function testBulletinScopeOptionsFailClosed() {
+    $this->assertSame(
+      array('Condominio' => 'Condominio'),
+      myapi_building_admin_filter_bulletin_scope_options(
+        array('General' => 'General', 'Condominio' => 'Condominio')
+      )
+    );
+
+    $this->assertSame(
+      array(),
+      myapi_building_admin_filter_bulletin_scope_options(
+        array('general' => 'General', 'condominio' => 'Condominio')
+      )
+    );
+  }
+
   /* -------------------------------------------------------------------------
    * Permission filtering.
    * ---------------------------------------------------------------------- */
