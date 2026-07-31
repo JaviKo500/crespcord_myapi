@@ -103,15 +103,40 @@ function myapi_building_admin_editable_types($include_claim_type = NULL) {
 }
 
 /**
+ * The content types the role may READ but never create nor edit.
+ *
+ * Kept apart from myapi_building_admin_editable_types() on purpose: nothing
+ * here ever reaches myapi_building_admin_permissions(), so a type listed below
+ * gets no 'create' and no 'edit any' — the only way it could become editable is
+ * by moving it to the other catalogue, which is a deliberate edit and not an
+ * oversight. A unit test pins the two lists apart.
+ *
+ * - 'condominio' is not a convenience: entityreference autocompletes query with
+ *   the 'node_access' tag, so leaving it out of the visible set would empty the
+ *   field_condominio selector of the bulletin form and the field_condominium
+ *   selector of the area and reservation forms — the role would not be able to
+ *   create anything. The wanted side effect is that those selectors only offer
+ *   the assigned condominiums.
+ * - 'vivienda' was added after SPEC 49 was approved, on the client's call: the
+ *   building operator needs to consult the units of their building — and who
+ *   lives in them — without being able to touch them. It reverses one of the
+ *   spec's acceptance criteria; see the note in specs/roles/49-building-admin-role.md.
+ *
+ * Both are scoped by the condominium map exactly like the editable types, so a
+ * 'vivienda' of another building stays invisible and answers 403.
+ *
+ * @return array
+ *   List of node type machine names.
+ */
+function myapi_building_admin_readonly_types() {
+  return ['condominio', 'vivienda'];
+}
+
+/**
  * The content types the role may see in listings and autocompletes.
  *
- * The editable types plus 'condominio'. That last one is not a convenience:
- * entityreference autocompletes query with the 'node_access' tag, so leaving
- * 'condominio' out of the visible set would empty the field_condominio
- * selector of the bulletin form and the field_condominium selector of the area
- * and reservation forms — the role would not be able to create anything. The
- * wanted side effect is that those selectors only offer the assigned
- * condominiums.
+ * The editable ones plus the read-only ones. This is the list the query alter
+ * narrows every node_access-tagged query to.
  *
  * @param bool|null $include_claim_type
  *   See myapi_building_admin_editable_types().
@@ -120,10 +145,10 @@ function myapi_building_admin_editable_types($include_claim_type = NULL) {
  *   List of node type machine names.
  */
 function myapi_building_admin_visible_types($include_claim_type = NULL) {
-  $types = myapi_building_admin_editable_types($include_claim_type);
-  $types[] = 'condominio';
-
-  return $types;
+  return array_merge(
+    myapi_building_admin_editable_types($include_claim_type),
+    myapi_building_admin_readonly_types()
+  );
 }
 
 /**

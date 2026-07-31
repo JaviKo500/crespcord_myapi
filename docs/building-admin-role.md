@@ -213,11 +213,46 @@ type would leave those selectors empty and the role unable to create anything.
 The wanted side effect is that they offer the assigned condominiums and only
 those.
 
-The query alter narrows to the **visible types** — `boletin`, `reservation`,
-`area`, `condominio`, plus `reclamo` once it exists — **and** to the assigned
-condominiums. Everything else disappears from the listings: a building admin
-sees no `pagos`, no `recibo`, no `gastos` and no `vivienda` at `/admin/content`,
-not even of their own condominium, because they do not manage those.
+The query alter narrows to the **visible types** **and** to the assigned
+condominiums. Visible means two different things:
+
+| Types | What the role can do |
+|---|---|
+| `boletin`, `reservation`, `area` (+ `reclamo` once it exists) | Create and edit |
+| `condominio`, `vivienda` | **Read only** — no `create`, no `edit any`, `/node/N/edit` answers 403 |
+
+The read-only ones live in their own catalogue,
+`myapi_building_admin_readonly_types()`, which never feeds
+`myapi_building_admin_permissions()`. That separation is what makes "consult"
+and "administer" two different edits to the code rather than one flag, and a
+unit test fails if a read-only type ever picks up a write permission.
+
+Everything else disappears from the listings: a building admin sees no `pagos`,
+no `recibo` and no `gastos` at `/admin/content`, not even of their own
+condominium, because they do not manage those.
+
+### The people of a unit — not solved by this layer
+
+Owners and occupants (`field_propietario`, `field_ocupante`) are **users**, not
+nodes, and neither `hook_node_access()` nor the `node_access` query tag reaches
+the user entity. There is no per-condominium filter for users anywhere in this
+module.
+
+So the obvious move is the wrong one:
+
+> **Do not grant `access user profiles`.** It is site-wide: it would open the
+> profile — name, phone, id number, email — of **every resident of every
+> condominium**, which is precisely what this feature exists to prevent.
+
+What works instead is to keep the query on nodes: a **View over `vivienda`
+nodes**, with a relationship to the owner and occupant users, printing their
+fields as columns. Because the base table is `node`, that view carries the
+`node_access` tag and inherits the condominium filter for free — with
+*«Disable SQL rewriting»* left unticked, as always.
+
+Until that view exists, what the role gets is the unit node itself: opening a
+`vivienda` shows its owner and occupant as rendered reference fields (the
+names), which needs no extra permission. Following those links 403s.
 
 Three guards run before anything is altered: the user holds the role; the query
 really selects from the `node` table (the tag does **not** imply it — other
@@ -304,13 +339,14 @@ way to reach anything.
 1. `/admin/structure/menu/add` → a new menu, e.g. **Administración de edificio**.
 2. Add one link per thing the role actually manages:
 
-   | Link | Path |
-   |---|---|
-   | Contenido | `admin/content` |
-   | Calendario de reservas | `admin/content/reservation-calendar` |
-   | Nuevo boletín | `node/add/boletin` |
-   | Nueva área | `node/add/area` |
-   | Nueva reserva | `node/add/reservation` |
+   | Link | Path | Note |
+   |---|---|---|
+   | Contenido | `admin/content` | |
+   | Viviendas | `admin/content?type=vivienda` | Read only — the filter already scopes it to their condominiums |
+   | Calendario de reservas | `admin/content/reservation-calendar` | |
+   | Nuevo boletín | `node/add/boletin` | |
+   | Nueva área | `node/add/area` | |
+   | Nueva reserva | `node/add/reservation` | |
 
 3. `/admin/structure/block` → place that menu's block in the sidebar region of
    the front-end theme, and under **Roles** tick **only**
@@ -318,6 +354,79 @@ way to reach anything.
 
 Drupal hides a menu link when the user cannot access its path, so the menu
 filters itself: nothing here can show an entry the role would get a 403 from.
+
+### The same thing in one command
+
+Confirm the theme and its regions first — the values below are the ones of this
+site, not a default:
+
+```bash
+drush vget theme_default
+drush php-eval "print_r(system_region_list(variable_get('theme_default')));"
+```
+
+Today that answers `bootstrap`, with **`sidebar_first`** (labelled *Primary*,
+where the site's own "Navegación" block already lives) and **`navigation`**
+(the Bootstrap navbar). Then:
+
+```bash
+drush php-eval "
+\$menu = array('menu_name' => 'menu-building-admin', 'title' => 'Administración de edificio', 'description' => 'Navegación del rol administrador edificio (SPEC 49).');
+menu_save(\$menu);
+\$links = array(
+  array('link_path' => 'admin/content', 'link_title' => 'Contenido'),
+  array('link_path' => 'admin/content', 'link_title' => 'Viviendas', 'options' => array('query' => array('type' => 'vivienda'))),
+  array('link_path' => 'admin/content/reservation-calendar', 'link_title' => 'Calendario de reservas'),
+  array('link_path' => 'node/add/boletin', 'link_title' => 'Nuevo boletín'),
+  array('link_path' => 'node/add/area', 'link_title' => 'Nueva área'),
+  array('link_path' => 'node/add/reservation', 'link_title' => 'Nueva reserva'),
+);
+\$w = 0;
+foreach (\$links as \$l) { \$l['menu_name'] = 'menu-building-admin'; \$l['module'] = 'menu'; \$l['weight'] = \$w++; menu_link_save(\$l); }
+
+db_merge('block')
+  ->key(array('theme' => 'bootstrap', 'module' => 'menu', 'delta' => 'menu-building-admin'))
+  ->fields(array('status' => 1, 'region' => 'sidebar_first', 'weight' => 0, 'title' => 'Navegación', 'visibility' => 0, 'pages' => '', 'custom' => 0, 'cache' => -1))
+  ->execute();
+
+\$rid = db_query('SELECT rid FROM {role} WHERE name = :n', array(':n' => 'administrador edificio'))->fetchField();
+db_delete('block_role')->condition('module', 'menu')->condition('delta', 'menu-building-admin')->execute();
+db_insert('block_role')->fields(array('module' => 'menu', 'delta' => 'menu-building-admin', 'rid' => \$rid))->execute();
+
+menu_cache_clear_all();
+print 'OK, rid=' . \$rid . PHP_EOL;
+" && drush cc all
+```
+
+To undo it:
+
+```bash
+drush php-eval "
+db_delete('block')->condition('module','menu')->condition('delta','menu-building-admin')->execute();
+db_delete('block_role')->condition('module','menu')->condition('delta','menu-building-admin')->execute();
+menu_delete(array('menu_name' => 'menu-building-admin'));
+menu_cache_clear_all();
+" && drush cc all
+```
+
+### Sidebar or navbar, not both
+
+A menu block can sit in **one region per theme**. Swapping `sidebar_first` for
+`navigation` in the script above moves the whole menu into the Bootstrap
+navbar; there is no way to have the same block in both without duplicating the
+menu or installing `menu_block` (not present on this site). The sidebar is the
+recommended one — it is the layout the site's other administrative users
+already have.
+
+Do **not** solve it by adding the role's links to the **main menu** instead.
+That block has no useful per-role visibility: Drupal only hides a link from
+whoever cannot access its path, so `node/add/boletin` in the navbar would show
+up for every other role that can create bulletins too.
+
+> **None of this travels with the module.** Menus, blocks and their role
+> visibility live in the site's database, so `drush updb` does not carry them
+> and the whole section has to be redone in every environment — the same
+> caveat as the Rules exemption above.
 
 > **Do not reuse the site's existing administration sidebar.** That one holds
 > Gestor Bancos, Personas, Reporte Pagos, Reporte Gastos and the rest of the

@@ -28,7 +28,7 @@ Dos notas transversales:
    - Back office: `access content`, `access content overview`, `access administration pages`, `view the administration theme`, `access toolbar`.
 4. **Filtro por condominio en el back office**, en dos piezas:
    - `hook_node_access()` — deniega `view` / `update` / `delete` sobre cualquier nodo **de los tipos con condominio resoluble** que no pertenezca a sus condominios asignados (403 por URL directa).
-   - `hook_query_alter()` sobre el tag `node_access` — estrecha `/admin/content` y demás listados a **los tipos visibles (`boletin`, `reservation`, `area`, reclamos y `condominio`) Y a sus condominios asignados**. `condominio` entra en la lista porque los autocompletados de `entityreference` consultan con ese mismo tag: sin él, el selector de `field_condominio` del boletín y el de `field_condominium` de área/reserva quedarían vacíos y el rol no podría crear nada. Como efecto lateral buscado, esos autocompletados solo ofrecen los condominios asignados.
+   - `hook_query_alter()` sobre el tag `node_access` — estrecha `/admin/content` y demás listados a **los tipos visibles (`boletin`, `reservation`, `area`, reclamos, `condominio` y —añadida tras la aprobación— `vivienda`) Y a sus condominios asignados**. `condominio` entra en la lista porque los autocompletados de `entityreference` consultan con ese mismo tag: sin él, el selector de `field_condominio` del boletín y el de `field_condominium` de área/reserva quedarían vacíos y el rol no podría crear nada. Como efecto lateral buscado, esos autocompletados solo ofrecen los condominios asignados.
 5. **Alcance de la denegación de vista**, con el condominio resuelto así:
 
    | Tipo | Cómo se resuelve el condominio |
@@ -172,6 +172,24 @@ El mapa del punto 5 del alcance, en su forma concreta:
 > hay que ejecutar además:
 > `drush role-remove-perm "administrador edificio" "access toolbar"`
 
+> **Cambio posterior a la aprobación — `vivienda` pasa a ser visible en solo
+> lectura.** El operador del edificio necesita consultar las viviendas de su
+> condominio y quién las ocupa. Se añade `vivienda` a un catálogo nuevo,
+> `myapi_building_admin_readonly_types()`, separado del de tipos editables:
+> nada de ese catálogo llega a `myapi_building_admin_permissions()`, así que el
+> rol **no** recibe `create` ni `edit any` sobre viviendas y `/node/N/edit`
+> sigue devolviendo 403. El filtro por condominio se le aplica igual que al
+> resto (modo `direct` sobre `field_condominio`), así que solo ve las de sus
+> condominios asignados. `pago`, `recibo` y `gasto` siguen fuera.
+>
+> **Las «personas» de las viviendas quedan pendientes**: los propietarios y
+> ocupantes son **usuarios**, no nodos, y ni `hook_node_access()` ni el tag
+> `node_access` alcanzan a la entidad usuario. Conceder `access user profiles`
+> abriría los perfiles de **todo** el sitio y rompería el aislamiento. La
+> salida correcta es una vista sobre nodos `vivienda` que muestre los datos de
+> propietario y ocupante como campos mediante una relación — la vista viaja por
+> el tag `node_access` y hereda el filtro. Requiere su propio spec.
+
 **Ningún permiso `delete any … content` ni `delete own … content`.** El rol no borra contenido: la baja de una reserva se hace cancelándola (spec 36 / 47) y la de un boletín o un área, despublicándola desde el formulario de edición. `hook_node_access()` sigue denegando también la operación `delete` sobre nodos ajenos, como defensa redundante por si alguien concede el permiso a mano más adelante.
 
 ---
@@ -261,7 +279,8 @@ Para que sean testeables, la lógica decidible se extrae a funciones sin depende
 **Filtro por condominio en back office**
 
 - [ ] Un usuario con el rol y el condominio A asignado ve en `/admin/content` únicamente nodos `boletin`, `reservation`, `area` (y reclamos si existe) del condominio A, más el propio nodo `condominio` A.
-- [ ] Ese mismo usuario **no ve** en `/admin/content` ningún `pago`, `recibo`, `gasto` ni `vivienda`, ni siquiera de A, ni ningún `condominio` distinto de A.
+- [ ] ~~Ese mismo usuario **no ve** en `/admin/content` ningún `pago`, `recibo`, `gasto` ni `vivienda`, ni siquiera de A~~, ni ningún `condominio` distinto de A. **Modificado tras la aprobación:** `vivienda` pasa a ser visible, en solo lectura y acotada al condominio A (ver nota abajo). `pago`, `recibo` y `gasto` siguen ocultos.
+- [ ] Ese mismo usuario ve en `/admin/content` las `vivienda` de A y **ninguna** de B, y `/node/<vivienda>/edit` devuelve 403 también para las de A.
 - [ ] Ese mismo usuario **no puede editar** el nodo `condominio` A: `/node/<A>/edit` devuelve 403 (ve el condominio, no lo administra).
 - [ ] Antes de dar por buenos los tres criterios anteriores, se ha comprobado que la vista que sirve `/admin/content` **no** tiene marcado *«Disable SQL rewriting»*.
 - [ ] Abrir por URL directa `/node/N` de una `reservation` del condominio B devuelve 403.

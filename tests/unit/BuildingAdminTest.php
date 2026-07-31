@@ -87,15 +87,43 @@ class BuildingAdminTest extends TestCase {
   }
 
   /**
-   * Visible = editable + 'condominio'. That last one is what keeps the
-   * entityreference autocompletes of the node forms from coming up empty.
+   * Visible = editable + read-only. 'condominio' is what keeps the
+   * entityreference autocompletes of the node forms from coming up empty;
+   * 'vivienda' is the units the operator consults but never touches.
    */
-  public function testVisibleTypesAreTheEditableOnesPlusCondominio() {
+  public function testVisibleTypesAreTheEditableOnesPlusTheReadOnlyOnes() {
     foreach (array(FALSE, TRUE) as $has_claims) {
       $editable = myapi_building_admin_editable_types($has_claims);
       $visible = myapi_building_admin_visible_types($has_claims);
 
-      $this->assertSame(array_merge($editable, array('condominio')), $visible);
+      $this->assertSame(
+        array_merge($editable, myapi_building_admin_readonly_types()),
+        $visible
+      );
+      $this->assertContains('condominio', $visible);
+      $this->assertContains('vivienda', $visible);
+    }
+  }
+
+  /**
+   * GUARD: the two catalogues never overlap, and no read-only type ever gets a
+   * write permission.
+   *
+   * Moving a type from one list to the other is what turns "consult" into
+   * "administer". This test makes that a deliberate act instead of a side
+   * effect: adding 'vivienda' to the editable list fails here.
+   */
+  public function testReadOnlyTypesAreNeverEditable() {
+    foreach (array(FALSE, TRUE) as $has_claims) {
+      $editable = myapi_building_admin_editable_types($has_claims);
+      $permissions = myapi_building_admin_permissions($has_claims);
+
+      foreach (myapi_building_admin_readonly_types() as $type) {
+        $this->assertNotContains($type, $editable);
+        $this->assertNotContains('create ' . $type . ' content', $permissions);
+        $this->assertNotContains('edit any ' . $type . ' content', $permissions);
+        $this->assertNotContains('edit own ' . $type . ' content', $permissions);
+      }
     }
   }
 
@@ -110,9 +138,11 @@ class BuildingAdminTest extends TestCase {
       $this->assertContains('edit any ' . $type . ' content', $permissions);
     }
 
-    // Seeing condominiums is not editing them: no permission over that type.
+    // Seeing a type is not editing it: no permission over the read-only ones.
     $this->assertNotContains('create condominio content', $permissions);
     $this->assertNotContains('edit any condominio content', $permissions);
+    $this->assertNotContains('create vivienda content', $permissions);
+    $this->assertNotContains('edit any vivienda content', $permissions);
   }
 
   /**
