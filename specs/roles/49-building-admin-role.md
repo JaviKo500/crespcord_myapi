@@ -159,6 +159,7 @@ El mapa del punto 5 del alcance, en su forma concreta:
 | `access administration pages` | system | Navegar el back office |
 | `view the administration theme` | system | Formularios de nodo con el tema admin |
 | ~~`access toolbar`~~ | ~~toolbar~~ | **Retirado durante la implementación** (ver nota abajo) |
+| `use text format filtered_html` | filter | **Añadido durante la implementación** (ver nota abajo) |
 
 > **Cambio posterior a la aprobación — `access toolbar` retirado.** Al probar el
 > rol se vio que la barra negra de Drupal le ofrece entradas de *Estructura* y
@@ -182,6 +183,46 @@ El mapa del punto 5 del alcance, en su forma concreta:
 > resto (modo `direct` sobre `field_condominio`), así que solo ve las de sus
 > condominios asignados. `pago`, `recibo` y `gasto` siguen fuera.
 >
+> **Cambio posterior a la aprobación — permiso de formato de texto y
+> `myapi_update_7013()`.** El catálogo no contemplaba ningún
+> `use text format ...`, y sin él Drupal solo deja al rol el formato *fallback*
+> (`plain_text`): **todo campo con formato que pueda editar aparece
+> desactivado**. Se descubrió porque `field_area_notes` salía bloqueado en
+> `node/add/area` y habilitado en `node/%/edit` — un nodo existente lleva su
+> propio formato guardado, uno nuevo toma el de la instancia.
+>
+> Dos arreglos, ambos en `myapi_update_7013()`:
+> - Conceder `use text format filtered_html` (constante
+>   `MYAPI_BUILDING_ADMIN_TEXT_FORMAT`). **No `full_html`**: permite HTML
+>   arbitrario y el permiso es de todo el sitio, no de un campo.
+> - Quitar el `'format' => 'full_html'` que el spec 32 fijó en el
+>   `default_value` de `field_area_notes`, para que cada usuario arranque en el
+>   formato que realmente puede usar. `myapi_update_7008()`, que creó esa
+>   instancia, se deja intacto: ya se ejecutó en producción.
+>
+> Nota lateral: el formato no filtra lo que llega a la app.
+> `resources/area.resource.inc` devuelve `field_area_notes_value` en crudo, sin
+> `check_markup()`. La puerta es del formulario de Drupal, no del contenido.
+
+> **Cambio posterior a la aprobación — `hook_field_access()` sobre
+> `field_condominio_admin`.** El spec no restringía quién puede ver y editar
+> ese campo, y editar la **cuenta propia** no requiere permiso en Drupal: un
+> administrador de edificio podía abrir su `/user/N/edit` y **asignarse todos
+> los condominios del sitio**. Era una escalada de privilegios, no un detalle
+> de presentación — todo el filtro vale lo que valga el control de ese campo.
+>
+> Se añade `myapi_field_access()` en `myapi.module`, que deniega `view` y
+> `edit` del campo a cualquiera fuera de
+> `myapi_building_admin_assigner_roles()` → `['administrator', 'backend']`
+> (más `uid 1`, misma guarda que `myapi_calendar_access()`). Deliberadamente
+> **no** se reutiliza `myapi_calendar_admin_roles()`: esa lista incluye ahora
+> al propio rol, que es justo a quien hay que dejar fuera.
+>
+> Denegar el campo no borra su valor: Drupal lo omite del formulario y lo salta
+> al guardar. Y no rompe el filtro, porque
+> `myapi_building_admin_condominium_ids()` lee el campo del objeto usuario ya
+> cargado y nunca pasa por `field_access()`.
+
 > **Las «personas» de las viviendas quedan pendientes**: los propietarios y
 > ocupantes son **usuarios**, no nodos, y ni `hook_node_access()` ni el tag
 > `node_access` alcanzan a la entidad usuario. Conceder `access user profiles`
@@ -272,6 +313,7 @@ Para que sean testeables, la lógica decidible se extrae a funciones sin depende
 - [ ] Re-ejecutar el update (`myapi_update_7012`) dos veces seguidas no crea un segundo rol, ni un segundo campo, ni filas duplicadas en `role_permission`.
 - [ ] `myapi_update_7011` sigue existiendo intacto (spec 50) y el nuevo update es `7012`.
 - [ ] `field_condominio_admin` aparece en `/admin/config/people/accounts/fields` y es editable en `/user/N/edit` como autocompletado que solo ofrece nodos `condominio`.
+- [ ] **Añadido tras la aprobación:** ese campo **no aparece** —ni en el formulario ni en el perfil renderizado— para un usuario que no sea `administrator`, `backend` o `uid 1`. En particular, un administrador de edificio abre su propio `/user/N/edit` y no lo ve; al guardar ese formulario, sus condominios asignados siguen intactos.
 - [ ] Ningún permiso `delete any … content` ni `delete own … content` queda concedido al rol en `/admin/people/permissions`.
 - [ ] Con el bundle de reclamos ausente, no hay ninguna fila en `role_permission` con `create reclamo content` ni `edit any reclamo content`; al crear el bundle y re-ejecutar el update, ambas aparecen.
 - [ ] Desinstalar el módulo (`drush dis myapi && drush pm-uninstall myapi`) deja el rol, sus permisos y el campo intactos.

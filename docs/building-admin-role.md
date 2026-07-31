@@ -26,7 +26,8 @@ responses are byte for byte what they were before.
 ## Deployment
 
 ```bash
-drush updb    # runs myapi_update_7012(): role, field and permissions
+drush updb    # 7012: role, field and permissions
+              # 7013: the text-format permission + the area-notes default format
 drush cc all  # picks up the new includes/myapi.building_admin.inc of files[]
 ```
 
@@ -103,6 +104,16 @@ autocomplete that only offers `condominio` nodes.
 | `access content overview` | Enter `/admin/content` |
 | `access administration pages` | Navigate the back office |
 | `view the administration theme` | Node forms in the admin theme |
+| `use text format filtered_html` | Write formatted text — see below |
+
+**The text format permission is not optional.** A role with no
+`use text format ...` permission only reaches Drupal's fallback format
+(`plain_text`), and every formatted field it may edit — the bulletin body,
+`field_area_notes` on an area — renders **disabled**, with *"no tiene permisos
+suficientes para editarlo"*. `filtered_html` and not `full_html`: the latter
+allows arbitrary HTML and the permission is site-wide, not per field. The
+format is named in `MYAPI_BUILDING_ADMIN_TEXT_FORMAT`, and the installer drops
+the permission silently on a site where that format does not exist.
 
 **`access toolbar` is deliberately NOT granted.** Drupal's black toolbar offers
 *Estructura* and *Configuración* entries this role can only get a 403 from, so
@@ -143,6 +154,22 @@ may take down.
    condominiums they administer. The autocomplete only offers `condominio`
    nodes; add as many as needed.
 4. Save.
+
+> **Only `administrator` and `backend` can see or set that field.**
+> `hook_field_access()` hides `field_condominio_admin` from everybody else, on
+> the user form and on the rendered profile alike — the building admin's own
+> account included. This is not tidiness: editing one's own account needs no
+> permission in Drupal, so without it an operator could open `/user/N/edit` and
+> assign themselves every condominium on the site. The whole filter is only as
+> strong as who can write this field. The list lives in
+> `myapi_building_admin_assigner_roles()`; `uid 1` is let in explicitly, the
+> same guard `myapi_calendar_access()` carries.
+>
+> Denying the field does **not** wipe it: Drupal omits a field the account
+> cannot edit from the form and skips it on save, so an operator editing their
+> own profile keeps their condominiums. Nor does it break the filter —
+> `myapi_building_admin_condominium_ids()` reads the raw field off the loaded
+> user object and never calls `field_access()`.
 
 > **A user with the role and no condominium assigned sees nothing**: an empty
 > `/admin/content`, and a 403 on every node of the types listed below. That is

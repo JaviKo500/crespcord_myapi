@@ -88,7 +88,12 @@ Notes:
   table. `slot_minutes`, `max_minutes`, `cancel_deadline_minutes` and `image_id`
   are cast to `int` when present, `null` otherwise.
 - `notes` is free text edited from the Drupal admin (field "Instrucciones o
-  notas", default text format Full HTML) and is **read-only** through the API.
+  notas") and is **read-only** through the API. Its default text format used to
+  be pinned to Full HTML; since SPEC 49 (`myapi_update_7013()`) the instance
+  carries no explicit format, so each editor starts on the best format they are
+  allowed to use — a hard-coded one left the textarea disabled for any role
+  without `use text format full_html`. This changes nothing here: the format is
+  never applied to the API response.
   It is returned **exactly as stored**: the value may contain HTML and the server
   never sanitizes or renders it (no `check_markup()`, no `filter_xss()`). Any
   client that renders it — a WebView in particular — is responsible for its own

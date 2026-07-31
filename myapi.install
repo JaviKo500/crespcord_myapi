@@ -773,7 +773,20 @@ function _myapi_reservations_install() {
     'required'      => 0,
     'description'   => 'Instrucciones, normas o detalles del área que la app muestra al residente antes de reservar. Admite HTML.',
     'settings'      => ['text_processing' => 1],
-    'default_value' => [['value' => '', 'format' => 'full_html']],
+    // No 'format' key on purpose. Pinning it to 'full_html' — as this instance
+    // did until SPEC 49 — hands that exact format to every user on
+    // node/add/area, and Drupal renders the whole textarea DISABLED for anyone
+    // without 'use text format full_html'. That is how the building-admin role
+    // found it: the field was blocked on create and fine on edit, because an
+    // existing node carries its own stored format.
+    //
+    // With the key absent, filter_process_format() falls back to
+    // filter_default_format(), i.e. the best format each user is actually
+    // allowed to write with. Sites created before this change are migrated by
+    // myapi_update_7013(); myapi_update_7008(), which first created this
+    // instance, is left untouched — it already ran in production and rewriting
+    // an executed update would only make the two disagree.
+    'default_value' => [['value' => '']],
     'widget'        => ['type' => 'text_textarea'],
   ]);
   _myapi_reservations_ensure_instance('field_concurrent_reservations', 'area', [
@@ -1243,4 +1256,35 @@ function myapi_update_7011() {
  */
 function myapi_update_7012() {
   _myapi_building_admin_install();
+}
+
+/**
+ * SPEC 49: lets the building-admin role write formatted text.
+ *
+ * Two halves of the same bug. A role with no 'use text format ...' permission
+ * only reaches Drupal's fallback format, so every formatted field it may edit
+ * renders DISABLED — which is how this surfaced: field_area_notes came up
+ * blocked on node/add/area and fine on node/%/edit, because an existing node
+ * carries its own stored format while a new one takes the instance default.
+ *
+ * (a) Re-runs the idempotent installer, which now grants
+ *     'use text format filtered_html'. Nothing else changes: the helper only
+ *     adds what is missing and never revokes.
+ * (b) Drops the hard-coded 'full_html' from the field_area_notes default value,
+ *     so each user starts on the best format they are actually allowed to
+ *     write with. Guarded so re-running it is a no-op, and so a site whose
+ *     instance was adjusted by hand is not overwritten wholesale — only the
+ *     'format' key of the default value is touched.
+ *
+ * Existing area nodes keep the format they were saved with; this only affects
+ * the starting point of a NEW one.
+ */
+function myapi_update_7013() {
+  _myapi_building_admin_install();
+
+  $instance = field_info_instance('node', 'field_area_notes', 'area');
+  if ($instance && isset($instance['default_value'][0]['format'])) {
+    unset($instance['default_value'][0]['format']);
+    field_update_instance($instance);
+  }
 }

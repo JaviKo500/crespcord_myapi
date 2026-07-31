@@ -555,6 +555,44 @@ function myapi_query_node_access_alter(QueryAlterableInterface $query) {
 }
 
 /**
+ * Implements hook_field_access().
+ *
+ * Restricts field_condominio_admin — the user field that decides which
+ * condominiums a building admin reaches — to the roles that may hand it out
+ * (SPEC 49). Everybody else neither sees it on a profile nor gets it on the
+ * user form.
+ *
+ * This is not cosmetic. Editing one's OWN account needs no permission in
+ * Drupal, so without this hook a building admin could open /user/N/edit and
+ * assign themselves every condominium on the site — the whole filter is only
+ * as strong as who can write this field.
+ *
+ * Glue only, and it leaves every other field of every other entity alone: the
+ * two guards on the first lines return TRUE ("no objection") before the
+ * include is even loaded for anything that is not this exact field on a user.
+ *
+ * @param string $op
+ *   'view' or 'edit'. Both are denied — a value that cannot be changed is
+ *   still an assignment nobody outside those roles has business reading.
+ *
+ * @return bool
+ *   FALSE denies the field; TRUE leaves the decision to Drupal.
+ */
+function myapi_field_access($op, $field, $entity_type, $entity, $account) {
+  if ($entity_type !== 'user' || empty($field['field_name'])) {
+    return TRUE;
+  }
+
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+
+  if ($field['field_name'] !== MYAPI_BUILDING_ADMIN_CONDO_FIELD) {
+    return TRUE;
+  }
+
+  return myapi_building_admin_assignment_field_access($account);
+}
+
+/**
  * Implements hook_form_FORM_ID_alter() for the 'boletin' node form.
  *
  * Glue only. Hides the 'General' and 'Personalizado' scopes from a building

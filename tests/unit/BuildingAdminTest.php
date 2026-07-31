@@ -163,6 +163,22 @@ class BuildingAdminTest extends TestCase {
   }
 
   /**
+   * One text format, and not 'full_html'.
+   *
+   * Without a 'use text format ...' permission the role only reaches Drupal's
+   * fallback format, and every formatted field it may edit — the bulletin body,
+   * the area notes — renders disabled. 'full_html' would fix that too, but the
+   * permission is site-wide and allows arbitrary HTML, so it is the wrong tool.
+   */
+  public function testASafeTextFormatIsGranted() {
+    $permissions = myapi_building_admin_permissions(FALSE);
+
+    $this->assertContains('use text format ' . MYAPI_BUILDING_ADMIN_TEXT_FORMAT, $permissions);
+    $this->assertSame('filtered_html', MYAPI_BUILDING_ADMIN_TEXT_FORMAT);
+    $this->assertNotContains('use text format full_html', $permissions);
+  }
+
+  /**
    * The role navigates through its own sidebar menu, not Drupal's toolbar.
    *
    * 'access toolbar' was granted when SPEC 49 was approved and was dropped
@@ -216,6 +232,42 @@ class BuildingAdminTest extends TestCase {
     foreach ($expected as $type => $entry) {
       $this->assertSame($entry, $map[$type], 'Map entry for ' . $type);
     }
+  }
+
+  /* -------------------------------------------------------------------------
+   * Who may hand out the condominium assignment.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * Only the two staff roles, plus uid 1.
+   */
+  public function testOnlyStaffRolesMayManageTheAssignment() {
+    $this->assertTrue(myapi_building_admin_may_manage_assignment(array('administrator')));
+    $this->assertTrue(myapi_building_admin_may_manage_assignment(array('backend')));
+    $this->assertTrue(myapi_building_admin_may_manage_assignment(array('authenticated user'), TRUE));
+  }
+
+  /**
+   * GUARD: a building admin may NOT manage the assignment — not even their own.
+   *
+   * Editing one's own account needs no permission in Drupal, so if this ever
+   * returns TRUE the role can widen its own reach to every condominium of the
+   * site and the whole feature stops meaning anything.
+   */
+  public function testABuildingAdminMayNotManageTheAssignment() {
+    $this->assertFalse(myapi_building_admin_may_manage_assignment(array(MYAPI_BUILDING_ADMIN_ROLE)));
+    $this->assertFalse(myapi_building_admin_may_manage_assignment(
+      array('authenticated user', MYAPI_BUILDING_ADMIN_ROLE)
+    ));
+    $this->assertNotContains(MYAPI_BUILDING_ADMIN_ROLE, myapi_building_admin_assigner_roles());
+  }
+
+  /**
+   * A plain resident, and an account with no roles at all, are out.
+   */
+  public function testEverybodyElseIsDenied() {
+    $this->assertFalse(myapi_building_admin_may_manage_assignment(array('authenticated user')));
+    $this->assertFalse(myapi_building_admin_may_manage_assignment(array()));
   }
 
   /* -------------------------------------------------------------------------

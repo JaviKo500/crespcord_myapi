@@ -67,6 +67,21 @@ if (!defined('MYAPI_BUILDING_ADMIN_BULLETIN_SCOPE')) {
   define('MYAPI_BUILDING_ADMIN_BULLETIN_SCOPE', 'Condominio');
 }
 
+// Text format the role is allowed to write with. Without one, every formatted
+// field it can edit — the bulletin body, the area notes — comes up DISABLED
+// with "no tiene permisos suficientes para editarlo": Drupal only lets a user
+// through the fallback format (plain_text) unless a 'use text format ...'
+// permission says otherwise.
+//
+// 'filtered_html' and not 'full_html': the latter allows arbitrary HTML and the
+// permission is site-wide, not per field. A format machine name is site
+// configuration, so this is the one place in the module that names one — and
+// the installer drops the permission silently if the format does not exist
+// (see myapi_building_admin_filter_available_permissions()).
+if (!defined('MYAPI_BUILDING_ADMIN_TEXT_FORMAT')) {
+  define('MYAPI_BUILDING_ADMIN_TEXT_FORMAT', 'filtered_html');
+}
+
 /* ---------------------------------------------------------------------------
  * Catalogues.
  *
@@ -197,7 +212,56 @@ function myapi_building_admin_permissions($include_claim_type = NULL) {
   $permissions[] = 'access administration pages';
   $permissions[] = 'view the administration theme';
 
+  // Writing. A role with no 'use text format ...' permission only reaches the
+  // fallback format, so every formatted field it may edit renders disabled —
+  // which is how this was found: field_area_notes came up blocked on
+  // node/add/area. See MYAPI_BUILDING_ADMIN_TEXT_FORMAT.
+  $permissions[] = 'use text format ' . MYAPI_BUILDING_ADMIN_TEXT_FORMAT;
+
   return $permissions;
+}
+
+/**
+ * The roles allowed to see and edit field_condominio_admin.
+ *
+ * That field is the key to the whole feature: whoever can write it decides
+ * which condominiums a building admin reaches. So it is NOT self-service —
+ * a building admin must not be able to widen their own assignment, and editing
+ * one's own account needs no permission in Drupal.
+ *
+ * Names, never rids, like everywhere else here. Deliberately NOT reusing
+ * myapi_calendar_admin_roles(): that list grew to include the building-admin
+ * role itself in SPEC 49, which is precisely who must be kept out of this one.
+ *
+ * @return array
+ *   Role names.
+ */
+function myapi_building_admin_assigner_roles() {
+  return ['administrator', 'backend'];
+}
+
+/**
+ * Decides whether a set of roles may manage the condominium assignment.
+ *
+ * uid 1 is let in explicitly, the same guard myapi_calendar_access() carries
+ * and for the same reason: Drupal's superuser bypass lives inside
+ * user_access(), which hook_field_access() never calls, so without this the
+ * site owner could be locked out of assigning condominiums on their own site.
+ *
+ * @param array $role_names
+ *   Role names of the account, as the values of $account->roles.
+ * @param bool $is_superuser
+ *   TRUE when the account is uid 1.
+ *
+ * @return bool
+ *   TRUE when the account may see and edit the field.
+ */
+function myapi_building_admin_may_manage_assignment(array $role_names, $is_superuser = FALSE) {
+  if ($is_superuser) {
+    return TRUE;
+  }
+
+  return (bool) array_intersect($role_names, myapi_building_admin_assigner_roles());
 }
 
 /**
@@ -611,6 +675,43 @@ function myapi_building_admin_is($account = NULL) {
   }
 
   return myapi_building_admin_roles_match(array_values($account->roles));
+}
+
+/**
+ * Whether an account may see and edit field_condominio_admin.
+ *
+ * Called from myapi_field_access() for that one field only. Denying it hides
+ * the field from the user form AND from the rendered profile, for every role
+ * outside myapi_building_admin_assigner_roles() — the building admin's own
+ * account included, which is the point: the assignment is granted to them, not
+ * chosen by them.
+ *
+ * Denying 'edit' does NOT wipe the stored value. Drupal's field_attach_form()
+ * omits a field the account cannot edit, and field_attach_submit() skips it on
+ * save, so an operator editing their own profile keeps their condominiums
+ * untouched.
+ *
+ * It also does not affect the filter itself: myapi_building_admin_condominium_ids()
+ * reads the field off the loaded user object and never calls field_access(),
+ * which is what keeps the condominium scoping working for an account that
+ * cannot see its own assignment.
+ *
+ * @param object $account
+ *   The account the check is made for.
+ *
+ * @return bool
+ *   TRUE when the account may see and edit the field.
+ */
+function myapi_building_admin_assignment_field_access($account) {
+  if (!is_object($account)) {
+    return FALSE;
+  }
+
+  $roles = (!empty($account->roles) && is_array($account->roles))
+    ? array_values($account->roles)
+    : [];
+
+  return myapi_building_admin_may_manage_assignment($roles, (int) $account->uid === 1);
 }
 
 /**
