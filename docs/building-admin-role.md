@@ -2,7 +2,14 @@
 
 A back-office role for the person who operates **one or more buildings** but
 not the whole site. It can create and edit bulletins, areas and reservations,
-and it only ever sees the content of the condominiums assigned to it (SPEC 49).
+and it only ever sees the content of the condominiums assigned to it (SPEC 49)
+and the **people** of those condominiums — their owners and occupants, plus
+themselves (SPEC 51).
+
+Two filters, same shape, one pair of halves each: a direct-URL check that
+answers 403 and a query alter that narrows every listing and autocomplete. The
+content one is `hook_node_access()` + the `node_access` tag; the people one is
+`hook_menu_alter()` + the `user_access` tag.
 
 **No `api/v1/...` endpoint is involved or changed by this role.** It exists for
 the Drupal admin UI only; the Flutter app never sees it, and a resident's
@@ -14,12 +21,14 @@ responses are byte for byte what they were before.
 
 | File | Role |
 |------|------|
-| `includes/myapi.building_admin.inc` | Everything: the four catalogues, the pure decision logic, the bulletin validation and the query alter. Single source of truth. |
-| `myapi.module` | Glue only: `hook_node_access()`, `hook_query_node_access_alter()`, the `boletin` branch of `hook_node_validate()`, and the role added to `myapi_calendar_admin_roles()`. |
-| `myapi.install` | `_myapi_building_admin_install()` — the role, the user field and the permissions — called from `hook_install()` and from `myapi_update_7012()`. |
+| `includes/myapi.building_admin.inc` | The NODE axis: the four catalogues, the pure decision logic, the bulletin validation and the node query alter. Single source of truth for what content the role reaches. |
+| `includes/myapi.building_admin_user.inc` | The USER axis (SPEC 51): who the role may see. The visible-uid set, the pure visibility rule, the `user/%user` access callback, the `user_access` query alter and the reservation-form validation. |
+| `myapi.module` | Glue only: `hook_node_access()`, `hook_query_node_access_alter()`, `hook_menu_alter()`, `hook_query_user_access_alter()`, the `boletin` and `reservation` branches of `hook_node_validate()`, and the role added to `myapi_calendar_admin_roles()`. |
+| `myapi.install` | `_myapi_building_admin_install()` — the role, the user field and the permissions — called from `hook_install()` and from `myapi_update_7012()` / `7013` / `7014`. Plus `hook_requirements('runtime')`, which warns when the role has lost `access user profiles`. |
 | `includes/myapi.reservation_calendar.inc` | Narrows the calendar page (condominium select, area select and reservation query) to the assigned condominiums. |
 | `includes/myapi.reservation_notification.inc` | `myapi_reservation_building_admin_uids()` — adds the building admins of a condominium to the "reservation created" email. |
-| `tests/unit/BuildingAdminTest.php` | Unit tests of the catalogues and of every pure decision. |
+| `tests/unit/BuildingAdminTest.php` | Unit tests of the catalogues and of every pure decision on the node side. |
+| `tests/unit/BuildingAdminUserTest.php` | Unit tests of the three pure functions of the people filter (SPEC 51). |
 
 ---
 
@@ -28,15 +37,24 @@ responses are byte for byte what they were before.
 ```bash
 drush updb    # 7012: role, field and permissions
               # 7013: the text-format permission + the area-notes default format
-drush cc all  # picks up the new includes/myapi.building_admin.inc of files[]
+              # 7014: 'access user profiles' (SPEC 51)
+drush cc all  # picks up the new .inc files of files[] AND rebuilds the menu
 ```
 
 Both are needed. Without `updb` there is no role and no `field_condominio_admin`;
 without `cc all` Drupal does not see the new `.inc` declared in `myapi.info` and
 the hooks fatal on the first node listing.
 
-`myapi_update_7012()` is **idempotent**: running it twice creates no second
-role, no second field and no duplicate row in `role_permission`.
+> **`cc all` stopped being optional in SPEC 51.** `hook_menu_alter()` only runs
+> on a menu rebuild and its result is cached in the `menu_router` table. Skip it
+> and `access user profiles` is granted while the 403 on `/user/N` is not yet in
+> force — the role would read the profile of **every resident of every
+> condominium**. After every deployment, check it in one move: open
+> `/user/<a resident of another condominium>` as the operator and confirm a 403.
+> That is the verification that is never skipped.
+
+Every update is **idempotent**: running them twice creates no second role, no
+second field and no duplicate row in `role_permission`.
 
 ### One manual step per environment: the login rule
 
@@ -105,6 +123,22 @@ autocomplete that only offers `condominio` nodes.
 | `access administration pages` | Navigate the back office |
 | `view the administration theme` | Node forms in the admin theme |
 | `use text format filtered_html` | Write formatted text — see below |
+| `access user profiles` | Read people — scoped to their condominiums by the people filter, see below |
+
+**`access user profiles` is site-wide and the filter is the only thing that
+scopes it.** Drupal has no per-condominium variant of it: the permission opens
+every profile, and the two halves of the people filter (SPEC 51) are what narrow
+what the role actually reaches. Without the permission the role keeps everything
+else but loses two things at once — every profile page answers 403 and the
+**`field_requester` autocomplete of the reservation form comes back empty**, with
+nothing on screen pointing at the cause. That is why `hook_requirements()` raises
+a *warning* at `/admin/reports/status` when the role exists and the permission is
+missing. It reports; it does not grant it back.
+
+**`administer users` is NOT granted, and it must never be.** Two reasons, and
+the second is the one that surprises: it is account administration this role has
+no business with, **and holding it switches the people filter off entirely** for
+whoever has it (see *The two halves of the people filter* below).
 
 **The text format permission is not optional.** A role with no
 `use text format ...` permission only reaches Drupal's fallback format
@@ -212,7 +246,7 @@ escalation.
 
 ---
 
-## The two halves of the filter
+## The two halves of the content filter
 
 ### 1. `hook_node_access()` — the direct URL
 
@@ -258,29 +292,6 @@ Everything else disappears from the listings: a building admin sees no `pagos`,
 no `recibo` and no `gastos` at `/admin/content`, not even of their own
 condominium, because they do not manage those.
 
-### The people of a unit — not solved by this layer
-
-Owners and occupants (`field_propietario`, `field_ocupante`) are **users**, not
-nodes, and neither `hook_node_access()` nor the `node_access` query tag reaches
-the user entity. There is no per-condominium filter for users anywhere in this
-module.
-
-So the obvious move is the wrong one:
-
-> **Do not grant `access user profiles`.** It is site-wide: it would open the
-> profile — name, phone, id number, email — of **every resident of every
-> condominium**, which is precisely what this feature exists to prevent.
-
-What works instead is to keep the query on nodes: a **View over `vivienda`
-nodes**, with a relationship to the owner and occupant users, printing their
-fields as columns. Because the base table is `node`, that view carries the
-`node_access` tag and inherits the condominium filter for free — with
-*«Disable SQL rewriting»* left unticked, as always.
-
-Until that view exists, what the role gets is the unit node itself: opening a
-`vivienda` shows its owner and occupant as rendered reference fields (the
-names), which needs no extra permission. Following those links 403s.
-
 Three guards run before anything is altered: the user holds the role; the query
 really selects from the `node` table (the tag does **not** imply it — other
 modules apply it to taxonomy, search or other entities, and altering those
@@ -295,6 +306,142 @@ endpoints are untouched.
 > ticked. If a building admin sees the whole site's content in that listing
 > while direct URLs still answer 403, that checkbox is the cause: untick it in
 > the view. Do not add code to compensate.
+
+---
+
+## The two halves of the people filter
+
+The owner and the occupants of a unit (`field_propietario`, `field_ocupante`,
+`field_ocupantes`) are **users**, not nodes, and neither `hook_node_access()`
+nor the `node_access` tag reaches the user entity. SPEC 51 gives that axis its
+own pair of halves, built exactly like the node one and living in
+`includes/myapi.building_admin_user.inc`.
+
+The rule in one sentence: **an operator sees the owners and occupants of the
+units of their assigned condominiums, plus themselves.**
+
+Two things that sentence deliberately does not say:
+
+- There is **no exception** for `administrator`, for `backend` nor for another
+  building admin. Whoever cannot be traced to an assigned condominium is
+  invisible, whatever role they hold. A rule with no exceptions fits in one line
+  and does not erode.
+- **One's own account is always visible**, listed or not. Without that, an
+  operator with no unit of their own would lose *Mi cuenta* and their own edit
+  form — and it opens nothing, since seeing one's own profile needs no
+  permission for any role in Drupal.
+
+The visible set is resolved once per request and cached: assigned condominiums
+(`myapi_building_admin_condominium_ids()`) → their units → owners and occupants
+(`myapi_condominium_member_uids()`, the same function the bulletin notifications
+of SPEC 25 use), plus the operator's own uid, which is added **always**. That
+last addition is why there is no "empty list" branch anywhere: an operator with
+no condominium assigned gets a list of exactly one uid — their own — and sees
+only themselves.
+
+### 1. `hook_menu_alter()` — the direct URL
+
+`myapi_menu_alter()` swaps the access callback of `user/%user` and
+`user/%user/view` for `myapi_building_admin_user_view_access()`. The profile of
+a resident of another condominium answers **403** at `/user/N`.
+
+That callback delegates to core's `user_view_access()` **first** and only
+narrows afterwards, so it can take access away and never hand it out: blocked
+accounts, anonymous visitors and the `access user profiles` permission itself
+are still decided by Drupal.
+
+`user/%user/edit` is **not** touched. Without `administer users`,
+`user_edit_access()` already refuses somebody else's account, and the operator
+keeps their own.
+
+> This hook only runs on a **menu rebuild**. `drush cc all` after deploying is
+> what puts it in force — see *Deployment*.
+
+### 2. `hook_query_user_access_alter()` — the listings and the autocompletes
+
+Mirror of the node one, on the `user_access` tag: past its two guards it adds a
+single `users.uid IN (visible uids)`, with no `JOIN` — the uids are already
+resolved in PHP.
+
+> **This reaches every query tagged `user_access`.** Two matter today:
+> - the generic `entityreference` handler when `target_type` is `user`, which is
+>   what makes the **`field_requester` autocomplete** of the reservation form
+>   offer only the residents of the assigned condominiums;
+> - the **`users` base table of Views**, which declares it as an *access query
+>   tag*, so a back-office listing of people is scoped for free.
+
+The two guards, in order: the filter is active for this operator (everybody else
+leaves on the first line, at the cost of one role lookup), and the query really
+selects from `users` — the tag does **not** imply it, exactly as `node_access`
+does not imply `node`, and without the check the condition would land on a query
+with no such column and break unrelated pages with an SQL error.
+
+There is deliberately no third "empty list" guard, because the list is never
+empty.
+
+No query of this module carries the `user_access` tag, so the `api/v1/...`
+endpoints are untouched — the same as on the node side.
+
+> **A Views view on the `users` base table with *«Disable SQL rewriting»*
+> ticked** lists every user of the site, exactly like the `/admin/content`
+> case above and with the same fix: untick the checkbox in the view. Do not add
+> code to compensate.
+
+### The one exception: `administer users`
+
+**An operator who also holds `administer users` is not filtered at all** — not
+their profiles, not their autocompletes, not their listings.
+
+That is not an oversight, it is the symmetric counterpart of `bypass node
+access` on the node side: a user holding `administrator` *and* this role already
+sees all the content of the site, because `bypass node access` cuts in before
+`myapi_node_access()` ever runs. Without this exception they would see all the
+content but only the people of their condominiums, and that asymmetry reads as a
+bug in the module.
+
+The price is explicit: **granting `administer users` to a building admin opens
+the whole address book of the site to them.** So it is not in the catalogue, it
+is never granted by the installer, and the exception exists only for whoever
+holds it through another role.
+
+Careful not to confuse the two sides — the rule with no exceptions says **who is
+visible**; `administer users` says **who is looking**.
+
+Note that `administer users` is not `bypass node access`: an operator holding it
+still gets `/admin/content` filtered by condominium and still gets a 403 on a
+`/node/N` of another condominium.
+
+### What the filter does not reach: `user/autocomplete`
+
+Core's own `user/autocomplete` path — the one behind the *Escrito por* /
+*Authored by* field of the node form — does **not** carry the `user_access` tag,
+so it is outside this filter and would offer the whole site.
+
+It opens nothing today: that field requires `administer nodes`, which this role
+does not have and must not get. It is written down here as a **known limitation
+and a maintenance rule**, not as an open hole: any new field that uses that path
+has to be filtered separately.
+
+### The reservation form
+
+`hook_node_validate()` guards the two scoped fields of a `reservation` on
+submit, the same two-layer approach as the bulletin: the form already offers
+nothing foreign, and the validation refuses a foreign value that arrives anyway
+through a hand-crafted POST.
+
+- `field_requester` must be one of the visible uids.
+- `field_unit` must be a unit of an assigned condominium — reusing the SPEC 49
+  decision, with no new query. The autocomplete of that field was already
+  scoped, with no code of SPEC 51, because `vivienda` is a read-only visible
+  type.
+
+The failure mode this closes is the worst one available: a reservation booked
+for a resident of another building becomes **invisible to the very operator who
+saved it**, the moment it is saved.
+
+`POST /api/v1/reservations` is untouched — `hook_node_validate()` is only
+reached from `node_form_validate()`, and the endpoint saves its node
+programmatically.
 
 ---
 
@@ -492,6 +639,17 @@ up for every other role that can create bulletins too.
   bundle adds its entry there, its nodes are outside the rule in both halves of
   the filter — visible in the listings and not 403 on a direct URL. Adding the
   map entry is the last step of that bundle's own spec.
+- **Any new back-office screen that lists people** must go through the
+  `user_access` tag or through `myapi_building_admin_user_decision()`. A hand-made
+  `db_select('users', …)` with no tag is unfiltered and shows the whole site.
+  Core's `user/autocomplete` carries no such tag either: a new field that uses it
+  needs its own filtering.
+- **Never grant `administer users` to this role.** Besides being account
+  administration it has no business with, it switches the people filter off for
+  whoever holds it — see *The one exception* above.
+- **`access user profiles` must stay granted** for the role to see anybody at
+  all. If it is removed, `/admin/reports/status` says so with a warning naming
+  the role and the permission; nothing repairs it behind your back.
 - **Deleting a `condominio` node** leaves a dangling reference in
   `field_condominio_admin` and the building admin silently loses access to it.
   Rare in production; the broken reference is visible at `/user/N/edit`.
