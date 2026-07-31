@@ -290,11 +290,24 @@ function myapi_menu() {
  * another condominium answers 403 to a building admin. The listing half is
  * myapi_query_user_access_alter().
  *
- * It swaps the access callback of the two profile routes and leaves their
- * 'access arguments' — array(1), the loaded account — exactly as they were, so
- * the replacement receives the same argument core's user_view_access() did.
- * That replacement calls the original FIRST and only narrows afterwards: it can
- * take access away, never hand it out.
+ * It swaps the access callback of the two profile routes and gives BOTH the
+ * 'access arguments' of 'user/%user' — array(1), the loaded account — so the
+ * replacement receives the same argument core's user_view_access() did. That
+ * replacement calls the original FIRST and only narrows afterwards: it can take
+ * access away, never hand it out.
+ *
+ * Writing the arguments explicitly is not decoration, it is the fix to a
+ * crash. 'user/%user/view' is a MENU_DEFAULT_LOCAL_TASK: core declares neither
+ * an access callback nor access arguments for it and _menu_router_build()
+ * copies both from the parent — but only for an item that has NO access
+ * callback yet. This hook runs BEFORE that build, so setting just the callback
+ * cancelled the inheritance and left the item with no arguments at all;
+ * _menu_check_access() then called the callback with zero arguments and every
+ * page rendering the "Mi cuenta" link died with an ArgumentCountError. Setting
+ * both keys makes the item self-sufficient and independent of that inheritance.
+ *
+ * The arguments are copied from 'user/%user' rather than written as array(1),
+ * so that if core ever changes them the two stay in step.
  *
  * 'user/%user/edit' is deliberately NOT touched. Without 'administer users',
  * user_edit_access() already refuses somebody else's account, and the operator
@@ -308,9 +321,18 @@ function myapi_menu() {
  *   The whole menu router, by reference.
  */
 function myapi_menu_alter(&$items) {
+  if (!isset($items['user/%user'])) {
+    return;
+  }
+
+  $arguments = isset($items['user/%user']['access arguments'])
+    ? $items['user/%user']['access arguments']
+    : [1];
+
   foreach (['user/%user', 'user/%user/view'] as $path) {
     if (isset($items[$path])) {
-      $items[$path]['access callback'] = 'myapi_building_admin_user_view_access';
+      $items[$path]['access callback']  = 'myapi_building_admin_user_view_access';
+      $items[$path]['access arguments'] = $arguments;
     }
   }
 }

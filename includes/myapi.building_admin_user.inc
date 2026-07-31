@@ -276,13 +276,21 @@ function myapi_building_admin_visible_uids($account = NULL) {
  * never hand it out. Blocked accounts, anonymous visitors and the
  * 'access user profiles' permission itself are all still decided by core.
  *
- * @param object $account
- *   The account whose profile is being opened, as loaded by the %user wildcard.
+ * @param object|null $account
+ *   The account whose profile is being opened, as loaded by the %user
+ *   wildcard.
+ *
+ *   It carries a default so that a router item reaching this callback with no
+ *   access arguments — which is exactly what a MENU_DEFAULT_LOCAL_TASK does
+ *   when an alter cancels its inheritance, see myapi_menu_alter() — denies
+ *   access instead of raising an ArgumentCountError on every page that renders
+ *   the "Mi cuenta" link. core's user_view_access() reads NULL as uid 0 and
+ *   refuses it, so the default fails closed on its own.
  *
  * @return bool
  *   TRUE when the profile may be viewed.
  */
-function myapi_building_admin_user_view_access($account) {
+function myapi_building_admin_user_view_access($account = NULL) {
   if (!user_view_access($account)) {
     return FALSE;
   }
