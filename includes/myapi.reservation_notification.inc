@@ -173,6 +173,54 @@ function myapi_reservation_backend_uids() {
 }
 
 /**
+ * Lists the uids of the ACTIVE building admins of one condominium (SPEC 49).
+ *
+ * Same shape as myapi_reservation_backend_uids() — role matched by name, never
+ * by rid, blocked accounts out, no implicit membership for uid 1 — plus a join
+ * on the user's field_condominio_admin, so only the operators of THIS
+ * condominium come back. Sending it to the admins of other buildings would be
+ * noise and a leak of other residents' data.
+ *
+ * Two cases return an empty list without touching the database:
+ * - A reservation with no condominium resolved. There is nobody to scope to.
+ * - An environment where field_condominio_admin does not exist yet, i.e. the
+ *   deploy window between pushing this code and running `drush updb`. Querying
+ *   its data table there would be a fatal error in the middle of creating a
+ *   reservation. field_info_field() is served from cache, so the check is free.
+ *
+ * @param int|NULL $condominium_id  The reservation's condominium nid.
+ *
+ * @return array  Unique uids as integers. Empty when nobody matches.
+ */
+function myapi_reservation_building_admin_uids($condominium_id) {
+  if ($condominium_id === NULL) {
+    return array();
+  }
+
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+
+  $field = MYAPI_BUILDING_ADMIN_CONDO_FIELD;
+  if (!field_info_field($field)) {
+    return array();
+  }
+
+  $query = db_select('users', 'u');
+  $query->fields('u', array('uid'));
+  $query->innerJoin('users_roles', 'ur', 'ur.uid = u.uid');
+  $query->innerJoin('role', 'r', 'r.rid = ur.rid');
+  $query->innerJoin('field_data_' . $field, 'fca', "fca.entity_id = u.uid AND fca.entity_type = 'user' AND fca.deleted = 0");
+  $query->condition('r.name', MYAPI_BUILDING_ADMIN_ROLE);
+  $query->condition('fca.' . $field . '_target_id', $condominium_id);
+  $query->condition('u.status', 1);
+  $query->condition('u.uid', 0, '>');
+  $query->distinct();
+
+  $uids = $query->execute()->fetchCol();
+
+  return array_map('intval', $uids);
+}
+
+/**
  * Date of a reservation row as 'd/m/Y'.
  *
  * Same format the calendar detail panel prints, so push, inbox and both emails
@@ -329,6 +377,14 @@ function myapi_reservation_enqueue_user_mail($row, $cancelled) {
  * down. With nobody holding the role nothing is enqueued and the event behaves
  * exactly the same.
  *
+ * SPEC 49 widens the CREATION key only: 'reservation_created_admin' also
+ * reaches the building admins of the reservation's condominium, because they
+ * are the ones who have to make room for it. The union is deduplicated, so
+ * somebody holding both 'backend' and 'administrador edificio' gets one single
+ * email. 'reservation_cancelled_admin' is deliberately left alone — the spec
+ * only asks for the creation one, and widening the cancellation email is a
+ * decision for whoever writes that spec.
+ *
  * Serves the two 'backend' keys (SPEC 50), which share ten of their twelve
  * lines: 'reservation_created_admin', fired by POST /api/v1/reservations, and
  * 'reservation_cancelled_admin', fired by PUT /api/v1/reservations/%/cancel.
@@ -344,6 +400,14 @@ function myapi_reservation_enqueue_user_mail($row, $cancelled) {
  */
 function myapi_reservation_enqueue_admin_mails($row, $key = 'reservation_created_admin') {
   $uids = myapi_reservation_backend_uids();
+
+  if ($key === 'reservation_created_admin') {
+    $uids = array_values(array_unique(array_merge(
+      $uids,
+      myapi_reservation_building_admin_uids($row->condominium_id)
+    )));
+  }
+
   if (empty($uids)) {
     return;
   }

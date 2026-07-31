@@ -293,14 +293,21 @@ function myapi_permission() {
  * The roles allowed into the back-office reservation calendar (SPEC 47).
  *
  * Single source of truth for that list: myapi_calendar_access() is its only
- * caller, and adding a third role means editing this one line. Names, never
+ * caller, and adding a fourth role means editing this one line. Names, never
  * rids: a rid is assigned per environment, so the 4 of production may well be
  * a different role on the client's site or in local.
+ *
+ * 'administrador edificio' joined in SPEC 49, and it is the only one of the
+ * three that does not see the whole site: the calendar page narrows its
+ * condominium select and its reservation query to the condominiums assigned to
+ * the user. Getting in is one thing, what is shown once in is another.
  *
  * @return array  Role names.
  */
 function myapi_calendar_admin_roles() {
-  return ['administrator', 'backend'];
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+
+  return ['administrator', 'backend', MYAPI_BUILDING_ADMIN_ROLE];
 }
 
 /**

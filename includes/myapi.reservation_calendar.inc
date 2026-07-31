@@ -412,15 +412,86 @@ function myapi_calendar_positive_int($value) {
 }
 
 /**
+ * Returns the condominium scope of the current user, or NULL for no limit.
+ *
+ * The one place this page asks whether the visitor is a building admin
+ * (SPEC 49). 'administrator' and 'backend' get NULL and nothing changes for
+ * them; a building admin gets their assigned condominiums, which may be an
+ * empty list.
+ *
+ * @return array|NULL  Assigned condominium nids, or NULL for no restriction.
+ */
+function myapi_calendar_condominium_scope() {
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+
+  return myapi_building_admin_is() ? myapi_building_admin_condominium_ids() : NULL;
+}
+
+/**
+ * Resolves which condominium(s) the calendar query must be limited to.
+ *
+ * The whole of the SPEC 49 narrowing of this page, as a pure function.
+ *
+ * $scope is NULL for a user who sees everything ('administrator', 'backend'),
+ * and the list of assigned condominiums for a building admin — possibly
+ * empty, which means "sees nothing".
+ *
+ * Three outcomes:
+ * - No scope: whatever was requested, including NULL for "the whole site".
+ * - Scope, and the requested condominium is inside it: that one.
+ * - Scope, and the request is absent OR points outside it: the scope itself.
+ *   This is what makes ?condominium=B behave as no selection AND still show
+ *   nothing of B — the caller passes the returned list to the query, so "no
+ *   selection" for this role means "all of mine", never "all of the site's".
+ *
+ * @param int|NULL $requested  The ?condominium= value, already normalised.
+ * @param array|NULL $scope  Assigned condominium nids, or NULL for none.
+ *
+ * @return int|array|NULL  A single nid, a list of them, or NULL for no filter.
+ */
+function myapi_calendar_effective_condominium($requested, $scope) {
+  if ($scope === NULL) {
+    return $requested;
+  }
+
+  if ($requested !== NULL && in_array((int) $requested, array_map('intval', $scope), TRUE)) {
+    return (int) $requested;
+  }
+
+  return $scope;
+}
+
+/**
  * Lists the published 'condominio' nodes for the condominium select.
+ *
+ * The $allowed argument arrived with SPEC 49: a building admin only gets their
+ * assigned condominiums in the select. NULL keeps the previous behaviour — the
+ * whole list — which is what 'administrator' and 'backend' still get.
+ *
+ * An EMPTY array is not the same as NULL: it means "restricted to nothing",
+ * i.e. a building admin with no condominium assigned, and returns an empty
+ * select. It is short-circuited before the query because a `nid IN ()` is not
+ * valid SQL.
+ *
+ * @param array|NULL $allowed  Condominium nids to restrict to, or NULL for no
+ *   restriction.
  *
  * @return array  nid => title, ordered by title.
  */
-function myapi_calendar_condominium_options() {
+function myapi_calendar_condominium_options($allowed = NULL) {
+  if (is_array($allowed) && !$allowed) {
+    return array();
+  }
+
   $query = db_select('node', 'n')
     ->fields('n', array('nid', 'title'))
     ->condition('n.type', 'condominio')
     ->condition('n.status', 1);
+
+  if (is_array($allowed)) {
+    $query->condition('n.nid', $allowed, 'IN');
+  }
+
   $query->orderBy('n.title');
 
   return $query->execute()->fetchAllKeyed();
@@ -435,12 +506,20 @@ function myapi_calendar_condominium_options() {
  * page over GET, with no AJAX (an explicit requirement of SPEC 47), at the
  * cost of one extra click when changing condominium.
  *
- * @param int|NULL $condominium_id  The 'condominio' nid, or NULL.
+ * Since SPEC 49 it also takes a LIST of nids, which is what a building admin
+ * with no condominium picked gets: the areas of every condominium they
+ * administer, instead of either none or all of the site's. db_select()
+ * conditions turn an array into an IN, so the only extra work is refusing an
+ * empty list — `IN ()` is not valid SQL — which also covers the building admin
+ * with nothing assigned.
+ *
+ * @param int|array|NULL $condominium_id  A 'condominio' nid, a list of them,
+ *   or NULL.
  *
  * @return array  nid => title, ordered by title. Empty when no condominium.
  */
 function myapi_calendar_area_options($condominium_id) {
-  if ($condominium_id === NULL) {
+  if ($condominium_id === NULL || (is_array($condominium_id) && !$condominium_id)) {
     return array();
   }
 
@@ -1234,19 +1313,35 @@ function myapi_reservation_calendar_page() {
   drupal_add_css($path . '/css/myapi.calendar.css');
   drupal_add_js($path . '/js/myapi.calendar.js');
 
+  // SPEC 49: NULL for a user who sees every condominium, the assigned list for
+  // a building admin. Everything below flows from it.
+  $scope = myapi_calendar_condominium_scope();
+
   // Order matters: the areas of the selected condominium are what the area
   // parameter is validated against, so they are loaded first.
-  $condominium_options = myapi_calendar_condominium_options();
-  $condominium = isset($_GET['condominium']) ? myapi_calendar_positive_int($_GET['condominium']) : NULL;
+  $condominium_options = myapi_calendar_condominium_options($scope);
+  $requested = isset($_GET['condominium']) ? myapi_calendar_positive_int($_GET['condominium']) : NULL;
+  $condominium = myapi_calendar_effective_condominium($requested, $scope);
   $area_options = myapi_calendar_area_options($condominium);
 
   $filters = myapi_calendar_filters($area_options);
+
+  // A list rather than a single nid means the request named no condominium of
+  // this user's — either it named none at all or it named someone else's — so
+  // the select must come up with nothing chosen. The query still gets the
+  // list, which is what keeps ?condominium=B from showing anything of B.
+  if (is_array($condominium)) {
+    $filters['condominium'] = NULL;
+  }
+
   $range = myapi_calendar_range($filters['view'], $filters['date']);
 
-  $rows = myapi_reservation_calendar_rows(
+  // An empty scope is a building admin with no condominium assigned: there is
+  // nothing to query, and an `IN ()` would not be valid SQL anyway.
+  $rows = (is_array($condominium) && !$condominium) ? array() : myapi_reservation_calendar_rows(
     $range['query_from'],
     $range['grid_to'],
-    $filters['condominium'],
+    $condominium,
     $filters['area'],
     $filters['statuses'],
     MYAPI_CALENDAR_MAX_ROWS

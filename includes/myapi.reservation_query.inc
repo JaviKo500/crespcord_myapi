@@ -422,7 +422,12 @@ function myapi_reservation_occupancy_ranges($busy, $capacity) {
  *                                  grid still leaves its tail inside it.
  * @param string   $to              Last day of the range, 'YYYY-MM-DD',
  *                                  inclusive.
- * @param int|NULL $condominium_id  Optional field_condominium filter.
+ * @param int|array|NULL $condominium_id  Optional field_condominium filter. A
+ *                                  list becomes an IN, which is how SPEC 49
+ *                                  scopes the calendar to the condominiums a
+ *                                  building admin manages. Never an empty
+ *                                  list: the caller short-circuits that case,
+ *                                  because `IN ()` is not valid SQL.
  * @param int|NULL $area_id         Optional field_area filter.
  * @param array    $statuses        Reservation statuses to include, e.g.
  *                                  array('confirmed'). Never a raw user string.
