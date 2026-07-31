@@ -51,7 +51,7 @@ there is no `field_cancel_reason` to store a reason in.
 
 | Event | Fires from | Notifies |
 |-------|-----------|----------|
-| Reservation created | `myapi_reservation_create()`, after the transaction commits and before the `201` | Resident (push + inbox + email) + every active `backend` user (email) |
+| Reservation created | `myapi_reservation_create()`, after the transaction commits and before the `201` | Resident (push + inbox + email) + every active `backend` user + the building admins of the reservation's condominium (email) |
 | Reservation cancelled **by an operator** | `myapi_node_update()` → `myapi_reservation_is_cancellation_transition()` | Resident only (push + inbox + email) |
 | Reservation cancelled **by its resident** | `myapi_reservation_cancel()` → `myapi_reservation_notify_user_cancelled()`, after `node_save()` and before the `200` | Every active `backend` user only (email) |
 
@@ -263,6 +263,25 @@ i.e. `/?q=node/<nid>` on a site with clean URLs off). Same destination as the
 - The `administrator` role receives nothing.
 - **No condominium filter**: every active `backend` user is notified of every
   reservation, because there is no user↔condominium link for that role today.
+
+### Building admins also get the creation email (SPEC 49)
+
+`myapi_reservation_building_admin_uids()` adds, **on creation only**, the active
+users holding `administrador edificio` whose `field_condominio_admin` contains
+the reservation's condominium. Same shape as the query above — role by name,
+`users.status = 1`, no implicit `uid 1` — plus the join on the user field.
+
+- The recipient list is the **union** of both queries, deduplicated: somebody
+  holding `backend` **and** `administrador edificio` receives **one** email.
+- Building admins of **other** condominiums receive nothing. That would be
+  noise, and a leak of other residents' data.
+- `reservation_cancelled_admin` is **not** widened: it still goes to `backend`
+  only.
+- A reservation with no condominium resolved, or an environment where
+  `field_condominio_admin` does not exist yet (the window between deploying and
+  running `drush updb`), adds nobody — and costs no query.
+
+See `docs/building-admin-role.md`.
 
 The detail email is sent on **creation** and on the **resident's own
 cancellation**. A cancellation performed by an operator from the back office

@@ -44,19 +44,21 @@ Access is **by role name only**:
 
 ```php
 function myapi_calendar_admin_roles() {
-  return ['administrator', 'backend'];
+  return ['administrator', 'backend', MYAPI_BUILDING_ADMIN_ROLE];
 }
 ```
 
 - A user with the `administrator` role sees the calendar.
 - A user with the `backend` role sees the calendar.
-- `uid 1` always sees it, even with neither role. The guard is explicit because
-  Drupal's superuser bypass lives inside `user_access()`, which this callback
-  never calls.
+- A user with the `administrador edificio` role sees the calendar, but **only
+  their own condominiums** — see below (SPEC 49).
+- `uid 1` always sees it, even with none of those roles. The guard is explicit
+  because Drupal's superuser bypass lives inside `user_access()`, which this
+  callback never calls.
 - Everybody else — an authenticated user without those roles, and any anonymous
   visitor — gets a **403**. Not a blank page, not a redirect to the login form.
 
-That function is the single source of truth for the list. Adding a third role
+That function is the single source of truth for the list. Adding a fourth role
 is editing that one line. Role **names** are compared, never rids: a rid is
 assigned per environment, so the `4` of production may well be a different role
 in local or on the client's site. `$user->roles` is `rid => name` in Drupal 7,
@@ -77,6 +79,24 @@ looks for it.
 
 The permission is declared and never checked. If a role must see the calendar,
 give it the role, not the permission.
+
+### `administrador edificio` sees only its condominiums
+
+Getting in is one thing; what is shown once in is another. For a user holding
+that role (SPEC 49), the page narrows itself:
+
+- the **condominium select** lists only the condominiums assigned to them in
+  `field_condominio_admin`;
+- the **area select** lists only the areas of those condominiums, instead of
+  the whole site's, when no single condominium is picked;
+- a hand-edited **`?condominium=B`** pointing at somebody else's condominium is
+  treated as *no selection*, and for this role no selection means **all of
+  mine** — never all of the site's. Nothing of B is shown;
+- with **no condominium assigned**, the selects are empty and the reservation
+  query is not even run.
+
+`administrator` and `backend` are unaffected: they see the page exactly as
+before. See `docs/building-admin-role.md`.
 
 ### How to grant access to someone
 
