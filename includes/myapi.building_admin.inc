@@ -82,6 +82,14 @@ if (!defined('MYAPI_BUILDING_ADMIN_TEXT_FORMAT')) {
   define('MYAPI_BUILDING_ADMIN_TEXT_FORMAT', 'filtered_html');
 }
 
+// The permission that lets the role read people at all (SPEC 51). Named here
+// rather than written twice because myapi_requirements() in myapi.install has
+// to ask whether this very permission is still granted, and the warning it
+// raises would be worthless if the two strings could drift apart.
+if (!defined('MYAPI_BUILDING_ADMIN_USER_PERMISSION')) {
+  define('MYAPI_BUILDING_ADMIN_USER_PERMISSION', 'access user profiles');
+}
+
 /* ---------------------------------------------------------------------------
  * Catalogues.
  *
@@ -218,6 +226,18 @@ function myapi_building_admin_permissions($include_claim_type = NULL) {
   //   drush role-remove-perm "administrador edificio" "access toolbar"
   $permissions[] = 'access content';
   $permissions[] = 'access content overview';
+  // Reading people (SPEC 51). Site-wide by nature — Drupal has no per-scope
+  // variant — and narrowed to the residents of the assigned condominiums by the
+  // two halves of the filter in includes/myapi.building_admin_user.inc. Without
+  // it the role loses the field_requester autocomplete of the reservation form
+  // and every profile page, which myapi_requirements() reports as a warning at
+  // /admin/reports/status rather than granting it back behind anyone's back.
+  //
+  // 'administer users' is NOT here and must never be: besides being account
+  // administration the role has no business with, holding it switches the
+  // people filter OFF for whoever has it. See
+  // myapi_building_admin_user_filter_applies().
+  $permissions[] = MYAPI_BUILDING_ADMIN_USER_PERMISSION;
   $permissions[] = 'access administration pages';
 
   // Writing. A role with no 'use text format ...' permission only reaches the

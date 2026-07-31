@@ -258,6 +258,69 @@ function myapi_install() {
 }
 
 /**
+ * Implements hook_requirements().
+ *
+ * One check, at 'runtime' only: the building-admin role exists but has lost
+ * 'access user profiles' (SPEC 51). Without that permission the role keeps its
+ * menu and its content, but every profile page answers 403 and the
+ * field_requester autocomplete of the reservation form comes back empty — a
+ * failure with no symptom pointing at its cause, whose first diagnosis would be
+ * "the SPEC 51 filter is broken".
+ *
+ * It reports and does NOT repair. Re-granting the permission on every status
+ * report would overrule an administrator who removed it on purpose, which is
+ * the same conservative line _myapi_building_admin_install() has held since
+ * SPEC 49. myapi_update_7014() is where the permission is granted.
+ *
+ * A site without the role says nothing at all: the role is created by this
+ * module's installer, but a site may legitimately have deleted it.
+ *
+ * This is the one place in the module where a rid appears, and it is READ from
+ * the role that was loaded by name — never written by hand. The rule of SPEC 49
+ * stands.
+ *
+ * @param string $phase
+ *   'install', 'update' or 'runtime'.
+ *
+ * @return array
+ *   Requirements keyed by machine name; empty when there is nothing to say.
+ */
+function myapi_requirements($phase) {
+  $requirements = [];
+
+  if ($phase !== 'runtime') {
+    return $requirements;
+  }
+
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+
+  $role = user_role_load_by_name(MYAPI_BUILDING_ADMIN_ROLE);
+  if (!$role) {
+    return $requirements;
+  }
+
+  // rid => permission name => TRUE, for the granted ones only.
+  $permissions = user_role_permissions([$role->rid => $role->name]);
+  if (!empty($permissions[$role->rid][MYAPI_BUILDING_ADMIN_USER_PERMISSION])) {
+    return $requirements;
+  }
+
+  $requirements['myapi_building_admin_user_permission'] = [
+    'title'       => t('My API: personas del rol "@role"', ['@role' => MYAPI_BUILDING_ADMIN_ROLE]),
+    'value'       => t('Falta el permiso "@permission"', ['@permission' => MYAPI_BUILDING_ADMIN_USER_PERMISSION]),
+    'severity'    => REQUIREMENT_WARNING,
+    'description' => t('El rol "@role" no tiene concedido el permiso "@permission", así que no puede ver ningún perfil de usuario y el autocompletado de "Solicitante" del formulario de reserva le sale vacío. El filtro por condominio sigue en su sitio: ese permiso solo decide si el rol lee personas, y las dos mitades del filtro deciden cuáles. Para reponerlo: <code>drush role-add-perm "@role" "@permission"</code>, o desde !link.', [
+      '@role'       => MYAPI_BUILDING_ADMIN_ROLE,
+      '@permission' => MYAPI_BUILDING_ADMIN_USER_PERMISSION,
+      // l() returns already-sanitised markup, which is what !link expects.
+      '!link'       => l(t('la página de permisos'), 'admin/people/permissions'),
+    ]),
+  ];
+
+  return $requirements;
+}
+
+/**
  * Implements hook_uninstall().
  */
 function myapi_uninstall() {
