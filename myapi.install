@@ -251,6 +251,10 @@ function myapi_schema() {
 function myapi_install() {
   myapi_mail_system_register();
   _myapi_reservations_install();
+  // After the reservations install: the 'area' and 'reservation' types must
+  // exist before their 'create'/'edit any' permissions can be found in
+  // module_invoke_all('permission') and granted to the building-admin role.
+  _myapi_building_admin_install();
 }
 
 /**
@@ -425,19 +429,29 @@ function _myapi_reservations_ensure_field($field_name, array $definition) {
  * Ensures a field instance exists on a bundle (idempotent).
  *
  * Instances are per bundle, so this checks the live instance definition on the
- * given node bundle and only calls field_create_instance() when missing. The
+ * given bundle and only calls field_create_instance() when missing. The
  * instance array carries its own label, required flag, widget, default_value,
  * description and settings.
+ *
+ * The $entity_type parameter was added by SPEC 49, which needs an instance on
+ * the 'user' entity for field_condominio_admin. It goes LAST and defaults to
+ * 'node' precisely so the ~30 calls of _myapi_reservations_install() — and the
+ * updates 7006 to 7009 already run in production — keep both their signature
+ * and their behaviour. The function name stays as it is for the same reason.
  *
  * @param string $field_name
  *   Machine name of the field (e.g. 'field_condominium').
  * @param string $bundle
- *   Machine name of the node bundle the instance belongs to (e.g. 'area').
+ *   Machine name of the bundle the instance belongs to (e.g. 'area', or 'user'
+ *   for the single bundle of the user entity).
  * @param array $instance
- *   Instance definition array passed verbatim to field_create_instance().
+ *   Instance definition array passed verbatim to field_create_instance(). Its
+ *   own 'entity_type' key must agree with $entity_type.
+ * @param string $entity_type
+ *   Entity type the bundle belongs to. Defaults to 'node'.
  */
-function _myapi_reservations_ensure_instance($field_name, $bundle, array $instance) {
-  if (!field_info_instance('node', $field_name, $bundle)) {
+function _myapi_reservations_ensure_instance($field_name, $bundle, array $instance, $entity_type = 'node') {
+  if (!field_info_instance($entity_type, $field_name, $bundle)) {
     field_create_instance($instance);
   }
 }
@@ -895,6 +909,110 @@ function _myapi_reservations_install() {
 }
 
 /**
+ * Creates the 'administrador edificio' role, its field and its permissions
+ * (idempotent, SPEC 49).
+ *
+ * Single source of truth for that role's installation: called both from
+ * hook_install() (fresh sites) and from myapi_update_7012() (already installed
+ * sites). Re-running it never duplicates the role, the field, the instance nor
+ * a role_permission row.
+ *
+ * Deliberately CONSERVATIVE: it creates what is missing and never revokes nor
+ * deletes. An administrator may have adjusted permissions by hand in
+ * production, and a `drush updb` must not undo that. The accepted trade-off is
+ * the other way round: re-running the update DOES grant again anything that
+ * was revoked by hand.
+ *
+ * Three parts, in this order:
+ * (a) the role, looked up by name because the rid is per environment;
+ * (b) the user field, with the same _ensure_field()/_ensure_instance() pair
+ *     the reservations model uses;
+ * (c) the permissions, crossed against the ones that actually exist on the
+ *     site so nothing dead is written into role_permission.
+ */
+function _myapi_building_admin_install() {
+  // Functions of a files[] .inc are not autoloaded by the D7 registry, and an
+  // .install runs early enough that the registry may not be warm anyway, so
+  // the include is explicit.
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+
+  // (a) The role. user_role_save() would happily create a second role with the
+  // same name, so the lookup is what makes this idempotent. The rid it gets is
+  // never read: every check in the module compares role NAMES.
+  $role = user_role_load_by_name(MYAPI_BUILDING_ADMIN_ROLE);
+  if (!$role) {
+    $role = new stdClass();
+    $role->name = MYAPI_BUILDING_ADMIN_ROLE;
+    user_role_save($role);
+    // user_role_save() writes the new rid back onto the object, but a reload
+    // is cheaper to reason about than trusting that side effect.
+    $role = user_role_load_by_name(MYAPI_BUILDING_ADMIN_ROLE);
+  }
+
+  if (!$role) {
+    // Nothing else can be done without a role to grant to. Loud rather than
+    // silent: the permissions below would otherwise fail one by one.
+    watchdog(
+      'myapi',
+      'SPEC 49: the role "@role" could not be created; its field and permissions were skipped.',
+      ['@role' => MYAPI_BUILDING_ADMIN_ROLE],
+      WATCHDOG_ERROR
+    );
+    return;
+  }
+
+  // (b) The user field: entityreference to 'condominio' nodes, unlimited
+  // cardinality, one instance on the single bundle of the user entity. The
+  // Field API creates field_data_field_condominio_admin and its revision table
+  // with entity_type = 'user'.
+  //
+  // Only 'target_type' is a field-level setting in D7; the handler and the
+  // target_bundles that restrict the autocomplete to condominiums live on the
+  // instance, which is where entityreference reads them.
+  _myapi_reservations_ensure_field(MYAPI_BUILDING_ADMIN_CONDO_FIELD, [
+    'field_name'  => MYAPI_BUILDING_ADMIN_CONDO_FIELD,
+    'type'        => 'entityreference',
+    'cardinality' => FIELD_CARDINALITY_UNLIMITED,
+    'settings'    => ['target_type' => 'node'],
+  ]);
+  _myapi_reservations_ensure_instance(MYAPI_BUILDING_ADMIN_CONDO_FIELD, 'user', [
+    'field_name'  => MYAPI_BUILDING_ADMIN_CONDO_FIELD,
+    'entity_type' => 'user',
+    'bundle'      => 'user',
+    'label'       => 'Condominios administrados',
+    'required'    => 0,
+    'description' => 'Condominios que este usuario puede administrar. Solo aplica al rol "administrador edificio"; sin ningún condominio, no verá contenido alguno.',
+    'settings'    => [
+      'handler'          => 'base',
+      'handler_settings' => [
+        'target_bundles' => ['condominio' => 'condominio'],
+        'sort'           => ['type' => 'none'],
+      ],
+    ],
+    'widget'      => ['type' => 'entityreference_autocomplete_tags'],
+  ], 'user');
+
+  // (c) The permissions. module_invoke_all('permission') returns
+  // permission name => definition, so its KEYS are the permissions that exist
+  // on this site right now. Crossing against them drops 'create reclamo
+  // content' while the claims bundle does not exist and 'access toolbar' when
+  // the toolbar module is disabled — instead of writing rows in
+  // role_permission that no screen can ever show or revoke.
+  //
+  // user_role_grant_permissions() is itself idempotent: it merges, so granting
+  // the same permission twice leaves one row.
+  $available = array_keys(module_invoke_all('permission'));
+  $granted = myapi_building_admin_filter_available_permissions(
+    myapi_building_admin_permissions(),
+    $available
+  );
+
+  if ($granted) {
+    user_role_grant_permissions($role->rid, $granted);
+  }
+}
+
+/**
  * Creates the my_api_tokens table on sites where the module is already enabled.
  */
 function myapi_update_7001() {
@@ -1104,4 +1222,25 @@ function myapi_update_7010() {
 function myapi_update_7011() {
   _myapi_reservations_install();
   myapi_mail_system_register();
+}
+
+/**
+ * SPEC 49: creates the 'administrador edificio' role, its user field and its
+ * permissions.
+ *
+ * Runs the same idempotent _myapi_building_admin_install() used by
+ * hook_install(), so re-running it creates no second role, no second field and
+ * no duplicate row in role_permission.
+ *
+ * The number is 7012 and NOT 7011: SPEC 50 already took 7011 and it is run in
+ * production, and system_update_7000() only executes numbers above the stored
+ * schema_version — reusing it would leave this update unrun on every existing
+ * site.
+ *
+ * Nothing is assigned to anyone here: the role is created empty on purpose,
+ * and giving it to a person is a manual task at /user/N/edit, together with
+ * their condominiums.
+ */
+function myapi_update_7012() {
+  _myapi_building_admin_install();
 }

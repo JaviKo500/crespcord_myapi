@@ -466,25 +466,115 @@ function myapi_node_update($node) {
 }
 
 /**
+ * Implements hook_node_access().
+ *
+ * The per-node half of the condominium filter of SPEC 49: a user holding the
+ * 'administrador edificio' role only reaches nodes of their assigned
+ * condominiums. The other half is myapi_query_node_access_alter(), which
+ * narrows the listings; this one closes the direct URL.
+ *
+ * Returns NODE_ACCESS_DENY only when ALL of these hold, and NODE_ACCESS_IGNORE
+ * otherwise:
+ * - the account holds the role (nobody else's access changes, the API
+ *   included);
+ * - the node's type is in myapi_building_admin_condominium_map();
+ * - its condominium could be resolved;
+ * - and that condominium is not among the assigned ones — where "no
+ *   condominium assigned at all" denies everything, by design.
+ *
+ * It NEVER returns NODE_ACCESS_ALLOW. Allowing here would short-circuit every
+ * other check Drupal makes — unpublished nodes, other modules' hooks — turning
+ * a condominium filter into a permission escalation. IGNORE means "I have
+ * nothing to say", which is exactly the case for every node this role may see.
+ *
+ * Two shapes of call are stepped around on the first lines:
+ * - $op 'create' arrives with $node as a TYPE STRING, not an object. Creation
+ *   is out of this hook's reach by design; the bulletin case is covered in
+ *   myapi_node_validate() and the area/reservation one is an accepted risk
+ *   written down in the spec.
+ * - A user with 'bypass node access' (administrator) never reaches this hook
+ *   at all: node_access() returns before invoking it. That is why an account
+ *   holding both roles keeps seeing everything.
+ *
+ * @param object|string $node
+ *   The node being checked, or the type string on 'create'.
+ * @param string $op
+ *   'view', 'update', 'delete' or 'create'.
+ * @param object $account
+ *   The account the check is made for.
+ *
+ * @return int
+ *   NODE_ACCESS_DENY or NODE_ACCESS_IGNORE.
+ */
+function myapi_node_access($node, $op, $account) {
+  if (!is_object($node) || ($op !== 'view' && $op !== 'update' && $op !== 'delete')) {
+    return NODE_ACCESS_IGNORE;
+  }
+
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+
+  if (!myapi_building_admin_is($account)) {
+    return NODE_ACCESS_IGNORE;
+  }
+
+  $decision = myapi_building_admin_access_decision(
+    myapi_building_admin_node_condominium($node),
+    myapi_building_admin_condominium_ids($account)
+  );
+
+  return $decision === 'deny' ? NODE_ACCESS_DENY : NODE_ACCESS_IGNORE;
+}
+
+/**
+ * Implements hook_query_TAG_alter() for the 'node_access' tag.
+ *
+ * The listing half of the SPEC 49 condominium filter; myapi_node_access() is
+ * the per-node half. Glue only: everything it decides lives in
+ * includes/myapi.building_admin.inc, next to the catalogues it reads.
+ *
+ * Scope worth stating out loud, because it is wider than /admin/content: this
+ * runs on EVERY query tagged 'node_access', which includes the
+ * entityreference autocompletes of the node forms. That is deliberate — it is
+ * what keeps the condominium selectors offering the assigned condominiums and
+ * only those — and it is written down in docs/building-admin-role.md so it is
+ * not diagnosed later as a bug.
+ *
+ * No query of this module carries that tag (checked across resources/ and
+ * includes/), so the api/v1/... endpoints are untouched.
+ */
+function myapi_query_node_access_alter(QueryAlterableInterface $query) {
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+  myapi_building_admin_alter_node_query($query);
+}
+
+/**
  * Implements hook_node_validate().
  *
- * Glue only: ignores everything that is not an 'area' node and delegates the
- * HH:MM format check of field_open_time / field_close_time to
- * includes/myapi.area_admin.inc. The type guard on the first line keeps every
- * other node form untouched and stops the include from being loaded on them.
+ * Glue only, dispatching by node type. Every type not named below falls
+ * through untouched, and its include is never loaded:
+ * - 'area' — HH:MM format of field_open_time / field_close_time (SPEC 46),
+ *   in includes/myapi.area_admin.inc. Unchanged behaviour.
+ * - 'boletin' — a building admin may only publish 'Condominio' bulletins of
+ *   their assigned condominiums (SPEC 49), in
+ *   includes/myapi.building_admin.inc. Every other user passes through.
  *
  * This hook is reached from node_form_validate() only, so it guards the admin
- * node form (node/add/area and node/%/edit) and nothing else: a programmatic
+ * node form (node/add/... and node/%/edit) and nothing else: a programmatic
  * node_save() — a migration, drush, or the node the reservation endpoints save
- * — does not go through form validation and is deliberately out of scope
- * (SPEC 46).
+ * — does not go through form validation and is deliberately out of scope.
  */
 function myapi_node_validate($node, $form, &$form_state) {
-  if ($node->type !== 'area') {
-    return;
+  switch ($node->type) {
+    case 'area':
+      module_load_include('inc', 'myapi', 'includes/myapi.area_admin');
+      myapi_area_validate_times($node, $form, $form_state);
+      return;
+
+    case 'boletin':
+      module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+      myapi_building_admin_validate_bulletin($node, $form, $form_state);
+      return;
   }
-  module_load_include('inc', 'myapi', 'includes/myapi.area_admin');
-  myapi_area_validate_times($node, $form, $form_state);
 }
 
 /**
