@@ -178,6 +178,9 @@ Since SPEC 46, `field_open_time` and `field_close_time` are validated as `HH:MM`
 on a 24h clock (`00:00`–`23:59`, leading zero required) when an area is saved
 from the Drupal admin form. The rule is format-only: `close_time <= open_time`
 stays legal, because that is how an overnight area is expressed (SPEC 41).
+Since SPEC 52 that rule lives in `includes/myapi.time_format.inc` and is shared
+with the `reservation` start/end times; the behaviour of the area form did not
+change with the move.
 
 The API does **not** validate the format on read: `open_time` and `close_time`
 are still returned exactly as stored, so an area saved with a malformed value

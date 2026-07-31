@@ -1,5 +1,7 @@
 # SPEC 46 — Validación de formato HH:MM de los horarios del área en el admin
 
+> **Nota (SPEC 52, 2026-07-31):** la regla que este spec describe sigue vigente y el formulario de `area` se comporta igual, pero su código se movió. `MYAPI_AREA_TIME_PATTERN` y `myapi_area_time_is_valid()` ya no existen: viven en `includes/myapi.time_format.inc` como `MYAPI_TIME_FORMAT_PATTERN` y `myapi_time_format_is_valid()`, compartidos con `field_start_time` / `field_end_time` del bundle `reservation`. `includes/myapi.area_admin.inc` queda como punto de entrada del bundle, y `tests/unit/AreaTimeFormatTest.php` pasó a ser `tests/unit/TimeFormatTest.php`. La decisión "solo `area`" de este spec fue revertida por SPEC 52.
+
 > **Estado:** Implemented · **Depende de:** SPEC 32 (`field_open_time` / `field_close_time` como `text` con `max_length = 5` en el bundle `area`), SPEC 41 (áreas que cierran tras medianoche: `close <= open` es legal) · **Fecha:** 2026-07-27
 > **Objetivo:** Impedir que un nodo `area` se guarde desde el formulario de administración de Drupal con `field_open_time` o `field_close_time` en un formato distinto de `HH:MM` (24 h), mediante `hook_node_validate()` delegado a un include nuevo, sin tocar ningún endpoint, ni el esquema, ni el contrato JSON de la API.
 

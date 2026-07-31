@@ -248,6 +248,29 @@ full schema definition.
 | `field_data_field_cancelled_by` | `entity_id`, `field_cancelled_by_value` | `cancelled_by`, text. Left join. |
 | `field_data_field_cancel_reason` | `entity_id`, `field_cancel_reason_value` | `cancel_reason`, text. Left join. |
 
+**Reservations saved from the Drupal admin form**
+
+Since SPEC 52, `field_start_time` and `field_end_time` are validated as `HH:MM`
+on a 24h clock (`00:00`–`23:59`, leading zero required) whenever a reservation
+is saved from the node form, for every user. Before that they accepted any
+string of up to five characters, and a malformed value breaks the fixed-width
+string comparisons this endpoint relies on (`time_from`/`time_to` bounds and the
+`start_time` sort). The rule is format-only: `end_time <= start_time` stays
+legal, because that is how a reservation crossing midnight is stored (SPEC 41),
+and the rule itself lives in `includes/myapi.time_format.inc`, shared with the
+area opening/closing times.
+
+The admin form still does **not** apply the rest of the business rules that
+`POST /api/v1/reservations` applies — overlap with another reservation, the
+area's concurrent capacity, the area's opening window, a date in the past. A
+reservation created from the back office can therefore violate any of them, and
+this endpoint returns it like any other.
+
+The API does **not** validate the format on read: `start_time` and `end_time`
+are returned exactly as stored, so a reservation saved with a malformed value
+before that validation existed keeps being served as-is until its node is saved
+again.
+
 **Possible errors**
 | Code | `error_code` | When |
 |------|--------------|------|
