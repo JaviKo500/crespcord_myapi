@@ -104,6 +104,8 @@ Instancia sobre la entidad usuario, creada con `_myapi_reservations_ensure_insta
 ]
 ```
 
+> **Corregido por SPEC 53.** Ese bloque `settings` está en el sitio equivocado: en Drupal 7 `entityreference`, `handler` y `handler_settings` son settings **de nivel campo**, no de instancia, así que el handler nunca los leyó y el autocompletado de etiquetas ofrecía cualquier nodo del sitio en vez de solo condominios. La instancia ya no lleva `settings`; los cinco campos `entityreference` del módulo los toman de `_myapi_entityreference_field_settings()`, y `myapi_update_7016()` repara los sitios ya instalados. Ver `specs/_shared/53-entityreference-selection-settings.md`.
+
 La Field API crea `field_data_field_condominio_admin` y `field_revision_field_condominio_admin` con `entity_type = 'user'`.
 
 ### 3. Catálogos en código (fuente única de verdad)

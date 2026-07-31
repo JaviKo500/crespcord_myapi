@@ -38,6 +38,7 @@ responses are byte for byte what they were before.
 drush updb    # 7012: role, field and permissions
               # 7013: the text-format permission + the area-notes default format
               # 7015: revokes 'view the administration theme'
+              # 7016: repairs the field_condominio_admin autocomplete (SPEC 53)
 drush cc all  # picks up the new includes/myapi.building_admin.inc of files[]
 ```
 
@@ -109,6 +110,18 @@ The role is created **empty**. Assigning it to a person is manual.
 cardinality, with an instance on the `user` entity. It shows at
 `/admin/config/people/accounts/fields` and is edited at `/user/N/edit` as a tags
 autocomplete that only offers `condominio` nodes.
+
+> **"Only `condominio` nodes" needs `myapi_update_7016()` on sites installed
+> before SPEC 53.** The `handler_settings.target_bundles` that restricts the
+> autocomplete is a **field-level** setting in Drupal 7 entityreference, and this
+> installer wrote it on the *instance*, where the selection handler never looks —
+> so the tags autocomplete of `/user/N/edit` offered every node of the site, not
+> just condominiums. Assigning the wrong node there is not cosmetic: the
+> condominium map of this role is read straight off this field. The settings now
+> come from `_myapi_entityreference_field_settings()` in `myapi.install`, shared
+> with the four reservation fields that had the same bug; the repair for existing
+> sites is `myapi_update_7016()`. See `docs/reservations-install.md` and
+> `specs/_shared/53-entityreference-selection-settings.md`.
 
 ### The permissions
 

@@ -70,6 +70,8 @@ No se crean tablas SQL propias (a diferencia de `myapi_tokens`). Se crean **enti
 
 `field_condominium` se crea una sola vez con `field_create_field()` y se añade como **instancia** a `area` y a `reservation` (ambos apuntan al mismo bundle `condominio`).
 
+> **Nota de SPEC 53.** Esta tabla lo dice bien — `handler` y `handler_settings.target_bundles` son settings **de campo** —, pero la implementación los escribió en las instancias, donde `entityreference` no los lee, y los cuatro autocompletados de abajo ofrecieron cualquier nodo del sitio hasta que se corrigió. Las columnas "Settings" de las dos tablas de instancias siguientes describen, por tanto, el **campo** de cada una, no su instancia: en el código solo `_myapi_entityreference_field_settings()` decide qué bundle es referenciable. Ver `specs/_shared/53-entityreference-selection-settings.md`.
+
 ### Instancias del bundle `area`
 
 | Instancia | Tipo de campo | Requerido | Default | Widget | Settings de instancia |

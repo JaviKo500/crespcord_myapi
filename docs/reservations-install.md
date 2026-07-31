@@ -107,13 +107,27 @@ as an **instance** to both `area` and `reservation`, both pointing at the
 `condominio` bundle. `field_info_field('field_condominium')` returns a single
 field with two instances.
 
-> **entityreference placement.** Only `target_type` is a field-level setting in
-> Drupal 7 entityreference. The `handler` and `handler_settings.target_bundles`
-> that restrict the referenceable bundle live on the **instance** — that is where
-> entityreference reads them — so `field_unit` → `vivienda`, `field_area` →
-> `area`, and both `field_condominium` instances → `condominio` are configured
-> at the instance level. `field_requester` targets `user` and is not restricted
-> by bundle.
+> **entityreference placement.** `target_type`, `handler` and
+> `handler_settings.target_bundles` are **all three field-level** settings in
+> Drupal 7 entityreference — the selection handler reads them off the *field*,
+> never off the instance. All of them therefore come from one catalogue,
+> `_myapi_entityreference_field_settings()` in `myapi.install`: `field_unit` →
+> `vivienda`, `field_area` → `area`, and `field_condominium` → `condominio` for
+> both of its instances. `field_requester` targets `user`, whose entity type has
+> a single bundle, so it carries no `target_bundles` and that absence is correct.
+>
+> Because these settings are field-level, a **shared** field has one selection
+> setting for all its bundles. That is harmless for `field_condominium` (both
+> bundles want `condominio`), but a future field needing different bundles per
+> bundle would have to be split in two — exactly like `field_area_status` and
+> `field_reservation_status` already are for their `allowed_values`.
+>
+> This is the SPEC 53 bug: until then the module wrote `handler` and
+> `handler_settings` on the **instances**, where entityreference never looks, so
+> the handler ran with no bundle condition and every autocomplete of the module
+> offered every node of the site — a `vivienda` or a `boletin` came up while
+> typing in `field_condominium`. See
+> [The SPEC 53 repair](#the-spec-53-repair-myapi_update_7016) below.
 
 ---
 
@@ -172,6 +186,50 @@ The hook reuses the same idempotent `_ensure_field` / `_ensure_instance`
 sub-helpers, so re-running it never duplicates the field/instance nor throws a
 `FieldException`. It only adds the field and its `area` instance — no REST
 endpoint, no business logic — and leaves `reservation` and `condominio` alone.
+
+### The SPEC 53 repair (`myapi_update_7016`)
+
+Fixing the installer is not enough for a site that already exists:
+`_myapi_reservations_ensure_field()` **skips any field that exists**, on purpose,
+so no `drush updb` would ever have reached the five entityreference fields
+created with their selection settings in the wrong place. `myapi_update_7016()`
+is the one thing in this module that writes over an existing field definition:
+
+```bash
+drush updb    # runs myapi_update_7016 → repairs the selection settings
+drush cc all
+```
+
+What it touches, and what it does not:
+
+| | |
+|---|---|
+| Fields repaired | `field_condominium`, `field_unit`, `field_area`, `field_requester`, `field_condominio_admin` |
+| What is written | `handler` and `handler_settings` on the **field**, via `field_update_field()` |
+| Data | **None.** Not one `field_data_*` row is read or written — this is a definition change |
+| `target_type` | Never touched. A field whose `target_type` disagrees with the catalogue is **reported to the log and skipped**, because changing it would orphan every stored `target_id` |
+| Values set by hand | Never overwritten. The update **fills in what is missing**; a `target_bundles` an administrator narrowed in the UI survives |
+| Old instance settings | Left in place. entityreference never reads instance settings, so the leftovers cost nothing |
+
+The decision of what counts as "missing" is a pure function,
+`_myapi_entityreference_repair_settings()`, covered by
+`tests/unit/EntityReferenceFieldSettingsTest.php`. Re-running the update finds
+everything in place and writes nothing.
+
+**Faster alternative for a single site.** Ticking the referenceable bundle at
+`/admin/structure/types/manage/area/fields/field_condominium` writes the same
+field-level setting through the UI and fixes both `field_condominium` instances
+at once. The update hook exists so this does not have to be done by hand, field
+by field, environment by environment.
+
+**How to confirm it on a site:**
+
+```bash
+drush php-eval "print_r(field_info_field('field_condominium')['settings']);"
+```
+
+`handler_settings.target_bundles` must show `condominio`. If only `target_type`
+comes back, the update has not run there.
 
 ---
 
