@@ -157,13 +157,20 @@ function myapi_building_admin_permissions($include_claim_type = NULL) {
   }
 
   // Back office access. Without these the role holds content permissions it
-  // cannot reach: no /admin/content, no admin theme on the node forms, no
-  // toolbar to navigate with.
+  // cannot reach: no /admin/content and no admin theme on the node forms.
+  //
+  // 'access toolbar' was in this list when SPEC 49 was approved and was taken
+  // out afterwards, on the client's call: the role navigates through its own
+  // sidebar menu, restricted to what it manages, and Drupal's black toolbar
+  // offered it 'Estructura' and 'Configuración' entries it can only get a 403
+  // from. Removing the permission from this catalogue does NOT revoke it on a
+  // site that already has it — the installer never revokes — so an existing
+  // environment also needs:
+  //   drush role-remove-perm "administrador edificio" "access toolbar"
   $permissions[] = 'access content';
   $permissions[] = 'access content overview';
   $permissions[] = 'access administration pages';
   $permissions[] = 'view the administration theme';
-  $permissions[] = 'access toolbar';
 
   return $permissions;
 }

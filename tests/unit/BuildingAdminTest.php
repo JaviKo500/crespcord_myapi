@@ -117,7 +117,7 @@ class BuildingAdminTest extends TestCase {
 
   /**
    * The back-office permissions, without which the content ones are
-   * unreachable: no /admin/content, no admin theme, no toolbar.
+   * unreachable: no /admin/content and no admin theme on the node forms.
    */
   public function testPermissionsIncludeTheBackOfficeAccess() {
     $permissions = myapi_building_admin_permissions(FALSE);
@@ -127,9 +127,22 @@ class BuildingAdminTest extends TestCase {
       'access content overview',
       'access administration pages',
       'view the administration theme',
-      'access toolbar',
     ) as $permission) {
       $this->assertContains($permission, $permissions);
+    }
+  }
+
+  /**
+   * The role navigates through its own sidebar menu, not Drupal's toolbar.
+   *
+   * 'access toolbar' was granted when SPEC 49 was approved and was dropped
+   * afterwards: the black toolbar offered 'Estructura' and 'Configuración'
+   * entries this role can only get a 403 from. This test is here so it is not
+   * silently added back.
+   */
+  public function testToolbarIsNotGranted() {
+    foreach (array(FALSE, TRUE) as $has_claims) {
+      $this->assertNotContains('access toolbar', myapi_building_admin_permissions($has_claims));
     }
   }
 

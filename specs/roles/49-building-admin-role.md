@@ -158,7 +158,19 @@ El mapa del punto 5 del alcance, en su forma concreta:
 | `access content overview` | node | Entrar a `/admin/content` |
 | `access administration pages` | system | Navegar el back office |
 | `view the administration theme` | system | Formularios de nodo con el tema admin |
-| `access toolbar` | toolbar | Barra de administración |
+| ~~`access toolbar`~~ | ~~toolbar~~ | **Retirado durante la implementación** (ver nota abajo) |
+
+> **Cambio posterior a la aprobación — `access toolbar` retirado.** Al probar el
+> rol se vio que la barra negra de Drupal le ofrece entradas de *Estructura* y
+> *Configuración* de las que solo puede obtener un 403. Decisión del cliente:
+> el rol navega por un **menú propio en el sidebar**, acotado a lo que gestiona
+> (boletines, áreas, reservas y el calendario), que es configuración del sitio y
+> no de este módulo. `access administration pages` y `access content overview`
+> se mantienen, así que `/admin/content` sigue siendo accesible por URL.
+>
+> Como el instalador nunca revoca, en los entornos que ya lo tienen concedido
+> hay que ejecutar además:
+> `drush role-remove-perm "administrador edificio" "access toolbar"`
 
 **Ningún permiso `delete any … content` ni `delete own … content`.** El rol no borra contenido: la baja de una reserva se hace cancelándola (spec 36 / 47) y la de un boletín o un área, despublicándola desde el formulario de edición. `hook_node_access()` sigue denegando también la operación `delete` sobre nodos ajenos, como defensa redundante por si alguien concede el permiso a mano más adelante.
 

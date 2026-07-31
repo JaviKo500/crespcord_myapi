@@ -37,6 +37,40 @@ the hooks fatal on the first node listing.
 `myapi_update_7012()` is **idempotent**: running it twice creates no second
 role, no second field and no duplicate row in `role_permission`.
 
+### One manual step per environment: the login rule
+
+> **Without this, a building admin cannot log in at all.** They authenticate and
+> are thrown straight back out — the log shows `Sesión abierta` immediately
+> followed by `Sesión cerrada`.
+
+The site has a Rules reaction rule, **`rules_validar_condominio_activo`**
+("validar condominio activo"), on the *User has logged in* event. It counts the
+condominiums where the account is `field_propietario` or `field_ocupante` and,
+finding none, redirects to `user/logout`. A building admin is **not a
+resident** — they manage a building, they do not live in one — so they have
+neither, and the rule expels them.
+
+The rule already carries an exemption list: its condition is
+`NOT user_has_role(...)` over a set of staff role ids. The fix is to add this
+role to that list:
+
+`/admin/config/workflow/rules` → **validar condominio activo** → edit the
+condition *NOT User has role(s)* → tick **`administrador edificio`** → save.
+
+> **This does not travel with the module.** That Rules condition stores role
+> **ids**, not names — the opposite of the criterion used throughout this
+> feature, where the `rid` is never referenced because it differs per
+> environment. So `drush updb` does not carry it, and the exemption must be
+> redone by hand in **every** environment where the role is installed (local,
+> staging, production). Get the id with:
+>
+> ```bash
+> drush sqlq "SELECT rid, name FROM dr_role ORDER BY rid"
+> ```
+>
+> Giving the operator a fake `vivienda` instead would also unblock the login,
+> but it puts a non-resident into the residents' data and is not the fix.
+
 ---
 
 ## What the installer creates
@@ -69,7 +103,14 @@ autocomplete that only offers `condominio` nodes.
 | `access content overview` | Enter `/admin/content` |
 | `access administration pages` | Navigate the back office |
 | `view the administration theme` | Node forms in the admin theme |
-| `access toolbar` | Administration toolbar |
+
+**`access toolbar` is deliberately NOT granted.** Drupal's black toolbar offers
+*Estructura* and *Configuración* entries this role can only get a 403 from, so
+it navigates through its own sidebar menu instead — see *Navigation* below. It
+was in the catalogue when SPEC 49 was approved and was dropped during
+implementation; a site that already had it granted needs
+`drush role-remove-perm "administrador edificio" "access toolbar"`, because the
+installer never revokes.
 
 **No `delete any … content` and no `delete own … content`, ever.** The role does
 not delete: a reservation is taken down by cancelling it, a bulletin or an area
@@ -250,6 +291,41 @@ unchanged.
 
 The **cancellation** email (`reservation_cancelled_admin`) still goes to
 `backend` only. Widening it was not part of SPEC 49.
+
+---
+
+## Navigation (site configuration, not this module)
+
+The role has no toolbar, so it needs a menu. This is **Drupal site
+configuration** — menus, blocks and view permissions — and none of it lives in
+`myapi`; it is written here because without it the role logs in and finds no
+way to reach anything.
+
+1. `/admin/structure/menu/add` → a new menu, e.g. **Administración de edificio**.
+2. Add one link per thing the role actually manages:
+
+   | Link | Path |
+   |---|---|
+   | Contenido | `admin/content` |
+   | Calendario de reservas | `admin/content/reservation-calendar` |
+   | Nuevo boletín | `node/add/boletin` |
+   | Nueva área | `node/add/area` |
+   | Nueva reserva | `node/add/reservation` |
+
+3. `/admin/structure/block` → place that menu's block in the sidebar region of
+   the front-end theme, and under **Roles** tick **only**
+   `administrador edificio`.
+
+Drupal hides a menu link when the user cannot access its path, so the menu
+filters itself: nothing here can show an entry the role would get a 403 from.
+
+> **Do not reuse the site's existing administration sidebar.** That one holds
+> Gestor Bancos, Personas, Reporte Pagos, Reporte Gastos and the rest of the
+> financial back office. Those screens are **Views of this site**, and a view
+> only goes through the condominium filter if its query carries the
+> `node_access` tag — several of them aggregate across condominiums by design.
+> Handing that menu to a building admin would undo the isolation this whole
+> feature exists to provide.
 
 ---
 
