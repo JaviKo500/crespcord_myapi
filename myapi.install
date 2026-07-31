@@ -489,6 +489,152 @@ function _myapi_reservations_ensure_field($field_name, array $definition) {
 }
 
 /**
+ * The entityreference selection settings of every field this module creates.
+ *
+ * Single source of truth, read by three callers: the two installers, which
+ * create the fields with these settings, and myapi_update_7016(), which repairs
+ * the fields of sites created before this catalogue existed.
+ *
+ * **Where these settings live, and why this catalogue exists.** All three keys
+ * — 'target_type', 'handler' and 'handler_settings' — are FIELD-level settings
+ * in Drupal 7 entityreference, never instance-level. The selection handler
+ * reads them from the field and only from the field:
+ *
+ *   // EntityReference_SelectionHandler_Generic::buildEntityFieldQuery()
+ *   if (!empty($this->field['settings']['handler_settings']['target_bundles'])) {
+ *     $query->entityCondition('bundle', ..., 'IN');
+ *   }
+ *
+ * The UI is what misleads: entityreference exposes them through
+ * hook_field_settings_form(), which Drupal renders inside the *instance* edit
+ * screen even though it saves them on the field. This module wrote them into
+ * the instance until SPEC 53, so the handler never saw a target_bundles and
+ * EVERY autocomplete of the module offered every node of the site — a vivienda
+ * or a boletin came up while typing in field_condominium. Keeping the
+ * definitions here, in one array, is what stops that from being reintroduced
+ * one field at a time; EntityReferenceFieldSettingsTest pins it.
+ *
+ * A consequence worth stating: because they are field-level, a shared field
+ * carries ONE selection setting for all its bundles. field_condominium is
+ * attached to both 'area' and 'reservation' and both want 'condominio', so
+ * nothing is lost here — but a future field needing different bundles per
+ * bundle would need two fields, exactly like field_area_status and
+ * field_reservation_status already do for their allowed_values.
+ *
+ * 'sort' is pinned to 'none' everywhere: entityreference then orders by the
+ * entity label, which is the node title (or the username), and that is the
+ * order the autocomplete should show.
+ *
+ * @return array
+ *   Field name => the field-level 'settings' array of that field.
+ */
+function _myapi_entityreference_field_settings() {
+  // MYAPI_BUILDING_ADMIN_CONDO_FIELD lives in the role's include. Explicit,
+  // like every other use of it in this file: an .install runs early enough that
+  // the D7 registry may not have the files[] entries warm.
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+
+  $condominium = [
+    'target_type'      => 'node',
+    'handler'          => 'base',
+    'handler_settings' => [
+      'target_bundles' => ['condominio' => 'condominio'],
+      'sort'           => ['type' => 'none'],
+    ],
+  ];
+
+  return [
+    // Shared by the 'area' and 'reservation' bundles.
+    'field_condominium' => $condominium,
+    // On 'user', SPEC 49. Same target, unlimited cardinality — cardinality is a
+    // separate field property and is not part of these settings.
+    MYAPI_BUILDING_ADMIN_CONDO_FIELD => $condominium,
+    'field_unit'        => [
+      'target_type'      => 'node',
+      'handler'          => 'base',
+      'handler_settings' => [
+        'target_bundles' => ['vivienda' => 'vivienda'],
+        'sort'           => ['type' => 'none'],
+      ],
+    ],
+    'field_area'        => [
+      'target_type'      => 'node',
+      'handler'          => 'base',
+      'handler_settings' => [
+        'target_bundles' => ['area' => 'area'],
+        'sort'           => ['type' => 'none'],
+      ],
+    ],
+    // The one field targeting 'user': the user entity has a single bundle, so
+    // there is no target_bundles to set and its ABSENCE is correct, not an
+    // oversight. What narrows this autocomplete to the residents of the
+    // assigned condominiums is the SPEC 51 'user_access' query alter, not a
+    // bundle condition.
+    'field_requester'   => [
+      'target_type'      => 'user',
+      'handler'          => 'base',
+      'handler_settings' => [
+        'sort' => ['type' => 'none'],
+      ],
+    ],
+  ];
+}
+
+/**
+ * Completes a field's entityreference settings without overwriting them.
+ *
+ * The rule is the same conservative one _myapi_building_admin_install() holds
+ * for permissions: FILL IN what is missing, never replace what somebody set. So
+ * a target_bundles adjusted by hand in production survives a `drush updb`,
+ * while a field that has none — the SPEC 53 bug — gets the catalogue's.
+ *
+ * Pure: no database, no Drupal. Takes the two arrays and returns the third, so
+ * tests/unit/EntityReferenceFieldSettingsTest.php exercises the whole decision
+ * without a site.
+ *
+ * @param array $current
+ *   The field's live 'settings' array, as field_info_field() returns it.
+ * @param array $wanted
+ *   The catalogue entry from _myapi_entityreference_field_settings().
+ *
+ * @return array|null
+ *   The settings to write, or NULL when nothing needs writing.
+ */
+function _myapi_entityreference_repair_settings(array $current, array $wanted) {
+  $repaired = $current;
+
+  if (empty($repaired['handler']) && !empty($wanted['handler'])) {
+    $repaired['handler'] = $wanted['handler'];
+  }
+
+  $handler_settings = isset($repaired['handler_settings']) && is_array($repaired['handler_settings'])
+    ? $repaired['handler_settings']
+    : [];
+  $wanted_handler_settings = isset($wanted['handler_settings']) && is_array($wanted['handler_settings'])
+    ? $wanted['handler_settings']
+    : [];
+
+  foreach ($wanted_handler_settings as $key => $value) {
+    if (empty($handler_settings[$key])) {
+      $handler_settings[$key] = $value;
+    }
+  }
+
+  // Only written when there is something to write: a field targeting an entity
+  // type with no bundle restriction must not gain an empty 'handler_settings'
+  // key just because this ran.
+  if ($handler_settings) {
+    $repaired['handler_settings'] = $handler_settings;
+  }
+
+  // 'target_type' is deliberately NOT repaired. It is the one setting that was
+  // always written at field level, changing it would orphan stored target_ids,
+  // and a mismatch there is a bug this update must report rather than paper
+  // over — see myapi_update_7016().
+  return $repaired == $current ? NULL : $repaired;
+}
+
+/**
  * Ensures a field instance exists on a bundle (idempotent).
  *
  * Instances are per bundle, so this checks the live instance definition on the
@@ -531,9 +677,11 @@ function _myapi_reservations_ensure_instance($field_name, $bundle, array $instan
  * (field_condominium once, shared by both bundles); (c) the per-bundle
  * instances.
  *
- * entityreference note: only 'target_type' is a field-level setting in D7; the
- * 'handler'/'handler_settings.target_bundles' that restrict the referenceable
- * bundle live on the instance, which is where entityreference reads them.
+ * entityreference note: 'target_type', 'handler' and
+ * 'handler_settings.target_bundles' are ALL field-level settings in D7 — the
+ * selection handler reads them off the field — so they come from
+ * _myapi_entityreference_field_settings() and never appear on an instance. The
+ * instances below carry label, required, widget and default value only.
  */
 function _myapi_reservations_install() {
   // (a) Content types.
@@ -552,11 +700,17 @@ function _myapi_reservations_install() {
 
   // (b) Fields (storage level). field_condominium is created once and shared
   // by both bundles.
+  //
+  // The entityreference ones take their whole 'settings' from the catalogue:
+  // that is where the referenceable bundles are decided, and the handler reads
+  // them from the field, not from the instance.
+  $reference_settings = _myapi_entityreference_field_settings();
+
   _myapi_reservations_ensure_field('field_condominium', [
     'field_name'  => 'field_condominium',
     'type'        => 'entityreference',
     'cardinality' => 1,
-    'settings'    => ['target_type' => 'node'],
+    'settings'    => $reference_settings['field_condominium'],
   ]);
   _myapi_reservations_ensure_field('field_image', [
     'field_name'  => 'field_image',
@@ -650,19 +804,19 @@ function _myapi_reservations_install() {
     'field_name'  => 'field_unit',
     'type'        => 'entityreference',
     'cardinality' => 1,
-    'settings'    => ['target_type' => 'node'],
+    'settings'    => $reference_settings['field_unit'],
   ]);
   _myapi_reservations_ensure_field('field_requester', [
     'field_name'  => 'field_requester',
     'type'        => 'entityreference',
     'cardinality' => 1,
-    'settings'    => ['target_type' => 'user'],
+    'settings'    => $reference_settings['field_requester'],
   ]);
   _myapi_reservations_ensure_field('field_area', [
     'field_name'  => 'field_area',
     'type'        => 'entityreference',
     'cardinality' => 1,
-    'settings'    => ['target_type' => 'node'],
+    'settings'    => $reference_settings['field_area'],
   ]);
   _myapi_reservations_ensure_field('field_date', [
     'field_name'  => 'field_date',
@@ -732,13 +886,8 @@ function _myapi_reservations_install() {
     'bundle'      => 'area',
     'label'       => 'Condominio',
     'required'    => 1,
-    'settings'    => [
-      'handler'          => 'base',
-      'handler_settings' => [
-        'target_bundles' => ['condominio' => 'condominio'],
-        'sort'           => ['type' => 'none'],
-      ],
-    ],
+    // No 'settings' here on purpose: the referenceable bundle is a field-level
+    // setting and lives in _myapi_entityreference_field_settings().
     'widget'      => ['type' => 'entityreference_autocomplete'],
   ]);
   _myapi_reservations_ensure_instance('field_image', 'area', [
@@ -870,13 +1019,8 @@ function _myapi_reservations_install() {
     'bundle'      => 'reservation',
     'label'       => 'Condominio',
     'required'    => 1,
-    'settings'    => [
-      'handler'          => 'base',
-      'handler_settings' => [
-        'target_bundles' => ['condominio' => 'condominio'],
-        'sort'           => ['type' => 'none'],
-      ],
-    ],
+    // Same field as the 'area' instance above, and the selection settings are
+    // shared with it because they are field-level. See the catalogue.
     'widget'      => ['type' => 'entityreference_autocomplete'],
   ]);
   _myapi_reservations_ensure_instance('field_unit', 'reservation', [
@@ -885,13 +1029,6 @@ function _myapi_reservations_install() {
     'bundle'      => 'reservation',
     'label'       => 'Vivienda',
     'required'    => 1,
-    'settings'    => [
-      'handler'          => 'base',
-      'handler_settings' => [
-        'target_bundles' => ['vivienda' => 'vivienda'],
-        'sort'           => ['type' => 'none'],
-      ],
-    ],
     'widget'      => ['type' => 'entityreference_autocomplete'],
   ]);
   _myapi_reservations_ensure_instance('field_requester', 'reservation', [
@@ -900,12 +1037,6 @@ function _myapi_reservations_install() {
     'bundle'      => 'reservation',
     'label'       => 'Solicitante',
     'required'    => 1,
-    'settings'    => [
-      'handler'          => 'base',
-      'handler_settings' => [
-        'sort' => ['type' => 'none'],
-      ],
-    ],
     'widget'      => ['type' => 'entityreference_autocomplete'],
   ]);
   _myapi_reservations_ensure_instance('field_area', 'reservation', [
@@ -914,13 +1045,6 @@ function _myapi_reservations_install() {
     'bundle'      => 'reservation',
     'label'       => 'Área',
     'required'    => 1,
-    'settings'    => [
-      'handler'          => 'base',
-      'handler_settings' => [
-        'target_bundles' => ['area' => 'area'],
-        'sort'           => ['type' => 'none'],
-      ],
-    ],
     'widget'      => ['type' => 'entityreference_autocomplete'],
   ]);
   _myapi_reservations_ensure_instance('field_date', 'reservation', [
@@ -1042,14 +1166,19 @@ function _myapi_building_admin_install() {
   // Field API creates field_data_field_condominio_admin and its revision table
   // with entity_type = 'user'.
   //
-  // Only 'target_type' is a field-level setting in D7; the handler and the
-  // target_bundles that restrict the autocomplete to condominiums live on the
-  // instance, which is where entityreference reads them.
+  // 'target_type', the handler and the target_bundles that restrict the
+  // autocomplete to condominiums are ALL field-level settings in D7
+  // entityreference, so all three come from the shared catalogue. Writing them
+  // on the instance — which is what this did until SPEC 53 — leaves the handler
+  // with no bundle condition and the tags autocomplete of /user/N/edit offers
+  // every node of the site.
+  $reference_settings = _myapi_entityreference_field_settings();
+
   _myapi_reservations_ensure_field(MYAPI_BUILDING_ADMIN_CONDO_FIELD, [
     'field_name'  => MYAPI_BUILDING_ADMIN_CONDO_FIELD,
     'type'        => 'entityreference',
     'cardinality' => FIELD_CARDINALITY_UNLIMITED,
-    'settings'    => ['target_type' => 'node'],
+    'settings'    => $reference_settings[MYAPI_BUILDING_ADMIN_CONDO_FIELD],
   ]);
   _myapi_reservations_ensure_instance(MYAPI_BUILDING_ADMIN_CONDO_FIELD, 'user', [
     'field_name'  => MYAPI_BUILDING_ADMIN_CONDO_FIELD,
@@ -1058,13 +1187,6 @@ function _myapi_building_admin_install() {
     'label'       => 'Condominios administrados',
     'required'    => 0,
     'description' => 'Condominios que este usuario puede administrar. Solo aplica al rol "administrador edificio"; sin ningún condominio, no verá contenido alguno.',
-    'settings'    => [
-      'handler'          => 'base',
-      'handler_settings' => [
-        'target_bundles' => ['condominio' => 'condominio'],
-        'sort'           => ['type' => 'none'],
-      ],
-    ],
     'widget'      => ['type' => 'entityreference_autocomplete_tags'],
   ], 'user');
 
@@ -1387,4 +1509,117 @@ function myapi_update_7015() {
   }
 
   user_role_revoke_permissions($role->rid, ['view the administration theme']);
+}
+
+/**
+ * Moves the entityreference selection settings onto the fields (SPEC 53).
+ *
+ * The bug this repairs: every autocomplete of this module offered every node of
+ * the site. Typing in field_condominium of the area form came back with
+ * viviendas, boletines and recibos, and the same happened in field_unit,
+ * field_area and field_condominio_admin. The cause was placement, not logic —
+ * 'handler' and 'handler_settings.target_bundles' were written on the INSTANCE,
+ * while the entityreference selection handler reads them off the FIELD, so it
+ * ran with no bundle condition at all. See
+ * _myapi_entityreference_field_settings().
+ *
+ * Why an update hook is needed on top of fixing the installer:
+ * _myapi_reservations_ensure_field() only creates what is missing and never
+ * touches a field that exists, on purpose, so no `drush updb` would ever have
+ * reached the fields of an installed site. This is the one place that writes
+ * over them, and it uses field_update_field(), which changes the field
+ * definition only — not one row of data moves.
+ *
+ * Conservative, like the rest of this installer: it FILLS IN what is missing
+ * and never replaces a target_bundles somebody set by hand
+ * (_myapi_entityreference_repair_settings() decides that, and is unit-tested).
+ * A field this module never created is left alone; a field whose target_type
+ * disagrees with the catalogue is REPORTED and skipped, because changing that
+ * one would orphan every target_id already stored in it.
+ *
+ * The dead 'handler_settings' left on the old instances is not cleaned up:
+ * entityreference never reads instance settings, so it costs nothing, and a
+ * field_update_instance() per bundle would be a write with no effect to show
+ * for it.
+ *
+ * Idempotent: a second run finds every setting already in place and writes
+ * nothing.
+ *
+ * @return string
+ *   A summary line, shown by drush and by update.php.
+ */
+function myapi_update_7016() {
+  $repaired = [];
+  $skipped = [];
+  $missing = [];
+
+  foreach (_myapi_entityreference_field_settings() as $field_name => $wanted) {
+    // field_read_field() and NOT field_info_field(): the first returns the
+    // definition as it is STORED, which is what may be written back with
+    // field_update_field(). The second returns the cached, processed one — it
+    // carries a 'bundles' key that does not belong in the field row, and during
+    // a `drush updb` that cache is not guaranteed to be warm.
+    $field = field_read_field($field_name);
+
+    if (!$field) {
+      // Nothing to repair — _myapi_reservations_install() creates it right,
+      // and a site may legitimately not have it (no claims bundle, a field
+      // deleted by hand).
+      $missing[] = $field_name;
+      continue;
+    }
+
+    $current = isset($field['settings']) && is_array($field['settings']) ? $field['settings'] : [];
+
+    if (!empty($current['target_type']) && $current['target_type'] !== $wanted['target_type']) {
+      $skipped[] = $field_name;
+      watchdog(
+        'myapi',
+        'SPEC 53: field @field targets @actual, not @expected; its selection settings were left untouched.',
+        [
+          '@field'    => $field_name,
+          '@actual'   => $current['target_type'],
+          '@expected' => $wanted['target_type'],
+        ],
+        WATCHDOG_WARNING
+      );
+      continue;
+    }
+
+    $settings = _myapi_entityreference_repair_settings($current, $wanted);
+    if ($settings === NULL) {
+      continue;
+    }
+
+    $field['settings'] = $settings;
+    field_update_field($field);
+    $repaired[] = $field_name;
+  }
+
+  // The autocompletes read the field definition through the field info cache,
+  // which field_update_field() clears on each write. Cleared once more here so
+  // a run that repaired nothing still leaves a warm, correct cache.
+  field_info_cache_clear();
+
+  if ($repaired) {
+    watchdog(
+      'myapi',
+      'SPEC 53: entityreference selection settings repaired on @fields.',
+      ['@fields' => implode(', ', $repaired)],
+      WATCHDOG_NOTICE
+    );
+  }
+
+  $summary = $repaired
+    ? t('Selection settings repaired on: @fields.', ['@fields' => implode(', ', $repaired)])
+    : t('Every entityreference field already carried its selection settings; nothing to repair.');
+
+  if ($missing) {
+    $summary .= ' ' . t('Not present on this site: @fields.', ['@fields' => implode(', ', $missing)]);
+  }
+  if ($skipped) {
+    $summary .= ' ' . t('Skipped for a target_type mismatch (see the log): @fields.', ['@fields' => implode(', ', $skipped)]);
+  }
+
+  return $summary;
 }
