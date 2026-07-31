@@ -21,6 +21,11 @@
  * the tested code makes of it. They exist so the cancellation-reason texts can
  * be asserted character by character. Nothing here touches the database: the
  * suite still covers pure logic only.
+ *
+ * t() and form_set_error() (SPEC 52) are of that same kind, and are what makes
+ * myapi_time_format_validate_fields() testable without a site: the walker is
+ * shared by the 'area' and 'reservation' node forms, so one bug in it silences
+ * the validation of four fields at once.
  */
 
 if (!function_exists('module_load_include')) {
@@ -55,5 +60,36 @@ if (!function_exists('format_date')) {
    */
   function format_date($timestamp, $type = 'medium', $format = '', $timezone = NULL, $langcode = NULL) {
     return date($format, $timestamp);
+  }
+}
+
+if (!function_exists('t')) {
+  /**
+   * The placeholder substitution only: no string catalogue is involved outside
+   * Drupal, and every myapi caller passes '@name' style placeholders, which
+   * Drupal itself resolves with strtr() after check_plain(). Sanitisation is
+   * left out on purpose — the tested code asserts the message text, and
+   * escaping it here would only make the assertions harder to read.
+   */
+  function t($string, array $args = [], array $options = []) {
+    return $args ? strtr($string, $args) : $string;
+  }
+}
+
+if (!function_exists('form_set_error')) {
+  /**
+   * Records the error instead of touching a form: Drupal keeps these in a
+   * static and prints them on the next page load, which is not observable from
+   * a unit test. The recorded map is keyed by the element path exactly as the
+   * production code builds it, so a test can assert WHICH input would be
+   * flagged and not just how many errors came out.
+   *
+   * Tests reset $GLOBALS['myapi_test_form_errors'] in setUp(); the null
+   * coalescing keeps a stray call outside a test from fataling.
+   */
+  function form_set_error($name = NULL, $message = '') {
+    $GLOBALS['myapi_test_form_errors'] = $GLOBALS['myapi_test_form_errors'] ?? [];
+    $GLOBALS['myapi_test_form_errors'][$name] = $message;
+    return $GLOBALS['myapi_test_form_errors'];
   }
 }
