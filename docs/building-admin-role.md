@@ -28,6 +28,7 @@ responses are byte for byte what they were before.
 ```bash
 drush updb    # 7012: role, field and permissions
               # 7013: the text-format permission + the area-notes default format
+              # 7015: revokes 'view the administration theme'
 drush cc all  # picks up the new includes/myapi.building_admin.inc of files[]
 ```
 
@@ -103,7 +104,6 @@ autocomplete that only offers `condominio` nodes.
 | `access content` | See published nodes |
 | `access content overview` | Enter `/admin/content` |
 | `access administration pages` | Navigate the back office |
-| `view the administration theme` | Node forms in the admin theme |
 | `use text format filtered_html` | Write formatted text — see below |
 
 **The text format permission is not optional.** A role with no
@@ -114,6 +114,16 @@ suficientes para editarlo"*. `filtered_html` and not `full_html`: the latter
 allows arbitrary HTML and the permission is site-wide, not per field. The
 format is named in `MYAPI_BUILDING_ADMIN_TEXT_FORMAT`, and the installer drops
 the permission silently on a site where that format does not exist.
+
+**`view the administration theme` is deliberately NOT granted.** With it, the
+node forms, `/admin/content` and the reservation calendar came up in **Seven**,
+while `backend` and every other operator of this site sees them in the site
+theme. Two things were wrong with that: the role worked on a layout nobody else
+here uses, and Seven does **not** show the role's own sidebar menu, because
+blocks are placed per theme — so the operator lost their navigation on exactly
+the pages where they need it. It was granted when SPEC 49 was approved and
+dropped afterwards; `myapi_update_7015()` revokes it on sites that already had
+it, so there is no manual step per environment.
 
 **`access toolbar` is deliberately NOT granted.** Drupal's black toolbar offers
 *Estructura* and *Configuración* entries this role can only get a 403 from, so

@@ -147,7 +147,7 @@ class BuildingAdminTest extends TestCase {
 
   /**
    * The back-office permissions, without which the content ones are
-   * unreachable: no /admin/content and no admin theme on the node forms.
+   * unreachable: no /admin/content and no way into the administration pages.
    */
   public function testPermissionsIncludeTheBackOfficeAccess() {
     $permissions = myapi_building_admin_permissions(FALSE);
@@ -156,7 +156,6 @@ class BuildingAdminTest extends TestCase {
       'access content',
       'access content overview',
       'access administration pages',
-      'view the administration theme',
     ) as $permission) {
       $this->assertContains($permission, $permissions);
     }
@@ -189,6 +188,22 @@ class BuildingAdminTest extends TestCase {
   public function testToolbarIsNotGranted() {
     foreach (array(FALSE, TRUE) as $has_claims) {
       $this->assertNotContains('access toolbar', myapi_building_admin_permissions($has_claims));
+    }
+  }
+
+  /**
+   * The role works on the site theme, like every other operator here.
+   *
+   * 'view the administration theme' was granted when SPEC 49 was approved and
+   * was dropped afterwards: it rendered the node forms and /admin/content in
+   * Seven, which looks nothing like what 'backend' sees and — because blocks
+   * are placed per theme — hides the role's own sidebar menu. Adding it back
+   * silently would undo that, so this test is the guard. myapi_update_7015()
+   * revokes it on sites that already had it.
+   */
+  public function testAdminThemeIsNotGranted() {
+    foreach (array(FALSE, TRUE) as $has_claims) {
+      $this->assertNotContains('view the administration theme', myapi_building_admin_permissions($has_claims));
     }
   }
 

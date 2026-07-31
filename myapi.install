@@ -1288,3 +1288,40 @@ function myapi_update_7013() {
     field_update_instance($instance);
   }
 }
+
+/**
+ * Revokes 'view the administration theme' from the building-admin role.
+ *
+ * With that permission the role saw node forms, /admin/content and the
+ * reservation calendar rendered in Seven, while every other operator of this
+ * site — 'backend' included — sees them in the site theme. Two consequences,
+ * and the second is the one that decided it: the layout was different for no
+ * reason, and Seven does not carry the role's own sidebar menu, because blocks
+ * are placed per theme. Dropping the permission puts the role on the same
+ * screens as 'backend'.
+ *
+ * **This update REVOKES, which nothing else in this module does.** The
+ * installer only ever adds, on purpose, so that a permission adjusted by hand
+ * in production survives a deployment. Taking the permission out of
+ * myapi_building_admin_permissions() alone would therefore have left every
+ * existing site exactly as it was and required a manual
+ * `drush role-remove-perm` per environment — which is precisely the manual step
+ * this update exists to remove. The trade-off is stated plainly: if somebody
+ * re-grants the permission by hand, running updates again takes it away.
+ *
+ * Idempotent: user_role_revoke_permissions() deletes rows, so a second run
+ * removes nothing that is not there. A site without the role does nothing.
+ *
+ * The number is 7015 and NOT 7014: SPEC 51 takes 7014, and reusing a number
+ * would leave one of the two unrun on every site that already ran the other.
+ */
+function myapi_update_7015() {
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+
+  $role = user_role_load_by_name(MYAPI_BUILDING_ADMIN_ROLE);
+  if (!$role) {
+    return;
+  }
+
+  user_role_revoke_permissions($role->rid, ['view the administration theme']);
+}
