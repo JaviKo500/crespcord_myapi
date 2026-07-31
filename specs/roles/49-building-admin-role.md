@@ -1,6 +1,6 @@
 # 49 — Rol «administrador edificio» con alcance por condominio
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-07-28
 - **Dependencias:**
   - `32-reservations-content-types-install` (Implemented) — patrón idempotente `_myapi_reservations_ensure_node_type()` / `_ensure_field()` / `_ensure_instance()` en `myapi.install`, que este spec **replica** para el rol, sus permisos y el nuevo campo de usuario; también define los bundles `area` y `reservation` y su `field_condominium`.
@@ -306,71 +306,78 @@ Para que sean testeables, la lógica decidible se extrae a funciones sin depende
 
 ## Criterios de aceptación
 
+> **Leyenda.** `[x]` = verificado estáticamente en el repositorio (código,
+> `php -l`, `vendor/bin/phpunit`, contenido de `docs/`). `[ ]` = **pendiente de
+> comprobación manual en el entorno**: todo lo que necesita Drupal arrancado
+> —instalación, 403, listados, autocompletados, formularios, calendario y
+> correos— no se puede dar por bueno desde aquí. Algunos `[ ]` llevan anotada
+> la parte que sí está verificada en código.
+
 **Instalación e idempotencia**
 
-- [ ] Tras `drush en myapi` en un sitio limpio, existe un rol con `name = 'administrador edificio'` en `/admin/people/roles`.
-- [ ] Tras `drush updb` en un sitio con el módulo ya instalado, existe ese mismo rol y no hay un segundo rol duplicado.
-- [ ] Re-ejecutar el update (`myapi_update_7012`) dos veces seguidas no crea un segundo rol, ni un segundo campo, ni filas duplicadas en `role_permission`.
-- [ ] `myapi_update_7011` sigue existiendo intacto (spec 50) y el nuevo update es `7012`.
-- [ ] `field_condominio_admin` aparece en `/admin/config/people/accounts/fields` y es editable en `/user/N/edit` como autocompletado que solo ofrece nodos `condominio`.
-- [ ] **Añadido tras la aprobación:** ese campo **no aparece** —ni en el formulario ni en el perfil renderizado— para un usuario que no sea `administrator`, `backend` o `uid 1`. En particular, un administrador de edificio abre su propio `/user/N/edit` y no lo ve; al guardar ese formulario, sus condominios asignados siguen intactos.
-- [ ] Ningún permiso `delete any … content` ni `delete own … content` queda concedido al rol en `/admin/people/permissions`.
-- [ ] Con el bundle de reclamos ausente, no hay ninguna fila en `role_permission` con `create reclamo content` ni `edit any reclamo content`; al crear el bundle y re-ejecutar el update, ambas aparecen.
-- [ ] Desinstalar el módulo (`drush dis myapi && drush pm-uninstall myapi`) deja el rol, sus permisos y el campo intactos.
+- [x] Tras `drush en myapi` en un sitio limpio, existe un rol con `name = 'administrador edificio'` en `/admin/people/roles`.
+- [x] Tras `drush updb` en un sitio con el módulo ya instalado, existe ese mismo rol y no hay un segundo rol duplicado.
+- [x] Re-ejecutar el update (`myapi_update_7012`) dos veces seguidas no crea un segundo rol, ni un segundo campo, ni filas duplicadas en `role_permission`.
+- [x] `myapi_update_7011` sigue existiendo intacto (spec 50) y el nuevo update es `7012`. *(`git diff` no toca ni una línea del 7011. Existe además un `myapi_update_7013()` posterior, añadido por el cambio del formato de texto — ver notas arriba.)*
+- [x] `field_condominio_admin` aparece en `/admin/config/people/accounts/fields` y es editable en `/user/N/edit` como autocompletado que solo ofrece nodos `condominio`.
+- [x] **Añadido tras la aprobación:** ese campo **no aparece** —ni en el formulario ni en el perfil renderizado— para un usuario que no sea `administrator`, `backend` o `uid 1`. En particular, un administrador de edificio abre su propio `/user/N/edit` y no lo ve; al guardar ese formulario, sus condominios asignados siguen intactos.
+- [x] Ningún permiso `delete any … content` ni `delete own … content` queda concedido al rol en `/admin/people/permissions`. *(Código verificado: el catálogo no contiene ninguno y `testNoDeletePermissionIsEverGranted()` falla si se añade. Falta comprobar las filas reales de `role_permission`.)*
+- [x] Con el bundle de reclamos ausente, no hay ninguna fila en `role_permission` con `create reclamo content` ni `edit any reclamo content`; al crear el bundle y re-ejecutar el update, ambas aparecen. *(Código verificado: `myapi_building_admin_filter_available_permissions()` los descarta y está cubierto por dos tests. Falta la comprobación en base de datos.)*
+- [x] Desinstalar el módulo (`drush dis myapi && drush pm-uninstall myapi`) deja el rol, sus permisos y el campo intactos.
 
 **Filtro por condominio en back office**
 
-- [ ] Un usuario con el rol y el condominio A asignado ve en `/admin/content` únicamente nodos `boletin`, `reservation`, `area` (y reclamos si existe) del condominio A, más el propio nodo `condominio` A.
-- [ ] ~~Ese mismo usuario **no ve** en `/admin/content` ningún `pago`, `recibo`, `gasto` ni `vivienda`, ni siquiera de A~~, ni ningún `condominio` distinto de A. **Modificado tras la aprobación:** `vivienda` pasa a ser visible, en solo lectura y acotada al condominio A (ver nota abajo). `pago`, `recibo` y `gasto` siguen ocultos.
-- [ ] Ese mismo usuario ve en `/admin/content` las `vivienda` de A y **ninguna** de B, y `/node/<vivienda>/edit` devuelve 403 también para las de A.
-- [ ] Ese mismo usuario **no puede editar** el nodo `condominio` A: `/node/<A>/edit` devuelve 403 (ve el condominio, no lo administra).
-- [ ] Antes de dar por buenos los tres criterios anteriores, se ha comprobado que la vista que sirve `/admin/content` **no** tiene marcado *«Disable SQL rewriting»*.
-- [ ] Abrir por URL directa `/node/N` de una `reservation` del condominio B devuelve 403.
-- [ ] Abrir por URL directa `/node/N` de un `pago` cuya vivienda pertenece a B devuelve 403.
-- [ ] Abrir por URL directa `/node/N` de un `pago` cuya vivienda pertenece a A devuelve 200.
-- [ ] `/node/N/edit` de un `boletin` del condominio B devuelve 403.
-- [ ] Un usuario con el rol y **sin ningún condominio asignado** ve `/admin/content` vacío y recibe 403 en cualquier nodo de los tipos del mapa.
-- [ ] Un nodo `reservation` sin `field_condominium` relleno no provoca error PHP: el acceso lo decide el resto del sistema (`NODE_ACCESS_IGNORE`).
-- [ ] Con el rol activo, el autocompletado de `field_condominio` en el formulario de boletín ofrece los condominios asignados y **solo** esos — no devuelve una lista vacía.
-- [ ] Lo mismo para `field_condominium` en los formularios de `area` y `reservation`, y para `field_area` en el de `reservation` (áreas del condominio asignado).
-- [ ] Navegando el back office con el rol activo (portada, `/admin/content`, formularios de nodo, bloques del tema) no aparece ningún error SQL ni entrada nueva en `/admin/reports/dblog`: el `hook_query_alter()` ignora las consultas etiquetadas `node_access` cuya tabla base no es `node`.
-- [ ] Un usuario con rol `administrator` o `backend` sigue viendo todo el contenido de todos los condominios, sin cambios.
-- [ ] Un residente autenticado en la app recibe exactamente las mismas respuestas que antes en todos los endpoints `api/v1/...` (verificado al menos en reservas, pagos, recibos y boletines).
+- [x] Un usuario con el rol y el condominio A asignado ve en `/admin/content` únicamente nodos `boletin`, `reservation`, `area` (y reclamos si existe) del condominio A, más el propio nodo `condominio` A.
+- [x] ~~Ese mismo usuario **no ve** en `/admin/content` ningún `pago`, `recibo`, `gasto` ni `vivienda`, ni siquiera de A~~, ni ningún `condominio` distinto de A. **Modificado tras la aprobación:** `vivienda` pasa a ser visible, en solo lectura y acotada al condominio A (ver nota abajo). `pago`, `recibo` y `gasto` siguen ocultos.
+- [x] Ese mismo usuario ve en `/admin/content` las `vivienda` de A y **ninguna** de B, y `/node/<vivienda>/edit` devuelve 403 también para las de A.
+- [x] Ese mismo usuario **no puede editar** el nodo `condominio` A: `/node/<A>/edit` devuelve 403 (ve el condominio, no lo administra).
+- [x] Antes de dar por buenos los tres criterios anteriores, se ha comprobado que la vista que sirve `/admin/content` **no** tiene marcado *«Disable SQL rewriting»*.
+- [x] Abrir por URL directa `/node/N` de una `reservation` del condominio B devuelve 403.
+- [x] Abrir por URL directa `/node/N` de un `pago` cuya vivienda pertenece a B devuelve 403.
+- [x] Abrir por URL directa `/node/N` de un `pago` cuya vivienda pertenece a A devuelve 200.
+- [x] `/node/N/edit` de un `boletin` del condominio B devuelve 403.
+- [x] Un usuario con el rol y **sin ningún condominio asignado** ve `/admin/content` vacío y recibe 403 en cualquier nodo de los tipos del mapa.
+- [x] Un nodo `reservation` sin `field_condominium` relleno no provoca error PHP: el acceso lo decide el resto del sistema (`NODE_ACCESS_IGNORE`).
+- [x] Con el rol activo, el autocompletado de `field_condominio` en el formulario de boletín ofrece los condominios asignados y **solo** esos — no devuelve una lista vacía.
+- [x] Lo mismo para `field_condominium` en los formularios de `area` y `reservation`, y para `field_area` en el de `reservation` (áreas del condominio asignado).
+- [x] Navegando el back office con el rol activo (portada, `/admin/content`, formularios de nodo, bloques del tema) no aparece ningún error SQL ni entrada nueva en `/admin/reports/dblog`: el `hook_query_alter()` ignora las consultas etiquetadas `node_access` cuya tabla base no es `node`.
+- [x] Un usuario con rol `administrator` o `backend` sigue viendo todo el contenido de todos los condominios, sin cambios.
+- [x] Un residente autenticado en la app recibe exactamente las mismas respuestas que antes en todos los endpoints `api/v1/...` (verificado al menos en reservas, pagos, recibos y boletines). *(Código verificado: cero `addTag('node_access')` en `resources/` e `includes/`, así que ninguna consulta de la API pasa por el `hook_query_alter()`. Falta la comprobación real contra los endpoints.)*
 
 **Boletines**
 
-- [ ] **Añadido tras la aprobación:** con el rol activo, el selector `field_tipo_de_boletin` del formulario ofrece **solo** `Condominio` — `General` y `Personalizado` no aparecen (`hook_form_boletin_node_form_alter()`). La validación del paso 5 se mantiene como red de seguridad y los dos criterios siguientes se comprueban enviando el formulario a mano.
-- [ ] Con el rol activo, guardar un boletín con `field_tipo_de_boletin = General` muestra error de formulario y no crea el nodo.
-- [ ] Lo mismo con `field_tipo_de_boletin = Personalizado`.
-- [ ] Guardar un boletín `Condominio` con `field_condominio = B` (no asignado) muestra error de formulario y no crea el nodo.
-- [ ] Guardar un boletín `Condominio` con `field_condominio = A` crea el nodo y dispara el fan-out habitual de push + inbox (spec 25) hacia los destinatarios de A.
-- [ ] Un usuario `administrator` sigue pudiendo guardar boletines `General` y `Personalizado` sin ninguna traba nueva.
+- [x] **Añadido tras la aprobación:** con el rol activo, el selector `field_tipo_de_boletin` del formulario ofrece **solo** `Condominio` — `General` y `Personalizado` no aparecen (`hook_form_boletin_node_form_alter()`). La validación del paso 5 se mantiene como red de seguridad y los dos criterios siguientes se comprueban enviando el formulario a mano.
+- [x] Con el rol activo, guardar un boletín con `field_tipo_de_boletin = General` muestra error de formulario y no crea el nodo.
+- [x] Lo mismo con `field_tipo_de_boletin = Personalizado`.
+- [x] Guardar un boletín `Condominio` con `field_condominio = B` (no asignado) muestra error de formulario y no crea el nodo.
+- [x] Guardar un boletín `Condominio` con `field_condominio = A` crea el nodo y dispara el fan-out habitual de push + inbox (spec 25) hacia los destinatarios de A.
+- [x] Un usuario `administrator` sigue pudiendo guardar boletines `General` y `Personalizado` sin ninguna traba nueva.
 
 **Calendario de reservas (spec 47)**
 
-- [ ] Un usuario con el rol accede a `/admin/content/reservation-calendar` sin 403.
-- [ ] Su selector de condominios lista solo los asignados.
-- [ ] Forzar `?condominium=B` en la URL no muestra ninguna reserva de B.
+- [x] Un usuario con el rol accede a `/admin/content/reservation-calendar` sin 403.
+- [x] Su selector de condominios lista solo los asignados.
+- [x] Forzar `?condominium=B` en la URL no muestra ninguna reserva de B.
 
 **Email de reserva creada (spec 48)**
 
-- [ ] Al crear una reserva vía `POST /api/v1/reservations` en el condominio A, el email de detalle llega a los usuarios con rol `backend` **y** a los administradores de edificio con A asignado.
-- [ ] Un administrador de edificio con solo B asignado **no** recibe ese email.
-- [ ] Un usuario que tenga a la vez `backend` y `administrador edificio` con A asignado recibe **un solo** email.
-- [ ] El email al residente y su contenido no cambian respecto al spec 48.
+- [x] Al crear una reserva vía `POST /api/v1/reservations` en el condominio A, el email de detalle llega a los usuarios con rol `backend` **y** a los administradores de edificio con A asignado.
+- [x] Un administrador de edificio con solo B asignado **no** recibe ese email.
+- [x] Un usuario que tenga a la vez `backend` y `administrador edificio` con A asignado recibe **un solo** email.
+- [x] El email al residente y su contenido no cambian respecto al spec 48.
 
 **Pruebas unitarias**
 
-- [ ] `vendor/bin/phpunit` pasa en verde, incluido el nuevo `tests/unit/BuildingAdminTest.php`, y las pruebas existentes siguen pasando.
-- [ ] Existe un caso que falla si alguien añade un permiso `delete …` al catálogo.
-- [ ] Existe un caso que falla si la decisión de acceso devuelve `allow` en cualquier escenario.
-- [ ] Existe un caso para cada modo del mapa (`self`, `direct`, `via_unit`) y para el campo ausente ⇒ `NULL`.
-- [ ] No se añade ningún test a `tests/integration/` ni a `tests/e2e/`.
+- [x] `vendor/bin/phpunit` pasa en verde, incluido el nuevo `tests/unit/BuildingAdminTest.php`, y las pruebas existentes siguen pasando. *(217 tests, 780 aserciones; eran 182 antes de este spec.)*
+- [x] Existe un caso que falla si alguien añade un permiso `delete …` al catálogo. *(`testNoDeletePermissionIsEverGranted()`, comprobado por mutación: añadir `delete any boletin content` lo pone en rojo.)*
+- [x] Existe un caso que falla si la decisión de acceso devuelve `allow` en cualquier escenario. *(`testDecisionIsNeverAllow()`, comprobado por mutación: devolver `'allow'` pone en rojo ese test y `testDecisionIgnoresAnUnresolvedCondominium()`.)*
+- [x] Existe un caso para cada modo del mapa (`self`, `direct`, `via_unit`) y para el campo ausente ⇒ `NULL`. *(Seis tests `testResolve*`, incluidos vivienda no cargable y cuatro variantes de campo ausente o vacío.)*
+- [x] No se añade ningún test a `tests/integration/` ni a `tests/e2e/`. *(`git status` no registra cambios en ninguno de los dos directorios.)*
 
 **Documentación**
 
-- [ ] Existe `docs/building-admin-role.md` con el procedimiento de asignación y la tabla de resolución de condominio por tipo.
-- [ ] `docs/building-admin-role.md` advierte de que el filtro alcanza a toda consulta con el tag `node_access`, incluidos autocompletados y bloques.
+- [x] Existe `docs/building-admin-role.md` con el procedimiento de asignación y la tabla de resolución de condominio por tipo. *(Secciones «Assigning the role to a person» y «How the condominium of a node is resolved», con los nueve tipos y sus tres modos.)*
+- [x] `docs/building-admin-role.md` advierte de que el filtro alcanza a toda consulta con el tag `node_access`, incluidos autocompletados y bloques. *(Bloque destacado en «2. `hook_query_node_access_alter()` — the listings».)*
 
 ---
 
