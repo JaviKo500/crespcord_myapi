@@ -197,20 +197,28 @@ function myapi_building_admin_permissions($include_claim_type = NULL) {
   }
 
   // Back office access. Without these the role holds content permissions it
-  // cannot reach: no /admin/content and no admin theme on the node forms.
+  // cannot reach: no /admin/content and no way into the administration pages.
   //
-  // 'access toolbar' was in this list when SPEC 49 was approved and was taken
-  // out afterwards, on the client's call: the role navigates through its own
-  // sidebar menu, restricted to what it manages, and Drupal's black toolbar
-  // offered it 'Estructura' and 'Configuración' entries it can only get a 403
-  // from. Removing the permission from this catalogue does NOT revoke it on a
-  // site that already has it — the installer never revokes — so an existing
-  // environment also needs:
+  // Two permissions were in this list when SPEC 49 was approved and were taken
+  // out afterwards, both on the client's call:
+  //
+  // - 'access toolbar' — the role navigates through its own sidebar menu,
+  //   restricted to what it manages, and Drupal's black toolbar offered it
+  //   'Estructura' and 'Configuración' entries it can only get a 403 from.
+  // - 'view the administration theme' — with it, node forms and /admin/content
+  //   rendered in Seven while every other operator of this site sees them in
+  //   the site theme. The role is meant to work exactly like 'backend' does,
+  //   sidebar menu included, and Seven hides that sidebar because blocks are
+  //   placed per theme.
+  //
+  // Removing a permission from this catalogue does NOT revoke it on a site that
+  // already has it — the installer never revokes. 'view the administration
+  // theme' is revoked once by myapi_update_7015(); 'access toolbar' still needs
+  // it by hand:
   //   drush role-remove-perm "administrador edificio" "access toolbar"
   $permissions[] = 'access content';
   $permissions[] = 'access content overview';
   $permissions[] = 'access administration pages';
-  $permissions[] = 'view the administration theme';
 
   // Writing. A role with no 'use text format ...' permission only reaches the
   // fallback format, so every formatted field it may edit renders disabled —
