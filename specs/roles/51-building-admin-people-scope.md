@@ -1,6 +1,6 @@
 # 51 — Alcance por condominio para las personas del rol «administrador edificio»
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-07-31
 - **Dependencias:**
   - `49-building-admin-role` (Implemented) — crea el rol, el campo de usuario
@@ -400,123 +400,123 @@ reconstruir el menú, el `hook_menu_alter()` no entra en vigor.
 
 **Instalación y permiso**
 
-- [ ] Tras `drush updb`, el rol `administrador edificio` tiene concedido
+- [x] Tras `drush updb`, el rol `administrador edificio` tiene concedido
       `access user profiles` en `/admin/people/permissions`.
-- [ ] Re-ejecutar `myapi_update_7014()` dos veces seguidas no duplica la fila en
+- [x] Re-ejecutar `myapi_update_7014()` dos veces seguidas no duplica la fila en
       `role_permission` ni altera ningún otro permiso del rol.
-- [ ] `myapi_update_7013` y anteriores siguen intactos: el `git diff` de este
+- [x] `myapi_update_7013` y anteriores siguen intactos: el `git diff` de este
       spec no toca ni una línea de ninguno de ellos.
-- [ ] `includes/myapi.building_admin_user.inc` está listado en `myapi.info` con
+- [x] `includes/myapi.building_admin_user.inc` está listado en `myapi.info` con
       `files[]`.
-- [ ] `administer users` **no** aparece en `myapi_building_admin_permissions()`
+- [x] `administer users` **no** aparece en `myapi_building_admin_permissions()`
       ni concedido al rol en `/admin/people/permissions`.
 
 **Perfiles por URL directa**
 
-- [ ] `O` abre `/user/<R1>` y ve el perfil completo: nombre, apellidos, cédula,
+- [x] `O` abre `/user/<R1>` y ve el perfil completo: nombre, apellidos, cédula,
       teléfono y correo.
-- [ ] `O` abre `/user/<R2>` y recibe 403.
-- [ ] `O` abre `/user/<O2>` y recibe 403.
-- [ ] `O` abre `/user/<U>` y recibe 403.
-- [ ] `O` abre su propio `/user/<O>` y lo ve, y el enlace «Mi cuenta» funciona.
-- [ ] Un operador con el rol y **sin ningún condominio asignado** sigue viendo su
+- [x] `O` abre `/user/<R2>` y recibe 403.
+- [x] `O` abre `/user/<O2>` y recibe 403.
+- [x] `O` abre `/user/<U>` y recibe 403.
+- [x] `O` abre su propio `/user/<O>` y lo ve, y el enlace «Mi cuenta» funciona.
+- [x] Un operador con el rol y **sin ningún condominio asignado** sigue viendo su
       propio `/user/N` y recibe 403 en el de cualquier otro usuario.
-- [ ] `O` abre `/user/<R1>/edit` y recibe 403 (leer no es editar), y
+- [x] `O` abre `/user/<R1>/edit` y recibe 403 (leer no es editar), y
       `/user/<O>/edit` sigue funcionando.
-- [ ] `O` no ve `field_condominio_admin` en su propio formulario de edición, y al
+- [x] `O` no ve `field_condominio_admin` en su propio formulario de edición, y al
       guardarlo sus condominios asignados siguen intactos (criterio del spec 49,
       revalidado porque este spec toca el mismo formulario).
-- [ ] Un usuario `administrator`, uno `backend` y un residente de la app abren
+- [x] Un usuario `administrator`, uno `backend` y un residente de la app abren
       `/user/<R2>` exactamente como antes de este spec.
-- [ ] Un usuario con el rol `administrador edificio` **y** el permiso
+- [x] Un usuario con el rol `administrador edificio` **y** el permiso
       `administer users` (por cualquier otro rol) abre `/user/<R2>` y lo ve, y su
       autocompletado de `field_requester` ofrece a todo el sitio.
-- [ ] Ese mismo usuario sigue viendo `/admin/content` filtrado por condominio y
+- [x] Ese mismo usuario sigue viendo `/admin/content` filtrado por condominio y
       sigue recibiendo 403 en `/node/N` de otro condominio: `administer users` no
       es `bypass node access` y no toca el filtro de nodos.
 
 **Listados y autocompletados**
 
-- [ ] En `node/add/reservation`, el autocompletado de `field_requester` ofrece a
+- [x] En `node/add/reservation`, el autocompletado de `field_requester` ofrece a
       `R1` y a `O`, y **no** ofrece a `R2`, `O2` ni `U`.
-- [ ] Ese mismo autocompletado, escrito con el nombre exacto de `R2`, devuelve
+- [x] Ese mismo autocompletado, escrito con el nombre exacto de `R2`, devuelve
       cero resultados.
-- [ ] El autocompletado de `field_unit` en ese formulario sigue ofreciendo solo
+- [x] El autocompletado de `field_unit` en ese formulario sigue ofreciendo solo
       las viviendas de `A` — sin código nuevo, por el filtro de nodos del spec 49.
-- [ ] Una vista de Views sobre la tabla base `users`, sin *«Disable SQL
+- [x] Una vista de Views sobre la tabla base `users`, sin *«Disable SQL
       rewriting»* marcado, lista solo a `R1` y `O` cuando la abre `O`.
-- [ ] Esa misma vista, abierta por un `administrator`, lista a todos los usuarios
+- [x] Esa misma vista, abierta por un `administrator`, lista a todos los usuarios
       del sitio.
-- [ ] Navegando el back office con el rol activo (portada, `/admin/content`,
+- [x] Navegando el back office con el rol activo (portada, `/admin/content`,
       formularios de nodo, calendario de reservas) no aparece ningún error SQL ni
       entrada nueva en `/admin/reports/dblog`: el alter ignora las consultas
       etiquetadas `user_access` cuya tabla base no es `users`.
 
 **Formulario de reserva**
 
-- [ ] `O` guarda una reserva con `field_requester = R1` y una vivienda de `A`: se
+- [x] `O` guarda una reserva con `field_requester = R1` y una vivienda de `A`: se
       crea sin error.
-- [ ] `O` envía el formulario con `field_requester = R2` forzando el valor a mano
+- [x] `O` envía el formulario con `field_requester = R2` forzando el valor a mano
       (el autocompletado no lo ofrece): sale error de formulario y **no** se crea
       el nodo.
-- [ ] `O` envía el formulario con una `field_unit` de `B` forzada a mano: sale
+- [x] `O` envía el formulario con una `field_unit` de `B` forzada a mano: sale
       error de formulario y **no** se crea el nodo.
-- [ ] Un `administrator` guarda una reserva con cualquier solicitante y cualquier
+- [x] Un `administrator` guarda una reserva con cualquier solicitante y cualquier
       vivienda sin ninguna traba nueva.
-- [ ] `POST /api/v1/reservations` de un residente sigue creando la reserva
+- [x] `POST /api/v1/reservations` de un residente sigue creando la reserva
       exactamente igual que antes: la validación no se invoca fuera del
       formulario de administración.
 
 **Informe de estado**
 
-- [ ] Con el permiso concedido, `/admin/reports/status` no muestra ningún aviso
+- [x] Con el permiso concedido, `/admin/reports/status` no muestra ningún aviso
       nuevo del módulo.
-- [ ] Tras `drush role-remove-perm "administrador edificio" "access user profiles"`,
+- [x] Tras `drush role-remove-perm "administrador edificio" "access user profiles"`,
       `/admin/reports/status` muestra un aviso de nivel *warning* que nombra el
       rol y el permiso.
-- [ ] En un sitio donde el rol no existe, `/admin/reports/status` no muestra ese
+- [x] En un sitio donde el rol no existe, `/admin/reports/status` no muestra ese
       aviso.
 
 **No regresión**
 
-- [ ] Un residente autenticado en la app recibe exactamente las mismas respuestas
+- [x] Un residente autenticado en la app recibe exactamente las mismas respuestas
       que antes en todos los endpoints `api/v1/...` — verificado al menos en
       reservas, pagos, recibos y boletines.
-- [ ] `grep -rn "addTag('user_access')" resources/ includes/` sigue devolviendo
+- [x] `grep -rn "addTag('user_access')" resources/ includes/` sigue devolviendo
       cero coincidencias.
-- [ ] Todos los criterios de aceptación del spec 49 marcados como verificados
+- [x] Todos los criterios de aceptación del spec 49 marcados como verificados
       siguen cumpliéndose: en particular, `/admin/content` filtrado por
       condominio y el 403 de `/node/N` de otro condominio.
 
 **Pruebas unitarias**
 
-- [ ] `vendor/bin/phpunit` pasa en verde, incluido el nuevo
+- [x] `vendor/bin/phpunit` pasa en verde, incluido el nuevo
       `tests/unit/BuildingAdminUserTest.php`, y las 217 pruebas existentes siguen
       pasando.
-- [ ] Existe un caso que falla si `myapi_building_admin_user_decision()` deja de
+- [x] Existe un caso que falla si `myapi_building_admin_user_decision()` deja de
       devolver `'allow'` para el propio operador.
-- [ ] Existe un caso que falla si esa función devuelve `'allow'` para un uid que
+- [x] Existe un caso que falla si esa función devuelve `'allow'` para un uid que
       no está en la lista y no es el propio operador.
-- [ ] Existe un caso con uids en cadena frente a enteros que falla si la
+- [x] Existe un caso con uids en cadena frente a enteros que falla si la
       comparación deja de normalizar los tipos.
-- [ ] Existe un caso que falla si `myapi_building_admin_user_filter_applies()`
+- [x] Existe un caso que falla si `myapi_building_admin_user_filter_applies()`
       deja de desactivar el filtro ante `administer users`, y otro que falla si lo
       desactiva para quien solo tiene el rol.
-- [ ] No se añade ningún test a `tests/integration/` ni a `tests/e2e/`.
+- [x] No se añade ningún test a `tests/integration/` ni a `tests/e2e/`.
 
 **Documentación**
 
-- [ ] La sección «The people of a unit — not solved by this layer» de
+- [x] La sección «The people of a unit — not solved by this layer» de
       `docs/building-admin-role.md` ya no existe con ese título ni con la
       instrucción *«Do not grant `access user profiles`»*.
-- [ ] `docs/building-admin-role.md` describe las dos mitades del filtro de
+- [x] `docs/building-admin-role.md` describe las dos mitades del filtro de
       usuarios con el mismo formato que las dos de nodos, y nombra el tag
       `user_access`.
-- [ ] `docs/building-admin-role.md` dice explícitamente que `user/autocomplete`
+- [x] `docs/building-admin-role.md` dice explícitamente que `user/autocomplete`
       de core queda fuera del filtro, y por qué eso no abre nada hoy.
-- [ ] `docs/building-admin-role.md` dice explícitamente que `administer users`
+- [x] `docs/building-admin-role.md` dice explícitamente que `administer users`
       desactiva el filtro de personas.
-- [ ] La tabla de permisos de `docs/building-admin-role.md` incluye
+- [x] La tabla de permisos de `docs/building-admin-role.md` incluye
       `access user profiles`.
 
 ---
