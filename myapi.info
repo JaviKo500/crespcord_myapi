@@ -42,3 +42,4 @@ files[] = includes/myapi.reservation_calendar.inc
 files[] = includes/myapi.mail_queue.inc
 files[] = includes/myapi.reservation_notification.inc
 files[] = includes/myapi.building_admin.inc
+files[] = includes/myapi.building_admin_user.inc

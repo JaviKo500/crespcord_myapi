@@ -9,6 +9,21 @@
 // response and request helpers, so load them globally on every request.
 module_load_include('inc', 'myapi', 'includes/myapi.i18n');
 
+// The people filter of SPEC 51. Loaded globally, like the i18n helpers above,
+// and for a reason that is not obvious: myapi_menu_alter() installs
+// myapi_building_admin_user_view_access() as the access callback of user/%user,
+// and _menu_check_access() calls the callback behind a function_exists() gate —
+// it does NOT include the router item's 'file' first, that happens later in
+// menu_execute_active_handler(). With the include missing, the callback would
+// simply not exist and access would fall through to FALSE: every profile page
+// of the site, for every role, would answer 403. Loading it here is one
+// require_once and removes that failure mode entirely.
+//
+// It costs nothing on an api/v1 request either: the two includes this file
+// leans on are loaded from inside its own functions, only when the filter is
+// actually active.
+module_load_include('inc', 'myapi', 'includes/myapi.building_admin_user');
+
 // OneSignal push queue name. Defined here in the always-loaded .module (not only
 // in includes/myapi.notification.inc) because hook_cron_queue_info() references
 // it to register the worker: during cron that hook can run before its include
@@ -266,6 +281,38 @@ function myapi_menu() {
   ];
 
   return $items;
+}
+
+/**
+ * Implements hook_menu_alter().
+ *
+ * The direct-URL half of the people filter of SPEC 51: /user/N of a resident of
+ * another condominium answers 403 to a building admin. The listing half is
+ * myapi_query_user_access_alter().
+ *
+ * It swaps the access callback of the two profile routes and leaves their
+ * 'access arguments' — array(1), the loaded account — exactly as they were, so
+ * the replacement receives the same argument core's user_view_access() did.
+ * That replacement calls the original FIRST and only narrows afterwards: it can
+ * take access away, never hand it out.
+ *
+ * 'user/%user/edit' is deliberately NOT touched. Without 'administer users',
+ * user_edit_access() already refuses somebody else's account, and the operator
+ * keeps their own.
+ *
+ * This hook only runs on a menu rebuild; its result is cached in the
+ * menu_router table. That is why 'drush cc all' is not optional when deploying
+ * SPEC 51 — see docs/building-admin-role.md.
+ *
+ * @param array $items
+ *   The whole menu router, by reference.
+ */
+function myapi_menu_alter(&$items) {
+  foreach (['user/%user', 'user/%user/view'] as $path) {
+    if (isset($items[$path])) {
+      $items[$path]['access callback'] = 'myapi_building_admin_user_view_access';
+    }
+  }
 }
 
 /**
@@ -555,6 +602,30 @@ function myapi_query_node_access_alter(QueryAlterableInterface $query) {
 }
 
 /**
+ * Implements hook_query_TAG_alter() for the 'user_access' tag.
+ *
+ * The listing half of the SPEC 51 people filter, mirror of the node one above;
+ * myapi_building_admin_user_view_access() is the direct-URL half. Glue only:
+ * the two guards and the single condition live in
+ * includes/myapi.building_admin_user.inc.
+ *
+ * Which queries carry this tag, and why both matter:
+ * - the generic entityreference handler when target_type is 'user', which is
+ *   what narrows the field_requester autocomplete of the reservation form to
+ *   the residents of the assigned condominiums;
+ * - the 'users' base table of Views, which declares it as an access query tag,
+ *   so any back-office listing of people is scoped too — unless somebody ticks
+ *   "Disable SQL rewriting" on the view, which is written down as a known risk.
+ *
+ * No query of this module carries that tag (checked across resources/ and
+ * includes/), so the api/v1/... endpoints are untouched.
+ */
+function myapi_query_user_access_alter(QueryAlterableInterface $query) {
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin_user');
+  myapi_building_admin_alter_user_query($query);
+}
+
+/**
  * Implements hook_field_access().
  *
  * Restricts field_condominio_admin — the user field that decides which
@@ -621,6 +692,9 @@ function myapi_form_boletin_node_form_alter(&$form, &$form_state, $form_id) {
  * - 'boletin' — a building admin may only publish 'Condominio' bulletins of
  *   their assigned condominiums (SPEC 49), in
  *   includes/myapi.building_admin.inc. Every other user passes through.
+ * - 'reservation' — a building admin may only book for a person they can see
+ *   and on a unit of their condominiums (SPEC 51), in
+ *   includes/myapi.building_admin_user.inc. Every other user passes through.
  *
  * This hook is reached from node_form_validate() only, so it guards the admin
  * node form (node/add/... and node/%/edit) and nothing else: a programmatic
@@ -637,6 +711,11 @@ function myapi_node_validate($node, $form, &$form_state) {
     case 'boletin':
       module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
       myapi_building_admin_validate_bulletin($node, $form, $form_state);
+      return;
+
+    case 'reservation':
+      module_load_include('inc', 'myapi', 'includes/myapi.building_admin_user');
+      myapi_building_admin_validate_reservation($node, $form, $form_state);
       return;
   }
 }
