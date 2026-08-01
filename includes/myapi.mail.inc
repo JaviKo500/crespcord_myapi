@@ -10,6 +10,22 @@
  */
 
 /**
+ * Absolute URL of the CrespCord logo used in every email header (SPEC 54).
+ *
+ * Built at runtime from $base_url and the module's own path — the PNG ships
+ * versioned inside the module (assets/crespcord-icon.png), so a normal deploy
+ * (git pull + drush cc all) already makes it reachable, with no
+ * hook_install() or update hook to copy it into sites/default/files.
+ *
+ * @return string  Absolute URL, e.g. 'https://example.com/sites/all/modules/myapi/assets/crespcord-icon.png'.
+ */
+function myapi_mail_logo_url() {
+  global $base_url;
+
+  return $base_url . '/' . drupal_get_path('module', 'myapi') . '/assets/crespcord-icon.png';
+}
+
+/**
  * Formats the password reset email.
  *
  * Called from myapi_mail() (in myapi.module) for the 'password_reset' key.
@@ -72,7 +88,7 @@ function myapi_mail_password_reset_html($params) {
     . '<tr><td align="center">'
     . '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background-color:#FCFAF7;border-radius:16px;overflow:hidden;">'
     . '<tr><td style="background-color:#4A3326;padding:28px 32px;text-align:center;">'
-    . '<span style="' . $font . 'font-size:20px;font-weight:bold;color:#F7F1EA;letter-spacing:1px;">CrespCord</span>'
+    . '<img src="' . check_plain(myapi_mail_logo_url()) . '" alt="CrespCord" height="28" style="height:28px;vertical-align:middle;">'
     . '</td></tr>'
     . '<tr><td style="padding:32px;">'
     . '<h1 style="' . $font . 'margin:0 0 16px;font-size:20px;color:#2B1D14;">' . $greeting . '</h1>'
@@ -307,7 +323,7 @@ function myapi_mail_reservation_html($title, $heading, $intro, array $lines, $fo
     . '<tr><td align="center">'
     . '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background-color:#FCFAF7;border-radius:16px;overflow:hidden;">'
     . '<tr><td style="background-color:#4A3326;padding:28px 32px;text-align:center;">'
-    . '<span style="' . $font . 'font-size:20px;font-weight:bold;color:#F7F1EA;letter-spacing:1px;">CrespCord</span>'
+    . '<img src="' . check_plain(myapi_mail_logo_url()) . '" alt="CrespCord" height="28" style="height:28px;vertical-align:middle;">'
     . '</td></tr>'
     . '<tr><td style="padding:32px;">'
     . '<h1 style="' . $font . 'margin:0 0 16px;font-size:20px;color:#2B1D14;">' . $heading . '</h1>'
