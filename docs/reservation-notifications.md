@@ -172,8 +172,9 @@ criterion as specs 27/28/30: the cancellation fires inside a
 
 ## Emails
 
-All four are HTML (CrespCord branding, inline styles) and all four leave
-through the deferred mail queue.
+All four are HTML (CrespCord branding, inline styles — the header shows the
+CrespCord logo image, `myapi_mail_logo_url()` in `includes/myapi.mail.inc`,
+SPEC 54) and all four leave through the deferred mail queue.
 
 | Mail key | Recipient | Subject |
 |----------|-----------|---------|
@@ -184,7 +185,11 @@ through the deferred mail queue.
 
 ### To the resident
 
-Greeting `Hola {nombre}`, a context sentence, and the data block:
+Greeting `Hola {nombre}`, a context sentence, and the data block. `{nombre}`
+is the requester's first and last name (`field_nombre` + `field_apellidos`,
+SPEC 54), never their username — e.g. `Hola Javier Contreras`, not
+`Hola javiko500`. A requester with neither field set falls back to their
+username, exactly as before SPEC 54.
 
 | Line | Example |
 |------|---------|
@@ -216,6 +221,12 @@ in the same order and with the same labels:
 `Usuario`, `Email`, `Vivienda`, `Área`, `Condominio`, `Fecha`, `Horario`,
 `Duración`, `Estado`, `Creada`.
 
+`Usuario` shows the requester's first and last name (SPEC 54), same as the
+resident's `{nombre}` greeting above — **not** `Nombre Apellido (username)`
+like the calendar detail panel. That `(username)` suffix is specific to the
+admin calendar (`myapi_calendar_user_label()`, unchanged) and was deliberately
+dropped for emails, where it read oddly next to a person's name.
+
 The cancellation variant (`reservation_cancelled_admin`) adds two more:
 
 | Line | Value |
@@ -232,15 +243,16 @@ always `Cancelada`.
 > the labels is a separate change.
 
 The values are produced by the very label helpers the calendar uses
-(`myapi_calendar_user_label()`, `myapi_calendar_unit_label()`,
-`myapi_calendar_area_label()`, `myapi_calendar_condominium_label()`,
-`myapi_calendar_duration_label()`), applied to a row built by
-`myapi_reservation_notification_row()` with the same shape
-`myapi_reservation_calendar_rows()` returns. An operator reading the email and
-an operator reading `admin/content/reservation-calendar` therefore see the same
-reservation described identically, absence labels included. The schedule uses
-the calendar's en dash (`–`); push, inbox and the resident email use the simple
-hyphen (`-`).
+(`myapi_calendar_user_name_label()` — the SPEC 54 variant without the
+username suffix, used for both `{nombre}` and `Usuario` above —,
+`myapi_calendar_unit_label()`, `myapi_calendar_area_label()`,
+`myapi_calendar_condominium_label()`, `myapi_calendar_duration_label()`),
+applied to a row built by `myapi_reservation_notification_row()` with the same
+shape `myapi_reservation_calendar_rows()` returns. An operator reading the
+email and an operator reading `admin/content/reservation-calendar` therefore
+see the same reservation described identically (name and username aside —
+see above), absence labels included. The schedule uses the calendar's en dash
+(`–`); push, inbox and the resident email use the simple hyphen (`-`).
 
 On the creation variant (`reservation_created_admin`) neither `Cancelada por`
 nor `Motivo` appears: the reservation is always `Confirmada` there. Only the

@@ -301,11 +301,14 @@ Notes:
   page renders in it regardless of the browser's own `Accept-Language` — see
   the notes under `GET/POST password/reset` below.
 - The email is **HTML**, not plain text: CrespCord branding (brown/sand
-  palette matching the `password/reset` web page), a greeting with the
-  account's username, a button linking to the reset page, and a
-  "Saludos, Grupo CrespCord" sign-off. All CSS is inline and the layout uses
-  tables, for compatibility with email clients that strip `<style>` blocks or
-  ignore CSS classes — see `myapi_mail_password_reset_html()` in
+  palette matching the `password/reset` web page), a header showing the
+  CrespCord logo image (`myapi_mail_logo_url()`, SPEC 54 — an absolute URL
+  built from `$base_url` + the module's own path, so the PNG shipped in
+  `assets/crespcord-icon.png` needs no install step beyond a normal deploy), a
+  greeting with the account's username, a button linking to the reset page,
+  and a "Saludos, Grupo CrespCord" sign-off. All CSS is inline and the layout
+  uses tables, for compatibility with email clients that strip `<style>`
+  blocks or ignore CSS classes — see `myapi_mail_password_reset_html()` in
   `includes/myapi.mail.inc`.
 - Drupal 7's default mail system converts HTML bodies to plain text before
   sending. To keep the markup, the `myapi_password_reset` mail key is mapped
