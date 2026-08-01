@@ -130,7 +130,7 @@ autocomplete that only offers `condominio` nodes.
 | `create boletin content`, `edit any boletin content` | Create and edit bulletins |
 | `create reservation content`, `edit any reservation content` | Create and edit reservations |
 | `create area content`, `edit any area content` | Create and edit areas |
-| `create reclamo content`, `edit any reclamo content` | **Only if that bundle exists** — it does not yet |
+| `create reclamo content`, `edit any reclamo content` | Create and edit reclamos — granted automatically since the bundle was created by SPEC 55 |
 | `access content` | See published nodes |
 | `access content overview` | Enter `/admin/content` |
 | `access administration pages` | Navigate the back office |
@@ -185,9 +185,11 @@ by unpublishing it from the edit form. Both are reversible; a delete is not. A
 unit test fails the day somebody adds a delete permission to the catalogue.
 
 Permissions are granted only if they **exist on the site**: the list is crossed
-against `module_invoke_all('permission')`, so `create reclamo content` (no such
-bundle) and `access toolbar` (module disabled) are dropped silently instead of
-writing a dead row in `role_permission`.
+against `module_invoke_all('permission')`, so a permission whose content type
+does not yet exist — `create reclamo content` before SPEC 55 created that
+bundle, `create claim_transaction content` if it were ever added to the
+catalogue — and `access toolbar` (module disabled) are dropped silently
+instead of writing a dead row in `role_permission`.
 
 > **Warning — hand-revoked permissions do not survive.** The installer is
 > conservative: it creates what is missing and never revokes. But re-running
@@ -255,11 +257,19 @@ node) and `via_unit` (two hops, through the `vivienda`).
 | `pagos` | `via_unit` | `field_vivienda` → the unit's `field_condominio` |
 | `recibo` | `via_unit` | `field_vivienda` → the unit's `field_condominio` |
 | `alicuota_extra` | `via_unit` | `field_vivienda` → the unit's `field_condominio` |
+| `reclamo` | `direct` | `field_condominium` — the same shared field as `area`/`reservation` (SPEC 55) |
 
 **A type that is not in this table is out of the rule.** So is a node of a
 listed type whose field is empty or missing: the condominium resolves to `NULL`,
 `hook_node_access()` returns `NODE_ACCESS_IGNORE` and the rest of Drupal decides,
 exactly as for any other user. No PHP notice is raised on a half-filled node.
+
+`claim_transaction` (SPEC 55) is the deliberate example: its condominium is
+only resolvable by hopping `field_claim` → `reclamo` → `field_condominium`, a
+two-field indirection none of the three modes above support, so it stays out of
+this table and out of `myapi_building_admin_editable_types()` — the role has no
+`create`/`edit any` permission over it and no node of that type is visible or
+editable through this rule. See `docs/claims-install.md`.
 
 The rule **only ever denies**. It never returns `NODE_ACCESS_ALLOW`: granting
 there would short-circuit every other check Drupal makes — unpublished nodes,
@@ -301,7 +311,7 @@ condominiums. Visible means two different things:
 
 | Types | What the role can do |
 |---|---|
-| `boletin`, `reservation`, `area` (+ `reclamo` once it exists) | Create and edit |
+| `boletin`, `reservation`, `area`, `reclamo` (SPEC 55) | Create and edit |
 | `condominio`, `vivienda` | **Read only** — no `create`, no `edit any`, `/node/N/edit` answers 403 |
 
 The read-only ones live in their own catalogue,
@@ -655,12 +665,15 @@ up for every other role that can create bulletins too.
 - **Adding a content type to the role** means editing
   `myapi_building_admin_editable_types()` and, if it has a condominium, adding
   its entry to `myapi_building_admin_condominium_map()`. Nothing else.
-- **The claims-and-suggestions bundle (`reclamo`) does not exist yet.** Its
-  permissions are granted the moment it does and `myapi_update_7012()` is run
-  again. But it is **not** in the condominium map, so until whoever creates that
-  bundle adds its entry there, its nodes are outside the rule in both halves of
-  the filter — visible in the listings and not 403 on a direct URL. Adding the
-  map entry is the last step of that bundle's own spec.
+- **The claims-and-suggestions bundle (`reclamo`) exists since SPEC 55**, which
+  also added its `myapi_building_admin_condominium_map()` entry
+  (`'field' => 'field_condominium'`) — the last step that spec had promised
+  here. Its permissions were already granted conditionally since SPEC 49, the
+  moment the bundle exists on the site. Its timeline bundle,
+  `claim_transaction`, is a deliberate exception: it is **not** in the map nor
+  in `myapi_building_admin_editable_types()`, because its condominium is only
+  resolvable by hopping `field_claim` → `reclamo` → `field_condominium`, which
+  none of the three modes above supports. See `docs/claims-install.md`.
 - **Any new back-office screen that lists people** must go through the
   `user_access` tag or through `myapi_building_admin_user_decision()`. A hand-made
   `db_select('users', …)` with no tag is unfiltered and shows the whole site.
