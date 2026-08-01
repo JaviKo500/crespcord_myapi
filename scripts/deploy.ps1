@@ -19,6 +19,9 @@ scp -i $key -r "$src\resources"  "${server}:${tmp}/"
 # unstyled.
 scp -i $key -r "$src\css"        "${server}:${tmp}/"
 scp -i $key -r "$src\js"         "${server}:${tmp}/"
+# Static assets (module logo, SPEC 54). Same reasoning as css/js: read at
+# runtime via drupal_get_path(), not declared in myapi.info.
+scp -i $key -r "$src\assets"     "${server}:${tmp}/"
 
 Write-Host "Copiando al directorio de Drupal y limpiando cache..."
 
@@ -31,6 +34,7 @@ sudo cp -r $tmp/includes   $dest/
 sudo cp -r $tmp/resources  $dest/
 sudo cp -r $tmp/css        $dest/
 sudo cp -r $tmp/js         $dest/
+sudo cp -r $tmp/assets     $dest/
 sudo chown -R www-data:www-data $dest
 rm -rf $tmp
 cd /var/www/html && sudo -u www-data drush cc all
