@@ -1,6 +1,6 @@
 # 55 — Tipos de contenido de reclamos y sugerencias (`reclamo` y `claim_transaction`)
 
-- **Estado:** Draft
+- **Estado:** Approved
 - **Fecha:** 2026-07-31
 - **Dependencias:**
   - `32-reservations-content-types-install` (Implemented) — patrón idempotente `_myapi_reservations_ensure_node_type()` / `_ensure_field()` / `_ensure_instance()` en `myapi.install`, y los campos compartidos `field_condominium` (→ bundle `condominio`) y `field_requester` (→ entidad `user`), que este spec reutiliza sin modificarlos.
