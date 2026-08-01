@@ -37,7 +37,7 @@ sudo cp -r $tmp/js         $dest/
 sudo cp -r $tmp/assets     $dest/
 sudo chown -R www-data:www-data $dest
 rm -rf $tmp
-cd /var/www/html && sudo -u www-data drush cc all
+cd /var/www/html && sudo -u www-data drush updb -y && sudo -u www-data drush cc all
 "@ -replace "`r`n", "`n"
 
 ssh -i $key $server $remote_commands
