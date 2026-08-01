@@ -45,7 +45,7 @@ require_once __DIR__ . '/../../myapi.install';
 class EntityReferenceFieldSettingsTest extends TestCase {
 
   /**
-   * The five entityreference fields this module creates.
+   * The six entityreference fields this module creates.
    *
    * Written out rather than derived from the catalogue: a test that reads its
    * expectations from the code under test proves nothing.
@@ -56,6 +56,7 @@ class EntityReferenceFieldSettingsTest extends TestCase {
     'field_unit',
     'field_area',
     'field_requester',
+    'field_claim',
   ];
 
   /**
@@ -69,7 +70,7 @@ class EntityReferenceFieldSettingsTest extends TestCase {
    * The catalogue.
    * ---------------------------------------------------------------------- */
 
-  public function testCatalogueCoversExactlyTheFiveReferenceFields() {
+  public function testCatalogueCoversExactlyTheSixReferenceFields() {
     $catalogue = _myapi_entityreference_field_settings();
 
     $names = array_keys($catalogue);
@@ -99,6 +100,7 @@ class EntityReferenceFieldSettingsTest extends TestCase {
       'people condominium'             => ['field_condominio_admin', ['condominio' => 'condominio']],
       'reservation unit'               => ['field_unit', ['vivienda' => 'vivienda']],
       'reservation area'               => ['field_area', ['area' => 'area']],
+      'transaction claim'              => ['field_claim', [MYAPI_BUILDING_ADMIN_CLAIM_TYPE => MYAPI_BUILDING_ADMIN_CLAIM_TYPE]],
     ];
   }
 
@@ -129,6 +131,7 @@ class EntityReferenceFieldSettingsTest extends TestCase {
       ['field_condominio_admin'],
       ['field_unit'],
       ['field_area'],
+      ['field_claim'],
     ];
   }
 

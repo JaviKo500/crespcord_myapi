@@ -223,26 +223,31 @@ class BuildingAdminTest extends TestCase {
   }
 
   /**
-   * The map covers exactly the nine types of the data model, each with the
-   * declared mode and field. A tenth entry, or a changed field name, is a
+   * The map covers exactly the ten types of the data model, each with the
+   * declared mode and field. An eleventh entry, or a changed field name, is a
    * change to the access rule and must be a deliberate edit here too.
+   *
+   * claim_transaction is deliberately absent (SPEC 55): its condominium is
+   * only resolvable by hopping field_claim -> reclamo -> field_condominium,
+   * and no mode this map supports does that hop yet.
    */
-  public function testCondominiumMapCoversTheNineDeclaredTypes() {
+  public function testCondominiumMapCoversTheTenDeclaredTypes() {
     $expected = array(
-      'condominio'     => array('mode' => 'self'),
-      'boletin'        => array('mode' => 'direct',   'field' => 'field_condominio'),
-      'gastos'         => array('mode' => 'direct',   'field' => 'field_condominio'),
-      'vivienda'       => array('mode' => 'direct',   'field' => 'field_condominio'),
-      'area'           => array('mode' => 'direct',   'field' => 'field_condominium'),
-      'reservation'    => array('mode' => 'direct',   'field' => 'field_condominium'),
-      'pagos'          => array('mode' => 'via_unit', 'field' => 'field_vivienda'),
-      'recibo'         => array('mode' => 'via_unit', 'field' => 'field_vivienda'),
-      'alicuota_extra' => array('mode' => 'via_unit', 'field' => 'field_vivienda'),
+      'condominio'                      => array('mode' => 'self'),
+      'boletin'                         => array('mode' => 'direct',   'field' => 'field_condominio'),
+      'gastos'                          => array('mode' => 'direct',   'field' => 'field_condominio'),
+      'vivienda'                        => array('mode' => 'direct',   'field' => 'field_condominio'),
+      'area'                            => array('mode' => 'direct',   'field' => 'field_condominium'),
+      'reservation'                     => array('mode' => 'direct',   'field' => 'field_condominium'),
+      'pagos'                           => array('mode' => 'via_unit', 'field' => 'field_vivienda'),
+      'recibo'                          => array('mode' => 'via_unit', 'field' => 'field_vivienda'),
+      'alicuota_extra'                  => array('mode' => 'via_unit', 'field' => 'field_vivienda'),
+      MYAPI_BUILDING_ADMIN_CLAIM_TYPE   => array('mode' => 'direct',   'field' => 'field_condominium'),
     );
 
     $map = myapi_building_admin_condominium_map();
 
-    $this->assertCount(9, $map);
+    $this->assertCount(10, $map);
     $this->assertSame(array_keys($expected), array_keys($map));
     foreach ($expected as $type => $entry) {
       $this->assertSame($entry, $map[$type], 'Map entry for ' . $type);
