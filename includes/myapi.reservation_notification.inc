@@ -37,6 +37,11 @@
 // includes/myapi.reservation_calendar.inc reuses myapi_reservation_valid_date().
 module_load_include('inc', 'myapi', 'resources/reservation.resource');
 
+// myapi_user_fetch_profile_fields() resolves field_nombre/field_apellidos
+// (SPEC 54). Reused instead of a duplicate query with the same joins, exactly
+// as includes/myapi.user.inc already does for the profile resources.
+module_load_include('inc', 'myapi', 'includes/myapi.user');
+
 /**
  * Value stored in myapi_notifications.source_type for a reservation event.
  */
@@ -93,7 +98,8 @@ define('MYAPI_RESERVATION_NOTIFY_ROLE', 'backend');
  *
  * @return object  Row with nid, created, date, start_time, end_time, status,
  *   cancelled_by, cancel_reason, area_id, area_title, unit_id, unit_title,
- *   condominium_id, uid, user_name and user_mail.
+ *   condominium_id, uid, user_name, user_mail, user_first_name and
+ *   user_last_name.
  */
 function myapi_reservation_notification_row($node) {
   $row = new stdClass();
@@ -136,11 +142,21 @@ function myapi_reservation_notification_row($node) {
   $row->uid = myapi_reservation_node_target_id($node, 'field_requester');
   $row->user_name = NULL;
   $row->user_mail = NULL;
+  $row->user_first_name = NULL;
+  $row->user_last_name = NULL;
   if ($row->uid !== NULL) {
     $account = user_load($row->uid);
     if ($account) {
       $row->user_name = $account->name;
       $row->user_mail = $account->mail !== '' ? $account->mail : NULL;
+
+      // SPEC 54: same profile fields myapi_calendar_user_label() already
+      // consumes, resolved here so the row carries the shape the calendar
+      // rows have — myapi_reservation_calendar_rows() joins these fields
+      // directly, and this row is built from a single node instead.
+      $profile = myapi_user_fetch_profile_fields($row->uid);
+      $row->user_first_name = $profile['first_name'];
+      $row->user_last_name = $profile['last_name'];
     }
   }
 
@@ -351,7 +367,10 @@ function myapi_reservation_enqueue_user_mail($row, $cancelled) {
   module_load_include('inc', 'myapi', 'includes/myapi.reservation_calendar');
 
   $params = [
-    'name'        => myapi_calendar_user_label($row),
+    // SPEC 54: full name, no username suffix — the calendar label reused
+    // here on purpose is myapi_calendar_user_name_label(), not
+    // myapi_calendar_user_label(), which is reserved for the admin panel.
+    'name'        => myapi_calendar_user_name_label($row),
     'area'        => myapi_calendar_area_label($row),
     'condominium' => myapi_calendar_condominium_label($row, myapi_calendar_condominium_options()),
     'unit'        => myapi_calendar_unit_label($row),
@@ -417,7 +436,8 @@ function myapi_reservation_enqueue_admin_mails($row, $key = 'reservation_created
 
   $params = [
     'nid'         => $row->nid,
-    'user'        => myapi_calendar_user_label($row),
+    // SPEC 54: full name, no username suffix (see myapi_reservation_enqueue_user_mail()).
+    'user'        => myapi_calendar_user_name_label($row),
     'email'       => $row->user_mail === NULL ? '—' : check_plain($row->user_mail),
     'unit'        => myapi_calendar_unit_label($row),
     'area'        => myapi_calendar_area_label($row),

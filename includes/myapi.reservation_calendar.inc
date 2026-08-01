@@ -1129,6 +1129,31 @@ function myapi_calendar_unit_label($row) {
 }
 
 /**
+ * Resolves the escaped full name of a reservation row's requester.
+ *
+ * Shared by myapi_calendar_user_label() (calendar, keeps the username suffix)
+ * and myapi_calendar_user_name_label() (SPEC 54, emails, no suffix), so the
+ * 'field_nombre' + 'field_apellidos' resolution lives in exactly one place and
+ * both callers degrade the same way when neither field is set.
+ *
+ * @param object $row  Reservation row.
+ *
+ * @return string|NULL  Already escaped full name, or NULL when neither
+ *   user_first_name nor user_last_name is set.
+ */
+function _myapi_reservation_full_name($row) {
+  $full_name = trim(
+    ($row->user_first_name !== NULL ? $row->user_first_name : '')
+    . ' '
+    . ($row->user_last_name !== NULL ? $row->user_last_name : '')
+  );
+  if ($full_name === '') {
+    return NULL;
+  }
+  return check_plain($full_name);
+}
+
+/**
  * Human label for the requester of a reservation row.
  *
  * Two different absences: a reservation with no field_requester at all ('Sin
@@ -1149,15 +1174,40 @@ function myapi_calendar_user_label($row) {
   if ($row->user_name === NULL) {
     return t('Usuario eliminado (#@uid)', array('@uid' => $row->uid));
   }
-  $full_name = trim(
-    ($row->user_first_name !== NULL ? $row->user_first_name : '')
-    . ' '
-    . ($row->user_last_name !== NULL ? $row->user_last_name : '')
-  );
-  if ($full_name === '') {
+  $full_name = _myapi_reservation_full_name($row);
+  if ($full_name === NULL) {
     return check_plain($row->user_name);
   }
-  return check_plain($full_name) . ' (' . check_plain($row->user_name) . ')';
+  return $full_name . ' (' . check_plain($row->user_name) . ')';
+}
+
+/**
+ * Human label for the requester of a reservation row, without the username
+ * suffix (SPEC 54).
+ *
+ * Same three absence cases as myapi_calendar_user_label() ('Sin usuario',
+ * 'Usuario eliminado (#uid)', username alone when no profile name is set),
+ * but when a full name IS available it is returned on its own — no
+ * '(username)' suffix. Built for the reservation emails: a greeting like
+ * "Hola Nombre Apellido (jperez)" reads oddly to the resident, unlike the
+ * admin calendar where the username helps the operator disambiguate.
+ *
+ * @param object $row  Reservation row.
+ *
+ * @return string  Already escaped.
+ */
+function myapi_calendar_user_name_label($row) {
+  if ($row->uid === NULL) {
+    return t('Sin usuario');
+  }
+  if ($row->user_name === NULL) {
+    return t('Usuario eliminado (#@uid)', array('@uid' => $row->uid));
+  }
+  $full_name = _myapi_reservation_full_name($row);
+  if ($full_name === NULL) {
+    return check_plain($row->user_name);
+  }
+  return $full_name;
 }
 
 /**
