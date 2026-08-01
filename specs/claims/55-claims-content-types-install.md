@@ -1,6 +1,6 @@
 # 55 — Tipos de contenido de reclamos y sugerencias (`reclamo` y `claim_transaction`)
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-07-31
 - **Dependencias:**
   - `32-reservations-content-types-install` (Implemented) — patrón idempotente `_myapi_reservations_ensure_node_type()` / `_ensure_field()` / `_ensure_instance()` en `myapi.install`, y los campos compartidos `field_condominium` (→ bundle `condominio`) y `field_requester` (→ entidad `user`), que este spec reutiliza sin modificarlos.
@@ -157,58 +157,58 @@ Corrige además la nota de `docs/building-admin-role.md` que anticipaba `field_c
 
 **Instalación e idempotencia**
 
-- [ ] En un sitio limpio, `drush en myapi` crea los content types `reclamo` y `claim_transaction` (verificable en `admin/structure/types`).
-- [ ] En el sitio donde `myapi` **ya** estaba instalado, `drush updb` ejecuta `myapi_update_7017` y crea ambos content types y todos sus campos, sin tocar ninguna tabla ni campo existente (`myapi_tokens`, `myapi_notifications`, los bundles `area`/`reservation`, etc.).
-- [ ] Reejecutar `_myapi_claims_install()` (ciclo `drush pm-uninstall`/`drush en`, o reejecutar el update) **no** duplica campos, instancias ni node types, y no lanza `FieldException`.
-- [ ] `drush pm-uninstall myapi` con `MYAPI_CLAIMS_DESTRUCTIVE_UNINSTALL = FALSE` **no** borra los content types `reclamo`/`claim_transaction`, sus campos ni sus nodos.
+- [x] En un sitio limpio, `drush en myapi` crea los content types `reclamo` y `claim_transaction` (verificable en `admin/structure/types`).
+- [x] En el sitio donde `myapi` **ya** estaba instalado, `drush updb` ejecuta `myapi_update_7017` y crea ambos content types y todos sus campos, sin tocar ninguna tabla ni campo existente (`myapi_tokens`, `myapi_notifications`, los bundles `area`/`reservation`, etc.).
+- [x] Reejecutar `_myapi_claims_install()` (ciclo `drush pm-uninstall`/`drush en`, o reejecutar el update) **no** duplica campos, instancias ni node types, y no lanza `FieldException`.
+- [x] `drush pm-uninstall myapi` con `MYAPI_CLAIMS_DESTRUCTIVE_UNINSTALL = FALSE` **no** borra los content types `reclamo`/`claim_transaction`, sus campos ni sus nodos.
 
 **Content type `reclamo`**
 
-- [ ] Tiene exactamente estos campos propios: `field_description`, `field_status`, `field_claim_type`, `field_reception_date`, `field_visibility`, más las instancias reutilizadas `field_condominium`, `field_requester`, `field_images`, `field_attachment`.
-- [ ] Usa el título nativo como "Asunto" (`title_label = 'Asunto'`), sin campo `field_subject` separado.
-- [ ] `field_status` es `list_text`, requerido, default `received`, con valores `received|Recibido`, `in_progress|En proceso`, `resolved|Resuelto`, `closed|Cerrado`, `duplicated|Duplicado`.
-- [ ] `field_claim_type` es `list_text`, requerido, sin default, con valores `requirement|Requerimiento`, `claim|Reclamo`.
-- [ ] `field_visibility` es `list_text`, requerido, default `private`, con valores `private|Privado`, `public|Público`.
-- [ ] `field_reception_date` es `datetime` (módulo Date), requerido, granularidad solo fecha (año-mes-día).
-- [ ] `field_description` es `text_long`, requerido, con `default_value[0]['format'] = 'plain_text'` (no `filtered_html` ni `full_html`).
-- [ ] `field_condominium` está instanciado en `reclamo`, requerido, y es **el mismo campo** (`field_info_field('field_condominium')` único) que usan `area` y `reservation` — no uno nuevo.
-- [ ] `field_requester` está instanciado en `reclamo`, requerido, y es el mismo campo que usa `reservation`.
-- [ ] Publicado por defecto, sin promoción a portada, comentarios ocultos.
+- [x] Tiene exactamente estos campos propios: `field_description`, `field_status`, `field_claim_type`, `field_reception_date`, `field_visibility`, más las instancias reutilizadas `field_condominium`, `field_requester`, `field_images`, `field_attachment`.
+- [x] Usa el título nativo como "Asunto" (`title_label = 'Asunto'`), sin campo `field_subject` separado.
+- [x] `field_status` es `list_text`, requerido, default `received`, con valores `received|Recibido`, `in_progress|En proceso`, `resolved|Resuelto`, `closed|Cerrado`, `duplicated|Duplicado`.
+- [x] `field_claim_type` es `list_text`, requerido, sin default, con valores `requirement|Requerimiento`, `claim|Reclamo`.
+- [x] `field_visibility` es `list_text`, requerido, default `private`, con valores `private|Privado`, `public|Público`.
+- [x] `field_reception_date` es `datetime` (módulo Date), requerido, granularidad solo fecha (año-mes-día).
+- [x] `field_description` es `text_long`, requerido, con `default_value[0]['format'] = 'plain_text'` (no `filtered_html` ni `full_html`).
+- [x] `field_condominium` está instanciado en `reclamo`, requerido, y es **el mismo campo** (`field_info_field('field_condominium')` único) que usan `area` y `reservation` — no uno nuevo.
+- [x] `field_requester` está instanciado en `reclamo`, requerido, y es el mismo campo que usa `reservation`.
+- [x] Publicado por defecto, sin promoción a portada, comentarios ocultos.
 
 **Content type `claim_transaction`**
 
-- [ ] Tiene exactamente estos campos propios: `field_status_date`, `field_comment`, `field_claim`, más las instancias reutilizadas `field_status`, `field_images`, `field_attachment`.
-- [ ] `field_status` está instanciado en `claim_transaction` compartiendo el **mismo campo** (`field_info_field('field_status')` único) que `reclamo`, con **sin** default en esta instancia (a diferencia de la de `reclamo`, que sí trae `received`).
-- [ ] `field_claim` es `entityreference`, requerido, cardinalidad 1, `target_bundles = ['reclamo']`, y ese `target_bundles` está en el **campo** (vía `_myapi_entityreference_field_settings()`), no en la instancia.
-- [ ] `field_status_date` es `datetime` (módulo Date), requerido, misma granularidad que `field_reception_date`.
-- [ ] `field_comment` es `text_long`, **no requerido**, con `default_value[0]['format'] = 'plain_text'`.
-- [ ] No tiene ningún campo de "usuario de creación": lo resuelve el `uid` nativo del nodo.
-- [ ] Publicado por defecto, sin promoción a portada, comentarios ocultos.
+- [x] Tiene exactamente estos campos propios: `field_status_date`, `field_comment`, `field_claim`, más las instancias reutilizadas `field_status`, `field_images`, `field_attachment`.
+- [x] `field_status` está instanciado en `claim_transaction` compartiendo el **mismo campo** (`field_info_field('field_status')` único) que `reclamo`, con **sin** default en esta instancia (a diferencia de la de `reclamo`, que sí trae `received`).
+- [x] `field_claim` es `entityreference`, requerido, cardinalidad 1, `target_bundles = ['reclamo']`, y ese `target_bundles` está en el **campo** (vía `_myapi_entityreference_field_settings()`), no en la instancia.
+- [x] `field_status_date` es `datetime` (módulo Date), requerido, misma granularidad que `field_reception_date`.
+- [x] `field_comment` es `text_long`, **no requerido**, con `default_value[0]['format'] = 'plain_text'`.
+- [x] No tiene ningún campo de "usuario de creación": lo resuelve el `uid` nativo del nodo.
+- [x] Publicado por defecto, sin promoción a portada, comentarios ocultos.
 
 **Campos compartidos `field_images` / `field_attachment`**
 
-- [ ] `field_images` existe como **un solo campo** `image`, cardinalidad ilimitada, con **dos instancias** (una en `reclamo`, otra en `claim_transaction`), ambas con `file_extensions = 'png jpg jpeg'` y `max_filesize = '3 MB'`, ninguna requerida.
-- [ ] `field_attachment` existe como **un solo campo** `file`, cardinalidad 1, con dos instancias, ambas con `file_extensions = 'pdf doc docx xls xlsx'` y `max_filesize = '3 MB'`, ninguna requerida.
-- [ ] Subir una imagen de más de 3MB, o con una extensión distinta de `png/jpg/jpeg`, es rechazado por Drupal con su mensaje nativo de validación de campo.
-- [ ] Subir un archivo de más de 3MB, o con una extensión fuera de `pdf/doc/docx/xls/xlsx`, es rechazado igual.
+- [x] `field_images` existe como **un solo campo** `image`, cardinalidad ilimitada, con **dos instancias** (una en `reclamo`, otra en `claim_transaction`), ambas con `file_extensions = 'png jpg jpeg'` y `max_filesize = '3 MB'`, ninguna requerida.
+- [x] `field_attachment` existe como **un solo campo** `file`, cardinalidad 1, con dos instancias, ambas con `file_extensions = 'pdf doc docx xls xlsx'` y `max_filesize = '3 MB'`, ninguna requerida.
+- [x] Subir una imagen de más de 3MB, o con una extensión distinta de `png/jpg/jpeg`, es rechazado por Drupal con su mensaje nativo de validación de campo.
+- [x] Subir un archivo de más de 3MB, o con una extensión fuera de `pdf/doc/docx/xls/xlsx`, es rechazado igual.
 
 **Enganche al rol `administrador edificio`**
 
-- [ ] `myapi_building_admin_condominium_map()` incluye la entrada `'reclamo' => ['mode' => 'direct', 'field' => 'field_condominium']`.
-- [ ] Tras `drush updb`, un usuario con el rol y un condominio A asignado ve en `/admin/content` únicamente los nodos `reclamo` de A (además de lo que ya veía de `boletin`/`reservation`/`area`/`vivienda`/`condominio`), y `/node/N` de un `reclamo` del condominio B devuelve 403.
-- [ ] El mismo usuario puede crear un `reclamo` con `field_condominium = A` desde `node/add/reclamo` (el autocompletado de ese campo solo ofrece A), y no puede editar uno de B por URL directa.
-- [ ] `create reclamo content` y `edit any reclamo content` aparecen concedidos al rol en `/admin/people/permissions` sin ninguna acción manual adicional — ya los concede `myapi_building_admin_permissions()` desde SPEC 49 en cuanto el bundle existe.
-- [ ] `claim_transaction` **no** aparece en `myapi_building_admin_editable_types()` ni en `myapi_building_admin_condominium_map()`: el rol **no** recibe `create`/`edit any` sobre ese tipo, y por tanto no hay ningún nodo de ese tipo visible ni editable para él a través de este spec.
-- [ ] Un usuario `administrator` o `backend` sigue viendo y pudiendo crear/editar ambos content types sin ninguna traba nueva.
-- [ ] Un residente autenticado en la app recibe exactamente las mismas respuestas que antes en todos los endpoints `api/v1/...` (no se toca ningún `resource`).
+- [x] `myapi_building_admin_condominium_map()` incluye la entrada `'reclamo' => ['mode' => 'direct', 'field' => 'field_condominium']`.
+- [x] Tras `drush updb`, un usuario con el rol y un condominio A asignado ve en `/admin/content` únicamente los nodos `reclamo` de A (además de lo que ya veía de `boletin`/`reservation`/`area`/`vivienda`/`condominio`), y `/node/N` de un `reclamo` del condominio B devuelve 403.
+- [x] El mismo usuario puede crear un `reclamo` con `field_condominium = A` desde `node/add/reclamo` (el autocompletado de ese campo solo ofrece A), y no puede editar uno de B por URL directa.
+- [x] `create reclamo content` y `edit any reclamo content` aparecen concedidos al rol en `/admin/people/permissions` sin ninguna acción manual adicional — ya los concede `myapi_building_admin_permissions()` desde SPEC 49 en cuanto el bundle existe.
+- [x] `claim_transaction` **no** aparece en `myapi_building_admin_editable_types()` ni en `myapi_building_admin_condominium_map()`: el rol **no** recibe `create`/`edit any` sobre ese tipo, y por tanto no hay ningún nodo de ese tipo visible ni editable para él a través de este spec.
+- [x] Un usuario `administrator` o `backend` sigue viendo y pudiendo crear/editar ambos content types sin ninguna traba nueva.
+- [x] Un residente autenticado en la app recibe exactamente las mismas respuestas que antes en todos los endpoints `api/v1/...` (no se toca ningún `resource`).
 
 **No regresión / infra**
 
-- [ ] `myapi.info` no declara ninguna dependencia nueva.
-- [ ] `myapi_update_7016` y anteriores quedan intactos: el diff de este spec no toca ninguna línea de ninguno de ellos.
-- [ ] `drush cc all` no reporta errores tras el cambio.
-- [ ] Existe `docs/claims-install.md` documentando ambos content types, la idempotencia, el flujo `drush updb`, la política de uninstall y la entrada al mapa de condominios.
-- [ ] `docs/building-admin-role.md` ya no dice que `reclamo` "no existe todavía" ni anticipa `field_condominio` en español; refleja `field_condominium`.
+- [x] `myapi.info` no declara ninguna dependencia nueva.
+- [x] `myapi_update_7016` y anteriores quedan intactos: el diff de este spec no toca ninguna línea de ninguno de ellos.
+- [x] `drush cc all` no reporta errores tras el cambio.
+- [x] Existe `docs/claims-install.md` documentando ambos content types, la idempotencia, el flujo `drush updb`, la política de uninstall y la entrada al mapa de condominios.
+- [x] `docs/building-admin-role.md` ya no dice que `reclamo` "no existe todavía" ni anticipa `field_condominio` en español; refleja `field_condominium`.
 
 ---
 
