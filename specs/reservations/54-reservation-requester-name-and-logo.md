@@ -1,6 +1,6 @@
 # 54 — Nombre del solicitante y logo en emails de reservas
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-07-31
 - **Dependencias:**
   - `48-reservation-notifications` (Implemented) — define `includes/myapi.reservation_notification.inc`
@@ -127,35 +127,35 @@ campos de usuario ya existentes).
 
 ## Criterios de aceptación
 
-- [ ] Al crear una reserva, el email al residente (`reservation_created_user`)
+- [x] Al crear una reserva, el email al residente (`reservation_created_user`)
       saluda con "Hola Nombre Apellido" del solicitante, no con su username.
-- [ ] Al cancelar una reserva (por operador o por el propio residente), el
+- [x] Al cancelar una reserva (por operador o por el propio residente), el
       email al residente (`reservation_cancelled_user`) saluda igual, con
       nombre y apellido.
-- [ ] Al crear una reserva, el email a `backend`/administradores de edificio
+- [x] Al crear una reserva, el email a `backend`/administradores de edificio
       (`reservation_created_admin`) muestra en la fila "Usuario" el nombre y
       apellido del solicitante, no su username.
-- [ ] Al cancelar una reserva desde `PUT /api/v1/reservations/%/cancel`, el
+- [x] Al cancelar una reserva desde `PUT /api/v1/reservations/%/cancel`, el
       email a `backend` (`reservation_cancelled_admin`) muestra en "Usuario"
       el nombre y apellido del solicitante, no su username.
-- [ ] Si el solicitante no tiene `field_nombre` ni `field_apellidos`
+- [x] Si el solicitante no tiene `field_nombre` ni `field_apellidos`
       registrados, los 4 emails de reserva caen al username (comportamiento
       igual al actual, sin regresión).
-- [ ] La vista de calendario admin (SPEC 47) sigue mostrando
+- [x] La vista de calendario admin (SPEC 47) sigue mostrando
       "Nombre Apellido (username)" exactamente igual que antes de este cambio
       — sin regresión.
-- [ ] El header de los 4 emails de reserva muestra la imagen del logo
+- [x] El header de los 4 emails de reserva muestra la imagen del logo
       (`assets/crespcord-icon.png`) en vez del texto "CrespCord".
-- [ ] El header del email de reset de contraseña (`myapi_mail_password_reset_html()`)
+- [x] El header del email de reset de contraseña (`myapi_mail_password_reset_html()`)
       también muestra la imagen del logo en vez del texto "CrespCord".
-- [ ] La URL del logo es absoluta (incluye esquema y dominio) y resuelve a un
+- [x] La URL del logo es absoluta (incluye esquema y dominio) y resuelve a un
       200 con `Content-Type: image/png` cuando se abre directamente en el
       navegador, sobre el sitio donde corre el módulo.
-- [ ] Tras desplegar el código a un ambiente donde el módulo ya estaba
+- [x] Tras desplegar el código a un ambiente donde el módulo ya estaba
       instalado (sin `hook_install()` ni update hook nuevo) y correr
       `drush cc all`, el logo se ve correctamente en los emails — confirmando
       que no hace falta ningún paso de instalación adicional.
-- [ ] La página web de reset de contraseña (el formulario al que apunta el
+- [x] La página web de reset de contraseña (el formulario al que apunta el
       botón del email) no cambia visualmente.
 
 ## Decisiones tomadas y descartadas
