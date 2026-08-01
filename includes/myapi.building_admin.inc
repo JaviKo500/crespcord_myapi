@@ -320,6 +320,10 @@ function myapi_building_admin_condominium_map() {
     'pagos'          => ['mode' => 'via_unit', 'field' => 'field_vivienda'],
     'recibo'         => ['mode' => 'via_unit', 'field' => 'field_vivienda'],
     'alicuota_extra' => ['mode' => 'via_unit', 'field' => 'field_vivienda'],
+    // SPEC 55. claim_transaction is deliberately NOT here: its condominium is
+    // only resolvable by hopping field_claim -> reclamo -> field_condominium,
+    // and no mode above supports that hop yet.
+    MYAPI_BUILDING_ADMIN_CLAIM_TYPE => ['mode' => 'direct', 'field' => 'field_condominium'],
   ];
 }
 

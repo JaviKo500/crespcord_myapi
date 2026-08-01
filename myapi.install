@@ -16,6 +16,18 @@
 define('MYAPI_RESERVATIONS_DESTRUCTIVE_UNINSTALL', FALSE);
 
 /**
+ * Whether uninstalling the module also destroys the claims content types,
+ * their fields and ALL their data (reclamos and their transactions).
+ *
+ * Kept FALSE on purpose: reclamos and claim transactions hold real client
+ * data, so an accidental `drush pm-uninstall myapi` must never wipe them. Flip
+ * this to TRUE only for a deliberate, one-off teardown where losing that data
+ * is intended. Independent from MYAPI_RESERVATIONS_DESTRUCTIVE_UNINSTALL:
+ * flipping one must not drag the other feature's data down with it.
+ */
+define('MYAPI_CLAIMS_DESTRUCTIVE_UNINSTALL', FALSE);
+
+/**
  * Implements hook_schema().
  */
 function myapi_schema() {
@@ -251,9 +263,11 @@ function myapi_schema() {
 function myapi_install() {
   myapi_mail_system_register();
   _myapi_reservations_install();
-  // After the reservations install: the 'area' and 'reservation' types must
-  // exist before their 'create'/'edit any' permissions can be found in
-  // module_invoke_all('permission') and granted to the building-admin role.
+  _myapi_claims_install();
+  // After the reservations and claims installs: 'area', 'reservation' and
+  // 'reclamo' must exist before their 'create'/'edit any' permissions can be
+  // found in module_invoke_all('permission') and granted to the
+  // building-admin role.
   _myapi_building_admin_install();
 }
 
@@ -333,6 +347,12 @@ function myapi_uninstall() {
   if (MYAPI_RESERVATIONS_DESTRUCTIVE_UNINSTALL) {
     _myapi_reservations_uninstall_destructive();
   }
+
+  // Same conservative default for the claims content types (SPEC 55), gated by
+  // its own independent constant.
+  if (MYAPI_CLAIMS_DESTRUCTIVE_UNINSTALL) {
+    _myapi_claims_uninstall_destructive();
+  }
 }
 
 /**
@@ -374,6 +394,55 @@ function _myapi_reservations_uninstall_destructive() {
   }
 
   foreach (['area', 'reservation'] as $type) {
+    if (node_type_load($type)) {
+      node_type_delete($type);
+    }
+  }
+
+  // Purge the deleted field data now instead of waiting for cron.
+  field_purge_batch(1000);
+}
+
+/**
+ * Destroys the claims schema and all its data (opt-in, never automatic).
+ *
+ * Only ever called from myapi_uninstall() when
+ * MYAPI_CLAIMS_DESTRUCTIVE_UNINSTALL is TRUE. Deleting a field also deletes its
+ * instances and stored values, so this wipes every reclamo and
+ * claim_transaction node's field data; the node types are then removed.
+ *
+ * field_condominium and field_requester are deliberately NOT in this list:
+ * they were created by SPEC 32 and are still used by 'area'/'reservation'
+ * regardless of this flag, so deleting them here would wipe reservations data
+ * on a site that only opted into the claims teardown. node_type_delete()
+ * already removes their 'reclamo' instances via field_attach_delete_bundle()
+ * without touching the field itself.
+ */
+function _myapi_claims_uninstall_destructive() {
+  // MYAPI_BUILDING_ADMIN_CLAIM_TYPE lives in the role's include; explicit load
+  // for the same reason as everywhere else in this file — an .install runs
+  // early enough that the D7 registry may not have files[] warm.
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+
+  $fields = [
+    'field_images',
+    'field_attachment',
+    'field_description',
+    'field_status',
+    'field_claim_type',
+    'field_reception_date',
+    'field_visibility',
+    'field_status_date',
+    'field_comment',
+    'field_claim',
+  ];
+  foreach ($fields as $field_name) {
+    if (field_info_field($field_name)) {
+      field_delete_field($field_name);
+    }
+  }
+
+  foreach ([MYAPI_BUILDING_ADMIN_CLAIM_TYPE, 'claim_transaction'] as $type) {
     if (node_type_load($type)) {
       node_type_delete($type);
     }
@@ -562,6 +631,16 @@ function _myapi_entityreference_field_settings() {
       'handler'          => 'base',
       'handler_settings' => [
         'target_bundles' => ['area' => 'area'],
+        'sort'           => ['type' => 'none'],
+      ],
+    ],
+    // On 'claim_transaction', SPEC 55. MYAPI_BUILDING_ADMIN_CLAIM_TYPE is the
+    // reserved machine name of the 'reclamo' bundle (SPEC 49).
+    'field_claim'       => [
+      'target_type'      => 'node',
+      'handler'          => 'base',
+      'handler_settings' => [
+        'target_bundles' => [MYAPI_BUILDING_ADMIN_CLAIM_TYPE => MYAPI_BUILDING_ADMIN_CLAIM_TYPE],
         'sort'           => ['type' => 'none'],
       ],
     ],
@@ -1211,6 +1290,323 @@ function _myapi_building_admin_install() {
 }
 
 /**
+ * Creates the claims content types, fields and instances (idempotent, SPEC 55).
+ *
+ * Single source of truth for the claims schema, called both from
+ * hook_install() (fresh sites) and from myapi_update_7017() (already installed
+ * sites). Re-running it never duplicates anything nor throws, because every
+ * creation goes through the same idempotent _ensure_* sub-helpers the
+ * reservations model uses (SPEC 32) — no sub-helper is added by this function.
+ *
+ * Order: (a) the two node types; (b) every field at the storage level
+ * (field_images and field_attachment created once, shared by both bundles;
+ * field_status created once, shared by both bundles); (c) the per-bundle
+ * instances, including the new instances of field_condominium and
+ * field_requester on 'reclamo' (fields themselves already exist since SPEC 32
+ * and are not recreated here).
+ *
+ * entityreference note: field_claim's 'target_type', 'handler' and
+ * 'handler_settings.target_bundles' come from
+ * _myapi_entityreference_field_settings(), same as every other entityreference
+ * field in this module — never written on the instance.
+ *
+ * field_status note: ONE field shared by both bundles, because their
+ * allowed_values are identical (unlike field_area_status /
+ * field_reservation_status in SPEC 32, which differed). Only the instance
+ * default_value differs: 'received' on 'reclamo', none on 'claim_transaction'
+ * — Field API allows that without any special handling.
+ */
+function _myapi_claims_install() {
+  // MYAPI_BUILDING_ADMIN_CLAIM_TYPE lives in the role's include. Explicit,
+  // like every other use of it in this file: an .install runs early enough
+  // that the D7 registry may not have the files[] entries warm.
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+
+  $claim_type = MYAPI_BUILDING_ADMIN_CLAIM_TYPE;
+  $transaction_type = 'claim_transaction';
+
+  // (a) Content types.
+  _myapi_reservations_ensure_node_type(
+    $claim_type,
+    'Reclamo',
+    'Reclamo o requerimiento presentado por un residente.',
+    'Asunto'
+  );
+  _myapi_reservations_ensure_node_type(
+    $transaction_type,
+    'Transacción de reclamo',
+    'Entrada de la línea de tiempo de un reclamo: cambio de estado con comentario opcional del administrador.',
+    'Título'
+  );
+
+  // (b) Fields (storage level).
+  //
+  // field_claim's whole 'settings' comes from the catalogue: that is where the
+  // referenceable bundle ('reclamo') is decided, and the selection handler
+  // reads it from the field, not from the instance.
+  $reference_settings = _myapi_entityreference_field_settings();
+
+  _myapi_reservations_ensure_field('field_images', [
+    'field_name'  => 'field_images',
+    'type'        => 'image',
+    'cardinality' => FIELD_CARDINALITY_UNLIMITED,
+  ]);
+  _myapi_reservations_ensure_field('field_attachment', [
+    'field_name'  => 'field_attachment',
+    'type'        => 'file',
+    'cardinality' => 1,
+  ]);
+  _myapi_reservations_ensure_field('field_description', [
+    'field_name'  => 'field_description',
+    'type'        => 'text_long',
+    'cardinality' => 1,
+  ]);
+  _myapi_reservations_ensure_field('field_status', [
+    'field_name'  => 'field_status',
+    'type'        => 'list_text',
+    'cardinality' => 1,
+    'settings'    => [
+      'allowed_values' => [
+        'received'    => 'Recibido',
+        'in_progress' => 'En proceso',
+        'resolved'    => 'Resuelto',
+        'closed'      => 'Cerrado',
+        'duplicated'  => 'Duplicado',
+      ],
+    ],
+  ]);
+  _myapi_reservations_ensure_field('field_claim_type', [
+    'field_name'  => 'field_claim_type',
+    'type'        => 'list_text',
+    'cardinality' => 1,
+    'settings'    => [
+      'allowed_values' => [
+        'requirement' => 'Requerimiento',
+        'claim'       => 'Reclamo',
+      ],
+    ],
+  ]);
+  _myapi_reservations_ensure_field('field_reception_date', [
+    'field_name'  => 'field_reception_date',
+    'type'        => 'datetime',
+    'cardinality' => 1,
+    'settings'    => [
+      'granularity' => [
+        'year'   => 'year',
+        'month'  => 'month',
+        'day'    => 'day',
+        'hour'   => 0,
+        'minute' => 0,
+        'second' => 0,
+      ],
+      'tz_handling' => 'none',
+      'timezone_db' => '',
+      'todate'      => '',
+    ],
+  ]);
+  _myapi_reservations_ensure_field('field_visibility', [
+    'field_name'  => 'field_visibility',
+    'type'        => 'list_text',
+    'cardinality' => 1,
+    'settings'    => [
+      'allowed_values' => [
+        'private' => 'Privado',
+        'public'  => 'Público',
+      ],
+    ],
+  ]);
+  _myapi_reservations_ensure_field('field_status_date', [
+    'field_name'  => 'field_status_date',
+    'type'        => 'datetime',
+    'cardinality' => 1,
+    'settings'    => [
+      'granularity' => [
+        'year'   => 'year',
+        'month'  => 'month',
+        'day'    => 'day',
+        'hour'   => 0,
+        'minute' => 0,
+        'second' => 0,
+      ],
+      'tz_handling' => 'none',
+      'timezone_db' => '',
+      'todate'      => '',
+    ],
+  ]);
+  _myapi_reservations_ensure_field('field_comment', [
+    'field_name'  => 'field_comment',
+    'type'        => 'text_long',
+    'cardinality' => 1,
+  ]);
+  _myapi_reservations_ensure_field('field_claim', [
+    'field_name'  => 'field_claim',
+    'type'        => 'entityreference',
+    'cardinality' => 1,
+    'settings'    => $reference_settings['field_claim'],
+  ]);
+
+  // (c) Instances of the 'reclamo' bundle.
+  _myapi_reservations_ensure_instance('field_condominium', $claim_type, [
+    'field_name'  => 'field_condominium',
+    'entity_type' => 'node',
+    'bundle'      => $claim_type,
+    'label'       => 'Condominio',
+    'required'    => 1,
+    // No 'settings' here on purpose: the referenceable bundle is a field-level
+    // setting and lives in _myapi_entityreference_field_settings().
+    'widget'      => ['type' => 'entityreference_autocomplete'],
+  ]);
+  _myapi_reservations_ensure_instance('field_requester', $claim_type, [
+    'field_name'  => 'field_requester',
+    'entity_type' => 'node',
+    'bundle'      => $claim_type,
+    'label'       => 'Solicitante',
+    'required'    => 1,
+    'widget'      => ['type' => 'entityreference_autocomplete'],
+  ]);
+  _myapi_reservations_ensure_instance('field_description', $claim_type, [
+    'field_name'    => 'field_description',
+    'entity_type'   => 'node',
+    'bundle'        => $claim_type,
+    'label'         => 'Descripción',
+    'required'      => 1,
+    'settings'      => ['text_processing' => 1],
+    // 'plain_text' is pinned on purpose, unlike field_area_notes (SPEC 32),
+    // whose 'format' key was removed by myapi_update_7013() because pinning
+    // 'full_html' disabled the textarea for anyone without that format. Plain
+    // text is available to every user, so no such problem exists here.
+    'default_value' => [['value' => '', 'format' => 'plain_text']],
+    'widget'        => ['type' => 'text_textarea'],
+  ]);
+  _myapi_reservations_ensure_instance('field_status', $claim_type, [
+    'field_name'    => 'field_status',
+    'entity_type'   => 'node',
+    'bundle'        => $claim_type,
+    'label'         => 'Estado',
+    'required'      => 1,
+    'default_value' => [['value' => 'received']],
+    'widget'        => ['type' => 'options_select'],
+  ]);
+  _myapi_reservations_ensure_instance('field_claim_type', $claim_type, [
+    'field_name'  => 'field_claim_type',
+    'entity_type' => 'node',
+    'bundle'      => $claim_type,
+    'label'       => 'Tipo',
+    'required'    => 1,
+    'widget'      => ['type' => 'options_select'],
+  ]);
+  _myapi_reservations_ensure_instance('field_reception_date', $claim_type, [
+    'field_name'  => 'field_reception_date',
+    'entity_type' => 'node',
+    'bundle'      => $claim_type,
+    'label'       => 'Fecha de recepción',
+    'required'    => 1,
+    'widget'      => [
+      'type'     => 'date_select',
+      'settings' => [
+        'input_format'   => 'Y-m-d',
+        'year_range'     => '-1:+3',
+        'increment'      => 1,
+        'label_position' => 'above',
+        'text_parts'     => [],
+      ],
+    ],
+  ]);
+  _myapi_reservations_ensure_instance('field_visibility', $claim_type, [
+    'field_name'    => 'field_visibility',
+    'entity_type'   => 'node',
+    'bundle'        => $claim_type,
+    'label'         => 'Visibilidad',
+    'required'      => 1,
+    'default_value' => [['value' => 'private']],
+    'widget'        => ['type' => 'options_select'],
+  ]);
+
+  // (c) Instances of the 'claim_transaction' bundle.
+  _myapi_reservations_ensure_instance('field_status', $transaction_type, [
+    'field_name'  => 'field_status',
+    'entity_type' => 'node',
+    'bundle'      => $transaction_type,
+    'label'       => 'Estado',
+    'required'    => 1,
+    // No 'default_value' here on purpose, unlike the 'reclamo' instance above:
+    // a transaction always records a deliberately chosen new status.
+    'widget'      => ['type' => 'options_select'],
+  ]);
+  _myapi_reservations_ensure_instance('field_status_date', $transaction_type, [
+    'field_name'  => 'field_status_date',
+    'entity_type' => 'node',
+    'bundle'      => $transaction_type,
+    'label'       => 'Fecha del estado',
+    'required'    => 1,
+    'widget'      => [
+      'type'     => 'date_select',
+      'settings' => [
+        'input_format'   => 'Y-m-d',
+        'year_range'     => '-1:+3',
+        'increment'      => 1,
+        'label_position' => 'above',
+        'text_parts'     => [],
+      ],
+    ],
+  ]);
+  _myapi_reservations_ensure_instance('field_comment', $transaction_type, [
+    'field_name'    => 'field_comment',
+    'entity_type'   => 'node',
+    'bundle'        => $transaction_type,
+    'label'         => 'Comentario',
+    'required'      => 0,
+    'settings'      => ['text_processing' => 1],
+    'default_value' => [['value' => '', 'format' => 'plain_text']],
+    'widget'        => ['type' => 'text_textarea'],
+  ]);
+  _myapi_reservations_ensure_instance('field_claim', $transaction_type, [
+    'field_name'  => 'field_claim',
+    'entity_type' => 'node',
+    'bundle'      => $transaction_type,
+    'label'       => 'Reclamo',
+    'required'    => 1,
+    'widget'      => ['type' => 'entityreference_autocomplete'],
+  ]);
+
+  // (c) Instances of field_images and field_attachment, identical on both
+  // bundles (same rule, same limits — see the docblock above).
+  $images_settings = [
+    'file_extensions'    => 'png jpg jpeg',
+    'max_filesize'       => '3 MB',
+    // Alt text is offered but not required — distinct from field_image on
+    // 'area' (SPEC 32), which disables it entirely (alt_field = 0).
+    'alt_field'          => 1,
+    'alt_field_required' => 0,
+  ];
+  $attachment_settings = [
+    'file_extensions' => 'pdf doc docx xls xlsx',
+    'max_filesize'    => '3 MB',
+  ];
+
+  foreach ([$claim_type, $transaction_type] as $bundle) {
+    _myapi_reservations_ensure_instance('field_images', $bundle, [
+      'field_name'  => 'field_images',
+      'entity_type' => 'node',
+      'bundle'      => $bundle,
+      'label'       => 'Imágenes',
+      'required'    => 0,
+      'settings'    => $images_settings,
+      'widget'      => ['type' => 'image_image'],
+    ]);
+    _myapi_reservations_ensure_instance('field_attachment', $bundle, [
+      'field_name'  => 'field_attachment',
+      'entity_type' => 'node',
+      'bundle'      => $bundle,
+      'label'       => 'Adjunto',
+      'required'    => 0,
+      'settings'    => $attachment_settings,
+      'widget'      => ['type' => 'file_generic'],
+    ]);
+  }
+}
+
+/**
  * Creates the my_api_tokens table on sites where the module is already enabled.
  */
 function myapi_update_7001() {
@@ -1622,4 +2018,23 @@ function myapi_update_7016() {
   }
 
   return $summary;
+}
+
+/**
+ * Creates the claims content types (reclamo, claim_transaction) and their
+ * fields on sites where the module is already installed.
+ *
+ * Runs the same idempotent _myapi_claims_install() used by hook_install(), so
+ * existing production sites get the claims schema via `drush updb` without a
+ * disable/enable cycle and without touching any existing table or bundle
+ * (my_api_tokens, myapi_notifications, 'area'/'reservation', etc.).
+ *
+ * The number is 7017 and NOT 7014, the next number the two comments above
+ * myapi_requirements() and myapi_update_7015() point at: SPEC 51 reserved 7014
+ * for a permission repair whose function was never written, a gap that
+ * predates this spec and that this spec does not fill. 7015 and 7016 are
+ * already taken, so 7017 is the first number actually free.
+ */
+function myapi_update_7017() {
+  _myapi_claims_install();
 }
