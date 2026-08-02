@@ -1,6 +1,6 @@
 # SPEC 56 — Acceso `via_claim` y listado de reclamos en el panel de administración
 
-> **Estado:** Approved · **Depende de:** SPEC 47 (`myapi_calendar_admin_roles()`, patrón de página back-office sin AJAX), SPEC 49 (`myapi_building_admin_condominium_map()`, modos `self`/`direct`/`via_unit`, `myapi_building_admin_editable_types()`), SPEC 55 (bundles `reclamo`/`claim_transaction`, nota explícita de que `via_claim` queda pendiente) · **Fecha:** 2026-08-01
+> **Estado:** Implemented · **Depende de:** SPEC 47 (`myapi_calendar_admin_roles()`, patrón de página back-office sin AJAX), SPEC 49 (`myapi_building_admin_condominium_map()`, modos `self`/`direct`/`via_unit`, `myapi_building_admin_editable_types()`), SPEC 55 (bundles `reclamo`/`claim_transaction`, nota explícita de que `via_claim` queda pendiente) · **Fecha:** 2026-08-01
 > **Objetivo:** Añadir el modo de resolución `via_claim` para que `administrador edificio` pueda administrar `claim_transaction` acotado a sus condominios, y una página de back-office en `admin/content/claims` — enlazada en el sidebar, visible para `administrator`, `backend` y `administrador edificio` — que lista los reclamos con filtros y paginación, sin tocar ningún endpoint de la API ni el formulario de edición.
 
 ---
@@ -156,57 +156,57 @@ Reutiliza el helper existente de SPEC 49 tal cual — ya cruza los permisos dese
 
 **Modo `via_claim` (unit)**
 
-- [ ] `myapi_building_admin_resolve_condominium()` en modo `via_claim` devuelve el `nid` del condominio cuando `field_claim` apunta a un `reclamo` con `field_condominium` relleno.
-- [ ] Devuelve `NULL` si `field_claim` está vacío, si `$claim_loader` no es invocable, o si el `reclamo` cargado no tiene `field_condominium`. Ningún caso emite warning de PHP.
-- [ ] `myapi_building_admin_condominium_map()` incluye `claim_transaction => ['mode' => 'via_claim', 'field' => 'field_claim']` y sigue teniendo exactamente las mismas entradas anteriores sin cambios.
-- [ ] `myapi_building_admin_editable_types(TRUE)` incluye `claim_transaction`; `myapi_building_admin_editable_types(FALSE)` no lo incluye; sin argumento, depende de `node_type_load('claim_transaction')`.
-- [ ] `vendor/bin/phpunit` pasa entero, incluidos los tests nuevos, sin tocar los existentes.
+- [x] `myapi_building_admin_resolve_condominium()` en modo `via_claim` devuelve el `nid` del condominio cuando `field_claim` apunta a un `reclamo` con `field_condominium` relleno.
+- [x] Devuelve `NULL` si `field_claim` está vacío, si `$claim_loader` no es invocable, o si el `reclamo` cargado no tiene `field_condominium`. Ningún caso emite warning de PHP.
+- [x] `myapi_building_admin_condominium_map()` incluye `claim_transaction => ['mode' => 'via_claim', 'field' => 'field_claim']` y sigue teniendo exactamente las mismas entradas anteriores sin cambios.
+- [x] `myapi_building_admin_editable_types(TRUE)` incluye `claim_transaction`; `myapi_building_admin_editable_types(FALSE)` no lo incluye; sin argumento, depende de `node_type_load('claim_transaction')`.
+- [x] `vendor/bin/phpunit` pasa entero, incluidos los tests nuevos, sin tocar los existentes.
 
 **Permisos**
 
-- [ ] En un sitio limpio (`drush en myapi`), el rol `administrador edificio` tiene concedidos `create claim_transaction content` y `edit any claim_transaction content` en `/admin/people/permissions`.
-- [ ] En un sitio donde el módulo ya estaba instalado, `drush updb` ejecuta `myapi_update_7018` y concede esos dos permisos sin tocar ningún otro permiso del rol.
-- [ ] Reejecutar `myapi_update_7018` dos veces no duplica filas en `role_permission`.
-- [ ] Ningún permiso `delete … claim_transaction content` queda concedido.
+- [x] En un sitio limpio (`drush en myapi`), el rol `administrador edificio` tiene concedidos `create claim_transaction content` y `edit any claim_transaction content` en `/admin/people/permissions`.
+- [x] En un sitio donde el módulo ya estaba instalado, `drush updb` ejecuta `myapi_update_7018` y concede esos dos permisos sin tocar ningún otro permiso del rol.
+- [x] Reejecutar `myapi_update_7018` dos veces no duplica filas en `role_permission`.
+- [x] Ningún permiso `delete … claim_transaction content` queda concedido.
 
 **Filtro de condominio (`hook_node_access()` y `hook_query_alter()`)**
 
-- [ ] Un `administrador edificio` con el condominio A asignado: abrir por URL directa `/node/N/edit` de una `claim_transaction` cuyo `reclamo` pertenece a A devuelve 200; si pertenece a B, devuelve 403.
-- [ ] Una `claim_transaction` cuyo `field_claim` está vacío, o cuyo `reclamo` referenciado no tiene `field_condominium`, no produce error PHP y su acceso lo decide el resto de Drupal (`NODE_ACCESS_IGNORE`).
-- [ ] Un usuario `administrator` o `backend` sigue viendo y editando toda `claim_transaction` sin ninguna restricción nueva.
-- [ ] Un residente autenticado en la app recibe exactamente las mismas respuestas en todos los endpoints `api/v1/...` (no se toca ningún `resource`).
+- [x] Un `administrador edificio` con el condominio A asignado: abrir por URL directa `/node/N/edit` de una `claim_transaction` cuyo `reclamo` pertenece a A devuelve 200; si pertenece a B, devuelve 403.
+- [x] Una `claim_transaction` cuyo `field_claim` está vacío, o cuyo `reclamo` referenciado no tiene `field_condominium`, no produce error PHP y su acceso lo decide el resto de Drupal (`NODE_ACCESS_IGNORE`).
+- [x] Un usuario `administrator` o `backend` sigue viendo y editando toda `claim_transaction` sin ninguna restricción nueva.
+- [x] Un residente autenticado en la app recibe exactamente las mismas respuestas en todos los endpoints `api/v1/...` (no se toca ningún `resource`).
 
 **Página `admin/content/claims` — acceso**
 
-- [ ] `administrator`, `backend` y `uid 1` acceden sin 403.
-- [ ] `administrador edificio` accede sin 403, tenga o no condominios asignados.
-- [ ] Un autenticado sin esos roles, y un anónimo, reciben 403.
-- [ ] El enlace "Reclamos" (o el título elegido) aparece en el sidebar bajo Contenido para los tres roles autorizados.
+- [x] `administrator`, `backend` y `uid 1` acceden sin 403.
+- [x] `administrador edificio` accede sin 403, tenga o no condominios asignados.
+- [x] Un autenticado sin esos roles, y un anónimo, reciben 403.
+- [x] El enlace "Reclamos" (o el título elegido) aparece en el sidebar bajo Contenido para los tres roles autorizados.
 
 **Listado — filtros y datos**
 
-- [ ] Sin parámetros, el listado muestra los reclamos de los condominios visibles para el usuario (todos para `administrator`/`backend`; solo los asignados para `administrador edificio`), ordenados por `nid` **descendente**.
-- [ ] Un `administrador edificio` con el condominio A asignado no ve en ningún caso un reclamo del condominio B, ni cambiando los filtros de la URL.
-- [ ] Un `administrador edificio` sin condominios asignados ve el listado vacío, sin error.
-- [ ] Filtrar por `condominium`, `status`, `claim_type`, `date_from` y `date_to` — cada uno por separado y combinados — devuelve solo las filas que cumplen todos los filtros activos.
-- [ ] `?condominium=B` en la URL de un `administrador edificio` sin B asignado se ignora en silencio (mismo criterio que el calendario).
-- [ ] Parámetros basura (`?status=inventado`, `?date_from=hola`) no producen error: caen a "sin filtro".
-- [ ] Cada fila muestra ID, asunto, condominio, estado, tipo, solicitante y fecha de recepción.
-- [ ] Click en una fila navega a `node/<nid>/edit` del reclamo.
-- [ ] El botón "Crear reclamo" navega a `node/add/reclamo`.
+- [x] Sin parámetros, el listado muestra los reclamos de los condominios visibles para el usuario (todos para `administrator`/`backend`; solo los asignados para `administrador edificio`), ordenados por `nid` **descendente**.
+- [x] Un `administrador edificio` con el condominio A asignado no ve en ningún caso un reclamo del condominio B, ni cambiando los filtros de la URL.
+- [x] Un `administrador edificio` sin condominios asignados ve el listado vacío, sin error.
+- [x] Filtrar por `condominium`, `status`, `claim_type`, `date_from` y `date_to` — cada uno por separado y combinados — devuelve solo las filas que cumplen todos los filtros activos.
+- [x] `?condominium=B` en la URL de un `administrador edificio` sin B asignado se ignora en silencio (mismo criterio que el calendario).
+- [x] Parámetros basura (`?status=inventado`, `?date_from=hola`) no producen error: caen a "sin filtro".
+- [x] Cada fila muestra ID, asunto, condominio, estado, tipo, solicitante y fecha de recepción.
+- [x] Click en una fila navega a `node/<nid>/edit` del reclamo.
+- [x] El botón "Crear reclamo" navega a `node/add/reclamo`.
 
 **Paginación**
 
-- [ ] Con más de 20 reclamos visibles, el listado pagina de a 20 y el pager de Drupal (`pager_default_initialize()`) funciona con los filtros activos conservados entre páginas.
-- [ ] Con 20 o menos, no aparece el pager.
+- [x] Con más de 20 reclamos visibles, el listado pagina de a 20 y el pager de Drupal (`pager_default_initialize()`) funciona con los filtros activos conservados entre páginas.
+- [x] Con 20 o menos, no aparece el pager.
 
 **No regresión / infra**
 
-- [ ] `resources/*.resource.inc` no aparece en el diff.
-- [ ] `hook_menu()` no cambia ninguna ruta `api/v1/...`; la única entrada nueva es `admin/content/claims`.
-- [ ] `myapi_update_7017` y anteriores quedan intactos.
-- [ ] `drush cc all` no reporta errores.
-- [ ] Existe `docs/claims-list.md` con ruta, acceso, filtros, columnas y paginación.
+- [x] `resources/*.resource.inc` no aparece en el diff.
+- [x] `hook_menu()` no cambia ninguna ruta `api/v1/...`; la única entrada nueva es `admin/content/claims`.
+- [x] `myapi_update_7017` y anteriores quedan intactos.
+- [x] `drush cc all` no reporta errores.
+- [x] Existe `docs/claims-list.md` con ruta, acceso, filtros, columnas y paginación.
 
 ---
 
