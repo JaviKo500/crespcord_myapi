@@ -1,6 +1,6 @@
 # SPEC 57 — Edición de reclamo con línea de tiempo de transacciones y modal de creación
 
-> **Estado:** Draft · **Depende de:** SPEC 56 (modo `via_claim`, permisos `create`/`edit any` sobre `claim_transaction` para `administrador edificio`, listado que enlaza a `node/%nid/edit`), SPEC 55 (bundles `reclamo`/`claim_transaction` y sus campos) · **Fecha:** 2026-08-01
+> **Estado:** Approved · **Depende de:** SPEC 56 (modo `via_claim`, permisos `create`/`edit any` sobre `claim_transaction` para `administrador edificio`, listado que enlaza a `node/%nid/edit`), SPEC 55 (bundles `reclamo`/`claim_transaction` y sus campos) · **Fecha:** 2026-08-01
 > **Objetivo:** En el formulario nativo de edición de `reclamo`, mostrar debajo la línea de tiempo de sus transacciones con un botón que abre un modal (AJAX Framework nativo de Drupal 7) para crear una nueva, sincronizando el estado del reclamo con el de la transacción guardada y creando automáticamente la transacción inicial al crear un reclamo.
 
 Decisiones técnicas de base, fijadas antes del alcance porque condicionan todo lo demás:
