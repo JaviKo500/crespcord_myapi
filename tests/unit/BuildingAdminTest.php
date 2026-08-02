@@ -10,7 +10,7 @@ require_once __DIR__ . '/../../includes/myapi.building_admin.inc';
  *
  * Covers the five decidable pieces of the spec, all of them free of Drupal:
  *   - the four catalogues (editable types, visible types, permissions, map);
- *   - myapi_building_admin_resolve_condominium() — the three modes of the map;
+ *   - myapi_building_admin_resolve_condominium() — the four modes of the map;
  *   - myapi_building_admin_access_decision()     — deny / ignore, never allow;
  *   - myapi_building_admin_bulletin_errors()     — the node form rule;
  *   - myapi_building_admin_filter_available_permissions().
@@ -73,16 +73,19 @@ class BuildingAdminTest extends TestCase {
     $this->assertContains('area', $types);
     $this->assertNotContains('condominio', $types);
     $this->assertNotContains(MYAPI_BUILDING_ADMIN_CLAIM_TYPE, $types);
+    $this->assertNotContains(MYAPI_BUILDING_ADMIN_TRANSACTION_TYPE, $types);
   }
 
   /**
    * The claims bundle joins the editable types only once it exists on the
-   * site; until then the catalogue must not name it.
+   * site; until then the catalogue must not name it. Same criterion for the
+   * claim_transaction bundle (SPEC 56): forcing TRUE includes both.
    */
   public function testEditableTypesWithTheClaimsBundle() {
     $types = myapi_building_admin_editable_types(TRUE);
 
     $this->assertContains(MYAPI_BUILDING_ADMIN_CLAIM_TYPE, $types);
+    $this->assertContains(MYAPI_BUILDING_ADMIN_TRANSACTION_TYPE, $types);
     $this->assertNotContains('condominio', $types);
   }
 
@@ -223,31 +226,33 @@ class BuildingAdminTest extends TestCase {
   }
 
   /**
-   * The map covers exactly the ten types of the data model, each with the
-   * declared mode and field. An eleventh entry, or a changed field name, is a
+   * The map covers exactly the eleven types of the data model, each with the
+   * declared mode and field. A twelfth entry, or a changed field name, is a
    * change to the access rule and must be a deliberate edit here too.
    *
-   * claim_transaction is deliberately absent (SPEC 55): its condominium is
-   * only resolvable by hopping field_claim -> reclamo -> field_condominium,
-   * and no mode this map supports does that hop yet.
+   * claim_transaction resolves via the new 'via_claim' mode (SPEC 56): its
+   * condominium is only resolvable by hopping field_claim -> reclamo ->
+   * field_condominium, reusing the claim's own map entry rather than
+   * hard-coding the field name twice.
    */
-  public function testCondominiumMapCoversTheTenDeclaredTypes() {
+  public function testCondominiumMapCoversTheElevenDeclaredTypes() {
     $expected = array(
-      'condominio'                      => array('mode' => 'self'),
-      'boletin'                         => array('mode' => 'direct',   'field' => 'field_condominio'),
-      'gastos'                          => array('mode' => 'direct',   'field' => 'field_condominio'),
-      'vivienda'                        => array('mode' => 'direct',   'field' => 'field_condominio'),
-      'area'                            => array('mode' => 'direct',   'field' => 'field_condominium'),
-      'reservation'                     => array('mode' => 'direct',   'field' => 'field_condominium'),
-      'pagos'                           => array('mode' => 'via_unit', 'field' => 'field_vivienda'),
-      'recibo'                          => array('mode' => 'via_unit', 'field' => 'field_vivienda'),
-      'alicuota_extra'                  => array('mode' => 'via_unit', 'field' => 'field_vivienda'),
-      MYAPI_BUILDING_ADMIN_CLAIM_TYPE   => array('mode' => 'direct',   'field' => 'field_condominium'),
+      'condominio'                            => array('mode' => 'self'),
+      'boletin'                               => array('mode' => 'direct',    'field' => 'field_condominio'),
+      'gastos'                                => array('mode' => 'direct',    'field' => 'field_condominio'),
+      'vivienda'                              => array('mode' => 'direct',    'field' => 'field_condominio'),
+      'area'                                  => array('mode' => 'direct',    'field' => 'field_condominium'),
+      'reservation'                           => array('mode' => 'direct',    'field' => 'field_condominium'),
+      'pagos'                                 => array('mode' => 'via_unit',  'field' => 'field_vivienda'),
+      'recibo'                                => array('mode' => 'via_unit',  'field' => 'field_vivienda'),
+      'alicuota_extra'                        => array('mode' => 'via_unit',  'field' => 'field_vivienda'),
+      MYAPI_BUILDING_ADMIN_CLAIM_TYPE         => array('mode' => 'direct',    'field' => 'field_condominium'),
+      MYAPI_BUILDING_ADMIN_TRANSACTION_TYPE   => array('mode' => 'via_claim', 'field' => 'field_claim'),
     );
 
     $map = myapi_building_admin_condominium_map();
 
-    $this->assertCount(10, $map);
+    $this->assertCount(11, $map);
     $this->assertSame(array_keys($expected), array_keys($map));
     foreach ($expected as $type => $entry) {
       $this->assertSame($entry, $map[$type], 'Map entry for ' . $type);
@@ -343,6 +348,50 @@ class BuildingAdminTest extends TestCase {
   }
 
   /**
+   * Mode 'via_claim': claim_transaction -> reclamo -> field_condominium, two
+   * hops through the claim rather than through a unit, with the claim load
+   * injected as the third parameter so no database is needed. The reclamo's
+   * own field name is read off the map entry (via testCondominiumMap...)
+   * rather than hard-coded a second time.
+   */
+  public function testResolveViaClaimModeFollowsTheClaim() {
+    $transaction = $this->node(MYAPI_BUILDING_ADMIN_TRANSACTION_TYPE, array('field_claim' => 200));
+    $loader = function ($nid) {
+      return $nid === 200
+        ? (object) array('type' => 'reclamo', 'field_condominium' => array('und' => array(array('target_id' => 6))))
+        : NULL;
+    };
+
+    $this->assertSame(6, myapi_building_admin_resolve_condominium($transaction, NULL, $loader));
+  }
+
+  /**
+   * A 'via_claim' node with no claim loader injected — the default — resolves
+   * to NULL instead of erroring, same guard as 'via_unit' with no unit loader.
+   */
+  public function testResolveViaClaimModeWithUninvocableLoaderIsNull() {
+    $transaction = $this->node(MYAPI_BUILDING_ADMIN_TRANSACTION_TYPE, array('field_claim' => 200));
+
+    $this->assertNull(
+      myapi_building_admin_resolve_condominium($transaction, NULL, 'nonexistent_loader_never_called')
+    );
+  }
+
+  /**
+   * A 'via_claim' node whose referenced 'reclamo' loads but has no
+   * field_condominium resolves to NULL, and quietly — no PHP notice on the
+   * missing field.
+   */
+  public function testResolveViaClaimModeWhenTheClaimHasNoCondominiumIsNull() {
+    $transaction = $this->node(MYAPI_BUILDING_ADMIN_TRANSACTION_TYPE, array('field_claim' => 200));
+    $loader = function ($nid) {
+      return $nid === 200 ? (object) array('type' => 'reclamo') : NULL;
+    };
+
+    $this->assertNull(myapi_building_admin_resolve_condominium($transaction, NULL, $loader));
+  }
+
+  /**
    * A type outside the map is outside the rule entirely.
    */
   public function testResolveUnknownTypeIsNull() {
@@ -366,6 +415,8 @@ class BuildingAdminTest extends TestCase {
       $this->node('condominio'),
       // Mode 'via_unit' with nothing to hop to.
       $this->node('pagos', array('field_vivienda' => NULL)),
+      // Mode 'via_claim' with nothing to hop to.
+      $this->node(MYAPI_BUILDING_ADMIN_TRANSACTION_TYPE, array('field_claim' => NULL)),
     );
 
     foreach ($cases as $index => $node) {
