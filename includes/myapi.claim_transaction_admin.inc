@@ -2,7 +2,7 @@
 
 /**
  * @file
- * Back-office claim transaction timeline and creation modal (SPEC 57).
+ * Back-office claim transaction timeline and creation page (SPEC 57).
  *
  * Everything behind node/%node/claim-transaction/add and the transactions
  * fieldset added to node/%nid/edit of a 'reclamo' lives here. It is NOT an
@@ -72,7 +72,7 @@ function myapi_claim_transaction_timeline_rows($claim_nid) {
 }
 
 /* ---------------------------------------------------------------------------
- * Creation form (SPEC 57 modal).
+ * Creation form (SPEC 57).
  * ------------------------------------------------------------------------ */
 
 /**
@@ -110,21 +110,35 @@ function myapi_claim_transaction_create_form($form, &$form_state, $claim_node) {
     '#required' => TRUE,
   );
 
-  // #date_format limited to the date part only: field_status_date's
-  // granularity is day-only (myapi.install), so no time picker is shown, and
-  // $form_state['values']['field_status_date'] comes back as array('date' =>
-  // 'Y-m-d'), no 'time' key — see date_popup_element_value_callback().
+  // Plain textfield, 'Y-m-d' as typed text — NOT a Field API / Date module
+  // widget of any kind. Two different "smart" date elements were tried and
+  // reverted here in a row: 'date_popup' (its own 'container-inline-date'
+  // CSS caused a duplicated sub-label, then a misaligned label) and core's
+  // native '#type' => 'date' (three selects; its own 'container-inline'
+  // wrapper, from theme_date(), rendered the selects sitting oddly low
+  // inside their box). A plain '#type' => 'textfield' uses the exact same
+  // 'form_element' wrapper as field_status/field_comment with no combo/
+  // multi-part markup of its own, so there is no special-case CSS left to
+  // fight — visually identical to every other field in this form,
+  // guaranteed. Validated server-side with myapi_reservation_valid_date()
+  // (resources/reservation.resource.inc), the same 'YYYY-MM-DD' + checkdate()
+  // rule already reused by includes/myapi.claims_admin.inc for the exact
+  // same reason (see myapi_claim_transaction_validate_status_date() below).
   $form['field_status_date'] = array(
-    '#type' => 'date_popup',
+    '#type' => 'textfield',
     '#title' => t('Fecha de estado'),
-    '#date_format' => 'Y-m-d',
-    '#default_value' => date('Y-m-d') . ' 00:00:00',
+    '#default_value' => date('Y-m-d'),
+    '#size' => 12,
+    '#maxlength' => 10,
+    '#description' => t('Formato: AAAA-MM-DD.'),
     '#required' => TRUE,
+    '#element_validate' => array('myapi_claim_transaction_validate_status_date'),
   );
 
   $form['field_comment'] = array(
     '#type' => 'textarea',
     '#title' => t('Comentario'),
+    '#required' => TRUE,
   );
 
   $images_field = field_info_field('field_images');
@@ -160,6 +174,24 @@ function myapi_claim_transaction_create_form($form, &$form_state, $claim_node) {
 }
 
 /**
+ * #element_validate callback of the field_status_date textfield.
+ *
+ * Reuses myapi_reservation_valid_date() (resources/reservation.resource.inc)
+ * rather than re-writing the 'YYYY-MM-DD' + checkdate() rule a third time —
+ * includes/myapi.claims_admin.inc already reaches into that same resource
+ * file for the identical reason (myapi_claims_list_filters()).
+ *
+ * @param array $element
+ * @param array $form_state
+ */
+function myapi_claim_transaction_validate_status_date($element, &$form_state) {
+  module_load_include('inc', 'myapi', 'resources/reservation.resource');
+  if (myapi_reservation_valid_date($element['#value']) === NULL) {
+    form_error($element, t('La fecha debe tener el formato AAAA-MM-DD y ser una fecha válida.'));
+  }
+}
+
+/**
  * Submit handler of myapi_claim_transaction_create_form().
  *
  * Builds and saves the 'claim_transaction' node by hand (field_claim = the
@@ -187,11 +219,8 @@ function myapi_claim_transaction_create_form_submit($form, &$form_state) {
 
   $transaction->field_claim[LANGUAGE_NONE][0]['target_id'] = $claim_nid;
   $transaction->field_status[LANGUAGE_NONE][0]['value'] = $form_state['values']['field_status'];
-  $transaction->field_status_date[LANGUAGE_NONE][0]['value'] = $form_state['values']['field_status_date']['date'];
-
-  if ($form_state['values']['field_comment'] !== '') {
-    $transaction->field_comment[LANGUAGE_NONE][0]['value'] = $form_state['values']['field_comment'];
-  }
+  $transaction->field_status_date[LANGUAGE_NONE][0]['value'] = $form_state['values']['field_status_date'];
+  $transaction->field_comment[LANGUAGE_NONE][0]['value'] = $form_state['values']['field_comment'];
 
   if (!empty($form_state['values']['field_images']['fid'])) {
     $transaction->field_images[LANGUAGE_NONE][0]['fid'] = $form_state['values']['field_images']['fid'];
@@ -207,83 +236,33 @@ function myapi_claim_transaction_create_form_submit($form, &$form_state) {
 }
 
 /* ---------------------------------------------------------------------------
- * Modal page callback.
+ * Creation page callback.
  * ------------------------------------------------------------------------ */
 
 /**
  * Page callback of node/%node/claim-transaction/add (SPEC 57).
  *
- * Access is already resolved by myapi_claim_transaction_modal_access()
- * (myapi.module) before this runs — $claim_node is guaranteed to be a
- * 'reclamo' the current user may update.
+ * A plain page — no modal, no AJAX. Access is already resolved by
+ * myapi_claim_transaction_add_access() (myapi.module) before this runs —
+ * $claim_node is guaranteed to be a 'reclamo' the current user may update.
  *
- * Two behaviours on the same route, chosen at request time:
- * - No JS / direct URL: returns the form as a normal render array, delivered
- *   as an ordinary HTML page (the menu item declares no 'delivery callback',
- *   so drupal_deliver_html_page() handles it exactly like any other page).
- * - Through the 'use-ajax' link added by myapi_form_reclamo_node_form_alter()
- *   (a later step): renders the same form and returns it as AJAX commands
- *   instead — ajax_command_html() fills the '#myapi-claim-transaction-modal'
- *   container that same later step adds (hidden, empty) to node/%nid/edit,
- *   then ajax_command_invoke() calls jQuery UI's .dialog() on that container
- *   to open it. Both are real functions of D7 core's includes/ajax.inc.
- *   ajax_command_open_modal_dialog() is deliberately NOT used: it does not
- *   exist in this Drupal 7.64 core (confirmed in the SPEC 57 plan's step 1
- *   spike, by listing every ajax_command_* function actually defined there).
- *
- * The AJAX branch is detected with the same signal Drupal core itself checks
- * in this situation — $_POST['ajax_page_state'] non-empty — see
- * ajax_base_page_theme() and the top of ajax_render(), both in
- * includes/ajax.inc. misc/ajax.js hardcodes every Drupal.ajax request
- * (including a plain '.use-ajax' link) to POST with that key always present,
- * so the check is reliable without any custom JS: core's own
- * Drupal.behaviors.AJAX already binds '.use-ajax' links automatically to any
- * element found in the DOM with that class, and drives the request/response
- * cycle end to end.
- *
- * ajax_render() is called directly, and the response is printed and the
- * request exited by hand, rather than declaring
- * 'delivery callback' => 'ajax_deliver' on the menu item: that would make
- * every request to this route an unconditional AJAX response, including the
- * no-JS one this same function also has to serve. Calling ajax_render() from
- * inside a page callback and terminating manually is the exact pattern its
- * own docblock documents: "some contributed and custom modules render Ajax
- * responses without using that delivery callback."
- *
- * drupal_add_library('system', 'ui.dialog') is called unconditionally, not
- * only on the AJAX branch: on a full page load it just adds the library to
- * the normal <head> like any other; on the AJAX branch, ajax_render()'s own
- * new-CSS/JS diffing (against $_POST['ajax_page_state']) picks it up and
- * prepends the extra commands needed to load it — nothing in this function
- * has to build that itself.
+ * Originally this route also served an AJAX/jQuery UI Dialog modal on top of
+ * this same form (opened from an 'use-ajax' link on node/%nid/edit). Dropped
+ * during implementation at the user's request: the jQuery UI dialog styling
+ * did not fit the site (missing theme CSS, a duplicated date_popup label),
+ * and a plain page/redirect flow was preferred outright over fixing it. The
+ * whole POST/redirect submit design (myapi_claim_transaction_create_form(),
+ * still unchanged) already assumed a full-page fallback, so nothing about
+ * the form or its submit handler needed to change — only this callback and
+ * the link in myapi_claim_transaction_timeline_build() (below) did.
  *
  * @param object $claim_node
  *   The 'reclamo' node loaded from the %node wildcard.
  *
- * @return array|null
- *   A render array (the form) on the no-JS path. On the AJAX path, prints
- *   the JSON response itself and never returns (drupal_exit()).
+ * @return array  A render array (the form).
  */
-function myapi_claim_transaction_modal_callback($claim_node) {
-  drupal_add_library('system', 'ui.dialog');
-
-  $form = drupal_get_form('myapi_claim_transaction_create_form', $claim_node);
-
-  if (empty($_POST['ajax_page_state'])) {
-    return $form;
-  }
-
-  $commands = array();
-  $commands[] = ajax_command_html('#myapi-claim-transaction-modal', drupal_render($form));
-  $commands[] = ajax_command_invoke('#myapi-claim-transaction-modal', 'dialog', array(array(
-    'modal' => TRUE,
-    'width' => 500,
-    'title' => t('Crear transacción'),
-  )));
-
-  drupal_add_http_header('Content-Type', 'application/json; charset=utf-8');
-  print ajax_render($commands);
-  drupal_exit();
+function myapi_claim_transaction_add_page_callback($claim_node) {
+  return drupal_get_form('myapi_claim_transaction_create_form', $claim_node);
 }
 
 /* ---------------------------------------------------------------------------
@@ -378,20 +357,15 @@ function myapi_claim_transaction_timeline_table_rows(array $rows) {
 }
 
 /**
- * Builds the transactions timeline block: the 'Crear transacción' link,
- * the read-only table, and the hidden modal container.
+ * Builds the transactions timeline block: the 'Crear transacción' link and
+ * the read-only table.
  *
  * The link comes FIRST (SPEC 57 acceptance criteria: "al inicio de la línea
- * de tiempo, no al final"), with class 'use-ajax' so
- * Drupal.behaviors.AJAX (misc/ajax.js, D7 core) binds it automatically —
- * see myapi_claim_transaction_modal_callback() for the request/response
- * cycle this triggers.
- *
- * '#myapi-claim-transaction-modal' is added here, empty and hidden
- * (display: none until jQuery UI's .dialog() takes over its visibility),
- * because it must already exist in the DOM of node/%nid/edit for
- * ajax_command_html()/ajax_command_invoke() to have a selector to target —
- * the modal callback never creates its own container.
+ * de tiempo, no al final"), and is a plain link to
+ * node/%node/claim-transaction/add (myapi_claim_transaction_add_page_callback()) —
+ * no AJAX, no modal. Clicking it navigates away and back, same as any other
+ * admin action link on this page (e.g. the claims listing's own 'Crear
+ * reclamo' button, docs/claims-list.md).
  *
  * @param object $claim_node
  *   The 'reclamo' node being edited.
@@ -405,7 +379,7 @@ function myapi_claim_transaction_timeline_build($claim_node) {
 
   $build['create_link'] = array(
     '#markup' => '<p>' . l(t('Crear transacción'), 'node/' . $claim_node->nid . '/claim-transaction/add', array(
-      'attributes' => array('class' => array('use-ajax', 'button')),
+      'attributes' => array('class' => array('button')),
     )) . '</p>',
   );
 
@@ -414,10 +388,6 @@ function myapi_claim_transaction_timeline_build($claim_node) {
     '#header' => array(t('Estado'), t('Fecha de estado'), t('Comentario'), t('Autor')),
     '#rows' => myapi_claim_transaction_timeline_table_rows($rows),
     '#empty' => t('Todavía no hay transacciones para este reclamo.'),
-  );
-
-  $build['modal_container'] = array(
-    '#markup' => '<div id="myapi-claim-transaction-modal" style="display: none;"></div>',
   );
 
   return $build;
@@ -440,10 +410,9 @@ function myapi_claim_transaction_timeline_build($claim_node) {
  * field_status is copied from the claim as chosen on node/add/reclamo — where
  * it stays editable, unlike node/%nid/edit — NOT forced to 'received'. Because
  * the transaction is born with the SAME status the claim already has, the
- * sync branch (myapi_claim_transaction_sync_claim_status(), a later step)
- * never finds a difference and never re-saves the claim: no
- * insert-triggers-update cascade. An acceptance criterion of SPEC 57 checks
- * this directly.
+ * sync branch (myapi_claim_transaction_sync_claim_status(), below) never
+ * finds a difference and never re-saves the claim: no insert-triggers-update
+ * cascade. An acceptance criterion of SPEC 57 checks this directly.
  *
  * Only ever called from hook_node_insert(), never hook_node_update(): editing
  * an existing claim must not create a second initial transaction.
@@ -485,9 +454,10 @@ function myapi_claim_transaction_create_initial($node) {
  * 'claim_transaction' branches (myapi.module). The rule lives in the node
  * hook, not in myapi_claim_transaction_create_form_submit(), precisely so
  * that node/add/claim_transaction and node/%nid/edit of a transaction (the
- * native forms, for 'administrator'/'backend', which never go through the
- * modal) are covered too, without duplicating the sync in two places. See
- * SPEC 57 "Decisiones tomadas y descartadas".
+ * native forms, for 'administrator'/'backend', which never go through
+ * myapi_claim_transaction_create_form()) are covered too, without
+ * duplicating the sync in two places. See SPEC 57 "Decisiones tomadas y
+ * descartadas".
  *
  * Direction is transaction -> claim only: nothing here ever creates or
  * touches another transaction, so there is no insert/update cascade beyond

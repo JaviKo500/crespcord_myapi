@@ -293,16 +293,16 @@ function myapi_menu() {
     'file'             => 'includes/myapi.claims_admin.inc',
   ];
 
-  // Claim transaction creation modal (SPEC 57). Same non-api/v1 pattern as
+  // Claim transaction creation page (SPEC 57). Same non-api/v1 pattern as
   // admin/content/claims just above: HTML for an operator, not the JSON
   // envelope. MENU_CALLBACK (not a menu-visible item) since it is only ever
   // reached from the 'Crear transacción' link of node/%nid/edit of a
   // 'reclamo', never navigated to directly.
   $items['node/%node/claim-transaction/add'] = [
     'title'            => 'Crear transacción',
-    'page callback'    => 'myapi_claim_transaction_modal_callback',
+    'page callback'    => 'myapi_claim_transaction_add_page_callback',
     'page arguments'   => [1],
-    'access callback'  => 'myapi_claim_transaction_modal_access',
+    'access callback'  => 'myapi_claim_transaction_add_access',
     'access arguments' => [1],
     'type'             => MENU_CALLBACK,
     'file'             => 'includes/myapi.claim_transaction_admin.inc',
@@ -509,10 +509,10 @@ function myapi_claims_admin_access() {
  * @param object $node
  *   The node loaded from the %node wildcard.
  *
- * @return bool  TRUE when the current user may open the creation modal for
+ * @return bool  TRUE when the current user may open the creation page for
  *   this claim.
  */
-function myapi_claim_transaction_modal_access($node) {
+function myapi_claim_transaction_add_access($node) {
   if (!is_object($node) || $node->type !== 'reclamo') {
     return FALSE;
   }
@@ -587,8 +587,9 @@ function myapi_node_presave($node) {
  *   myapi_claim_transaction_sync_claim_status() (SPEC 57, same include),
  *   which syncs the parent claim's field_status when it differs. Covers
  *   node/add/claim_transaction (the native form, for 'administrator'/
- *   'backend') as well as the modal's own create form — both end in
- *   node_save(), which is what fires this hook. Never finds a difference for
+ *   'backend') as well as myapi_claim_transaction_create_form() (SPEC 57's
+ *   own creation page) — both end in node_save(), which is what fires this
+ *   hook. Never finds a difference for
  *   the automatic initial transaction above, since it is born with the
  *   claim's own current status — no insert-triggers-update cascade.
  * - Published 'boletin' node: delegates the notification fan-out + push
