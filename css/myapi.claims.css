@@ -1,0 +1,52 @@
+/**
+ * @file
+ * Styles for the back-office claims listing (SPEC 56).
+ *
+ * Loaded from myapi_claims_list_page() with drupal_add_css(), never declared
+ * in myapi.info: a stylesheets[] entry would ship this file on every page of
+ * the site, API responses included.
+ *
+ * Everything is namespaced under .myapi-claims-* so it cannot leak into the
+ * admin theme, and no rule targets a bare element selector.
+ */
+
+/* ---- Filter row ----
+ *
+ * Drupal stacks every form item in its own block. Here the five filters plus
+ * the button belong on a single line, so the form becomes a flex row whose
+ * items align on their input, whatever the height of their label. It wraps on
+ * a narrow window instead of overflowing. Same pattern as .myapi-cal-filters
+ * in css/myapi.calendar.css (SPEC 47), kept in its own file rather than
+ * shared: the claims page does not load the calendar's CSS just for this one
+ * rule set. */
+
+.myapi-claims-filters {
+  margin: 1em 0 0.5em;
+  padding: 12px 14px;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  background: #fafafa;
+}
+
+/* theme_form() wraps every child of a form in an anonymous <div> ("to satisfy
+ * XHTML compliance"), so the form has exactly one child and the flex row has
+ * to go on that div, not on the <form> itself. */
+.myapi-claims-filters > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+
+.myapi-claims-filters .form-item {
+  margin: 0 14px 0 0;
+  padding: 0;
+}
+
+.myapi-claims-filters label {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 0.82em;
+  font-weight: bold;
+  color: #555;
+  white-space: nowrap;
+}

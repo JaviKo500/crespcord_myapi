@@ -12,7 +12,10 @@
  * Flutter app consumes, and this is back office.
  *
  * The file is loaded by the 'file' key of its hook_menu() entry in
- * myapi.module, so it only reaches PHP on that one route.
+ * myapi.module, so it only reaches PHP on that one route. Its CSS
+ * (css/myapi.claims.css, the filter row) is added from the page callback with
+ * drupal_add_css() rather than declared in myapi.info, which would load it on
+ * every API response too.
  *
  * No AJAX of any kind (SPEC 47's precedent): every filter reloads the page
  * over GET, which is what keeps the URL linkable and the pager's own links
@@ -266,6 +269,8 @@ function myapi_claims_list_table_rows(array $rows, array $condominium_options) {
  */
 function myapi_claims_list_filter_form($form, &$form_state, $filters, $condominium_options) {
   $form['#method'] = 'get';
+  // Hook for css/myapi.claims.css, which lays the five filters out on one row.
+  $form['#attributes']['class'][] = 'myapi-claims-filters';
   // No CSRF token: a read-only GET filter has nothing to forge, and the token
   // would show up in the URL.
   $form['#token'] = FALSE;
@@ -340,6 +345,8 @@ function myapi_claims_list_filter_form($form, &$form_state, $filters, $condomini
  */
 function myapi_claims_list_page() {
   module_load_include('inc', 'myapi', 'includes/myapi.reservation_calendar');
+
+  drupal_add_css(drupal_get_path('module', 'myapi') . '/css/myapi.claims.css');
 
   // SPEC 49: NULL for a user who sees every condominium ('administrator',
   // 'backend'), the assigned list (possibly empty) for an 'administrador

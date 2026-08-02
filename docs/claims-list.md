@@ -22,6 +22,11 @@ no AJAX of any kind.
 | `includes/myapi.claim_query.inc` | `myapi_claims_list_rows()`, the single query. |
 | `includes/myapi.building_admin.inc` | Unmodified by this file: the `via_claim` condominium-resolution mode and the `hook_query_node_access_alter()` narrowing live here, reused through `->addTag('node_access')` on the query above. |
 | `includes/myapi.reservation_calendar.inc` | Reused, not duplicated: `myapi_calendar_condominium_scope()`, `myapi_calendar_positive_int()`, `myapi_calendar_effective_condominium()` and `myapi_calendar_condominium_options()` are already generic — none of the four reads or writes anything calendar-specific — and `includes/myapi.reservation_notification.inc` already reused the last one the same way before this spec. |
+| `css/myapi.claims.css` | The filter row: the five fields sit on a single flex line instead of stacking. Same `.myapi-cal-filters` pattern as the calendar (SPEC 47), kept in its own file rather than shared. |
+
+The `.css` is attached from the page callback with `drupal_add_css()` and is
+**deliberately not declared in `myapi.info`**: a `stylesheets[]` entry would
+ship it on every page of the site, API responses included.
 
 After adding or modifying any of this, run:
 
