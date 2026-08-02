@@ -1,6 +1,6 @@
 # SPEC 56 — Acceso `via_claim` y listado de reclamos en el panel de administración
 
-> **Estado:** Draft · **Depende de:** SPEC 47 (`myapi_calendar_admin_roles()`, patrón de página back-office sin AJAX), SPEC 49 (`myapi_building_admin_condominium_map()`, modos `self`/`direct`/`via_unit`, `myapi_building_admin_editable_types()`), SPEC 55 (bundles `reclamo`/`claim_transaction`, nota explícita de que `via_claim` queda pendiente) · **Fecha:** 2026-08-01
+> **Estado:** Approved · **Depende de:** SPEC 47 (`myapi_calendar_admin_roles()`, patrón de página back-office sin AJAX), SPEC 49 (`myapi_building_admin_condominium_map()`, modos `self`/`direct`/`via_unit`, `myapi_building_admin_editable_types()`), SPEC 55 (bundles `reclamo`/`claim_transaction`, nota explícita de que `via_claim` queda pendiente) · **Fecha:** 2026-08-01
 > **Objetivo:** Añadir el modo de resolución `via_claim` para que `administrador edificio` pueda administrar `claim_transaction` acotado a sus condominios, y una página de back-office en `admin/content/claims` — enlazada en el sidebar, visible para `administrator`, `backend` y `administrador edificio` — que lista los reclamos con filtros y paginación, sin tocar ningún endpoint de la API ni el formulario de edición.
 
 ---
