@@ -280,6 +280,19 @@ function myapi_menu() {
     'file'             => 'includes/myapi.reservation_calendar.inc',
   ];
 
+  // Back-office claims listing (SPEC 56). Same non-api/v1 pattern as
+  // admin/content/reservation-calendar just above: HTML for an operator, not
+  // the JSON envelope, so its callback lives in includes/ and not resources/.
+  // MENU_NORMAL_ITEM so it shows up under Contenido in the administration
+  // menu, next to the calendar.
+  $items['admin/content/claims'] = [
+    'title'            => 'Reclamos',
+    'page callback'    => 'myapi_claims_list_page',
+    'access callback'  => 'myapi_claims_admin_access',
+    'type'             => MENU_NORMAL_ITEM,
+    'file'             => 'includes/myapi.claims_admin.inc',
+  ];
+
   return $items;
 }
 
@@ -411,6 +424,57 @@ function myapi_calendar_access() {
   }
 
   return (bool) array_intersect($user->roles, myapi_calendar_admin_roles());
+}
+
+/**
+ * The roles allowed into the back-office claims listing (SPEC 56).
+ *
+ * Single source of truth for that list, same criterion as
+ * myapi_calendar_admin_roles(): myapi_claims_admin_access() is its only
+ * caller, and names are compared, never rids.
+ *
+ * 'administrador edificio' is here for the same reason it is in the
+ * calendar's list: it is exactly the role that can already create and edit
+ * claims (SPEC 49/55) but had nowhere to see them grouped together, nor
+ * access to their transactions. Getting into the page is one thing, what is
+ * shown once in is another — see myapi_claims_admin_access().
+ *
+ * @return array  Role names.
+ */
+function myapi_claims_admin_roles() {
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+
+  return ['administrator', 'backend', MYAPI_BUILDING_ADMIN_ROLE];
+}
+
+/**
+ * Access callback of admin/content/claims (SPEC 56).
+ *
+ * By ROLE only, same criterion as myapi_calendar_access(). An 'administrador
+ * edificio' with no condominium assigned still gets in: this callback only
+ * asks "does the role apply", never "does this user have anything to see" —
+ * that second question belongs to the query
+ * (->addTag('node_access') on myapi_claims_list_rows()), which is what
+ * decides an empty listing instead of a 403. Conflating the two would deny
+ * access to an operator whose assignment is simply pending, which reads as a
+ * broken account rather than an empty one.
+ *
+ * Returning FALSE makes Drupal answer 403, not a redirect nor a blank page.
+ *
+ * uid 1 is let in explicitly, same guard as myapi_calendar_access() and for
+ * the same reason: the superuser bypass lives inside user_access(), which
+ * this callback never calls.
+ *
+ * @return bool  TRUE when the current user may see the claims listing.
+ */
+function myapi_claims_admin_access() {
+  global $user;
+
+  if ((int) $user->uid === 1) {
+    return TRUE;
+  }
+
+  return (bool) array_intersect($user->roles, myapi_claims_admin_roles());
 }
 
 /**

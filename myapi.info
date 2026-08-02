@@ -45,3 +45,5 @@ files[] = includes/myapi.mail_queue.inc
 files[] = includes/myapi.reservation_notification.inc
 files[] = includes/myapi.building_admin.inc
 files[] = includes/myapi.building_admin_user.inc
+files[] = includes/myapi.claim_query.inc
+files[] = includes/myapi.claims_admin.inc

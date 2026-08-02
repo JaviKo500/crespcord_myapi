@@ -2038,3 +2038,23 @@ function myapi_update_7016() {
 function myapi_update_7017() {
   _myapi_claims_install();
 }
+
+/**
+ * SPEC 56: grants the building-admin role its two new claim_transaction
+ * permissions.
+ *
+ * Runs the same idempotent _myapi_building_admin_install() used by
+ * hook_install(). By the time this runs, 'claim_transaction' already exists
+ * on the site (SPEC 55's myapi_update_7017() created the bundle), and
+ * myapi_building_admin_editable_types() already lists it once
+ * node_type_load('claim_transaction') resolves — the code changes of SPEC 56
+ * did that, not this update. So this is a single call: no schema, no field,
+ * just the two permissions ('create claim_transaction content', 'edit any
+ * claim_transaction content') the newly-editable type is now entitled to.
+ *
+ * Re-running it grants nothing twice: the installer only adds what is
+ * missing from role_permission and never revokes.
+ */
+function myapi_update_7018() {
+  _myapi_building_admin_install();
+}

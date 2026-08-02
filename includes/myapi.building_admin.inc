@@ -59,6 +59,14 @@ if (!defined('MYAPI_BUILDING_ADMIN_CLAIM_TYPE')) {
   define('MYAPI_BUILDING_ADMIN_CLAIM_TYPE', 'reclamo');
 }
 
+// Machine name of the claim-transaction bundle (SPEC 55/56). Same guard
+// criterion as MYAPI_BUILDING_ADMIN_CLAIM_TYPE: isolated in a constant and
+// always crossed against node_type_load() before being granted or listed, so
+// a site without the bundle is unaffected.
+if (!defined('MYAPI_BUILDING_ADMIN_TRANSACTION_TYPE')) {
+  define('MYAPI_BUILDING_ADMIN_TRANSACTION_TYPE', 'claim_transaction');
+}
+
 // The only field_tipo_de_boletin value this role may publish. That field is a
 // pre-existing site field, not managed by this module, so the comparison is
 // against this literal and the validation skips itself when the field is
@@ -103,23 +111,39 @@ if (!defined('MYAPI_BUILDING_ADMIN_USER_PERMISSION')) {
  * 'condominio' is deliberately NOT here: the role sees its condominiums (see
  * myapi_building_admin_visible_types()) but never edits them.
  *
+ * Covers both claim bundles — 'reclamo' and 'claim_transaction' (SPEC 56) —
+ * under the same $include_claim_type argument: forcing TRUE or FALSE decides
+ * both at once, which is all the two callers that pass an explicit value
+ * (tests, and myapi_building_admin_permissions() when it does) need. Left at
+ * NULL, each bundle is resolved on its own with node_type_load(), so a site
+ * with 'reclamo' but not yet 'claim_transaction' (or vice versa) gets exactly
+ * what exists.
+ *
  * @param bool|null $include_claim_type
- *   TRUE/FALSE to force whether the claims bundle is included. NULL (the
- *   default) resolves it with node_type_load(), which is what callers inside
- *   Drupal want.
+ *   TRUE/FALSE to force whether both claim bundles are included. NULL (the
+ *   default) resolves each one with node_type_load(), which is what callers
+ *   inside Drupal want.
  *
  * @return array
  *   List of node type machine names.
  */
 function myapi_building_admin_editable_types($include_claim_type = NULL) {
+  $include_reclamo = $include_claim_type;
+  $include_transaction = $include_claim_type;
+
   if ($include_claim_type === NULL) {
-    $include_claim_type = (bool) node_type_load(MYAPI_BUILDING_ADMIN_CLAIM_TYPE);
+    $include_reclamo = (bool) node_type_load(MYAPI_BUILDING_ADMIN_CLAIM_TYPE);
+    $include_transaction = (bool) node_type_load(MYAPI_BUILDING_ADMIN_TRANSACTION_TYPE);
   }
 
   $types = ['boletin', 'reservation', 'area'];
 
-  if ($include_claim_type) {
+  if ($include_reclamo) {
     $types[] = MYAPI_BUILDING_ADMIN_CLAIM_TYPE;
+  }
+
+  if ($include_transaction) {
+    $types[] = MYAPI_BUILDING_ADMIN_TRANSACTION_TYPE;
   }
 
   return $types;
@@ -295,11 +319,15 @@ function myapi_building_admin_may_manage_assignment(array $role_names, $is_super
 /**
  * How the condominium of each content type is resolved.
  *
- * Three modes:
- * - 'self'     — the node IS the condominium; its own nid is the answer.
- * - 'direct'   — an entityreference field on the node points at it.
- * - 'via_unit' — the node points at a 'vivienda', whose field_condominio
- *                points at it. Two hops.
+ * Four modes:
+ * - 'self'      — the node IS the condominium; its own nid is the answer.
+ * - 'direct'    — an entityreference field on the node points at it.
+ * - 'via_unit'  — the node points at a 'vivienda', whose field_condominio
+ *                 points at it. Two hops.
+ * - 'via_claim' — the node points at a 'reclamo' (SPEC 56), whose own map
+ *                 entry says which field points at the condominium. Two hops,
+ *                 same shape as 'via_unit' but through the claim instead of
+ *                 the unit.
  *
  * A type that is not in this map is OUT of the access rule entirely:
  * myapi_building_admin_node_access() returns NODE_ACCESS_IGNORE for it and the
@@ -320,10 +348,11 @@ function myapi_building_admin_condominium_map() {
     'pagos'          => ['mode' => 'via_unit', 'field' => 'field_vivienda'],
     'recibo'         => ['mode' => 'via_unit', 'field' => 'field_vivienda'],
     'alicuota_extra' => ['mode' => 'via_unit', 'field' => 'field_vivienda'],
-    // SPEC 55. claim_transaction is deliberately NOT here: its condominium is
-    // only resolvable by hopping field_claim -> reclamo -> field_condominium,
-    // and no mode above supports that hop yet.
     MYAPI_BUILDING_ADMIN_CLAIM_TYPE => ['mode' => 'direct', 'field' => 'field_condominium'],
+    // SPEC 56. field_claim is an entityreference on claim_transaction to a
+    // 'reclamo' node; its condominium field is read from the claim's own
+    // entry above rather than hard-coded here a second time.
+    MYAPI_BUILDING_ADMIN_TRANSACTION_TYPE => ['mode' => 'via_claim', 'field' => 'field_claim'],
   ];
 }
 
@@ -466,11 +495,17 @@ function myapi_building_admin_field_value($entity, $field_name) {
  *   Called as $unit_loader($nid) and expected to return a node object or a
  *   falsy value. Only used by the 'via_unit' mode; NULL disables that mode and
  *   makes it resolve to NULL.
+ * @param callable|null $claim_loader
+ *   Called as $claim_loader($nid) and expected to return a node object or a
+ *   falsy value. Only used by the 'via_claim' mode (SPEC 56); NULL disables
+ *   that mode and makes it resolve to NULL. Kept separate from $unit_loader,
+ *   even though production always injects 'node_load' for both, so a test can
+ *   fix one hop and leave the other deliberately broken.
  *
  * @return int|null
  *   The condominium nid, or NULL when it cannot be resolved.
  */
-function myapi_building_admin_resolve_condominium($node, $unit_loader = NULL) {
+function myapi_building_admin_resolve_condominium($node, $unit_loader = NULL, $claim_loader = NULL) {
   if (!is_object($node) || empty($node->type)) {
     return NULL;
   }
@@ -502,6 +537,20 @@ function myapi_building_admin_resolve_condominium($node, $unit_loader = NULL) {
       // The unit's own condominium field, taken from the map rather than
       // hard-coded, so 'vivienda' is declared in one place only.
       return myapi_building_admin_field_target_id($unit, $map['vivienda']['field']);
+
+    case 'via_claim':
+      $claim_nid = myapi_building_admin_field_target_id($node, $entry['field']);
+      if (!$claim_nid || !is_callable($claim_loader)) {
+        return NULL;
+      }
+      $claim = call_user_func($claim_loader, $claim_nid);
+      if (!is_object($claim)) {
+        return NULL;
+      }
+      // The claim's own condominium field, taken from its map entry rather
+      // than hard-coded, so MYAPI_BUILDING_ADMIN_CLAIM_TYPE is declared in one
+      // place only.
+      return myapi_building_admin_field_target_id($claim, $map[MYAPI_BUILDING_ADMIN_CLAIM_TYPE]['field']);
   }
 
   return NULL;
@@ -815,14 +864,14 @@ function myapi_building_admin_node_condominium($node) {
   }
 
   if (empty($node->nid)) {
-    return myapi_building_admin_resolve_condominium($node, 'node_load');
+    return myapi_building_admin_resolve_condominium($node, 'node_load', 'node_load');
   }
 
   $cache = &drupal_static(__FUNCTION__, []);
   $nid = (int) $node->nid;
 
   if (!array_key_exists($nid, $cache)) {
-    $cache[$nid] = myapi_building_admin_resolve_condominium($node, 'node_load');
+    $cache[$nid] = myapi_building_admin_resolve_condominium($node, 'node_load', 'node_load');
   }
 
   return $cache[$nid];
@@ -1110,6 +1159,29 @@ function myapi_building_admin_alter_node_query($query) {
       $branches->condition(db_and()
         ->condition($node_alias . '.type', $type)
         ->condition($condo_alias . '.' . $unit_field . '_target_id', $assigned, 'IN'));
+      $branch_count++;
+      continue;
+    }
+
+    if ($entry['mode'] === 'via_claim') {
+      // Two hops: node -> reclamo -> condominio (SPEC 56). Same shape as
+      // 'via_unit', through the claim instead of the unit; the claim's own
+      // field comes from its map entry so MYAPI_BUILDING_ADMIN_CLAIM_TYPE is
+      // declared in one place only.
+      $claim_field = $map[MYAPI_BUILDING_ADMIN_CLAIM_TYPE]['field'];
+      if (!field_info_field($claim_field)) {
+        continue;
+      }
+      $claim_alias = myapi_building_admin_join_field($query, $entry['field'], $node_alias . '.nid', $joined);
+      $condo_alias = myapi_building_admin_join_field(
+        $query,
+        $claim_field,
+        $claim_alias . '.' . $entry['field'] . '_target_id',
+        $joined
+      );
+      $branches->condition(db_and()
+        ->condition($node_alias . '.type', $type)
+        ->condition($condo_alias . '.' . $claim_field . '_target_id', $assigned, 'IN'));
       $branch_count++;
     }
   }
