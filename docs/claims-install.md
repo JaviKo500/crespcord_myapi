@@ -242,18 +242,19 @@ attached). This entry must be applied **after** the bundle and
 otherwise `hook_node_access()` would try to resolve a field the type does not
 carry yet.
 
-**`claim_transaction` is deliberately excluded** — from this map and from
-`myapi_building_admin_editable_types()`. Its condominium is only resolvable by
+**`claim_transaction` was excluded here on purpose** — from this map and from
+`myapi_building_admin_editable_types()`, at the time this install code was
+written. Its condominium is not resolvable on the node itself: it needs
 hopping `field_claim` → `reclamo` → `field_condominium`, a two-field
-indirection none of the map's three modes (`self` / `direct` / `via_unit`)
-support today. Granting the role permissions over it without that resolution
-would expose the status-change history of every condominium's claims to any
-building admin — a real risk, not a cosmetic one. This is left for the spec
-that builds the actual status-change workflow, which will need to add a new
-resolution mode (e.g. `via_claim`) before it can safely add
-`claim_transaction` to either catalogue.
+indirection none of the map's three modes of the time (`self` / `direct` /
+`via_unit`) supported. Granting the role permissions over it without that
+resolution would have exposed the status-change history of every
+condominium's claims to any building admin — a real risk, not a cosmetic one.
 
-See `docs/building-admin-role.md` for the full role documentation.
+**SPEC 56 closed that gap**: a fourth mode, `via_claim`, does exactly that
+hop, and `claim_transaction` now has a map entry and is part of
+`myapi_building_admin_editable_types()`. See `docs/building-admin-role.md` and
+`docs/claims-list.md` for the resolution itself and its permissions.
 
 ---
 

@@ -242,9 +242,10 @@ may take down.
 
 ## How the condominium of a node is resolved
 
-`myapi_building_admin_condominium_map()` is the single source of truth. Three
+`myapi_building_admin_condominium_map()` is the single source of truth. Four
 modes: `self` (the node is the condominium), `direct` (a reference field on the
-node) and `via_unit` (two hops, through the `vivienda`).
+node), `via_unit` (two hops, through the `vivienda`) and `via_claim` (two hops,
+through the `reclamo`; SPEC 56).
 
 | Node type | Mode | How the condominium is resolved |
 |---|---|---|
@@ -258,18 +259,19 @@ node) and `via_unit` (two hops, through the `vivienda`).
 | `recibo` | `via_unit` | `field_vivienda` → the unit's `field_condominio` |
 | `alicuota_extra` | `via_unit` | `field_vivienda` → the unit's `field_condominio` |
 | `reclamo` | `direct` | `field_condominium` — the same shared field as `area`/`reservation` (SPEC 55) |
+| `claim_transaction` | `via_claim` | `field_claim` → the claim's `field_condominium` (SPEC 56) |
 
 **A type that is not in this table is out of the rule.** So is a node of a
 listed type whose field is empty or missing: the condominium resolves to `NULL`,
 `hook_node_access()` returns `NODE_ACCESS_IGNORE` and the rest of Drupal decides,
 exactly as for any other user. No PHP notice is raised on a half-filled node.
 
-`claim_transaction` (SPEC 55) is the deliberate example: its condominium is
-only resolvable by hopping `field_claim` → `reclamo` → `field_condominium`, a
-two-field indirection none of the three modes above support, so it stays out of
-this table and out of `myapi_building_admin_editable_types()` — the role has no
-`create`/`edit any` permission over it and no node of that type is visible or
-editable through this rule. See `docs/claims-install.md`.
+`claim_transaction`'s own field name (`field_condominium`) is not hard-coded a
+second time in the `via_claim` branch: it is read off the map's `reclamo`
+entry, the same principle `via_unit` already applies by reading `vivienda`'s
+field from the map instead of repeating it. See `docs/claims-list.md` for the
+full detail — the permissions this mode unlocks, its fail-closed behaviour and
+the manual verification matrix.
 
 The rule **only ever denies**. It never returns `NODE_ACCESS_ALLOW`: granting
 there would short-circuit every other check Drupal makes — unpublished nodes,
@@ -670,10 +672,13 @@ up for every other role that can create bulletins too.
   (`'field' => 'field_condominium'`) — the last step that spec had promised
   here. Its permissions were already granted conditionally since SPEC 49, the
   moment the bundle exists on the site. Its timeline bundle,
-  `claim_transaction`, is a deliberate exception: it is **not** in the map nor
-  in `myapi_building_admin_editable_types()`, because its condominium is only
-  resolvable by hopping `field_claim` → `reclamo` → `field_condominium`, which
-  none of the three modes above supports. See `docs/claims-install.md`.
+  `claim_transaction`, was a deliberate exception until SPEC 56: its
+  condominium is only resolvable by hopping `field_claim` → `reclamo` →
+  `field_condominium`, which none of the three modes of the time supported.
+  **SPEC 56 added the fourth mode, `via_claim`**, exactly for that hop, and
+  `claim_transaction` is now in both the map and
+  `myapi_building_admin_editable_types()`. See `docs/claims-install.md` and
+  `docs/claims-list.md`.
 - **Any new back-office screen that lists people** must go through the
   `user_access` tag or through `myapi_building_admin_user_decision()`. A hand-made
   `db_select('users', …)` with no tag is unfiltered and shows the whole site.
