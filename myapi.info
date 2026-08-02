@@ -5,6 +5,7 @@ package = Custom
 
 dependencies[] = entityreference
 dependencies[] = date
+dependencies[] = date_popup
 
 files[] = myapi.module
 files[] = myapi.install
@@ -47,3 +48,4 @@ files[] = includes/myapi.building_admin.inc
 files[] = includes/myapi.building_admin_user.inc
 files[] = includes/myapi.claim_query.inc
 files[] = includes/myapi.claims_admin.inc
+files[] = includes/myapi.claim_transaction_admin.inc

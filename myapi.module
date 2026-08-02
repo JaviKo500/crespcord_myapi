@@ -293,6 +293,21 @@ function myapi_menu() {
     'file'             => 'includes/myapi.claims_admin.inc',
   ];
 
+  // Claim transaction creation modal (SPEC 57). Same non-api/v1 pattern as
+  // admin/content/claims just above: HTML for an operator, not the JSON
+  // envelope. MENU_CALLBACK (not a menu-visible item) since it is only ever
+  // reached from the 'Crear transacción' link of node/%nid/edit of a
+  // 'reclamo', never navigated to directly.
+  $items['node/%node/claim-transaction/add'] = [
+    'title'            => 'Crear transacción',
+    'page callback'    => 'myapi_claim_transaction_modal_callback',
+    'page arguments'   => [1],
+    'access callback'  => 'myapi_claim_transaction_modal_access',
+    'access arguments' => [1],
+    'type'             => MENU_CALLBACK,
+    'file'             => 'includes/myapi.claim_transaction_admin.inc',
+  ];
+
   return $items;
 }
 
@@ -478,6 +493,34 @@ function myapi_claims_admin_access() {
 }
 
 /**
+ * Access callback of node/%node/claim-transaction/add (SPEC 57).
+ *
+ * Unlike myapi_claims_admin_access() above, this is a per-NODE check, not a
+ * per-role one: it defers entirely to node_access(), which already handles
+ * the 'bypass node access' superuser shortcut and, for 'administrador
+ * edificio', the condominium scoping of SPEC 49/56 via
+ * myapi_node_access() (hook_node_access() in this same file). Nothing here
+ * duplicates that logic.
+ *
+ * FALSE for any node that is not a 'reclamo': the route is
+ * node/%node/claim-transaction/add for any node id, and this closes it for
+ * every other content type.
+ *
+ * @param object $node
+ *   The node loaded from the %node wildcard.
+ *
+ * @return bool  TRUE when the current user may open the creation modal for
+ *   this claim.
+ */
+function myapi_claim_transaction_modal_access($node) {
+  if (!is_object($node) || $node->type !== 'reclamo') {
+    return FALSE;
+  }
+
+  return node_access('update', $node) && node_access('create', 'claim_transaction');
+}
+
+/**
  * Implements hook_mail().
  *
  * Glue only: loads the mail include and delegates the formatting. The
@@ -530,12 +573,24 @@ function myapi_node_presave($node) {
 /**
  * Implements hook_node_insert().
  *
- * Glue only. Two independent branches:
+ * Glue only. Independent branches:
  * - 'pagos' created directly with field_estado_pago = "Completado": delegates
  *   to myapi_payment_notify_approved() in includes/myapi.payment_workflow.inc
  *   (the verification-transition case is already covered by
  *   myapi_node_presave() above; this branch only covers direct creation,
  *   where $node->nid did not exist yet in presave).
+ * - 'reclamo': delegates to myapi_claim_transaction_create_initial() in
+ *   includes/myapi.claim_transaction_admin.inc (SPEC 57), which creates the
+ *   claim's automatic initial transaction. Runs for every 'reclamo' creation
+ *   path, not only the admin form — see that function's docblock.
+ * - 'claim_transaction': delegates to
+ *   myapi_claim_transaction_sync_claim_status() (SPEC 57, same include),
+ *   which syncs the parent claim's field_status when it differs. Covers
+ *   node/add/claim_transaction (the native form, for 'administrator'/
+ *   'backend') as well as the modal's own create form — both end in
+ *   node_save(), which is what fires this hook. Never finds a difference for
+ *   the automatic initial transaction above, since it is born with the
+ *   claim's own current status — no insert-triggers-update cascade.
  * - Published 'boletin' node: delegates the notification fan-out + push
  *   enqueue to includes/myapi.notification.inc. A bulletin saved as a draft
  *   (status 0) does not notify anyone; editing or publishing it later does
@@ -547,6 +602,16 @@ function myapi_node_insert($node) {
     if (myapi_payment_field_value($node, 'field_estado_pago') === MYAPI_PAYMENT_STATUS_COMPLETED) {
       myapi_payment_notify_approved($node);
     }
+    return;
+  }
+  if ($node->type === 'reclamo') {
+    module_load_include('inc', 'myapi', 'includes/myapi.claim_transaction_admin');
+    myapi_claim_transaction_create_initial($node);
+    return;
+  }
+  if ($node->type === 'claim_transaction') {
+    module_load_include('inc', 'myapi', 'includes/myapi.claim_transaction_admin');
+    myapi_claim_transaction_sync_claim_status($node);
     return;
   }
   if ($node->type !== 'boletin' || $node->status != 1) {
@@ -577,6 +642,12 @@ function myapi_node_insert($node) {
  *   operator cancels their reservation from the back office. The opt-out save
  *   from PUT /api/v1/reservations/%/cancel never matches it, so a resident
  *   cancelling from the app notifies nobody.
+ * - 'claim_transaction': delegates to
+ *   myapi_claim_transaction_sync_claim_status() (SPEC 57,
+ *   includes/myapi.claim_transaction_admin.inc) — same function
+ *   myapi_node_insert()'s 'claim_transaction' branch calls, so editing an
+ *   existing transaction's field_status (node/%nid/edit, the native form)
+ *   syncs the claim exactly like creating one does.
  */
 function myapi_node_update($node) {
   if ($node->type === 'pagos') {
@@ -601,6 +672,11 @@ function myapi_node_update($node) {
     if (myapi_reservation_is_cancellation_transition($node)) {
       myapi_reservation_notify_cancelled($node);
     }
+    return;
+  }
+  if ($node->type === 'claim_transaction') {
+    module_load_include('inc', 'myapi', 'includes/myapi.claim_transaction_admin');
+    myapi_claim_transaction_sync_claim_status($node);
     return;
   }
 }
@@ -766,6 +842,19 @@ function myapi_field_access($op, $field, $entity_type, $entity, $account) {
 function myapi_form_boletin_node_form_alter(&$form, &$form_state, $form_id) {
   module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
   myapi_building_admin_restrict_bulletin_form($form, $form_state);
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter() for the 'reclamo' node form (SPEC 57).
+ *
+ * Glue only, same criterion as myapi_form_boletin_node_form_alter() just
+ * above: the include is loaded and the actual work — disabling field_status
+ * in edit mode and appending the transactions timeline fieldset — is
+ * delegated entirely to includes/myapi.claim_transaction_admin.inc.
+ */
+function myapi_form_reclamo_node_form_alter(&$form, &$form_state, $form_id) {
+  module_load_include('inc', 'myapi', 'includes/myapi.claim_transaction_admin');
+  myapi_claim_transaction_reclamo_form_alter($form, $form_state);
 }
 
 /**
