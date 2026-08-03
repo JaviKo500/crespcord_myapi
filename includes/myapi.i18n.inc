@@ -134,6 +134,7 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'reservation_not_confirmed'          => 'Only a confirmed reservation can be cancelled.',
       'reservation_cancel_window_expired'  => 'The cancellation window for this reservation has expired.',
       'reservation_cancelled'              => 'Reservation cancelled successfully.',
+      'claim_not_found'                    => 'Claim not found.',
     ],
     'es' => [
       'invalid_credentials'    => 'Usuario o contraseña incorrectos.',
@@ -200,6 +201,7 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'reservation_not_confirmed'          => 'Solo se puede cancelar una reserva confirmada.',
       'reservation_cancel_window_expired'  => 'La ventana de cancelación de esta reserva ya expiró.',
       'reservation_cancelled'              => 'Reserva cancelada correctamente.',
+      'claim_not_found'                    => 'Reclamo no encontrado.',
     ],
   ];
 

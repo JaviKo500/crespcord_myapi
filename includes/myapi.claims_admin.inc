@@ -38,6 +38,7 @@
  */
 
 module_load_include('inc', 'myapi', 'includes/myapi.claim_query');
+module_load_include('inc', 'myapi', 'includes/myapi.claims_common');
 
 /* ---------------------------------------------------------------------------
  * Filters.
@@ -50,39 +51,12 @@ module_load_include('inc', 'myapi', 'includes/myapi.claim_query');
  * ------------------------------------------------------------------------ */
 
 /**
- * Normalises a raw GET value into one of the four allowed statuses, or NULL.
- *
- * The whitelist is hard-coded rather than read from field_info_field(): the
- * four stored values are part of the data model this spec was written
- * against, and validation must not silently change if a site administrator
- * edits the field's allowed values from the UI. Labels, which carry no such
- * risk, ARE read from the field (see myapi_claims_status_options()).
- *
- * 'duplicated' was the fifth until SPEC 62 dropped it from the catalogue; a
- * bookmarked '?status=duplicated' now falls back to "no filter", like any
- * other unknown value.
- *
- * @param mixed $value  Raw $_GET value.
- *
- * @return string|null
+ * myapi_claims_valid_status() and myapi_claims_valid_claim_type() used to live
+ * here. They moved to includes/myapi.claims_common.inc (SPEC 64) unchanged,
+ * when resources/claim.resource.inc needed the same two whitelists: this page
+ * still calls them exactly as before, through the module_load_include() at the
+ * top of the file.
  */
-function myapi_claims_valid_status($value) {
-  $allowed = array('received', 'in_progress', 'resolved', 'closed');
-  return (is_scalar($value) && in_array((string) $value, $allowed, TRUE)) ? (string) $value : NULL;
-}
-
-/**
- * Normalises a raw GET value into one of the two allowed claim types, or
- * NULL. Same reasoning as myapi_claims_valid_status().
- *
- * @param mixed $value  Raw $_GET value.
- *
- * @return string|null
- */
-function myapi_claims_valid_claim_type($value) {
-  $allowed = array('requirement', 'claim');
-  return (is_scalar($value) && in_array((string) $value, $allowed, TRUE)) ? (string) $value : NULL;
-}
 
 /**
  * Reads the allowed_values of a list_text field, or an empty array when the
