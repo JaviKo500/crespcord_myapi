@@ -202,7 +202,11 @@ function myapi_claim_transaction_transaction_form_alter(&$form, &$form_state) {
       }
     }
   }
+  form_load_include($form_state, 'inc', 'myapi', 'includes/myapi.claim_transaction_admin');
   $form['#submit'][] = 'myapi_claim_transaction_edit_form_submit_redirect';
+  if (isset($form['actions']['submit']['#submit'])) {
+    $form['actions']['submit']['#submit'][] = 'myapi_claim_transaction_edit_form_submit_redirect';
+  }
 }
 ```
 
@@ -225,6 +229,23 @@ function myapi_claim_transaction_transaction_form_alter(&$form, &$form_state) {
   or a `field_access` rule removed `field_claim` from the form, there is
   nothing to disable, but redirecting to the claim is still right — the
   handler resolves it from the saved node, not from the form.
+- **Both `#submit` lists, not just the form's.** `form_execute_handlers()`
+  runs the **triggering element's** `#submit` when it has one and ignores the
+  form-level list entirely, and `node_form()` always gives its Save button
+  `array('node_form_submit')`. A handler appended only to `$form['#submit']`
+  therefore never runs on a node form — saving landed on Drupal's native
+  `node/<nid>` as if it did not exist. Only one of the two lists ever executes,
+  so appending to both never runs it twice.
+- **`form_load_include()`, not plain `module_load_include()`.** This form has
+  `managed_file` fields, so Drupal **caches** it: the POST is served from the
+  cached array and `hook_form_alter()` — with it, `myapi.module`'s
+  `module_load_include()` — never runs again, leaving the cached `#submit`
+  pointing at a function whose file was never loaded (`Call to undefined
+  function myapi_claim_transaction_edit_form_submit_redirect()`).
+  `form_load_include()` also records the file in
+  `$form_state['build_info']['files']`, which is what Drupal reloads when it
+  retrieves a cached form. Any future `#submit` handler this module adds to a
+  native form from an `.inc` needs the same treatment.
 - No other field of the native form is restricted: `field_status`,
   `field_status_date`, `field_comment`, `field_images` and `field_attachment`
   stay fully editable. `field_claim` is locked for one specific risk — moving

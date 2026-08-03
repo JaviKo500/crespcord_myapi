@@ -140,3 +140,29 @@ if (!function_exists('element_children')) {
     return $children;
   }
 }
+
+if (!function_exists('form_load_include')) {
+  /**
+   * The bookkeeping half of Drupal's own, which is the half that matters here:
+   * the file is recorded in $form_state['build_info']['files'] so Drupal can
+   * reload it when it retrieves a CACHED form — without it, a #submit handler
+   * living in an .inc is an undefined function on POST. The loading half is
+   * the module_load_include() stubbed above, i.e. a no-op out of Drupal.
+   */
+  function form_load_include(&$form_state, $type, $module, $name = NULL) {
+    if (!isset($name)) {
+      $name = $module;
+    }
+    if (!isset($form_state['build_info']['files']["$module:$name.$type"])) {
+      $form_state['build_info']['files']["$module:$name.$type"] = array(
+        'type' => $type,
+        'module' => $module,
+        'name' => $name,
+      );
+
+      return module_load_include($type, $module, $name);
+    }
+
+    return FALSE;
+  }
+}

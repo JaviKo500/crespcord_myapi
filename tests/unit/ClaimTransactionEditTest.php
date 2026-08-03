@@ -156,6 +156,85 @@ class ClaimTransactionEditTest extends TestCase {
   }
 
   /**
+   * The Save button carries its own #submit list, and that is the one Drupal
+   * actually runs.
+   *
+   * form_execute_handlers() uses the triggering element's '#submit' when it
+   * has one and IGNORES the form-level list entirely; node_form() always gives
+   * its Save button array('node_form_submit'). A handler appended only to
+   * $form['#submit'] therefore never runs on a node form — which is why saving
+   * used to land on Drupal's native node/<nid>. Appending to both lists is
+   * safe: only one of them ever executes.
+   */
+  public function testSubmitHandlerIsAlsoAppendedToTheSaveButton() {
+    $form = $this->editForm();
+    $form['actions']['submit']['#submit'] = array('node_form_submit');
+
+    myapi_claim_transaction_transaction_form_alter($form, $form_state);
+
+    $this->assertSame(
+      array('node_form_submit', 'myapi_claim_transaction_edit_form_submit_redirect'),
+      $form['actions']['submit']['#submit']
+    );
+  }
+
+  /**
+   * A form whose Save button has no #submit of its own is left alone there —
+   * the form-level list is what Drupal will run in that case.
+   */
+  public function testButtonWithoutSubmitListIsNotGivenOne() {
+    $form = $this->editForm();
+    $form['actions']['submit'] = array('#type' => 'submit', '#value' => 'Guardar');
+
+    myapi_claim_transaction_transaction_form_alter($form, $form_state);
+
+    $this->assertArrayNotHasKey('#submit', $form['actions']['submit']);
+    $this->assertSame(
+      'myapi_claim_transaction_edit_form_submit_redirect',
+      end($form['#submit'])
+    );
+  }
+
+  /**
+   * The include is registered in $form_state so Drupal reloads it when the
+   * form comes back from its cache.
+   *
+   * This is a regression guard, and the bug it guards against was seen live:
+   * the node form has managed_file fields, so it IS cached, the POST does not
+   * re-run hook_form_alter(), and the cached #submit pointed at a function
+   * whose file had never been loaded — "Call to undefined function
+   * myapi_claim_transaction_edit_form_submit_redirect()". Appending the
+   * handler without recording its file is what caused it.
+   */
+  public function testEditModeRegistersTheIncludeForTheCachedForm() {
+    $form = $this->editForm();
+    $form_state = array();
+
+    myapi_claim_transaction_transaction_form_alter($form, $form_state);
+
+    $this->assertArrayHasKey(
+      'myapi:includes/myapi.claim_transaction_admin.inc',
+      $form_state['build_info']['files']
+    );
+  }
+
+  /**
+   * Nothing is registered on the creation path, where no handler is appended
+   * either: the two go together.
+   */
+  public function testCreationModeRegistersNothing() {
+    $node = new stdClass();
+    $node->type = 'claim_transaction';
+
+    $form = array('#node' => $node, '#submit' => array('node_form_submit'));
+    $form_state = array();
+
+    myapi_claim_transaction_transaction_form_alter($form, $form_state);
+
+    $this->assertSame(array(), $form_state);
+  }
+
+  /**
    * Every delta of every language, not just the first one. A regression here
    * would pass unnoticed on a monolingual, cardinality-1 site.
    */

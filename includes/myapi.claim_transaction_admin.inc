@@ -352,6 +352,26 @@ function myapi_claim_transaction_reclamo_form_alter(&$form, &$form_state) {
  * disable, but redirecting to the claim is still right — the handler resolves
  * it from the saved node, not from the form.
  *
+ * The handler is appended to BOTH $form['#submit'] and the Save button's own
+ * $form['actions']['submit']['#submit'], because form_execute_handlers() runs
+ * the TRIGGERING ELEMENT's list when it has one and ignores the form-level one
+ * entirely — and node_form() gives its Save button its own
+ * array('node_form_submit'). Only one of the two lists ever executes, so this
+ * never runs twice; and even if it did, assigning the same redirect twice is
+ * idempotent. Without the button list, saving landed on Drupal's native
+ * node/<nid> as if the handler did not exist.
+ *
+ * form_load_include() rather than plain module_load_include(): this form has
+ * managed_file fields (field_images, field_attachment), which make Drupal
+ * CACHE it, so the POST is served from the cached array and hook_form_alter()
+ * — with it, myapi.module's module_load_include() — never runs again. The
+ * cached #submit would then point at a function whose file was never loaded,
+ * which is exactly the "Call to undefined function
+ * myapi_claim_transaction_edit_form_submit_redirect()" seen on the site. What
+ * fixes it is the side effect: form_load_include() records the file in
+ * $form_state['build_info']['files'], and Drupal reloads those when it
+ * retrieves a cached form.
+ *
  * @param array $form
  * @param array $form_state
  */
@@ -370,7 +390,13 @@ function myapi_claim_transaction_transaction_form_alter(&$form, &$form_state) {
     }
   }
 
+  form_load_include($form_state, 'inc', 'myapi', 'includes/myapi.claim_transaction_admin');
+
   $form['#submit'][] = 'myapi_claim_transaction_edit_form_submit_redirect';
+
+  if (isset($form['actions']['submit']['#submit'])) {
+    $form['actions']['submit']['#submit'][] = 'myapi_claim_transaction_edit_form_submit_redirect';
+  }
 }
 
 /**

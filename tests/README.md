@@ -66,7 +66,11 @@ the `#weight` sort of the original — which `myapi` never asks for — and adds
 `is_int($key)` guard the original lacks, because a widget's deltas are integer
 keys and `$key[0]` on an `int` raises a PHP 7.4 warning; an integer key is
 never a `#property`, so the branch is faithful rather than a deviation.
-These stubs keep the suite's rule intact: still no
+`form_load_include()` (SPEC 59 too) is stubbed for its **bookkeeping** half
+only — recording the file in `$form_state['build_info']['files']`, which is
+what lets a `#submit` handler living in an `.inc` survive a cached form; its
+loading half is the `module_load_include()` no-op above. These stubs keep the
+suite's rule intact: still no
 database, still pure logic. Anything that runs `db_select()`, `node_load()` or
 the mail queue stays out of `tests/unit` — that is why
 `myapi_reservation_calendar_rows()` and
