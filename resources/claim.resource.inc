@@ -235,10 +235,12 @@ function myapi_claim_parse_condominium_id(array $allowed) {
  * @param array $condos   Condominium nids the reader is related to. MUST be
  *                        non-empty — the callers answer an empty list without
  *                        querying, since an "IN ()" is invalid SQL in D7.
- * @param array $filters  ['condominium_id' => int|NULL, 'status' => string|NULL,
- *                        'claim_type' => string|NULL, 'from' => string|NULL,
- *                        'to' => string|NULL]. Every key optional; NULL means
- *                        no filter on that column.
+ * @param array $filters  ['nid' => int|NULL, 'condominium_id' => int|NULL,
+ *                        'status' => string|NULL, 'claim_type' => string|NULL,
+ *                        'from' => string|NULL, 'to' => string|NULL]. Every key
+ *                        optional; NULL means no filter on that column. 'nid'
+ *                        is what turns this into the detail query: one claim,
+ *                        under exactly the same access rule as the list.
  *
  * @return SelectQuery  The query, with these aliases already in place:
  *                      n (node), fc (condominium), fv (visibility),
@@ -265,6 +267,13 @@ function myapi_claim_base_query($uid, array $condos, array $filters = []) {
   $query->leftJoin('field_data_field_status', 'fs', "fs.entity_id = n.nid AND fs.entity_type = 'node' AND fs.deleted = 0");
   $query->leftJoin('field_data_field_claim_type', 'fct', "fct.entity_id = n.nid AND fct.entity_type = 'node' AND fct.deleted = 0");
   $query->leftJoin('field_data_field_reception_date', 'frd', "frd.entity_id = n.nid AND frd.entity_type = 'node' AND frd.deleted = 0");
+
+  // The detail's only extra condition. It narrows the same access rule instead
+  // of replacing it, which is why a claim the reader may not see answers "no
+  // rows" here rather than needing a separate permission check afterwards.
+  if (!empty($filters['nid'])) {
+    $query->condition('n.nid', $filters['nid']);
+  }
 
   // Optional filters. '?condominium_id' narrows WITHIN the set above, it never
   // widens it: myapi_claim_parse_condominium_id() has already answered 403 for
@@ -644,4 +653,204 @@ function myapi_claim_build_item($row, array $images, array $transactions) {
     'attachment'       => myapi_claim_build_file($row->attachment_fid, $row->attachment_uri, $row->attachment_filename),
     'transactions'     => isset($transactions[$id]) ? $transactions[$id] : [],
   ];
+}
+
+/* ---------------------------------------------------------------------------
+ * Endpoints.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Dispatcher for /api/v1/claims and /api/v1/claims/%.
+ *
+ * Routes by HTTP method, the same shape every resource in this module uses.
+ * One callback serves both routes: hook_menu() passes the nid for the item path
+ * and nothing for the collection, so $id is what tells list from detail.
+ *
+ * GET is the only supported method — this resource is read-only (SPEC 64) —
+ * and POST/PUT/DELETE answer 405 on BOTH paths. Authentication is deliberately
+ * NOT resolved here but inside myapi_claim_list() / myapi_claim_detail(), so an
+ * unsupported method answers 405 without a token rather than 401: the method is
+ * wrong whoever is asking.
+ *
+ * @param mixed $id  The nid from the item route, or NULL on the collection.
+ */
+function myapi_claim_dispatch($id = NULL) {
+  $method = myapi_request_method();
+
+  if ($method === 'GET' && $id === NULL) {
+    myapi_claim_list();
+  }
+  elseif ($method === 'GET') {
+    myapi_claim_detail($id);
+  }
+  else {
+    myapi_error('method_not_allowed', 405);
+  }
+}
+
+/**
+ * GET /api/v1/claims — the claims of the authenticated resident.
+ *
+ * Orchestration only; every decision it makes lives in one of the helpers
+ * above. In order: authenticate, resolve the reader's condominiums, parse the
+ * query string, count, fetch the page, batch-load images and transactions, and
+ * serialise.
+ *
+ * A reader with no unit at all gets 200 with an empty list and total 0, NOT a
+ * 403: "you have nothing" is not "you may not", the same criterion as
+ * GET /api/v1/bulletins. It also short-circuits before any query, which is
+ * what keeps myapi_claim_base_query() from ever building an "IN ()" — invalid
+ * SQL in D7.
+ *
+ * Query-string parsing is lax throughout — an invalid page, limit, sort,
+ * status, claim_type, date bound or include falls back to its default in
+ * silence, never a 422. The single exception is '?condominium_id' pointing at a
+ * condominium the reader does not belong to, which myapi_claim_parse_condominium_id()
+ * answers with 403 (see its docblock for why that one is different).
+ *
+ * Exactly three queries reach the database per request — count, page, images —
+ * plus one for the transactions and, when they are expanded, one more for
+ * THEIR images. None of them grows with the number of rows.
+ */
+function myapi_claim_list() {
+  // 1. Authentication. Answers 401 missing_authorization / invalid_token on
+  // its own and never returns on failure; on success it hands back the token
+  // row, whose uid is the reader.
+  $token = myapi_auth_require_access_token();
+  $uid = (int) $token->uid;
+
+  // 2. The reader's condominiums: the outer bound of everything below.
+  $condos = myapi_condominium_related_nids($uid);
+  if (empty($condos)) {
+    myapi_respond([
+      'claims' => [],
+      'pagination' => [
+        'total'       => 0,
+        'page'        => 1,
+        'limit'       => 20,
+        'total_pages' => 0,
+      ],
+    ], 200);
+  }
+
+  // 3. Pagination and sort. Same idiom as payments: garbage falls back to the
+  // default, and '-1' means "everything on one page" (SPEC 15).
+  $page = isset($_GET['page']) && ctype_digit((string) $_GET['page']) && (int) $_GET['page'] > 0
+    ? (int) $_GET['page']
+    : 1;
+
+  $limit = isset($_GET['limit']) && $_GET['limit'] === '-1'
+    ? -1
+    : (isset($_GET['limit']) && ctype_digit((string) $_GET['limit']) && (int) $_GET['limit'] > 0
+      ? max(1, min(50, (int) $_GET['limit']))
+      : 20);
+
+  if ($limit === -1) {
+    $page = 1;
+  }
+
+  $sort = isset($_GET['sort']) && in_array($_GET['sort'], ['asc', 'desc'], TRUE)
+    ? $_GET['sort']
+    : 'desc';
+
+  // 4. Filters. status and claim_type go through the SAME validators the back
+  // office uses (includes/myapi.claims_common.inc): no whitelist is written
+  // here, so '?status=duplicated' falls back to "no filter" through one line of
+  // code shared by both consumers.
+  $range = myapi_claim_parse_date_range();
+  $filters = [
+    'condominium_id' => myapi_claim_parse_condominium_id($condos),
+    'status'         => isset($_GET['status']) ? myapi_claims_valid_status($_GET['status']) : NULL,
+    'claim_type'     => isset($_GET['claim_type']) ? myapi_claims_valid_claim_type($_GET['claim_type']) : NULL,
+    'from'           => $range['from'],
+    'to'             => $range['to'],
+  ];
+
+  // 5. Count first: the pagination block describes the filtered set, not the
+  // page. A page past the last one simply fetches no rows and answers 200 with
+  // an empty list.
+  $total = myapi_claim_count($uid, $condos, $filters);
+  $total_pages = $limit === -1
+    ? ($total > 0 ? 1 : 0)
+    : ($total > 0 ? (int) ceil($total / $limit) : 0);
+
+  // 6. The page, then its images and transactions in one batch each.
+  $rows = myapi_claim_fetch($uid, $condos, $filters, $page, $limit, $sort);
+  $nids = [];
+  foreach ($rows as $row) {
+    $nids[] = (int) $row->id;
+  }
+  $images = myapi_claim_load_images($nids);
+  $transactions = myapi_claim_load_transactions($nids, myapi_claim_include_transactions());
+
+  $claims = array_map(function ($row) use ($images, $transactions) {
+    return myapi_claim_build_item($row, $images, $transactions);
+  }, $rows);
+
+  // 7. Respond 200 (read-only endpoint, no message).
+  myapi_respond([
+    'claims' => $claims,
+    'pagination' => [
+      'total'       => (int) $total,
+      'page'        => $page,
+      'limit'       => $limit,
+      'total_pages' => $total_pages,
+    ],
+  ], 200);
+}
+
+/**
+ * GET /api/v1/claims/% — one claim, with its full timeline.
+ *
+ * Same access rule as the list, because it is literally the same query: the
+ * only differences are a condition on n.nid, no pagination, and transactions
+ * that are ALWAYS expanded. That asymmetry with the list is deliberate — the
+ * detail exists precisely to read the timeline, and requiring
+ * '?include=transactions' here would force every client to always send it.
+ *
+ * Every way of not being allowed to see a claim answers the same
+ * 404 claim_not_found: a nid that does not exist, one from another
+ * condominium, one that is private and filed by somebody else, an unpublished
+ * one, and a non-numeric id are indistinguishable from each other in the
+ * response. A 403 would confirm to anyone probing ids that there IS a private
+ * claim behind that number; the uniform 404 leaks neither the existence nor
+ * the reason. This is on purpose different from the 403 unit_access_denied of
+ * payments and reservations, where the id in the URL is a unit the caller
+ * already knows about.
+ *
+ * @param mixed $id  The nid from the route. Anything that is not a positive
+ *                   integer is a 404, never a PHP error.
+ */
+function myapi_claim_detail($id) {
+  $token = myapi_auth_require_access_token();
+  $uid = (int) $token->uid;
+
+  // '/api/v1/claims/abc' must answer the same 404 as a missing claim rather
+  // than reaching the query with a non-numeric id.
+  if (!is_scalar($id) || !ctype_digit((string) $id) || (int) $id <= 0) {
+    myapi_error('claim_not_found', 404);
+  }
+
+  $condos = myapi_condominium_related_nids($uid);
+  if (empty($condos)) {
+    myapi_error('claim_not_found', 404);
+  }
+
+  // The same fetch the list uses, narrowed to one nid and unpaginated: same
+  // access rule, same joins, same projected columns — so the item of the detail
+  // cannot end up with different keys or types than the item of the list. The
+  // query string plays no part here; no filter other than the nid is applied.
+  $rows = myapi_claim_fetch($uid, $condos, ['nid' => (int) $id], 1, -1, 'desc');
+  if (empty($rows)) {
+    myapi_error('claim_not_found', 404);
+  }
+  $row = reset($rows);
+
+  $nids = [(int) $row->id];
+  $images = myapi_claim_load_images($nids);
+  $transactions = myapi_claim_load_transactions($nids, TRUE);
+
+  myapi_respond([
+    'claim' => myapi_claim_build_item($row, $images, $transactions),
+  ], 200);
 }

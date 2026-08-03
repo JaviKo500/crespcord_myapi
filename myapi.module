@@ -266,6 +266,25 @@ function myapi_menu() {
     'file'             => 'resources/bulletin.resource.inc',
   ];
 
+  // Claims, read-only (SPEC 64). Both routes share one dispatcher: the item
+  // path passes the nid as its only page argument and the collection passes
+  // nothing, which is what myapi_claim_dispatch() routes on. Same shape as
+  // api/v1/payments and api/v1/payments/%.
+  $items['api/v1/claims'] = [
+    'page callback'    => 'myapi_claim_dispatch',
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/claim.resource.inc',
+  ];
+
+  $items['api/v1/claims/%'] = [
+    'page callback'    => 'myapi_claim_dispatch',
+    'page arguments'   => [3],
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/claim.resource.inc',
+  ];
+
   // Back-office reservation calendar (SPEC 47). The only route of this module
   // that is not an api/v1 endpoint: it renders HTML for an operator, not the
   // JSON envelope for the app, which is why its callback lives in includes/
