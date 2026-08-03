@@ -26,6 +26,10 @@
  * myapi_time_format_validate_fields() testable without a site: the walker is
  * shared by the 'area' and 'reservation' node forms, so one bug in it silences
  * the validation of four fields at once.
+ *
+ * drupal_get_path() and $base_url (SPEC 54) are the environment counterpart:
+ * myapi_mail_logo_url() builds the header logo URL out of both, and every HTML
+ * email template calls it, so without them the whole email suite fatals.
  */
 
 if (!function_exists('module_load_include')) {
@@ -33,6 +37,22 @@ if (!function_exists('module_load_include')) {
     // No-op: unit tests require the relevant includes/*.inc files themselves.
   }
 }
+
+/**
+ * The two halves of the logo URL myapi_mail_logo_url() assembles.
+ *
+ * Drupal resolves the path from the system table and $base_url from the
+ * request; outside a site both are just constants, and the value only has to
+ * be stable and plausible: no assertion reads the <img> src, it is the fatal
+ * on the missing function that the tests need gone.
+ */
+if (!function_exists('drupal_get_path')) {
+  function drupal_get_path($type, $name) {
+    return 'sites/all/modules/' . $name;
+  }
+}
+
+$GLOBALS['base_url'] = 'https://crespcord.example.com';
 
 if (!function_exists('drupal_strlen')) {
   function drupal_strlen($text) {

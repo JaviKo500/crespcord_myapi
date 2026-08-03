@@ -46,7 +46,10 @@ change adds another file-scope call to a Drupal function** in one of the
 with the `'custom'` type — each a faithful one-liner over the PHP function
 Drupal itself wraps. Unlike the one above, these are called from *inside* the
 functions under test (the cancellation-reason validation and the notification
-and email texts of SPEC 50). They keep the suite's rule intact: still no
+and email texts of SPEC 50). It also stubs `drupal_get_path()` and sets
+`$base_url` (SPEC 54): `myapi_mail_logo_url()` builds the email header logo URL
+out of both, and every HTML email template calls it, so without them the whole
+email suite fatals. They keep the suite's rule intact: still no
 database, still pure logic. Anything that runs `db_select()`, `node_load()` or
 the mail queue stays out of `tests/unit` — that is why
 `myapi_reservation_calendar_rows()` and
