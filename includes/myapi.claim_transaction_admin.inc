@@ -31,17 +31,18 @@ module_load_include('inc', 'myapi', 'includes/myapi.claims_admin');
  * appears rather than disappearing from the timeline.
  *
  * ORDER BY field_status_date DESC, nid DESC: field_status_date is a
- * day-granularity 'datetime' field (same storage shape as
- * field_reception_date on 'reclamo'), so ordering by the raw joined column is
- * equivalent to ordering by its date part alone. The nid tie-break makes the
- * order deterministic when two transactions share a status date.
+ * minute-granularity 'datetime' field (SPEC 58 widened it from day-only),
+ * stored as a lexicographically sortable 'Y-m-d H:i:s' string, so ordering by
+ * the raw joined column orders by the full instant. The nid tie-break makes
+ * the order deterministic when two transactions share a status date and time.
  *
  * @param int $claim_nid
  *   The 'reclamo' node id whose transactions to list.
  *
  * @return array
- *   One object per transaction, each with: nid, status, status_date (
- *   'Y-m-d'), comment, uid, user_name, created. Fetched eagerly — the
+ *   One object per transaction, each with: nid, status, status_date (the full
+ *   stored 'Y-m-d H:i:s' — SPEC 58 dropped the SUBSTR that used to truncate it
+ *   to its date part), comment, uid, user_name, created. Fetched eagerly — the
  *   expected volume per claim is low (see SPEC 57 scope), so no pager.
  */
 function myapi_claim_transaction_timeline_rows($claim_nid) {
@@ -57,7 +58,7 @@ function myapi_claim_transaction_timeline_rows($claim_nid) {
   $query->addField('fs', 'field_status_value', 'status');
 
   $query->leftJoin('field_data_field_status_date', 'fsd', "fsd.entity_id = n.nid AND fsd.entity_type = 'node' AND fsd.deleted = 0");
-  $query->addExpression('SUBSTR(fsd.field_status_date_value, 1, 10)', 'status_date');
+  $query->addField('fsd', 'field_status_date_value', 'status_date');
 
   $query->leftJoin('field_data_field_comment', 'fcm', "fcm.entity_id = n.nid AND fcm.entity_type = 'node' AND fcm.deleted = 0");
   $query->addField('fcm', 'field_comment_value', 'comment');
@@ -110,7 +111,7 @@ function myapi_claim_transaction_create_form($form, &$form_state, $claim_node) {
     '#required' => TRUE,
   );
 
-  // Plain textfield, 'Y-m-d' as typed text — NOT a Field API / Date module
+  // Plain textfield, 'Y-m-d H:i' as typed text — NOT a Field API / Date module
   // widget of any kind. Two different "smart" date elements were tried and
   // reverted here in a row: 'date_popup' (its own 'container-inline-date'
   // CSS caused a duplicated sub-label, then a misaligned label) and core's
@@ -120,17 +121,19 @@ function myapi_claim_transaction_create_form($form, &$form_state, $claim_node) {
   // 'form_element' wrapper as field_status/field_comment with no combo/
   // multi-part markup of its own, so there is no special-case CSS left to
   // fight — visually identical to every other field in this form,
-  // guaranteed. Validated server-side with myapi_reservation_valid_date()
-  // (resources/reservation.resource.inc), the same 'YYYY-MM-DD' + checkdate()
-  // rule already reused by includes/myapi.claims_admin.inc for the exact
-  // same reason (see myapi_claim_transaction_validate_status_date() below).
+  // guaranteed. SPEC 58 widened the accepted value from a bare date to date +
+  // time, which does not change that reasoning: still typed text, still
+  // validated server-side, now with myapi_reservation_valid_date() AND
+  // myapi_reservation_valid_time() (resources/reservation.resource.inc), the
+  // same two rules already reused by includes/myapi.claims_admin.inc for the
+  // exact same reason (see myapi_claim_transaction_validate_status_date()).
   $form['field_status_date'] = array(
     '#type' => 'textfield',
     '#title' => t('Fecha de estado'),
-    '#default_value' => date('Y-m-d'),
-    '#size' => 12,
-    '#maxlength' => 10,
-    '#description' => t('Formato: AAAA-MM-DD.'),
+    '#default_value' => date('Y-m-d H:i'),
+    '#size' => 16,
+    '#maxlength' => 16,
+    '#description' => t('Formato: AAAA-MM-DD HH:MM.'),
     '#required' => TRUE,
     '#element_validate' => array('myapi_claim_transaction_validate_status_date'),
   );
@@ -176,18 +179,27 @@ function myapi_claim_transaction_create_form($form, &$form_state, $claim_node) {
 /**
  * #element_validate callback of the field_status_date textfield.
  *
- * Reuses myapi_reservation_valid_date() (resources/reservation.resource.inc)
- * rather than re-writing the 'YYYY-MM-DD' + checkdate() rule a third time —
- * includes/myapi.claims_admin.inc already reaches into that same resource
- * file for the identical reason (myapi_claims_list_filters()).
+ * Splits the typed 'AAAA-MM-DD HH:MM' on its single space and validates each
+ * half with the helper that already covers it: myapi_reservation_valid_date()
+ * ('YYYY-MM-DD' + checkdate()) and myapi_reservation_valid_time() ('HH:MM',
+ * 24h) — both in resources/reservation.resource.inc. No new regex is written
+ * here: includes/myapi.claims_admin.inc already reaches into that same
+ * resource file for the identical reason (myapi_claims_list_filters()).
+ *
+ * A value with no time part fails: explode() returns a single element, $time
+ * stays NULL and the error fires. That is deliberate — SPEC 58 requires the
+ * exact instant of the status change, so a bare date is not accepted.
  *
  * @param array $element
  * @param array $form_state
  */
 function myapi_claim_transaction_validate_status_date($element, &$form_state) {
   module_load_include('inc', 'myapi', 'resources/reservation.resource');
-  if (myapi_reservation_valid_date($element['#value']) === NULL) {
-    form_error($element, t('La fecha debe tener el formato AAAA-MM-DD y ser una fecha válida.'));
+  $parts = explode(' ', trim($element['#value']), 2);
+  $date = isset($parts[0]) ? myapi_reservation_valid_date($parts[0]) : NULL;
+  $time = isset($parts[1]) ? myapi_reservation_valid_time($parts[1]) : NULL;
+  if ($date === NULL || $time === NULL) {
+    form_error($element, t('La fecha debe tener el formato AAAA-MM-DD HH:MM, con una fecha y una hora válidas.'));
   }
 }
 
@@ -219,7 +231,11 @@ function myapi_claim_transaction_create_form_submit($form, &$form_state) {
 
   $transaction->field_claim[LANGUAGE_NONE][0]['target_id'] = $claim_nid;
   $transaction->field_status[LANGUAGE_NONE][0]['value'] = $form_state['values']['field_status'];
-  $transaction->field_status_date[LANGUAGE_NONE][0]['value'] = $form_state['values']['field_status_date'];
+  // Seconds are pinned to ':00' — the textfield captures minutes at most, and
+  // Date module stores the value as the full 'Y-m-d H:i:s' DATETIME it always
+  // was. Validation above guarantees both parts are present and well-formed.
+  $status_date_parts = explode(' ', trim($form_state['values']['field_status_date']), 2);
+  $transaction->field_status_date[LANGUAGE_NONE][0]['value'] = $status_date_parts[0] . ' ' . $status_date_parts[1] . ':00';
   $transaction->field_comment[LANGUAGE_NONE][0]['value'] = $form_state['values']['field_comment'];
 
   if (!empty($form_state['values']['field_images']['fid'])) {
@@ -337,6 +353,12 @@ function myapi_claim_transaction_author_label($row) {
  * — for the same reuse reason as myapi_claims_status_options(): one field,
  * one label source, shared by both bundles.
  *
+ * The status date cell shows 'd/m/Y H:i' (SPEC 58), the same custom format
+ * myapi.reservation_calendar.inc and myapi.reservation_notification.inc use
+ * for their timestamps. Transactions created before SPEC 58 were stored with
+ * a '00:00' time and therefore display as such: that is the value actually
+ * recorded, not a formatting bug.
+ *
  * @param array $rows  Rows from myapi_claim_transaction_timeline_rows().
  *
  * @return array  One row per transaction, ready for '#theme' => 'table'.
@@ -347,7 +369,7 @@ function myapi_claim_transaction_timeline_table_rows(array $rows) {
   foreach ($rows as $row) {
     $table_rows[] = array(
       myapi_claims_status_label($row->status),
-      $row->status_date === NULL ? '—' : check_plain(format_date(strtotime($row->status_date), 'custom', 'd/m/Y')),
+      $row->status_date === NULL ? '—' : check_plain(format_date(strtotime($row->status_date), 'custom', 'd/m/Y H:i')),
       ($row->comment === NULL || $row->comment === '') ? '—' : check_plain($row->comment),
       myapi_claim_transaction_author_label($row),
     );
@@ -437,7 +459,10 @@ function myapi_claim_transaction_create_initial($node) {
 
   $transaction->field_claim[LANGUAGE_NONE][0]['target_id'] = $node->nid;
   $transaction->field_status[LANGUAGE_NONE][0]['value'] = myapi_building_admin_field_value($node, 'field_status');
-  $transaction->field_status_date[LANGUAGE_NONE][0]['value'] = date('Y-m-d');
+  // 'Y-m-d H:i:00' since SPEC 58: the automatic initial transaction records
+  // the real instant the claim was created, not that day at midnight. Same
+  // pinned ':00' seconds as the creation form's submit handler.
+  $transaction->field_status_date[LANGUAGE_NONE][0]['value'] = date('Y-m-d H:i:00');
 
   node_save($transaction);
 }

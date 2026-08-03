@@ -1424,8 +1424,8 @@ function _myapi_claims_install() {
         'year'   => 'year',
         'month'  => 'month',
         'day'    => 'day',
-        'hour'   => 0,
-        'minute' => 0,
+        'hour'   => 'hour',
+        'minute' => 'minute',
         'second' => 0,
       ],
       'tz_handling' => 'none',
@@ -1542,7 +1542,7 @@ function _myapi_claims_install() {
     'widget'      => [
       'type'     => 'date_select',
       'settings' => [
-        'input_format'   => 'Y-m-d',
+        'input_format'   => 'Y-m-d H:i',
         'year_range'     => '-1:+3',
         'increment'      => 1,
         'label_position' => 'above',
@@ -2057,4 +2057,45 @@ function myapi_update_7017() {
  */
 function myapi_update_7018() {
   _myapi_building_admin_install();
+}
+
+/**
+ * SPEC 58: widens 'field_status_date' from day-only to day + hour + minute.
+ *
+ * The field is a Date module 'datetime' field, which already stores a full
+ * DATETIME internally — day-only was a configuration constraint on the field
+ * settings and on the widget, never on the schema. So this update rewrites
+ * configuration only and touches no row of field_data_field_status_date:
+ * existing transactions keep the exact value they were saved with (a '00:00'
+ * time), which the timeline now displays as such.
+ *
+ * field_update_field() changes the field-wide 'granularity' setting (today
+ * only 'claim_transaction' uses this field). field_update_instance() widens
+ * the native 'date_select' widget of that same instance, so that the native
+ * node/add/claim_transaction and node/%nid/edit forms offer hour and minute
+ * selectors too. The 'reclamo' instance of field_reception_date is a
+ * different field and is deliberately left alone.
+ *
+ * Re-running it is safe: both calls just write the same settings again.
+ */
+function myapi_update_7019() {
+  $field = field_info_field('field_status_date');
+  if (!$field) {
+    return;
+  }
+  $field['settings']['granularity'] = array(
+    'year'   => 'year',
+    'month'  => 'month',
+    'day'    => 'day',
+    'hour'   => 'hour',
+    'minute' => 'minute',
+    'second' => 0,
+  );
+  field_update_field($field);
+
+  $instance = field_info_instance('node', 'field_status_date', 'claim_transaction');
+  if ($instance) {
+    $instance['widget']['settings']['input_format'] = 'Y-m-d H:i';
+    field_update_instance($instance);
+  }
 }
