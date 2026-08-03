@@ -41,6 +41,15 @@ the `hook_node_presave()` glue that calls it and the `myapi_update_7020()`
 backfill. `ClaimTransactionEditTest` grew four cases in the same spec, for the
 native "Título" field that alter now hides.
 
+Since SPEC 61, `tests/unit/ClaimTransactionInitialCommentTest.php` covers
+`myapi_claim_transaction_initial_comment()`, the acknowledgement text the
+automatic initial transaction of a claim is born with, whose only variable part
+is the noun taken from `field_claim_type`. Same split as above: reading that
+field off the node and saving the transaction is
+`myapi_claim_transaction_create_initial()`, which stays out of this layer. Its
+last case composes a title out of the comment, so the two SPEC 60/61 functions
+are also checked together.
+
 **Prerequisites:** PHP 7.4, Composer.
 
 **Run:**

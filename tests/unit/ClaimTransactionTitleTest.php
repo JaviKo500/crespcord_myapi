@@ -55,8 +55,12 @@ class ClaimTransactionTitleTest extends TestCase {
   }
 
   /**
-   * The automatic initial transaction of a claim (SPEC 57) has no comment: the
-   * title has to end at the date, with no dangling separator.
+   * A transaction saved with field_comment empty — the native node form leaves
+   * it optional — has to end at the date, with no dangling separator. Until
+   * SPEC 61 this was also the automatic initial transaction's case; that one
+   * now carries an acknowledgement comment (see
+   * ClaimTransactionInitialCommentTest), which does not change what this test
+   * pins down.
    */
   public function testWithoutCommentTheSeparatorDoesNotDangle() {
     $title = myapi_claim_transaction_title(128, 'Recibido', self::STATUS_DATE, NULL);
