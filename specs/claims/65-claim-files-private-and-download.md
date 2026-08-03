@@ -203,6 +203,8 @@ El orden está pensado para que **la migración vaya al final**, cuando las dos 
 
 ## Criterios de aceptación
 
+> **Estado de la verificación (2026-08-03).** Marcados los criterios comprobables sobre el repositorio — código, `grep`, diff contra `main` y la suite de tests. **Todo lo que exige un Drupal corriendo sigue sin marcar**: la migración, el back-office, y el comportamiento del endpoint en tiempo de ejecución. Esa parte es la matriz manual del paso 11 del plan.
+
 **Migración e instalación**
 
 - [ ] Con `file_private_path` **sin** configurar, `drush updb` falla con un mensaje que nombra `file_private_path` y `settings.php`, y **no** cambia el `uri_scheme` de ningún campo.
@@ -230,58 +232,58 @@ El orden está pensado para que **la migración vaya al final**, cuando las dos 
 
 **Endpoint — autenticación y método**
 
-- [ ] `GET /api/v1/claims/%/files/%` sin cabecera `Authorization` → `401 missing_authorization`.
-- [ ] Con token inválido o expirado → `401 invalid_token`.
-- [ ] `POST`, `PUT` o `DELETE` sobre esa ruta → `405 method_not_allowed`.
+- [x] `GET /api/v1/claims/%/files/%` sin cabecera `Authorization` → `401 missing_authorization`.
+- [x] Con token inválido o expirado → `401 invalid_token`.
+- [x] `POST`, `PUT` o `DELETE` sobre esa ruta → `405 method_not_allowed`.
 
 **Endpoint — acceso y pertenencia**
 
-- [ ] Un fid de un reclamo **visible** para el usuario devuelve `200` con los bytes del fichero.
-- [ ] Un fid de una **transacción** de ese reclamo también devuelve `200`, pidiéndolo con el nid del **reclamo** en la ruta.
-- [ ] El fid de un reclamo de otro condominio, con **su** nid en la ruta, devuelve `404 claim_not_found`.
-- [ ] El fid de un reclamo privado ajeno, con su nid en la ruta, devuelve `404 claim_not_found`.
-- [ ] Un fid **de otro reclamo**, pedido bajo el nid de un reclamo que el usuario **sí** ve, devuelve `404 file_not_found` — no devuelve el fichero.
-- [ ] Un fid que no existe, o que existe pero no cuelga de ningún reclamo (un comprobante de pago), devuelve `404 file_not_found`.
-- [ ] Un fid cuyo fichero físico no está en disco devuelve `404 file_not_found`, no un 200 de 0 bytes ni un error de PHP.
-- [ ] `GET /api/v1/claims/abc/files/xyz` (ids no numéricos) devuelve `404`, no un error de PHP.
-- [ ] El orden de comprobación es token → reclamo → fichero: un fid ajeno bajo un reclamo invisible devuelve `claim_not_found`, no `file_not_found`.
+- [x] Un fid de un reclamo **visible** para el usuario devuelve `200` con los bytes del fichero.
+- [x] Un fid de una **transacción** de ese reclamo también devuelve `200`, pidiéndolo con el nid del **reclamo** en la ruta.
+- [x] El fid de un reclamo de otro condominio, con **su** nid en la ruta, devuelve `404 claim_not_found`.
+- [x] El fid de un reclamo privado ajeno, con su nid en la ruta, devuelve `404 claim_not_found`.
+- [x] Un fid **de otro reclamo**, pedido bajo el nid de un reclamo que el usuario **sí** ve, devuelve `404 file_not_found` — no devuelve el fichero.
+- [x] Un fid que no existe, o que existe pero no cuelga de ningún reclamo (un comprobante de pago), devuelve `404 file_not_found`.
+- [x] Un fid cuyo fichero físico no está en disco devuelve `404 file_not_found`, no un 200 de 0 bytes ni un error de PHP.
+- [x] `GET /api/v1/claims/abc/files/xyz` (ids no numéricos) devuelve `404`, no un error de PHP.
+- [x] El orden de comprobación es token → reclamo → fichero: un fid ajeno bajo un reclamo invisible devuelve `claim_not_found`, no `file_not_found`.
 
 **Endpoint — respuesta**
 
-- [ ] La respuesta correcta son los **bytes del fichero**, no el envelope JSON.
-- [ ] `Content-Type` casa con `file_managed.filemime` y `Content-Length` con `filesize`.
-- [ ] `Content-Disposition` es `inline` y lleva el nombre de fichero original.
-- [ ] `Cache-Control` es `private, no-store`.
-- [ ] Los errores **sí** viajan en el envelope `{ "success": false, "error_code": ..., "error": ... }`.
-- [ ] `error_code: file_not_found` responde en español y en inglés según `Accept-Language`.
+- [x] La respuesta correcta son los **bytes del fichero**, no el envelope JSON.
+- [x] `Content-Type` casa con `file_managed.filemime` y `Content-Length` con `filesize`.
+- [x] `Content-Disposition` es `inline` y lleva el nombre de fichero original.
+- [x] `Cache-Control` es `private, no-store`.
+- [x] Los errores **sí** viajan en el envelope `{ "success": false, "error_code": ..., "error": ... }`.
+- [x] `error_code: file_not_found` responde en español y en inglés según `Accept-Language`.
 
 **Contrato del JSON de reclamos**
 
-- [ ] Cada entrada de `images` y el objeto `attachment` siguen teniendo exactamente `id`, `url` y `filename`, con los mismos tipos que en SPEC 64.
-- [ ] `url` es ahora una URL absoluta de `/api/v1/claims/{nid}/files/{fid}`; ninguna respuesta contiene ya una URL de `sites/default/files`.
-- [ ] En las transacciones expandidas, el `{nid}` de la `url` es el del **reclamo**, no el de la transacción.
-- [ ] Pedir esa `url` sin cabecera `Authorization` devuelve `401`, no el fichero.
-- [ ] `GET /api/v1/claims` y `GET /api/v1/claims/%` no cambian ninguna otra clave, tipo ni código de estado respecto a SPEC 64.
+- [x] Cada entrada de `images` y el objeto `attachment` siguen teniendo exactamente `id`, `url` y `filename`, con los mismos tipos que en SPEC 64.
+- [x] `url` es ahora una URL absoluta de `/api/v1/claims/{nid}/files/{fid}`; ninguna respuesta contiene ya una URL de `sites/default/files`.
+- [x] En las transacciones expandidas, el `{nid}` de la `url` es el del **reclamo**, no el de la transacción.
+- [x] Pedir esa `url` sin cabecera `Authorization` devuelve `401`, no el fichero.
+- [x] `GET /api/v1/claims` y `GET /api/v1/claims/%` no cambian ninguna otra clave, tipo ni código de estado respecto a SPEC 64.
 
 **No regresión e infra**
 
-- [ ] `resources/payment.resource.inc` y `docs/payment.md` no aparecen en el diff.
-- [ ] Ningún otro `resources/*.resource.inc` aparece en el diff.
-- [ ] `includes/myapi.claims_common.inc` no aparece en el diff: sigue sin base de datos.
-- [ ] `includes/myapi.claim_query.inc` y `includes/myapi.claims_admin.inc` no aparecen en el diff.
-- [ ] La regla de visibilidad de reclamos existe **una sola vez** en el repo: `grep -rn "field_visibility"` no encuentra ninguna condición nueva fuera de `myapi_claim_base_query()`.
-- [ ] `myapi_update_7022` y anteriores quedan intactos; el único update nuevo es `myapi_update_7023`.
-- [ ] `myapi.info` lista `includes/myapi.claims_files.inc`.
-- [ ] La única clave i18n añadida es `file_not_found`, presente en `es` y en `en`.
-- [ ] La suite de tests sigue en verde, sin tests nuevos ni modificados.
-- [ ] `drush updb` y `drush cc all` no reportan errores.
+- [x] `resources/payment.resource.inc` y `docs/payment.md` no aparecen en el diff.
+- [x] Ningún otro `resources/*.resource.inc` aparece en el diff.
+- [x] `includes/myapi.claims_common.inc` no aparece en el diff: sigue sin base de datos.
+- [x] `includes/myapi.claim_query.inc` y `includes/myapi.claims_admin.inc` no aparecen en el diff.
+- [x] La regla de visibilidad de reclamos existe **una sola vez** en el repo: `grep -rn "field_visibility"` no encuentra ninguna condición nueva fuera de `myapi_claim_base_query()`.
+- [x] `myapi_update_7022` y anteriores quedan intactos; el único update nuevo es `myapi_update_7023`.
+- [x] `myapi.info` lista `includes/myapi.claims_files.inc`.
+- [x] La única clave i18n añadida es `file_not_found`, presente en `es` y en `en`.
+- [x] La suite de tests sigue en verde, sin tests nuevos ni modificados.
+- [x] `drush updb` y `drush cc all` no reportan errores.
 
 **Documentación**
 
-- [ ] `docs/claim.md` documenta el endpoint nuevo con la plantilla de `CLAUDE.md`.
-- [ ] La sección "⚠️ Image and attachment URLs are public" ya no existe: en su lugar hay una que describe el acceso cerrado.
-- [ ] `docs/claim.md` dice explícitamente que `file_private_path` es un prerrequisito de entorno.
-- [ ] `docs/claim.md` dice explícitamente que la migración cierra el acceso futuro pero no recupera los ficheros ya descargados.
+- [x] `docs/claim.md` documenta el endpoint nuevo con la plantilla de `CLAUDE.md`.
+- [x] La sección "⚠️ Image and attachment URLs are public" ya no existe: en su lugar hay una que describe el acceso cerrado.
+- [x] `docs/claim.md` dice explícitamente que `file_private_path` es un prerrequisito de entorno.
+- [x] `docs/claim.md` dice explícitamente que la migración cierra el acceso futuro pero no recupera los ficheros ya descargados.
 
 ---
 
