@@ -1,9 +1,10 @@
-# Claims API (SPEC 64)
+# Claims API (SPEC 64, SPEC 65)
 
-Two read-only endpoints over the `reclamo` nodes the back office manages
-(SPEC 55–63): a paginated list and a detail by id. The Flutter app consumes
-them; nothing here creates, edits or closes a claim, and nothing here adds a
-transaction to one — those paths are back office only
+Three read-only endpoints over the `reclamo` nodes the back office manages
+(SPEC 55–63): a paginated list, a detail by id, and the authenticated download
+of one claim file (SPEC 65). The Flutter app consumes them; nothing here
+creates, edits or closes a claim, uploads or deletes a file, or adds a
+transaction — those paths are back office only
 (see [claim-transaction-timeline.md](claim-transaction-timeline.md)).
 
 Two documents cover the other half of the same data:
@@ -107,13 +108,13 @@ Notes on the date bounds:
         "images": [
           {
             "id": 512,
-            "url": "https://mi-sitio/sites/default/files/mancha.jpg",
+            "url": "https://mi-sitio/api/v1/claims/140/files/512",
             "filename": "mancha.jpg"
           }
         ],
         "attachment": {
           "id": 513,
-          "url": "https://mi-sitio/sites/default/files/informe.pdf",
+          "url": "https://mi-sitio/api/v1/claims/140/files/513",
           "filename": "informe.pdf"
         },
         "transactions": [12, 15, 18]
@@ -268,6 +269,71 @@ the id in the URL is a unit the caller already knows about.
 
 ---
 
+## GET /api/v1/claims/%/files/%
+
+The bytes of one image or attachment of a claim (SPEC 65). This is the URL that
+travels in every `url` key of the two endpoints above — the client does not
+compose it.
+
+**Authentication:** required (Bearer access token)
+
+**Headers**
+| Header | Value |
+|--------|-------|
+| Authorization | Bearer `<access_token>` |
+
+The token is read from the `Authorization` header **only**. `?access_token=` is
+deliberately not supported: a token in a query string ends up in the server
+logs, in the `Referer` and in the browser history — the exact kind of leak this
+endpoint exists to close. Flutter's image loader accepts headers.
+
+**Path parameters**
+
+| Param | Notes |
+|-------|-------|
+| `{claim_nid}` (arg 3) | The nid of the **claim**, always — also for the files of one of its transactions. The claim is the unit of access, and the app never needs to know which transaction a picture hangs from. |
+| `{fid}` (arg 5) | `file_managed.fid`, the `id` of the file object. |
+
+**Success response (200) — the bytes of the file, not the JSON envelope**
+
+This is the one endpoint of the module that does not answer the response
+envelope on success, and the exception is deliberate: a binary file has no
+envelope to travel in, and base64 inside a JSON body would inflate it by a third
+and break every standard image loader. **Errors still use the envelope**, below.
+
+| Header | Value |
+|--------|-------|
+| `Content-Type` | `file_managed.filemime` |
+| `Content-Length` | `file_managed.filesize` |
+| `Content-Disposition` | `inline; filename="<original name>"` |
+| `Cache-Control` | `private, no-store` |
+
+`inline` and not `attachment`: the app renders these images on screen, and
+`attachment` would force a download in any web viewer. The original filename
+travels in the header either way.
+
+**Possible errors**
+| Code | `error_code` | When |
+|------|--------------|------|
+| 401 | `missing_authorization` | No `Authorization` header. |
+| 401 | `invalid_token` | Token unknown, revoked, expired, or its user blocked. |
+| 404 | `claim_not_found` | The claim does not exist, is unpublished, belongs to another condominium, is private and filed by somebody else, or the id is not a positive integer. Same rule and same message as `GET /api/v1/claims/%`. |
+| 404 | `file_not_found` | The claim **is** visible, but the fid does not exist, is not a positive integer, does not belong to that claim nor to any of its transactions, or its physical file is not on disk. |
+| 405 | `method_not_allowed` | Any method other than `GET`. |
+
+**The order of the checks is token → claim → file, always.** The first question
+that fails is the one that answers. A foreign fid under a claim the caller
+cannot see returns `claim_not_found`, never `file_not_found`: answering about
+the file first would let anyone probe fids under a claim they have no access to.
+
+**A fid that exists but belongs to another claim returns `404`, not `403`.** The
+caller has already proved they can see the claim in the path, so distinguishing
+"that file is not of this claim" leaks nothing and separates two different
+problems in support. A `403` *would* leak: it would confirm that the fid exists
+somewhere else.
+
+---
+
 ## Field reference
 
 **Claim item**
@@ -294,7 +360,7 @@ the id in the URL is a unit the caller already knows about.
 | Key | Type | Notes |
 |-----|------|-------|
 | `id` | int | `file_managed.fid`. |
-| `url` | string | Absolute, from `file_create_url()`. **Public — see the warning below.** |
+| `url` | string | Absolute URL of `GET /api/v1/claims/{claim_nid}/files/{id}`. **Requires the `Authorization` header — see below.** The `{claim_nid}` is always the **claim's**, also for the files of a transaction. |
 | `filename` | string | The original file name. |
 
 **Transaction object** (expanded)
@@ -342,24 +408,66 @@ Filtering by hour is not supported.
 
 ---
 
-## ⚠️ Image and attachment URLs are public
+## Image and attachment URLs are authenticated (SPEC 65)
 
-**The `url` of every image and attachment opens with no `Authorization` header.**
+**No file of a claim is served without an access decision.** `field_images` and
+`field_attachment` live in `private://` since SPEC 65, so the web server never
+delivers them directly; every read goes through PHP and through one of two
+doors:
 
-`field_images` and `field_attachment` were created without a `uri_scheme`
-(SPEC 55), so their files live in `public://` and are served directly by the web
-server. This is true with or without these endpoints — the files were already
-downloadable by anyone holding the URL — but the API hands those URLs to more
-people than before.
+| Reader | Door | Rule |
+|--------|------|------|
+| The app | `GET /api/v1/claims/%/files/%`, documented above | Bearer token + the visibility rule of this document, evaluated with the same `myapi_claim_base_query()` the list and the detail use. |
+| The back office | `hook_file_download()` (`myapi_file_download()`) | Drupal session + role: `administrator`, `backend`, and `administrador edificio` **scoped to its assigned condominiums** (SPEC 49/56). Anybody else, and any anonymous, gets `403`. |
 
-The consequence worth stating: **a private claim can carry a sensitive photo
-whose URL is not access-controlled.** The URLs are not enumerable and include
-the original filename, but that is obfuscation, not access control.
+Both doors share `includes/myapi.claims_files.inc`, which resolves which claim
+owns a given fid — directly, or through the transaction that carries it.
 
-Closing this properly means migrating both fields to `private://`, adding an
-authenticated download endpoint, and migrating the already-uploaded files. That
-is a spec of its own, not a patch to this one. Until then, this is a known and
-accepted risk, documented here so nobody discovers it by accident.
+**What the app has to do:** send `Authorization: Bearer <token>` when loading an
+image too, not only when calling the JSON endpoints. A `url` requested without
+the header answers `401`, not the file.
+
+### `file_private_path` is an environment prerequisite
+
+The private file system must be configured in `settings.php` (or at
+`admin/config/media/file-system`) **before** running `drush updb`. Without it
+the `private://` scheme does not resolve, `myapi_update_7023()` aborts with a
+message naming `file_private_path`, and no field is modified.
+
+The directory must live **outside the docroot**, or be protected by the
+`.htaccess` Drupal writes into it. A private directory that the web server still
+serves changes the URL of the files and nothing else: it does not close a single
+thing.
+
+### The migration closes future access, it does not rewind the past
+
+`myapi_update_7023()` moves the already-uploaded files from `public://` to
+`private://` and rewrites `file_managed.uri`. From that moment on, no claim file
+is served unauthenticated.
+
+**What it cannot do is recover what already left.** A `sites/default/files` URL
+that was shared in a chat, cached by a proxy, or saved to a device is a copy
+outside anyone's control, and no code change brings it back. What stops working
+is the URL, not the copies already made.
+
+Two operational consequences of the same migration:
+
+- Run `drush image-flush --all` after `drush updb`. Image-style derivatives
+  generated while the originals were public stay written under
+  `sites/default/files/styles/` and keep being served; flushing them removes
+  those copies, and they regenerate under `private://styles/` on the next view.
+- Deployed app versions with cached `sites/default/files` URLs stop seeing
+  images the moment the update runs. This is a coordinated migration: run it
+  once the app version that sends the header is published, or accept the window
+  of broken images.
+
+### Maintenance rule
+
+Any new file field on `reclamo` or `claim_transaction` must be created with
+`'settings' => ['uri_scheme' => 'private']` **and** added to the ownership
+resolution in `includes/myapi.claims_files.inc`. A field created without both is
+born public and unreachable through either door — exactly the hole SPEC 65
+closed.
 
 ---
 
