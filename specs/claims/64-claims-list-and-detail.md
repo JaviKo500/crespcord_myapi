@@ -1,6 +1,6 @@
 # SPEC 64 — Endpoints de listado y detalle de reclamos (`GET /api/v1/claims`, `GET /api/v1/claims/%`)
 
-> **Estado:** Approved · **Depende de:** SPEC 55 (bundles `reclamo` y `claim_transaction` y todos sus campos), SPEC 62 (catálogo de cuatro estados), SPEC 63 (`field_reception_date` con hora), SPEC 15 (`limit=-1`), SPEC 34 (patrón de listado paginado con filtros de fecha), SPEC 31 (filtro `condominium_id` validado contra el set del usuario) · **Fecha:** 2026-08-03
+> **Estado:** Implemented · **Depende de:** SPEC 55 (bundles `reclamo` y `claim_transaction` y todos sus campos), SPEC 62 (catálogo de cuatro estados), SPEC 63 (`field_reception_date` con hora), SPEC 15 (`limit=-1`), SPEC 34 (patrón de listado paginado con filtros de fecha), SPEC 31 (filtro `condominium_id` validado contra el set del usuario) · **Fecha:** 2026-08-03
 > **Objetivo:** Exponer los reclamos del condominio del residente autenticado en dos endpoints de solo lectura — un listado paginado y filtrable, y un detalle por id —, devolviendo los públicos de su condominio más los privados donde él es el solicitante, con las transacciones colapsadas a ids salvo que se pidan expandidas.
 
 Notas técnicas que fija la cabecera, porque condicionan el resto del documento:
@@ -216,81 +216,81 @@ Tres consultas por request, no una por fila:
 
 **Autenticación y método**
 
-- [ ] `GET /api/v1/claims` sin cabecera `Authorization` → `401 missing_authorization`.
-- [ ] Con un token inválido o expirado → `401 invalid_token`.
-- [ ] `POST`, `PUT` o `DELETE` sobre `api/v1/claims` o `api/v1/claims/%` → `405 method_not_allowed`.
+- [x] `GET /api/v1/claims` sin cabecera `Authorization` → `401 missing_authorization`.
+- [x] Con un token inválido o expirado → `401 invalid_token`.
+- [x] `POST`, `PUT` o `DELETE` sobre `api/v1/claims` o `api/v1/claims/%` → `405 method_not_allowed`.
 
 **Visibilidad y acceso**
 
-- [ ] Un reclamo **público** de un condominio del usuario aparece en su listado, sea quien sea el solicitante.
-- [ ] Un reclamo **privado donde el usuario es `field_requester`** aparece en su listado.
-- [ ] Un reclamo **privado de otro solicitante**, mismo condominio, **no** aparece — ni siquiera con su `id` en el detalle (`404`).
-- [ ] Un reclamo de un condominio donde el usuario no tiene vivienda **no** aparece, sea público o privado.
-- [ ] Un reclamo privado donde el usuario es el solicitante pero cuyo condominio ya no está en su set **no** aparece (el filtro de condominio manda siempre).
-- [ ] Un reclamo cargado por un admin donde el usuario es autor del nodo (`node.uid`) pero **no** es `field_requester`, y es privado, **no** aparece.
-- [ ] Un usuario sin ninguna vivienda recibe `200` con `claims: []`, `total: 0`, `total_pages: 0` — **no** un `403`.
-- [ ] Un reclamo no publicado (`status = 0`) no aparece nunca, ni en el listado ni en el detalle.
+- [x] Un reclamo **público** de un condominio del usuario aparece en su listado, sea quien sea el solicitante.
+- [x] Un reclamo **privado donde el usuario es `field_requester`** aparece en su listado.
+- [x] Un reclamo **privado de otro solicitante**, mismo condominio, **no** aparece — ni siquiera con su `id` en el detalle (`404`).
+- [x] Un reclamo de un condominio donde el usuario no tiene vivienda **no** aparece, sea público o privado.
+- [x] Un reclamo privado donde el usuario es el solicitante pero cuyo condominio ya no está en su set **no** aparece (el filtro de condominio manda siempre).
+- [x] Un reclamo cargado por un admin donde el usuario es autor del nodo (`node.uid`) pero **no** es `field_requester`, y es privado, **no** aparece.
+- [x] Un usuario sin ninguna vivienda recibe `200` con `claims: []`, `total: 0`, `total_pages: 0` — **no** un `403`.
+- [x] Un reclamo no publicado (`status = 0`) no aparece nunca, ni en el listado ni en el detalle.
 
 **Filtros y paginación del listado**
 
-- [ ] `?condominium_id=` con un nid del set del usuario acota el listado a ese condominio.
-- [ ] `?condominium_id=` con un nid válido **ajeno** al usuario → `403 condominium_access_denied`.
-- [ ] `?condominium_id=abc` (o `0`, o negativo) se ignora en silencio: devuelve todos los condominios del usuario, sin `422` ni `403`.
-- [ ] `?status=in_progress` filtra; `?status=duplicated` o `?status=inventado` devuelve todos los estados, sin `422`.
-- [ ] `?claim_type=claim` filtra; cualquier otro valor devuelve ambos tipos.
+- [x] `?condominium_id=` con un nid del set del usuario acota el listado a ese condominio.
+- [x] `?condominium_id=` con un nid válido **ajeno** al usuario → `403 condominium_access_denied`.
+- [x] `?condominium_id=abc` (o `0`, o negativo) se ignora en silencio: devuelve todos los condominios del usuario, sin `422` ni `403`.
+- [x] `?status=in_progress` filtra; `?status=duplicated` o `?status=inventado` devuelve todos los estados, sin `422`.
+- [x] `?claim_type=claim` filtra; cualquier otro valor devuelve ambos tipos.
 - [ ] `?date_from` / `?date_to` filtran inclusivamente **por día**: un reclamo recibido el día de `date_to` a las 14:30 **sí** aparece.
-- [ ] Un rango invertido (`date_from > date_to`) descarta el filtro entero; una fecha malformada o inexistente (`2026-02-30`) se ignora en silencio.
-- [ ] Con al menos una cota de fecha activa, los reclamos sin `field_reception_date` quedan fuera.
-- [ ] `?sort=asc` y `?sort=desc` ordenan por `field_reception_date`; los empates se resuelven por `nid` en la misma dirección y el orden es estable entre páginas.
-- [ ] `?limit=-1` devuelve todos los reclamos que casan en una sola página con `total_pages: 1`; `total = 0` → `total_pages: 0`; una página más allá de la última → `200` con `claims: []`.
+- [x] Un rango invertido (`date_from > date_to`) descarta el filtro entero; una fecha malformada o inexistente (`2026-02-30`) se ignora en silencio.
+- [x] Con al menos una cota de fecha activa, los reclamos sin `field_reception_date` quedan fuera.
+- [x] `?sort=asc` y `?sort=desc` ordenan por `field_reception_date`; los empates se resuelven por `nid` en la misma dirección y el orden es estable entre páginas.
+- [x] `?limit=-1` devuelve todos los reclamos que casan en una sola página con `total_pages: 1`; `total = 0` → `total_pages: 0`; una página más allá de la última → `200` con `claims: []`.
 
 **Transacciones**
 
-- [ ] Sin `?include`, cada item trae `"transactions"` como array de **ints**.
-- [ ] Con `?include=transactions`, cada item trae `"transactions"` como array de **objetos** con las siete claves documentadas.
-- [ ] `?include=cualquier-otra-cosa` devuelve las transacciones colapsadas, sin `422`.
-- [ ] Las transacciones vienen en orden **ascendente** por `field_status_date`, con desempate por `nid` ascendente.
-- [ ] Un reclamo sin ninguna transacción devuelve `"transactions": []` en ambos modos.
-- [ ] Ningún objeto de transacción incluye el autor (`uid` o username) del cambio de estado.
-- [ ] Un listado de 20 reclamos expandidos ejecuta un número **constante** de queries (no una por reclamo ni una por transacción).
+- [x] Sin `?include`, cada item trae `"transactions"` como array de **ints**.
+- [x] Con `?include=transactions`, cada item trae `"transactions"` como array de **objetos** con las siete claves documentadas.
+- [x] `?include=cualquier-otra-cosa` devuelve las transacciones colapsadas, sin `422`.
+- [x] Las transacciones vienen en orden **ascendente** por `field_status_date`, con desempate por `nid` ascendente.
+- [x] Un reclamo sin ninguna transacción devuelve `"transactions": []` en ambos modos.
+- [x] Ningún objeto de transacción incluye el autor (`uid` o username) del cambio de estado.
+- [x] Un listado de 20 reclamos expandidos ejecuta un número **constante** de queries (no una por reclamo ni una por transacción).
 
 **Archivos**
 
-- [ ] `images` es siempre un array (vacío cuando no hay ninguna), ordenado por `delta`, con `id` (int), `url` absoluta y `filename`.
-- [ ] `attachment` es un objeto con esas mismas tres claves, o `null` cuando el reclamo no tiene adjunto.
-- [ ] Las `url` devueltas abren el archivo **sin** cabecera `Authorization` — es el comportamiento esperado hoy, documentado en `docs/claim.md`, no un fallo.
-- [ ] Las transacciones expandidas exponen sus propias `images` / `attachment` con las mismas reglas.
+- [x] `images` es siempre un array (vacío cuando no hay ninguna), ordenado por `delta`, con `id` (int), `url` absoluta y `filename`.
+- [x] `attachment` es un objeto con esas mismas tres claves, o `null` cuando el reclamo no tiene adjunto.
+- [x] Las `url` devueltas abren el archivo **sin** cabecera `Authorization` — es el comportamiento esperado hoy, documentado en `docs/claim.md`, no un fallo.
+- [x] Las transacciones expandidas exponen sus propias `images` / `attachment` con las mismas reglas.
 
 **Detalle**
 
-- [ ] `GET /api/v1/claims/{id}` de un reclamo visible devuelve `200` con `data.claim` y **sin** bloque `pagination`.
-- [ ] Sus transacciones vienen **siempre expandidas**, sin necesidad de `?include`.
-- [ ] Un id inexistente, uno de otro condominio y un privado ajeno devuelven los tres exactamente `404 claim_not_found`, indistinguibles entre sí.
-- [ ] `GET /api/v1/claims/abc` (id no numérico) devuelve `404 claim_not_found`, no un error de PHP.
-- [ ] El item del detalle tiene exactamente las mismas claves y tipos que el del listado (mismo serializador).
+- [x] `GET /api/v1/claims/{id}` de un reclamo visible devuelve `200` con `data.claim` y **sin** bloque `pagination`.
+- [x] Sus transacciones vienen **siempre expandidas**, sin necesidad de `?include`.
+- [x] Un id inexistente, uno de otro condominio y un privado ajeno devuelven los tres exactamente `404 claim_not_found`, indistinguibles entre sí.
+- [x] `GET /api/v1/claims/abc` (id no numérico) devuelve `404 claim_not_found`, no un error de PHP.
+- [x] El item del detalle tiene exactamente las mismas claves y tipos que el del listado (mismo serializador).
 
 **Formatos**
 
-- [ ] `reception_date` y `status_date` salen como `Y-m-dTH:i:s` con la hora **tal cual está almacenada**, sin desplazamiento de zona horaria.
-- [ ] Un reclamo anterior a SPEC 63 sale con `T00:00:00`, sin error.
-- [ ] `created` sale como `Y-m-dTH:i:s` en la zona horaria del sitio.
-- [ ] `id`, `condominium_id`, `requester_id` y los `id` de archivo son enteros JSON, no strings; y `null` cuando no hay fila.
+- [x] `reception_date` y `status_date` salen como `Y-m-dTH:i:s` con la hora **tal cual está almacenada**, sin desplazamiento de zona horaria.
+- [x] Un reclamo anterior a SPEC 63 sale con `T00:00:00`, sin error.
+- [x] `created` sale como `Y-m-dTH:i:s` en la zona horaria del sitio.
+- [x] `id`, `condominium_id`, `requester_id` y los `id` de archivo son enteros JSON, no strings; y `null` cuando no hay fila.
 
 **No regresión e infra**
 
-- [ ] `includes/myapi.claim_query.inc` no aparece en el diff.
-- [ ] En `includes/myapi.claims_admin.inc` el diff es **solo** la eliminación de las dos funciones movidas más el `module_load_include()` nuevo: su query, sus filtros, su tabla y su formulario quedan intactos.
-- [ ] `admin/content/claims` sigue filtrando igual: `?status=in_progress` acota, `?status=duplicated` devuelve todo, `?claim_type=claim` acota.
-- [ ] `myapi_claims_valid_status()` y `myapi_claims_valid_claim_type()` existen **una sola vez** en el repo, en `includes/myapi.claims_common.inc` (`grep -rn` devuelve una definición de cada una).
-- [ ] No existe ninguna whitelist de estados ni de tipos de reclamo escrita dentro de `resources/claim.resource.inc`.
-- [ ] `ClaimsStatusFilterTest.php` pasa con el `require_once` nuevo y **sin ningún assert modificado**.
-- [ ] `myapi.install` no aparece en el diff: no hay campos, updates ni bundles nuevos.
-- [ ] Ningún endpoint `api/v1/...` existente cambia su respuesta.
-- [ ] `myapi.info` lista **los dos** archivos nuevos: `includes/myapi.claims_common.inc` y `resources/claim.resource.inc`.
-- [ ] La única clave i18n añadida es `claim_not_found`, presente en `es` y en `en`.
-- [ ] `docs/claim.md` existe y casa con el contrato implementado, incluida la nota de URLs públicas.
-- [ ] La suite de tests sigue en verde, con `ClaimListFilterTest` incluido.
-- [ ] `drush cc all` no reporta errores.
+- [x] `includes/myapi.claim_query.inc` no aparece en el diff.
+- [x] En `includes/myapi.claims_admin.inc` el diff es **solo** la eliminación de las dos funciones movidas más el `module_load_include()` nuevo: su query, sus filtros, su tabla y su formulario quedan intactos.
+- [x] `admin/content/claims` sigue filtrando igual: `?status=in_progress` acota, `?status=duplicated` devuelve todo, `?claim_type=claim` acota.
+- [x] `myapi_claims_valid_status()` y `myapi_claims_valid_claim_type()` existen **una sola vez** en el repo, en `includes/myapi.claims_common.inc` (`grep -rn` devuelve una definición de cada una).
+- [x] No existe ninguna whitelist de estados ni de tipos de reclamo escrita dentro de `resources/claim.resource.inc`.
+- [x] `ClaimsStatusFilterTest.php` pasa con el `require_once` nuevo y **sin ningún assert modificado**.
+- [x] `myapi.install` no aparece en el diff: no hay campos, updates ni bundles nuevos.
+- [x] Ningún endpoint `api/v1/...` existente cambia su respuesta.
+- [x] `myapi.info` lista **los dos** archivos nuevos: `includes/myapi.claims_common.inc` y `resources/claim.resource.inc`.
+- [x] La única clave i18n añadida es `claim_not_found`, presente en `es` y en `en`.
+- [x] `docs/claim.md` existe y casa con el contrato implementado, incluida la nota de URLs públicas.
+- [x] La suite de tests sigue en verde, con `ClaimListFilterTest` incluido.
+- [x] `drush cc all` no reporta errores.
 
 ---
 
