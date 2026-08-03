@@ -103,10 +103,27 @@ class ClaimTransactionEditTest extends TestCase {
    * ---------------------------------------------------------------------- */
 
   /**
+   * The native title element as node_form() builds it, for the SPEC 60 cases.
+   */
+  private function titleElement() {
+    return array(
+      '#type' => 'textfield',
+      '#title' => 'Título',
+      '#required' => TRUE,
+      '#default_value' => '',
+    );
+  }
+
+  /**
    * node/add/claim_transaction: the native creation path is left untouched.
    *
    * This is the acceptance criterion of the spec turned into a test — nothing
    * disabled, no submit handler added, the form identical to what came in.
+   *
+   * The fixture carries no 'title' element on purpose: hiding it is the one
+   * thing SPEC 60 added to this alter in creation mode, and it has its own
+   * tests below. Everything ELSE still has to come out identical, which is what
+   * this asserts.
    */
   public function testCreationModeLeavesTheFormUntouched() {
     $node = new stdClass();
@@ -138,6 +155,67 @@ class ClaimTransactionEditTest extends TestCase {
     myapi_claim_transaction_transaction_form_alter($form, $form_state);
 
     $this->assertSame($before, $form);
+  }
+
+  /* -------------------------------------------------------------------------
+   * The native title field (SPEC 60).
+   *
+   * myapi_claim_transaction_set_title() regenerates the title on every save, so
+   * whatever the operator typed would be overwritten. These four cases pin the
+   * consequence: the field is hidden in BOTH modes — the only part of this
+   * alter that runs above the edit-mode guard — and its #required goes with it,
+   * or Drupal would refuse to save a form nobody can fill in.
+   * ---------------------------------------------------------------------- */
+
+  public function testCreationModeHidesTheTitleField() {
+    $node = new stdClass();
+    $node->type = 'claim_transaction';
+
+    $form = array('#node' => $node, 'title' => $this->titleElement());
+
+    myapi_claim_transaction_transaction_form_alter($form, $form_state);
+
+    $this->assertFalse($form['title']['#access']);
+    $this->assertFalse($form['title']['#required']);
+  }
+
+  public function testEditModeHidesTheTitleField() {
+    $form = $this->editForm();
+    $form['title'] = $this->titleElement();
+
+    myapi_claim_transaction_transaction_form_alter($form, $form_state);
+
+    $this->assertFalse($form['title']['#access']);
+    $this->assertFalse($form['title']['#required']);
+  }
+
+  /**
+   * A form with no title element at all (another module removed it, or a
+   * bundle without has_title): no key is invented and nothing else breaks.
+   */
+  public function testMissingTitleElementIsNotCreated() {
+    $form = $this->editForm();
+
+    myapi_claim_transaction_transaction_form_alter($form, $form_state);
+
+    $this->assertArrayNotHasKey('title', $form);
+    $this->assertTrue($form['field_claim']['und'][0]['target_id']['#disabled']);
+  }
+
+  /**
+   * Hiding the title does not touch anything else in the element — the label
+   * and the default value survive, which is what lets Drupal resubmit the
+   * stored title of an existing transaction while the field is inaccessible.
+   */
+  public function testHidingTheTitleKeepsTheRestOfTheElement() {
+    $form = $this->editForm();
+    $form['title'] = $this->titleElement();
+    $form['title']['#default_value'] = 'Reclamo #128 · En proceso · 03/08/2026 14:30';
+
+    myapi_claim_transaction_transaction_form_alter($form, $form_state);
+
+    $this->assertSame('Reclamo #128 · En proceso · 03/08/2026 14:30', $form['title']['#default_value']);
+    $this->assertSame('textfield', $form['title']['#type']);
   }
 
   /**
