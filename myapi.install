@@ -2099,3 +2099,97 @@ function myapi_update_7019() {
     field_update_instance($instance);
   }
 }
+
+/**
+ * SPEC 60: fills in the title of the 'claim_transaction' nodes saved without
+ * one.
+ *
+ * Until SPEC 60, neither myapi_claim_transaction_create_form_submit() nor
+ * myapi_claim_transaction_create_initial() (SPEC 57) wrote $node->title, and
+ * node.title is NOT NULL DEFAULT '' — so those transactions were stored with an
+ * empty title and show up as a blank link in /admin/content. From now on
+ * hook_node_presave() titles every save; this rewrites the ones already on
+ * disk, with the same myapi_claim_transaction_title() the presave uses.
+ *
+ * Only rows with title = '' are touched. The ones created through
+ * node/add/claim_transaction carry a title an operator typed by hand before
+ * this spec existed, and overwriting it would destroy information he put there
+ * deliberately; they converge to the automatic format on their first save.
+ *
+ * db_update() and NOT node_load() + node_save(), deliberately: node_save()
+ * fires hook_node_update(), whose 'claim_transaction' branch (SPEC 57) syncs
+ * the PARENT CLAIM's field_status with the saved transaction's. Re-saving old
+ * transactions in arbitrary order would leave every claim carrying the status
+ * of whichever of its transactions was processed last — silent data corruption
+ * in exchange for a title. Writing the column directly touches no field and
+ * fires no hook.
+ *
+ * Both node.title and node_revision.title are written: in D7 node_load() reads
+ * the title off the active revision, while listings and most queries read
+ * node.title, so updating only one of the two leaves the site showing the value
+ * in some places and the empty string in others. The bundle has no revisions
+ * enabled (variable node_options_claim_transaction is ['status'], see
+ * _myapi_reservations_ensure_node_type()), so n.vid is the only revision there
+ * is.
+ *
+ * Re-running it is a no-op: after the first pass no row matches title = ''.
+ *
+ * @return string
+ *   Message drush updb prints, with how many rows were filled in.
+ */
+function myapi_update_7020() {
+  module_load_include('inc', 'myapi', 'includes/myapi.claim_transaction_admin');
+  module_load_include('inc', 'myapi', 'includes/myapi.claims_admin');
+
+  $query = db_select('node', 'n')
+    ->fields('n', array('nid', 'vid'))
+    ->condition('n.type', 'claim_transaction')
+    ->condition('n.title', '');
+
+  // Same LEFT JOIN criterion as myapi_claim_transaction_timeline_rows(): a
+  // transaction missing one of these values still gets a title, built out of
+  // whatever it does have.
+  $query->leftJoin('field_data_field_claim', 'fcl', "fcl.entity_id = n.nid AND fcl.entity_type = 'node' AND fcl.deleted = 0");
+  $query->addField('fcl', 'field_claim_target_id', 'claim_nid');
+
+  $query->leftJoin('field_data_field_status', 'fs', "fs.entity_id = n.nid AND fs.entity_type = 'node' AND fs.deleted = 0");
+  $query->addField('fs', 'field_status_value', 'status');
+
+  $query->leftJoin('field_data_field_status_date', 'fsd', "fsd.entity_id = n.nid AND fsd.entity_type = 'node' AND fsd.deleted = 0");
+  $query->addField('fsd', 'field_status_date_value', 'status_date');
+
+  $query->leftJoin('field_data_field_comment', 'fcm', "fcm.entity_id = n.nid AND fcm.entity_type = 'node' AND fcm.deleted = 0");
+  $query->addField('fcm', 'field_comment_value', 'comment');
+
+  $options = myapi_claims_status_options();
+  $updated = 0;
+
+  foreach ($query->execute() as $row) {
+    $title = myapi_claim_transaction_title(
+      $row->claim_nid,
+      ($row->status !== NULL && isset($options[$row->status])) ? $options[$row->status] : $row->status,
+      $row->status_date,
+      $row->comment
+    );
+
+    db_update('node')
+      ->fields(array('title' => $title))
+      ->condition('nid', $row->nid)
+      ->execute();
+
+    db_update('node_revision')
+      ->fields(array('title' => $title))
+      ->condition('vid', $row->vid)
+      ->execute();
+
+    $updated++;
+  }
+
+  if ($updated) {
+    // The rows were written behind Drupal's back, so anything already loaded in
+    // this request still carries the empty title.
+    entity_get_controller('node')->resetCache();
+  }
+
+  return t('Se generó el título de @count transacciones de reclamo que estaban guardadas sin título.', array('@count' => $updated));
+}

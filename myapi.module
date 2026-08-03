@@ -555,18 +555,32 @@ function myapi_mail($key, &$message, $params) {
 /**
  * Implements hook_node_presave().
  *
- * Glue only: ignores everything that is not a 'pagos' node and delegates the
- * payment verification workflow to includes/myapi.payment_workflow.inc. The
- * type guard on the first line keeps every other node save untouched and avoids
- * recursion when the workflow re-saves the 'vivienda' and 'condominio' nodes.
+ * Glue only. Independent branches, same shape as myapi_node_insert() below —
+ * this function used to be a single 'pagos' branch with an early return, and
+ * grew a second one in SPEC 60 without changing the first:
+ * - 'pagos': delegates the payment verification workflow to
+ *   includes/myapi.payment_workflow.inc. Its own return keeps the branch from
+ *   recursing when the workflow re-saves the 'vivienda' and 'condominio' nodes.
+ * - 'claim_transaction': delegates to myapi_claim_transaction_set_title()
+ *   (includes/myapi.claim_transaction_admin.inc, SPEC 60), which composes the
+ *   node title out of the claim, status, status date and comment. Presave and
+ *   not insert/update: field_attach_presave() has already normalised the field
+ *   values by now, and the row is not written yet, so no second save is needed.
+ *   Covers every creation and edition path of a transaction at once — the
+ *   module's own creation page, the automatic initial transaction, and both
+ *   native node forms.
  */
 function myapi_node_presave($node) {
-  if ($node->type !== 'pagos') {
+  if ($node->type === 'pagos') {
+    module_load_include('inc', 'myapi', 'includes/myapi.payment_workflow');
+    if (myapi_payment_is_verification_transition($node)) {
+      myapi_payment_apply_verification($node);
+    }
     return;
   }
-  module_load_include('inc', 'myapi', 'includes/myapi.payment_workflow');
-  if (myapi_payment_is_verification_transition($node)) {
-    myapi_payment_apply_verification($node);
+  if ($node->type === 'claim_transaction') {
+    module_load_include('inc', 'myapi', 'includes/myapi.claim_transaction_admin');
+    myapi_claim_transaction_set_title($node);
   }
 }
 
