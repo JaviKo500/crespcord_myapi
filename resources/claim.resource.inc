@@ -854,3 +854,122 @@ function myapi_claim_detail($id) {
     'claim' => myapi_claim_build_item($row, $images, $transactions),
   ], 200);
 }
+
+/**
+ * Dispatcher for /api/v1/claims/%/files/% (SPEC 65).
+ *
+ * Its own dispatcher and not a third case inside myapi_claim_dispatch(): that
+ * one routes by the presence of $id, and adding a second optional argument
+ * would turn "list, detail or file" into a chain of isset() that is hard to
+ * read. Two routes, two dispatchers, one responsibility each.
+ *
+ * Same criterion as myapi_claim_dispatch() for the method check: it happens
+ * before any authentication, so POST answers 405 without a token — the method
+ * is wrong whoever is asking.
+ *
+ * @param mixed $id   The claim nid from the route.
+ * @param mixed $fid  The file id from the route.
+ */
+function myapi_claim_file_dispatch($id = NULL, $fid = NULL) {
+  if (myapi_request_method() === 'GET') {
+    myapi_claim_file_download($id, $fid);
+  }
+  else {
+    myapi_error('method_not_allowed', 405);
+  }
+}
+
+/**
+ * GET /api/v1/claims/%/files/% — the bytes of one claim file (SPEC 65).
+ *
+ * The app's way into the files that SPEC 65 moved to private://. The back
+ * office's way is hook_file_download() (myapi_file_download() in myapi.module),
+ * which asks a role question; this asks the resident's one — the same
+ * visibility rule as the rest of this file, because it is the same query.
+ *
+ * THE ONE ENDPOINT OF THIS MODULE THAT DOES NOT ANSWER THE JSON ENVELOPE ON
+ * SUCCESS. A binary file has no envelope to travel in, and base64 in a JSON
+ * body would inflate it by a third and break every standard image loader.
+ * Regla 4 de CLAUDE.md is broken here on purpose, exactly once, and only for
+ * the 200: errors below still go through myapi_error() unchanged. Written down
+ * in docs/claim.md so it does not read as an oversight.
+ *
+ * The order of the three checks is the rule, not an implementation detail:
+ * token → claim → file. Answering about the file first would let anyone probe
+ * fids under the nid of a claim they cannot see; the access question is always
+ * answered before the existence one. So a foreign fid under an invisible claim
+ * says claim_not_found, and only under a claim the reader DOES see does it say
+ * file_not_found.
+ *
+ * The nid in the route is always the CLAIM's, including for the files of a
+ * transaction: the claim is the unit of access, and the client never needs to
+ * know which transaction a picture hangs from.
+ *
+ * @param mixed $id   The claim nid from the route. Anything that is not a
+ *                    positive integer answers 404, never a PHP error.
+ * @param mixed $fid  The file id from the route, same treatment.
+ */
+function myapi_claim_file_download($id, $fid) {
+  // 1. Token. Answers 401 on its own and never returns on failure.
+  $token = myapi_auth_require_access_token();
+  $uid = (int) $token->uid;
+
+  if (!is_scalar($id) || !ctype_digit((string) $id) || (int) $id <= 0) {
+    myapi_error('claim_not_found', 404);
+  }
+  $id = (int) $id;
+
+  // 2. The claim, under the visibility rule of SPEC 64. Not rewritten here:
+  // this is the same myapi_claim_base_query() the list and the detail use, so
+  // who may see a private claim is decided in one place for all three. Every
+  // way of not being allowed answers the same 404 as GET /api/v1/claims/%.
+  $condos = myapi_condominium_related_nids($uid);
+  if (empty($condos)) {
+    myapi_error('claim_not_found', 404);
+  }
+
+  if (myapi_claim_count($uid, $condos, ['nid' => $id]) === 0) {
+    myapi_error('claim_not_found', 404);
+  }
+
+  // 3. The file. From here on the reader has already proved they see this
+  // claim, so distinguishing "that file is not of this claim" leaks nothing —
+  // and it is a different problem to diagnose in support.
+  module_load_include('inc', 'myapi', 'includes/myapi.claims_files');
+
+  if (!is_scalar($fid) || !ctype_digit((string) $fid) || (int) $fid <= 0) {
+    myapi_error('file_not_found', 404);
+  }
+  $fid = (int) $fid;
+
+  // Membership, resolved by the include the back-office hook also calls: the
+  // fid must hang from THIS claim or from one of its transactions. A fid of
+  // another claim, or one that belongs to no claim at all (a payment receipt),
+  // answers 404 here rather than being served.
+  if (myapi_claims_file_claim_nid($fid) !== $id) {
+    myapi_error('file_not_found', 404);
+  }
+
+  $file = file_load($fid);
+
+  // A file_managed row pointing at a file that is not on disk answers 404 too,
+  // not a 200 of zero bytes nor a PHP warning from fopen().
+  if (!is_object($file) || !file_exists($file->uri)) {
+    myapi_error('file_not_found', 404);
+  }
+
+  // 4. The bytes. file_transfer() sends the headers, streams the file in
+  // chunks and ends the request; nothing after this line runs.
+  //
+  // 'inline' because the app renders these images on screen and 'attachment'
+  // would force a download in any web viewer; the original filename travels in
+  // the header either way. 'private, no-store' because the whole point of this
+  // endpoint is that the file is not cacheable by anything between the app and
+  // Drupal.
+  file_transfer($file->uri, [
+    'Content-Type'        => $file->filemime,
+    'Content-Length'      => $file->filesize,
+    'Content-Disposition' => 'inline; filename="' . $file->filename . '"',
+    'Cache-Control'       => 'private, no-store',
+  ]);
+}

@@ -285,6 +285,22 @@ function myapi_menu() {
     'file'             => 'resources/claim.resource.inc',
   ];
 
+  // Authenticated download of a claim file (SPEC 65). Its own dispatcher and
+  // not a third case of myapi_claim_dispatch(): see myapi_claim_file_dispatch().
+  // The two wildcards are the CLAIM's nid and the fid — arguments 3 and 5 —
+  // and the nid is always the claim's, also for the files of a transaction.
+  //
+  // 'access callback' TRUE like every other api/v1 route: the token is
+  // resolved inside the callback so the response is this module's JSON
+  // envelope and not Drupal's 403 page.
+  $items['api/v1/claims/%/files/%'] = [
+    'page callback'    => 'myapi_claim_file_dispatch',
+    'page arguments'   => [3, 5],
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/claim.resource.inc',
+  ];
+
   // Back-office reservation calendar (SPEC 47). The only route of this module
   // that is not an api/v1 endpoint: it renders HTML for an operator, not the
   // JSON envelope for the app, which is why its callback lives in includes/
@@ -819,6 +835,39 @@ function myapi_query_node_access_alter(QueryAlterableInterface $query) {
 function myapi_query_user_access_alter(QueryAlterableInterface $query) {
   module_load_include('inc', 'myapi', 'includes/myapi.building_admin_user');
   myapi_building_admin_alter_user_query($query);
+}
+
+/**
+ * Implements hook_file_download().
+ *
+ * The back office's half of SPEC 65: since the claim images and attachments
+ * moved to private://, nothing serves them without an explicit decision, and
+ * this is where the operator's decision is made. The app's half is
+ * GET /api/v1/claims/%/files/% in resources/claim.resource.inc, which asks a
+ * different question (a Bearer token and the visibility rule of SPEC 64) of
+ * the same shared include.
+ *
+ * Glue only, like the two hooks above: the three return values Drupal expects
+ * — headers, -1, NULL — are decided in includes/myapi.claims_files.inc, next
+ * to the ownership resolution the endpoint also calls.
+ *
+ * NULL for anything this module does not recognise is deliberate: -1 is a hard
+ * deny that cuts other modules off, so answering NULL keeps this module
+ * opining about its own files only, and every other private file of the site
+ * behaves exactly as it did before.
+ *
+ * @param string $uri
+ *   The URI of the file being requested.
+ *
+ * @return array|int|NULL
+ *   Headers when granted, -1 when denied, NULL when the file is not ours.
+ */
+function myapi_file_download($uri) {
+  global $user;
+
+  module_load_include('inc', 'myapi', 'includes/myapi.claims_files');
+
+  return myapi_claims_file_download_headers($uri, $user);
 }
 
 /**
