@@ -1,6 +1,6 @@
 # SPEC 59 — Editar transacción desde la línea de tiempo del reclamo
 
-> **Estado:** Draft · **Depende de:** SPEC 56 (permisos `create`/`edit any claim_transaction content` para `administrador edificio`, modo `via_claim`), SPEC 57 (`includes/myapi.claim_transaction_admin.inc`: tabla y función de render de la línea de tiempo que este spec modifica), SPEC 58 (`field_status_date` con hora — este spec asume que ya está ampliado, para que editar una transacción permita corregir también la hora) · **Fecha:** 2026-08-01
+> **Estado:** Approved · **Depende de:** SPEC 56 (permisos `create`/`edit any claim_transaction content` para `administrador edificio`, modo `via_claim`), SPEC 57 (`includes/myapi.claim_transaction_admin.inc`: tabla y función de render de la línea de tiempo que este spec modifica), SPEC 58 (`field_status_date` con hora — este spec asume que ya está ampliado, para que editar una transacción permita corregir también la hora) · **Fecha:** 2026-08-01
 > **Objetivo:** Agregar un enlace "Editar" a cada fila de la línea de tiempo de transacciones del reclamo, apuntando a la edición nativa de esa `claim_transaction` (`node/%nid/edit`), visible solo cuando el usuario tiene acceso, con `field_claim` bloqueado en edición y redirigiendo de vuelta al reclamo tras guardar.
 
 Notas técnicas que fija esto, porque condicionan el resto:
@@ -9,6 +9,7 @@ Notas técnicas que fija esto, porque condicionan el resto:
 - `field_claim` pasa a `#disabled = TRUE` en el formulario nativo de edición de `claim_transaction` — mismo patrón ya usado por SPEC 57 para `field_status` en el formulario de `reclamo` — para que editar una transacción no pueda re-apuntarla a otro reclamo por error.
 - Tras guardar la edición nativa, se fuerza `$form_state['redirect']` de vuelta a `node/<claim_nid>/edit` (en vez del destino nativo `node/<nid>`), vía `hook_form_alter()` sobre `claim_transaction_node_form`, leyendo `field_claim` del propio nodo que se está guardando.
 - Ningún cambio de permisos: los que ya concedió SPEC 56 (`edit any claim_transaction content`) alcanzan; este spec solo agrega el enlace y ajusta el formulario nativo.
+- De las tres funciones nuevas, **dos son lógica pura** y entran en `tests/unit/` (mismo criterio que SPEC 49/56): `myapi_claim_transaction_transaction_form_alter()` es manipulación de arrays de FAPI, y `myapi_claim_transaction_edit_form_submit_redirect()` es una lectura de campo (`myapi_building_admin_field_target_id()`, ya cubierta) más una asignación. La tercera, `myapi_claim_transaction_edit_link()`, es `node_load()` + `node_access()`: queda fuera del unit layer por la misma regla que ya dejó fuera a `myapi_node_access()` en `BuildingAdminTest` — se verifica en la matriz manual.
 
 ---
 
@@ -24,6 +25,9 @@ Notas técnicas que fija esto, porque condicionan el resto:
   - Nueva **`myapi_claim_transaction_edit_form_submit_redirect($form, &$form_state)`** — lee `field_claim` del nodo recién guardado (`$form_state['node']`) con `myapi_building_admin_field_target_id()` (ya reutilizado en este archivo) y, si resuelve un `claim_nid`, fija `$form_state['redirect'] = 'node/' . $claim_nid . '/edit'`.
 - **`myapi.module`** (modificar):
   - Nueva `myapi_form_claim_transaction_node_form_alter(&$form, &$form_state, $form_id)` — glue de una línea, mismo patrón que `myapi_form_reclamo_node_form_alter()`: carga el include y delega.
+- **`tests/unit/ClaimTransactionEditTest.php`** (nuevo) — tests unitarios de las dos funciones puras del spec. Detalle de casos en "Tests unitarios", más abajo.
+- **`tests/unit/bootstrap.php`** (modificar) — stub de `element_children()`, la única función de Drupal que `myapi_claim_transaction_transaction_form_alter()` llama desde adentro. Mismo tipo de stub que `t()`/`form_set_error()` (SPEC 52): equivalente fiel de una línea, sin base de datos.
+- **`tests/README.md`** (modificar) — el stub nuevo y la cobertura nueva, en las dos secciones donde ese fichero ya lleva la cuenta ("Unit tests" y el bloque de "Design constraint — `tests/unit/bootstrap.php`").
 - **`docs/claim-transaction-timeline.md`** (modificar) — documenta el link "Editar" (condición de visibilidad), el bloqueo de `field_claim` en edición, y el redirect forzado al reclamo.
 - `drush cc all` al final. Sin `drush updb`: ningún campo, tabla ni permiso nuevo (los permisos ya los concedió SPEC 56).
 
@@ -34,6 +38,8 @@ Notas técnicas que fija esto, porque condicionan el resto:
 - **Notificar al residente** cuando se edita una transacción existente. Mismo patrón que `48-reservation-notifications`, spec propio si se pide.
 - **Historial de ediciones / auditoría** (quién editó qué campo y cuándo). No hay tracking de revisiones en este spec — Drupal core no lo activa para este bundle y no se agrega.
 - **Cualquier endpoint `api/v1/...`.**
+- **Tests de integración (SimpleTest) o e2e (Postman/Newman) de este flujo.** `tests/integration/` y `tests/e2e/` siguen cubriendo solo `auth` (ver `tests/README.md`, "Scope note"); ninguna pantalla de back-office tiene cobertura ahí todavía, y este spec no abre esa puerta. Lo que sí entra es el unit layer, donde ya viven `BuildingAdminTest`/`BuildingAdminUserTest`.
+- **Test unitario de `myapi_claim_transaction_edit_link()`.** Ver "Tests unitarios": es `node_load()` + `node_access()`, exactamente lo que `tests/unit` no toca.
 - **La ampliación de `field_status_date` a día+hora.** Ya la resuelve SPEC 58 en el widget nativo; este spec no repite esa lógica, solo se beneficia de que ya exista al abrir el formulario de edición.
 - **Restringir otros campos del formulario nativo** (`field_status`, `field_status_date`, `field_comment`, `field_images`, `field_attachment`) más allá de `field_claim`. Siguen editables sin ninguna restricción nueva — el único campo que se bloquea es `field_claim`, por el riesgo específico de mover la transacción a otro reclamo.
 
@@ -102,10 +108,12 @@ function myapi_claim_transaction_transaction_form_alter(&$form, &$form_state) {
     return;
   }
 
-  foreach (element_children($form['field_claim']) as $langcode) {
-    foreach (element_children($form['field_claim'][$langcode]) as $delta) {
-      if (isset($form['field_claim'][$langcode][$delta]['target_id'])) {
-        $form['field_claim'][$langcode][$delta]['target_id']['#disabled'] = TRUE;
+  if (isset($form['field_claim'])) {
+    foreach (element_children($form['field_claim']) as $langcode) {
+      foreach (element_children($form['field_claim'][$langcode]) as $delta) {
+        if (isset($form['field_claim'][$langcode][$delta]['target_id'])) {
+          $form['field_claim'][$langcode][$delta]['target_id']['#disabled'] = TRUE;
+        }
       }
     }
   }
@@ -116,10 +124,16 @@ function myapi_claim_transaction_transaction_form_alter(&$form, &$form_state) {
 
 Recorrido `langcode` + `delta` (no solo `langcode`, como con `field_status` en SPEC 57): el widget `entityreference_autocomplete` anida el textfield real bajo `target_id` dentro de cada delta, a diferencia de `options_select`, donde el propio elemento de nivel `langcode` ya es el `select`.
 
+El `isset($form['field_claim'])` envuelve **solo el bucle**, no el `#submit`: si el campo no estuviera en el formulario (otro módulo que lo quite, o un `field_access` que lo oculte), no hay nada que deshabilitar, pero el redirect al reclamo sigue siendo correcto — lo resuelve el nodo guardado, no el formulario. Sin esa guarda, `element_children(NULL)` emite un warning de PHP 7.4 y el `foreach` sobre `NULL` otro más; el test unitario del caso "sin `field_claim`" es lo que fija esta separación.
+
 ### `myapi_claim_transaction_edit_form_submit_redirect()` — nuevo
 
 ```php
 function myapi_claim_transaction_edit_form_submit_redirect($form, &$form_state) {
+  if (empty($form_state['node'])) {
+    return;
+  }
+
   module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
 
   $claim_nid = myapi_building_admin_field_target_id($form_state['node'], 'field_claim');
@@ -129,23 +143,88 @@ function myapi_claim_transaction_edit_form_submit_redirect($form, &$form_state) 
 }
 ```
 
+El `empty($form_state['node'])` es la contraparte del anterior: `node_form_submit()` siempre deja ahí el nodo guardado, pero esta función corre al final de una cadena de submits que otro módulo podría alterar, y leer un índice inexistente sería un notice de PHP. `myapi_building_admin_field_target_ids()` ya tolera un no-objeto (`is_object()` en su primera guarda), así que la guarda es contra el notice, no contra un fatal — y es un caso del test unitario.
+
 Corre **después** del submit nativo de `node_form_submit()` (agregado al final de `$form['#submit']`), que ya guardó el nodo y ya dejó `$form_state['node']` con el objeto actualizado — incluido `field_claim`, cuyo valor Drupal reenvía igual pese a estar `#disabled` (mismo mecanismo ya documentado en SPEC 57 para `field_status`). Si `$claim_nid` no resuelve (caso ya cubierto como riesgo en SPEC 56/57: `field_claim` vacío o corrupto), no se sobrescribe `$form_state['redirect']` y Drupal cae al destino nativo (`node/<nid>`).
+
+---
+
+## Tests unitarios
+
+`tests/unit/` cubre solo lógica pura, sin base de datos ni APIs de Drupal (`tests/README.md`). De este spec entran las dos funciones que cumplen esa condición; `myapi_claim_transaction_edit_link()` no, y eso se dice explícitamente en el docblock del fichero de test, no se omite en silencio (mismo criterio que `BuildingAdminTest` con `myapi_node_access()`).
+
+### `tests/unit/bootstrap.php` — stub nuevo
+
+```php
+if (!function_exists('element_children')) {
+  /**
+   * Every key that is not a '#property'. Drupal's own version also sorts by
+   * '#weight' when asked; myapi never asks, and the widget's deltas are
+   * already in order, so the sort is left out on purpose.
+   */
+  function element_children(&$elements, $sort = FALSE) {
+    $children = array();
+    foreach ($elements as $key => $value) {
+      if ($key === '' || $key[0] !== '#') {
+        $children[] = $key;
+      }
+    }
+
+    return $children;
+  }
+}
+```
+
+`&$elements` por referencia igual que el original (Drupal la usa para cachear el orden); el test pasa siempre un array real, así que la firma no cambia ningún comportamiento.
+
+### `tests/unit/ClaimTransactionEditTest.php` — nuevo
+
+`require_once` de `includes/myapi.claim_transaction_admin.inc` y de `includes/myapi.building_admin.inc`. El primero hace un `module_load_include()` a nivel de fichero (para `includes/myapi.claims_admin.inc`), que el stub no-op del bootstrap ya neutraliza — por eso el segundo `require_once` es explícito: dentro de `myapi_claim_transaction_edit_form_submit_redirect()` el `module_load_include()` tampoco carga nada, y `myapi_building_admin_field_target_id()` tiene que estar disponible de verdad. Es exactamente la restricción de diseño que `tests/README.md` ya documenta.
+
+**`myapi_claim_transaction_transaction_form_alter()`**
+
+| Caso | Qué fija |
+|---|---|
+| Modo creación (`$form['#node']` sin `nid`) | El formulario queda idéntico: ni `#disabled`, ni `#submit` agregado. Es el criterio de aceptación de `node/add/claim_transaction` convertido en test. |
+| Sin `#node` en absoluto | Mismo resultado, sin notice de PHP (`empty()` cubre ambos). |
+| Modo edición, un `langcode`/un `delta` | `field_claim[und][0]['target_id']['#disabled'] === TRUE` y `#submit` termina en `myapi_claim_transaction_edit_form_submit_redirect`. |
+| Modo edición, varios `langcode` y varios `delta` | **Todos** los `target_id` quedan deshabilitados. Guarda contra la regresión de deshabilitar solo el primero — que en un sitio monolingüe pasaría inadvertida. |
+| Un delta sin `target_id` (widget distinto) | No se crea la clave `target_id` ni se rompe el recorrido; el resto de los deltas sí se deshabilita. |
+| `#property` mezclada entre los hijos (`#theme`, `#language`) | No se la trata como `langcode`/`delta` — es lo que el stub de `element_children()` está garantizando. |
+| Sin `field_claim` en el formulario | Ningún warning y `#submit` **sí** se agrega (ver Modelo de datos). |
+| `#submit` preexistente | Se conserva y la función nueva queda **al final** — el orden es lo que garantiza que corra después de `node_form_submit()`, es decir con el nodo ya guardado. |
+| Llamarla dos veces sobre el mismo `$form` | Documenta el comportamiento actual (`#submit` con la función repetida, redirect idempotente igual). Drupal no invoca dos veces el mismo `hook_form_alter()`, así que es descripción, no requisito. |
+
+**`myapi_claim_transaction_edit_form_submit_redirect()`**
+
+| Caso | Qué fija |
+|---|---|
+| `field_claim` con `target_id` | `$form_state['redirect'] === 'node/<claim_nid>/edit'`. |
+| `field_claim` multi-delta | Toma el primero, la semántica de `myapi_building_admin_field_target_id()`. |
+| `field_claim` presente pero vacío (`array()`) | `redirect` **no** se toca: el criterio de aceptación del dato corrupto. |
+| `field_claim` ausente del nodo | Igual: sin redirect, sin error. |
+| `redirect` ya fijado por otro submit y `field_claim` sin resolver | El valor previo sobrevive intacto — "no se sobrescribe" es más fuerte que "no se fija". |
+| `$form_state['node']` ausente / no objeto | Sin notice, sin redirect. |
 
 ---
 
 ## Plan de implementación
 
-1. **`includes/myapi.claim_transaction_admin.inc` — `myapi_claim_transaction_edit_link($nid)`.** *Verificación: `php -l`.*
+1. **`tests/unit/bootstrap.php` — stub de `element_children()`.** *Verificación: `php -l`; `vendor/bin/phpunit` sigue en verde con los tests que ya existían (el stub no altera ninguno).*
 
-2. **`includes/myapi.claim_transaction_admin.inc` — `myapi_claim_transaction_timeline_table_rows()` y `myapi_claim_transaction_timeline_build()`.** Columna/header "Editar" agregados. *Verificación: `node/%nid/edit` de un reclamo con transacciones muestra la columna nueva con el link en cada fila accesible.*
+2. **`tests/unit/ClaimTransactionEditTest.php` (nuevo) — todos los casos de la sección anterior, antes de tocar la lógica.** *Verificación: `vendor/bin/phpunit` **en rojo**, con errores de función inexistente para las dos funciones nuevas.*
 
-3. **`includes/myapi.claim_transaction_admin.inc` — `myapi_claim_transaction_transaction_form_alter()` + `myapi_claim_transaction_edit_form_submit_redirect()`.** *Verificación: `php -l`.*
+3. **`includes/myapi.claim_transaction_admin.inc` — `myapi_claim_transaction_edit_link($nid)`.** *Verificación: `php -l`.*
 
-4. **`myapi.module` — `myapi_form_claim_transaction_node_form_alter()`.** *Verificación: `drush cc all`; abrir `node/%nid/edit` de una `claim_transaction` muestra `field_claim` con su valor visible pero deshabilitado (no se puede tipear ni autocompletar otro reclamo).*
+4. **`includes/myapi.claim_transaction_admin.inc` — `myapi_claim_transaction_timeline_table_rows()` y `myapi_claim_transaction_timeline_build()`.** Columna/header "Editar" agregados. *Verificación: `node/%nid/edit` de un reclamo con transacciones muestra la columna nueva con el link en cada fila accesible.*
 
-5. **`docs/claim-transaction-timeline.md`.** Documenta el link "Editar" (y su condición de visibilidad), el bloqueo de `field_claim`, y el redirect forzado al reclamo tras guardar. *Verificación: lectura contra la implementación.*
+5. **`includes/myapi.claim_transaction_admin.inc` — `myapi_claim_transaction_transaction_form_alter()` + `myapi_claim_transaction_edit_form_submit_redirect()`.** Con las dos guardas del Modelo de datos. *Verificación: `php -l`; `vendor/bin/phpunit` **en verde**, suite entera.*
 
-6. **`drush cc all` + matriz manual.** Click en "Editar" desde la línea de tiempo abre `node/%nid/edit` de esa transacción; cambiar estado/comentario/fecha y guardar redirige de vuelta a `node/<claim_nid>/edit`, con la línea de tiempo ya reflejando los cambios (incluida la sincronización de `field_status` del reclamo, ya cubierta por SPEC 57); intentar cambiar `field_claim` a mano (URL manipulada) no tiene efecto, porque Drupal descarta el valor enviado de un elemento `#disabled`; un `administrador edificio` sin el condominio del reclamo asignado no ve el link "Editar" en ninguna fila (ni accede a `node/%nid/edit` de esa transacción por URL directa: 403); crear una `claim_transaction` desde `node/add/claim_transaction` (ruta nativa, sin `nid` todavía) sigue funcionando exactamente igual que antes, sin ningún redirect forzado ni campo deshabilitado.
+6. **`myapi.module` — `myapi_form_claim_transaction_node_form_alter()`.** *Verificación: `drush cc all`; abrir `node/%nid/edit` de una `claim_transaction` muestra `field_claim` con su valor visible pero deshabilitado (no se puede tipear ni autocompletar otro reclamo).*
+
+7. **`docs/claim-transaction-timeline.md` y `tests/README.md`.** El primero documenta el link "Editar" (y su condición de visibilidad), el bloqueo de `field_claim`, y el redirect forzado al reclamo tras guardar; el segundo, el stub de `element_children()` y la cobertura nueva. *Verificación: lectura contra la implementación.*
+
+8. **`drush cc all` + matriz manual.** Click en "Editar" desde la línea de tiempo abre `node/%nid/edit` de esa transacción; cambiar estado/comentario/fecha y guardar redirige de vuelta a `node/<claim_nid>/edit`, con la línea de tiempo ya reflejando los cambios (incluida la sincronización de `field_status` del reclamo, ya cubierta por SPEC 57); intentar cambiar `field_claim` a mano (URL manipulada) no tiene efecto, porque Drupal descarta el valor enviado de un elemento `#disabled`; un `administrador edificio` sin el condominio del reclamo asignado no ve el link "Editar" en ninguna fila (ni accede a `node/%nid/edit` de esa transacción por URL directa: 403); crear una `claim_transaction` desde `node/add/claim_transaction` (ruta nativa, sin `nid` todavía) sigue funcionando exactamente igual que antes, sin ningún redirect forzado ni campo deshabilitado.
 
 ---
 
@@ -178,6 +257,14 @@ Corre **después** del submit nativo de `node_form_submit()` (agregado al final 
 - [ ] Ningún permiso nuevo se concede ni se revoca: `create`/`edit any claim_transaction content` siguen siendo exactamente los que otorgó SPEC 56.
 - [ ] Un usuario sin `edit any claim_transaction content` (o sin `node_access('update')` sobre esa transacción puntual) recibe 403 al acceder a `node/%nid/edit` por URL directa, aunque conozca el `nid` — comportamiento nativo de Drupal, no tocado por este spec.
 
+**Tests unitarios**
+
+- [ ] `vendor/bin/phpunit` pasa entero, incluidos los tests nuevos, sin modificar ninguna aserción de los tests existentes.
+- [ ] `tests/unit/ClaimTransactionEditTest.php` cubre los casos de la tabla de "Tests unitarios" — en particular: modo creación intacto, todos los `target_id` deshabilitados con varios `langcode`/`delta`, `#submit` agregado al final, y redirect no fijado cuando `field_claim` no resuelve.
+- [ ] El stub de `element_children()` en `tests/unit/bootstrap.php` es un equivalente fiel del original para el único uso que hace el código probado, y no rompe ningún test previo.
+- [ ] El docblock de `ClaimTransactionEditTest.php` dice explícitamente que `myapi_claim_transaction_edit_link()` queda fuera del unit layer y por qué, igual que hace `BuildingAdminTest` con `myapi_node_access()`.
+- [ ] `tests/README.md` menciona el stub nuevo y la cobertura nueva.
+
 **No regresión / infra**
 
 - [ ] `resources/*.resource.inc` no aparece en el diff.
@@ -199,6 +286,10 @@ Corre **después** del submit nativo de `node_form_submit()` (agregado al final 
 | Redirect tras guardar | Forzado a `node/<claim_nid>/edit`, agregado a `$form['#submit']` | Dejar el destino nativo de Drupal (`node/<nid>`, la vista de la transacción) | Decisión explícita del usuario, por consistencia de flujo con la creación (SPEC 57 ya redirige ahí tras crear). El costo es tocar mínimamente el submit nativo del formulario de `claim_transaction` — algo que SPEC 57 evitó a propósito para el formulario de *creación* (por eso usó uno propio), pero acá no aplica esa razón porque se reutiliza el formulario nativo de edición sin más remedio. |
 | Mecanismo del redirect | Función de submit adicional agregada a `$form['#submit']`, leída desde `$form_state['node']` después del guardado | Un `hook_node_update()` que fije `drupal_goto()` a mano | Agregar a `$form['#submit']` es el mecanismo estándar de FAPI para intervenir el flujo de un formulario sin tocar su lógica de guardado; `drupal_goto()` en un hook de nodo interrumpiría la ejecución de otros `hook_node_update()` que corran después (como el propio de sincronización de estado de este mismo módulo). |
 | Alcance de `hook_form_claim_transaction_node_form_alter()` | Solo actúa en modo edición (`$form['#node']->nid` presente) | Aplicarlo también en `node/add/claim_transaction` | El pedido es "editar transacción desde el listado"; la creación nativa (para `administrator`/`backend`) ya funcionaba antes de este spec y no tiene el riesgo de "mover" una transacción porque todavía no pertenece a ningún reclamo hasta que se guarda por primera vez. |
+| Cobertura de tests | Unit tests solo de las dos funciones puras (`transaction_form_alter()` y `edit_form_submit_redirect()`) | Cubrir también `myapi_claim_transaction_edit_link()` inyectándole un `$node_loader`/`$access_checker`, como SPEC 56 inyectó `$claim_loader` | La inyección de SPEC 56 valía la pena porque el salto doble `claim_transaction → reclamo → condominio` es lógica propia con varias ramas. Acá la función es literalmente "cargá el nodo, preguntá `node_access()`, devolvé `l()`": inyectar los dos colaboradores dejaría el test verificando los mocks, no el comportamiento, y agregaría dos parámetros que ningún llamador de producción usa. El acceso real ya está cubierto donde vive (`BuildingAdminTest` para la resolución `via_claim`, matriz manual para `node_access()` sobre el sitio). |
+| Fichero de test | Uno nuevo, `ClaimTransactionEditTest.php` | Agregar los casos a `BuildingAdminTest.php`, que ya requiere `includes/myapi.building_admin.inc` | `BuildingAdminTest` cubre el rol `administrador edificio` (SPEC 49/56); estos casos son del formulario de `claim_transaction`, otro fichero de producción y otro tema. Un fichero por área es el patrón que ya siguen los 14 tests existentes (`ReservationCapacityTest`, `ReservationMidnightTest`, …). |
+| Guardas nuevas (`isset($form['field_claim'])`, `empty($form_state['node'])`) | Se agregan, y cada una tiene su caso de test | Dejar el código del spec tal como estaba, sin guardas | Escribir los casos primero las hizo evidentes: ambas rutas emiten warnings/notices de PHP 7.4 en vez de fallar limpio, y ninguna es hipotética (un `field_access` que oculte `field_claim`, u otro submit que vacíe `$form_state`). El costo es dos líneas. |
+| Integración / e2e de este flujo | No se agregan | Un `MyapiClaimTransactionTestCase.test` en `tests/integration/` que haga el roundtrip real de editar y verificar el redirect | `tests/integration/` y `tests/e2e/` cubren hoy solo `auth` (`tests/README.md`, "Scope note"). Abrir la cobertura de back-office es un spec propio, no un anexo de éste — y arrastraría el módulo companion `myapi_test`, el runner de SimpleTest y el acceso SSH al servidor para un cambio de dos funciones. |
 | Historial de ediciones | Fuera de alcance, sin revisions ni log de auditoría | Activar `node_revision` para `claim_transaction`, o registrar un `watchdog()` en cada edición | No fue pedido. Agregar revisiones tocaría el content type (SPEC 55) sin necesidad declarada; si se pide auditoría más adelante, es un spec propio. |
 | Restringir otros campos en edición (`field_status_date`, `field_comment`, etc.) | Sin cambios, todos editables | Bloquear también `field_status_date` o `field_comment` para forzar solo cambios de estado "limpios" | No fue pedido — el pedido es habilitar la edición, no restringirla más allá del riesgo puntual de `field_claim`. Restringir de más contradiría el objetivo de la spec. |
 
@@ -212,6 +303,8 @@ Corre **después** del submit nativo de `node_form_submit()` (agregado al final 
 | **Un `#disabled` de FAPI se puede saltar con un POST armado a mano** si algún código intermedio leyera `$_POST` directamente en vez de `$form_state['values']`. | Ningún código de este spec ni de SPEC 57 lee `$_POST` directamente; todo pasa por `$form_state['values']`/`$form_state['node']` estándar, donde Drupal ya garantiza el descarte del valor de un elemento deshabilitado — mismo razonamiento ya documentado como riesgo aceptado en SPEC 57 para `field_status`. |
 | **Agregar una función a `$form['#submit']` de un formulario nativo de nodo** puede interactuar mal con otros módulos que también alteren `claim_transaction_node_form` en el futuro (orden de ejecución de submits). | Hoy no hay ningún otro `hook_form_alter()` sobre este formulario — se verificó al revisar `myapi.module` completo. La función se agrega al final de `$form['#submit']`, después del submit nativo de guardado, que es el punto de extensión estándar de FAPI para esto; si en el futuro otro módulo necesita intervenir, el orden relativo se resuelve entonces con `hook_form_alter()` y sus pesos, no es un problema introducido por este spec. |
 | **El redirect al reclamo puede sorprender a un `administrator`/`backend` acostumbrado al flujo nativo de Drupal** (guardar un nodo y ver su propia página), si edita una `claim_transaction` sin venir del link de la línea de tiempo (por ejemplo, desde `/admin/content`). | Aceptado conscientemente: es el mismo destino final sin importar desde dónde se llegó a editar, y es coherente con que la transacción "vive" dentro del contexto de su reclamo — mismo criterio ya fijado por SPEC 57 para la creación. Si en el uso real resulta confuso, es un ajuste de UX futuro, no un bug de este spec. |
+| **El stub de `element_children()` puede divergir del original** y hacer que un test pase (o falle) por una razón que en Drupal no ocurre. | Es el mismo riesgo, ya aceptado, de los seis stubs que `tests/unit/bootstrap.php` lleva desde SPEC 50/52/54, y la mitigación es la misma: el stub implementa **solo** lo que el código probado usa (filtrar claves `#`), y la parte que no se usa (el orden por `#weight`) queda fuera con un comentario que lo dice, en vez de imitada a medias. El comportamiento real del widget se verifica igual en la matriz manual del paso 8. |
+| **Los tests unitarios no prueban que el link "Editar" se oculte de verdad**, que es el punto de seguridad del spec. | Deliberado y escrito, no un olvido: esa garantía la da `node_access('update', ...)` —código de Drupal más la regla `via_claim` de SPEC 56, ya cubierta por `BuildingAdminTest` en su parte pura. Los dos criterios de aceptación del `administrador edificio` sin el condominio (celda vacía y 403 por URL directa) siguen siendo verificación manual, igual que en SPEC 56/57. |
 | **`field_claim` corrupto o vacío** (nodo borrado, dato inconsistente) hace que `myapi_claim_transaction_edit_form_submit_redirect()` no encuentre `claim_nid` y el redirect caiga al destino nativo. | Comportamiento ya cubierto explícitamente en Modelo de datos y en los criterios de aceptación: sin `claim_nid` resuelto, no se sobrescribe `$form_state['redirect']` — nunca se intenta un `drupal_goto()` a una ruta inválida. Mismo caso ya documentado como riesgo aceptado en SPEC 56/57. |
 
 ---
@@ -225,5 +318,6 @@ Corre **después** del submit nativo de `node_form_submit()` (agregado al final 
 - Cualquier endpoint `api/v1/...`.
 - Ampliar `field_status_date` a día+hora (ya resuelto por SPEC 58).
 - Restringir otros campos del formulario nativo más allá de `field_claim`.
+- Tests de integración (SimpleTest) o e2e de este flujo, y test unitario de `myapi_claim_transaction_edit_link()`.
 
 Cada uno, si entra, va en su propio spec.
