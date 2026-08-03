@@ -36,12 +36,15 @@
  * over 'reclamo', this endpoint will not inherit them, and the condition below
  * is where they would have to be mirrored.
  *
- * Image and attachment URLs travel in the response as plain public URLs:
- * field_images and field_attachment live in public:// (SPEC 55 created them
- * with no uri_scheme), so the files are downloadable with no Authorization
- * header. Documented as a known risk in docs/claim.md; closing it means
- * migrating to private:// plus an authenticated download endpoint, which is a
- * spec of its own.
+ * Image and attachment URLs are authenticated since SPEC 65: field_images and
+ * field_attachment live in private://, so nothing serves them without a
+ * decision, and the 'url' key of every file object now carries the absolute
+ * URL of GET /api/v1/claims/%/files/% — myapi_claim_file_download() below —
+ * instead of a sites/default/files one. The key and its type did not change;
+ * what changed is that the app must send the Authorization header when loading
+ * an image too. The back office reads the same files through
+ * hook_file_download() (myapi_file_download() in myapi.module), and both
+ * consumers share includes/myapi.claims_files.inc. See docs/claim.md.
  */
 
 module_load_include('inc', 'myapi', 'includes/myapi.request');
@@ -378,12 +381,12 @@ function myapi_claim_fetch($uid, array $condos, array $filters, $page, $limit, $
   $query->addField('fd', 'field_description_value', 'description');
 
   // The attachment travels joined rather than file_load()ed: cardinality 1, and
-  // this way the whole page costs no extra query. uri is what
-  // myapi_claim_build_item() turns into an absolute URL.
+  // this way the whole page costs no extra query. The uri is NOT projected:
+  // since SPEC 65 the URL is built from the claim nid and the fid, and the
+  // file's own location never reaches the response.
   $query->leftJoin('field_data_field_attachment', 'fa', "fa.entity_id = n.nid AND fa.entity_type = 'node' AND fa.deleted = 0");
   $query->leftJoin('file_managed', 'fm', 'fm.fid = fa.field_attachment_fid');
   $query->addField('fm', 'fid', 'attachment_fid');
-  $query->addField('fm', 'uri', 'attachment_uri');
   $query->addField('fm', 'filename', 'attachment_filename');
 
   $direction = ($sort === 'asc') ? 'ASC' : 'DESC';
@@ -411,20 +414,29 @@ function myapi_claim_fetch($uid, array $condos, array $filters, $page, $limit, $
  * serves the claims of a page and, when they are expanded, the transactions of
  * those claims (see myapi_claim_load_transactions()).
  *
- * The URLs it builds are PUBLIC: field_images lives in public:// (SPEC 55
- * created it with no uri_scheme), so file_create_url() returns a plain
- * sites/default/files URL that opens with no Authorization header. Known and
- * documented in docs/claim.md — see the @file docblock.
+ * The URLs it builds are AUTHENTICATED since SPEC 65: field_images lives in
+ * private://, and every url points at GET /api/v1/claims/%/files/% instead of
+ * at the file. That URL needs the nid of the CLAIM, which for a transaction's
+ * image is not the nid of the row — hence $owner_map.
  *
- * @param array $nids  Node ids to load images for. An empty array short-circuits
- *                     with no query (an "IN ()" is invalid SQL in D7).
+ * @param array $nids       Node ids to load images for. An empty array
+ *                          short-circuits with no query (an "IN ()" is invalid
+ *                          SQL in D7).
+ * @param array $owner_map  [entity nid => owning claim nid], for the callers
+ *                          whose nids are not claims. Empty — the default —
+ *                          means every nid is its own owner, which is exactly
+ *                          the case when the nids ARE claims; only
+ *                          myapi_claim_load_transactions() fills it in. A nid
+ *                          missing from a non-empty map falls back to itself
+ *                          rather than to nothing, so a url is never built
+ *                          without a nid.
  *
  * @return array  [nid => [['id' => int, 'url' => string, 'filename' => string],
  *                ...]], in delta order. A nid with no images is simply absent
  *                from the map; callers default it to an empty array, so the
  *                'images' key is always an array in the response.
  */
-function myapi_claim_load_images(array $nids) {
+function myapi_claim_load_images(array $nids, array $owner_map = []) {
   if (empty($nids)) {
     return [];
   }
@@ -436,7 +448,6 @@ function myapi_claim_load_images(array $nids) {
   $query->innerJoin('file_managed', 'fm', 'fm.fid = fi.field_images_fid');
   $query->addField('fi', 'entity_id', 'entity_id');
   $query->addField('fm', 'fid', 'fid');
-  $query->addField('fm', 'uri', 'uri');
   $query->addField('fm', 'filename', 'filename');
   // entity_id first so the rows of one node arrive together, delta second so
   // they keep the order the operator uploaded them in.
@@ -448,11 +459,10 @@ function myapi_claim_load_images(array $nids) {
   // worse for the client than no entry at all.
   $images = [];
   foreach ($query->execute() as $row) {
-    $images[(int) $row->entity_id][] = [
-      'id'       => (int) $row->fid,
-      'url'      => file_create_url($row->uri),
-      'filename' => $row->filename,
-    ];
+    $entity_id = (int) $row->entity_id;
+    $claim_nid = isset($owner_map[$entity_id]) ? (int) $owner_map[$entity_id] : $entity_id;
+
+    $images[$entity_id][] = myapi_claim_build_file($row->fid, $row->filename, $claim_nid);
   }
 
   return $images;
@@ -527,7 +537,6 @@ function myapi_claim_load_transactions(array $nids, $expand) {
     $query->leftJoin('field_data_field_attachment', 'fa', "fa.entity_id = n.nid AND fa.entity_type = 'node' AND fa.deleted = 0");
     $query->leftJoin('file_managed', 'fm', 'fm.fid = fa.field_attachment_fid');
     $query->addField('fm', 'fid', 'attachment_fid');
-    $query->addField('fm', 'uri', 'attachment_uri');
     $query->addField('fm', 'filename', 'attachment_filename');
   }
 
@@ -546,11 +555,19 @@ function myapi_claim_load_transactions(array $nids, $expand) {
 
   // One more query for the images of every transaction on the page, the same
   // batch load the claims themselves use — never one per transaction.
+  //
+  // The owner map is what makes the file URLs carry the CLAIM's nid and not
+  // the transaction's (SPEC 65): the endpoint that serves them is
+  // /api/v1/claims/{claim}/files/{fid}, because the claim is the unit of
+  // access and the app never has to know which transaction a picture hangs
+  // from.
   $transaction_nids = [];
+  $owner_map = [];
   foreach ($rows as $row) {
     $transaction_nids[] = (int) $row->id;
+    $owner_map[(int) $row->id] = (int) $row->claim_id;
   }
-  $images = myapi_claim_load_images($transaction_nids);
+  $images = myapi_claim_load_images($transaction_nids, $owner_map);
 
   $transactions = [];
   foreach ($rows as $row) {
@@ -565,7 +582,8 @@ function myapi_claim_load_transactions(array $nids, $expand) {
       'comment'     => $row->comment,
       'created'     => format_date((int) $row->created, 'custom', 'Y-m-d\TH:i:s'),
       'images'      => isset($images[$id]) ? $images[$id] : [],
-      'attachment'  => myapi_claim_build_file($row->attachment_fid, $row->attachment_uri, $row->attachment_filename),
+      // The claim's nid, not $id: same reason as the owner map above.
+      'attachment'  => myapi_claim_build_file($row->attachment_fid, $row->attachment_filename, (int) $row->claim_id),
     ];
   }
 
@@ -573,28 +591,38 @@ function myapi_claim_load_transactions(array $nids, $expand) {
 }
 
 /**
- * Shapes one file — the claim's attachment or a transaction's — into the
- * response, or NULL when there is none.
+ * Shapes one file — an image, the claim's attachment or a transaction's — into
+ * the response, or NULL when there is none.
  *
- * Shared by myapi_claim_build_item() and myapi_claim_load_transactions() so a
- * file looks the same wherever it appears. The columns arrive already joined
- * from file_managed; nothing here loads anything.
+ * The single place a file object is built, so the three keys and their types
+ * are the same wherever a file appears. The columns arrive already joined from
+ * file_managed; nothing here loads anything.
  *
- * @param mixed $fid       file_managed.fid, or NULL when the LEFT JOIN found
- *                         no row.
- * @param mixed $uri       file_managed.uri.
- * @param mixed $filename  file_managed.filename.
+ * Since SPEC 65 the url is NOT the file's own location: field_images and
+ * field_attachment live in private://, so what travels is the absolute URL of
+ * GET /api/v1/claims/%/files/% — myapi_claim_file_download() — which serves the
+ * bytes to a caller holding a Bearer token. The file's uri is therefore not
+ * needed here at all, and is no longer projected by the queries either.
+ *
+ * $claim_nid is the nid of the CLAIM, which is not always the nid of the row
+ * the file hangs from: for a transaction's file it is the claim that
+ * transaction belongs to. See myapi_claim_load_transactions().
+ *
+ * @param mixed $fid        file_managed.fid, or NULL when the LEFT JOIN found
+ *                          no row.
+ * @param mixed $filename   file_managed.filename.
+ * @param int   $claim_nid  The nid of the claim the file belongs to.
  *
  * @return array|NULL  ['id' => int, 'url' => string, 'filename' => string].
  */
-function myapi_claim_build_file($fid, $uri, $filename) {
+function myapi_claim_build_file($fid, $filename, $claim_nid) {
   if ($fid === NULL) {
     return NULL;
   }
 
   return [
     'id'       => (int) $fid,
-    'url'      => file_create_url($uri),
+    'url'      => url('api/v1/claims/' . (int) $claim_nid . '/files/' . (int) $fid, ['absolute' => TRUE]),
     'filename' => $filename,
   ];
 }
@@ -650,7 +678,7 @@ function myapi_claim_build_item($row, array $images, array $transactions) {
     // Always an array, never null: an empty list is the honest answer to "no
     // images", and it saves every client a null check before iterating.
     'images'           => isset($images[$id]) ? $images[$id] : [],
-    'attachment'       => myapi_claim_build_file($row->attachment_fid, $row->attachment_uri, $row->attachment_filename),
+    'attachment'       => myapi_claim_build_file($row->attachment_fid, $row->attachment_filename, $id),
     'transactions'     => isset($transactions[$id]) ? $transactions[$id] : [],
   ];
 }

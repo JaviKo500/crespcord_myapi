@@ -1346,15 +1346,27 @@ function _myapi_claims_install() {
   // reads it from the field, not from the instance.
   $reference_settings = _myapi_entityreference_field_settings();
 
+  // The two file fields are born PRIVATE (SPEC 65). Drupal's default for a
+  // file or image field is 'public', which is what SPEC 55 created them with
+  // and what myapi_update_7023() migrates away from; a fresh site never runs
+  // that update, so without these two lines it would be installed with the
+  // very hole the update exists to close. The uri_scheme belongs to the field
+  // (storage), not to the instance, which is why it is set here and not below.
+  //
+  // _myapi_reservations_ensure_field() only creates a field that is missing,
+  // so on an already-installed site these two lines are a no-op and the change
+  // is applied by the update instead.
   _myapi_reservations_ensure_field('field_images', [
     'field_name'  => 'field_images',
     'type'        => 'image',
     'cardinality' => FIELD_CARDINALITY_UNLIMITED,
+    'settings'    => ['uri_scheme' => 'private'],
   ]);
   _myapi_reservations_ensure_field('field_attachment', [
     'field_name'  => 'field_attachment',
     'type'        => 'file',
     'cardinality' => 1,
+    'settings'    => ['uri_scheme' => 'private'],
   ]);
   _myapi_reservations_ensure_field('field_description', [
     'field_name'  => 'field_description',
@@ -2316,4 +2328,161 @@ function myapi_update_7022() {
     $instance['widget']['settings']['input_format'] = 'Y-m-d H:i';
     field_update_instance($instance);
   }
+}
+
+/**
+ * SPEC 65: moves the claim images and attachments to private://.
+ *
+ * The irreversible step of SPEC 65, and the reason it is the LAST one of that
+ * spec's plan: once this runs, the sites/default/files URLs of those files
+ * stop working, so both ways of reading them — hook_file_download() for the
+ * back office and GET /api/v1/claims/%/files/% for the app — have to be live
+ * and verified before it is executed.
+ *
+ * Three things happen here, in this order:
+ *
+ *   (a) private:// is checked. This is the ONLY case that aborts: without a
+ *       private directory there is no migration possible, and going on would
+ *       declare the fields private while their files stayed public — the worst
+ *       of the three states. The abort happens BEFORE any field is touched, so
+ *       a site missing file_private_path ends the update exactly as it started.
+ *   (b) The two fields get uri_scheme = 'private', which is what makes every
+ *       FUTURE upload land in the private directory.
+ *   (c) The files already uploaded are moved one by one.
+ *
+ * What is NOT touched, and why the migration is safe: field_data_field_images,
+ * field_data_field_attachment and their field_revision_* tables store the fid
+ * and never the URI, so not one of their rows is rewritten. The node↔file link
+ * is the fid, and the fid does not change. file_move() rewrites
+ * file_managed.uri and moves the bytes; that is the whole change.
+ *
+ * Scope: fids referenced from a node through one of the two fields, whose uri
+ * still starts with public://. A file already in private:// is skipped in
+ * silence, which is what makes this re-runnable — the state lives in
+ * file_managed.uri, so a second pass finds nothing to move and needs no
+ * control table. Files in public:// that NO field row references (an abandoned
+ * upload, a deleted node) are deliberately left alone: moving files nothing
+ * points at buys nothing and risks touching another module's.
+ *
+ * An individual failure — the file is not on disk, the destination is not
+ * writable — is logged to watchdog with its fid and its uri, skipped, and does
+ * NOT abort: one stray file must not block the other two hundred, and what is
+ * left behind is recorded precisely enough to be repaired by hand.
+ *
+ * FILE_EXISTS_RENAME and not FILE_EXISTS_REPLACE: replacing could destroy a
+ * private file that already carries that name — a payment receipt included, if
+ * they ever share a directory. Renaming loses nothing; the fid stays the same
+ * and file_move() updates the uri itself. The cosmetic cost is that a renamed
+ * file ('informe.pdf' → 'informe_0.pdf') travels with the new name in the
+ * 'filename' key.
+ *
+ * Destination is the root of private://, not a subdirectory: neither field
+ * instance declares a file_directory, so NEW uploads land in the root. Moving
+ * the old ones anywhere else would split the same field's files across two
+ * places.
+ */
+function myapi_update_7023() {
+  // (a) The one abort. 'private' is only a registered stream wrapper when
+  // file_private_path is set, so the scheme check IS the configuration check;
+  // file_prepare_directory() then makes sure the directory exists and is
+  // writable.
+  $directory = 'private://';
+  if (!file_stream_wrapper_valid_scheme('private') || !file_prepare_directory($directory, FILE_CREATE_DIRECTORY)) {
+    throw new DrupalUpdateException(
+      'SPEC 65: no hay sistema de ficheros privado disponible. Configura file_private_path en settings.php '
+      . '(o en admin/config/media/file-system), apuntando a un directorio escribible y FUERA del docroot, '
+      . 'y vuelve a ejecutar la actualización. No se ha modificado ningún campo ni movido ningún fichero.'
+    );
+  }
+
+  // (b) The fields. From here on every new upload is born private.
+  foreach (array('field_images', 'field_attachment') as $field_name) {
+    $field = field_info_field($field_name);
+    if (!$field) {
+      continue;
+    }
+    $field['settings']['uri_scheme'] = 'private';
+    field_update_field($field);
+  }
+  field_info_cache_clear();
+
+  // (c) The files already uploaded. One query per field table gathers the
+  // referenced fids with their current uri; the partition into "to move",
+  // "already private" and "broken" is done in PHP, so the three counters of
+  // the summary come out of a single pass.
+  $sources = array(
+    'field_data_field_images'     => 'field_images_fid',
+    'field_data_field_attachment' => 'field_attachment_fid',
+  );
+
+  $uris = array();
+  foreach ($sources as $table => $column) {
+    if (!db_table_exists($table)) {
+      continue;
+    }
+    $query = db_select($table, 'f');
+    $query->condition('f.entity_type', 'node');
+    $query->condition('f.deleted', 0);
+    $query->innerJoin('file_managed', 'fm', 'fm.fid = f.' . $column);
+    $query->addField('fm', 'fid', 'fid');
+    $query->addField('fm', 'uri', 'uri');
+    $query->distinct();
+
+    foreach ($query->execute() as $row) {
+      // The same file referenced from both fields is collected once.
+      $uris[(int) $row->fid] = $row->uri;
+    }
+  }
+
+  $moved = 0;
+  $failed = 0;
+  $already = 0;
+
+  foreach ($uris as $fid => $uri) {
+    if (file_uri_scheme($uri) !== 'public') {
+      $already++;
+      continue;
+    }
+
+    $file = file_load($fid);
+
+    if (!is_object($file) || !file_exists($file->uri)) {
+      $failed++;
+      watchdog(
+        'myapi',
+        'SPEC 65: el fichero @fid (@uri) no se pudo migrar a private:// porque no está en disco. Sigue declarado en file_managed y hay que repararlo a mano.',
+        array('@fid' => $fid, '@uri' => $uri),
+        WATCHDOG_WARNING
+      );
+      continue;
+    }
+
+    // file_move() returns FALSE on failure rather than throwing, but a stream
+    // wrapper can raise; either way one bad file must not abort the rest.
+    try {
+      $result = file_move($file, 'private://' . $file->filename, FILE_EXISTS_RENAME);
+    }
+    catch (Exception $e) {
+      $result = FALSE;
+    }
+
+    if ($result) {
+      $moved++;
+    }
+    else {
+      $failed++;
+      watchdog(
+        'myapi',
+        'SPEC 65: falló el movimiento del fichero @fid (@uri) a private://. Se salta y el resto de la migración continúa.',
+        array('@fid' => $fid, '@uri' => $uri),
+        WATCHDOG_ERROR
+      );
+    }
+  }
+
+  return t('SPEC 65: @moved ficheros movidos a private://, @failed fallidos (registrados en el log), @already ya estaban en private://.', array(
+    '@moved'   => $moved,
+    '@failed'  => $failed,
+    '@already' => $already,
+  ));
 }
