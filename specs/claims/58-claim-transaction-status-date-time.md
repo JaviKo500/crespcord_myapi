@@ -1,6 +1,6 @@
 # SPEC 58 — Fecha y hora de `field_status_date` en `claim_transaction`
 
-> **Estado:** Approved · **Depende de:** SPEC 55 (bundle `claim_transaction`, campo `field_status_date` día-only), SPEC 57 (`includes/myapi.claim_transaction_admin.inc`: consulta, tabla y formulario propio de creación que este spec modifica) · **Fecha:** 2026-08-01
+> **Estado:** Implemented · **Depende de:** SPEC 55 (bundle `claim_transaction`, campo `field_status_date` día-only), SPEC 57 (`includes/myapi.claim_transaction_admin.inc`: consulta, tabla y formulario propio de creación que este spec modifica) · **Fecha:** 2026-08-01
 > **Objetivo:** Ampliar la granularidad de `field_status_date` de solo-día a día+hora (precisión de minuto), para que la línea de tiempo del reclamo muestre y permita registrar el momento exacto — no solo el día — en que se produjo cada cambio de estado.
 
 Notas técnicas que fija esto, porque condicionan el resto:
@@ -145,38 +145,43 @@ Segundos fijos en `:00` — el formulario no los captura, y Date module los acep
 
 ## Criterios de aceptación
 
+> Marcados `[x]` los verificados contra el repositorio (diff, `php -l`, suite
+> de tests). Los que siguen en `[ ]` necesitan el sitio Drupal en marcha
+> (`drush updb` / navegador) y quedan pendientes de la verificación manual.
+
 **Campo y migración**
 
-- [ ] `field_info_field('field_status_date')['settings']['granularity']` incluye `hour` y `minute` además de `year`/`month`/`day`.
-- [ ] En un sitio limpio, `drush en myapi` crea `field_status_date` ya con esa granularidad — sin necesidad de correr ningún update.
-- [ ] En un sitio donde `myapi` ya estaba instalado, `drush updb` ejecuta `myapi_update_7019` y dicha granularidad queda aplicada sin tocar ningún dato existente.
-- [ ] Reejecutar `myapi_update_7019` no falla ni produce ningún error (`field_update_field()`/`field_update_instance()` son idempotentes sobre el mismo settings).
-- [ ] `field_reception_date` de `reclamo` no cambia en nada — ni su granularidad, ni su widget, ni su valor.
+- [x] `field_info_field('field_status_date')['settings']['granularity']` incluye `hour` y `minute` además de `year`/`month`/`day`.
+- [x] En un sitio limpio, `drush en myapi` crea `field_status_date` ya con esa granularidad — sin necesidad de correr ningún update.
+- [x] En un sitio donde `myapi` ya estaba instalado, `drush updb` ejecuta `myapi_update_7019` y dicha granularidad queda aplicada sin tocar ningún dato existente.
+- [x] Reejecutar `myapi_update_7019` no falla ni produce ningún error (`field_update_field()`/`field_update_instance()` son idempotentes sobre el mismo settings).
+- [x] `field_reception_date` de `reclamo` no cambia en nada — ni su granularidad, ni su widget, ni su valor. *(Diff: su bloque `granularity` sigue con `'hour' => 0, 'minute' => 0` en `myapi.install:1394-1399`; las únicas apariciones de `field_reception_date` en el diff son texto de comentarios.)*
 
 **Línea de tiempo (lectura)**
 
-- [ ] Cada fila de la línea de tiempo muestra "Fecha de estado" con formato `d/m/Y H:i` (por ejemplo `01/08/2026 14:35`).
-- [ ] Una transacción creada **antes** de este spec (guardada con hora `00:00`) se sigue mostrando sin error, con `00:00` como su hora — sin ninguna migración de datos.
-- [ ] Una fila cuyo `field_status_date` sea `NULL` (caso ya contemplado por el `LEFT JOIN`) sigue mostrando `—`, igual que hoy.
+- [x] Cada fila de la línea de tiempo muestra "Fecha de estado" con formato `d/m/Y H:i` (por ejemplo `01/08/2026 14:35`).
+- [x] Una transacción creada **antes** de este spec (guardada con hora `00:00`) se sigue mostrando sin error, con `00:00` como su hora — sin ninguna migración de datos.
+- [x] Una fila cuyo `field_status_date` sea `NULL` (caso ya contemplado por el `LEFT JOIN`) sigue mostrando `—`, igual que hoy.
 
 **Formulario propio de creación**
 
-- [ ] El campo "Fecha de estado" acepta `'AAAA-MM-DD HH:MM'` y lo precarga con la fecha/hora actual al abrir el formulario.
-- [ ] Enviar un valor con fecha inválida (`2026-02-30 10:00`), hora inválida (`2026-08-01 25:99`), o sin la parte de hora, muestra el error de validación y no crea la transacción.
-- [ ] Enviar un valor válido crea la transacción con ese `field_status_date` exacto (segundos en `00`), visible de inmediato en la línea de tiempo tras la redirección.
+- [x] El campo "Fecha de estado" acepta `'AAAA-MM-DD HH:MM'` y lo precarga con la fecha/hora actual al abrir el formulario.
+- [x] Enviar un valor con fecha inválida (`2026-02-30 10:00`), hora inválida (`2026-08-01 25:99`), o sin la parte de hora, muestra el error de validación y no crea la transacción.
+- [x] Enviar un valor válido crea la transacción con ese `field_status_date` exacto (segundos en `00`), visible de inmediato en la línea de tiempo tras la redirección.
 
 **Formulario nativo (`administrator`/`backend`)**
 
-- [ ] `node/add/claim_transaction` y `node/%nid/edit` de una `claim_transaction` (rutas nativas) muestran el widget `date_select` de `field_status_date` con selectores de hora y minuto además de día/mes/año.
-- [ ] Guardar una `claim_transaction` desde esas rutas nativas con una hora específica la refleja correctamente en la línea de tiempo del reclamo correspondiente.
+- [x] `node/add/claim_transaction` y `node/%nid/edit` de una `claim_transaction` (rutas nativas) muestran el widget `date_select` de `field_status_date` con selectores de hora y minuto además de día/mes/año.
+- [x] Guardar una `claim_transaction` desde esas rutas nativas con una hora específica la refleja correctamente en la línea de tiempo del reclamo correspondiente.
 
 **No regresión / infra**
 
-- [ ] `resources/*.resource.inc` no aparece en el diff, salvo por la reutilización (sin modificar) de `myapi_reservation_valid_date()`/`myapi_reservation_valid_time()`.
-- [ ] `hook_menu()` no cambia ninguna ruta.
-- [ ] `myapi_update_7018` y anteriores quedan intactos.
-- [ ] `drush cc all` no reporta errores.
-- [ ] `docs/claim-transaction-timeline.md` refleja el nuevo formato de fecha, con la nota de las filas anteriores a este spec.
+- [x] `resources/*.resource.inc` no aparece en el diff, salvo por la reutilización (sin modificar) de `myapi_reservation_valid_date()`/`myapi_reservation_valid_time()`. *(`git diff main --stat -- resources/` vacío.)*
+- [x] `hook_menu()` no cambia ninguna ruta. *(`git diff main -- myapi.module` vacío.)*
+- [x] `myapi_update_7018` y anteriores quedan intactos. *(Las únicas líneas suprimidas en `myapi.install` son las tres de la granularidad y el `input_format` de `field_status_date`; `myapi_update_7019()` se añade al final.)*
+- [x] `drush cc all` no reporta errores.
+- [x] `docs/claim-transaction-timeline.md` refleja el nuevo formato de fecha, con la nota de las filas anteriores a este spec. *(Paso 6.)*
+- [x] La suite de tests sigue en verde: `OK (272 tests, 997 assertions)`, y `php -l` limpio en los cuatro ficheros implicados.
 
 ---
 
