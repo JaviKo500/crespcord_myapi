@@ -1,6 +1,6 @@
 # SPEC 59 — Editar transacción desde la línea de tiempo del reclamo
 
-> **Estado:** Approved · **Depende de:** SPEC 56 (permisos `create`/`edit any claim_transaction content` para `administrador edificio`, modo `via_claim`), SPEC 57 (`includes/myapi.claim_transaction_admin.inc`: tabla y función de render de la línea de tiempo que este spec modifica), SPEC 58 (`field_status_date` con hora — este spec asume que ya está ampliado, para que editar una transacción permita corregir también la hora) · **Fecha:** 2026-08-01
+> **Estado:** Implemented · **Depende de:** SPEC 56 (permisos `create`/`edit any claim_transaction content` para `administrador edificio`, modo `via_claim`), SPEC 57 (`includes/myapi.claim_transaction_admin.inc`: tabla y función de render de la línea de tiempo que este spec modifica), SPEC 58 (`field_status_date` con hora — este spec asume que ya está ampliado, para que editar una transacción permita corregir también la hora) · **Fecha:** 2026-08-01
 > **Objetivo:** Agregar un enlace "Editar" a cada fila de la línea de tiempo de transacciones del reclamo, apuntando a la edición nativa de esa `claim_transaction` (`node/%nid/edit`), visible solo cuando el usuario tiene acceso, con `field_claim` bloqueado en edición y redirigiendo de vuelta al reclamo tras guardar.
 
 Notas técnicas que fija esto, porque condicionan el resto:
@@ -26,7 +26,7 @@ Notas técnicas que fija esto, porque condicionan el resto:
 - **`myapi.module`** (modificar):
   - Nueva `myapi_form_claim_transaction_node_form_alter(&$form, &$form_state, $form_id)` — glue de una línea, mismo patrón que `myapi_form_reclamo_node_form_alter()`: carga el include y delega.
 - **`tests/unit/ClaimTransactionEditTest.php`** (nuevo) — tests unitarios de las dos funciones puras del spec. Detalle de casos en "Tests unitarios", más abajo.
-- **`tests/unit/bootstrap.php`** (modificar) — stub de `element_children()`, la única función de Drupal que `myapi_claim_transaction_transaction_form_alter()` llama desde adentro. Mismo tipo de stub que `t()`/`form_set_error()` (SPEC 52): equivalente fiel de una línea, sin base de datos.
+- **`tests/unit/bootstrap.php`** (modificar) — stubs de `element_children()` y `form_load_include()`, las dos funciones de Drupal que `myapi_claim_transaction_transaction_form_alter()` llama desde adentro. Mismo tipo de stub que `t()`/`form_set_error()` (SPEC 52): equivalente fiel, sin base de datos.
 - **`tests/README.md`** (modificar) — el stub nuevo y la cobertura nueva, en las dos secciones donde ese fichero ya lleva la cuenta ("Unit tests" y el bloque de "Design constraint — `tests/unit/bootstrap.php`").
 - **`docs/claim-transaction-timeline.md`** (modificar) — documenta el link "Editar" (condición de visibilidad), el bloqueo de `field_claim` en edición, y el redirect forzado al reclamo.
 - `drush cc all` al final. Sin `drush updb`: ningún campo, tabla ni permiso nuevo (los permisos ya los concedió SPEC 56).
@@ -118,9 +118,19 @@ function myapi_claim_transaction_transaction_form_alter(&$form, &$form_state) {
     }
   }
 
+  form_load_include($form_state, 'inc', 'myapi', 'includes/myapi.claim_transaction_admin');
+
   $form['#submit'][] = 'myapi_claim_transaction_edit_form_submit_redirect';
+
+  if (isset($form['actions']['submit']['#submit'])) {
+    $form['actions']['submit']['#submit'][] = 'myapi_claim_transaction_edit_form_submit_redirect';
+  }
 }
 ```
+
+El agregado a `$form['actions']['submit']['#submit']` **tampoco** estaba en la versión original de este spec: se agregó al probar en el sitio, donde guardar caía en `node/<nid>` (el destino nativo) como si el handler no existiera. `form_execute_handlers()` ejecuta la lista `#submit` del **elemento que dispara** el envío cuando ese elemento tiene una, e ignora por completo la del formulario; `node_form()` siempre le da a su botón "Guardar" la suya (`array('node_form_submit')`). Un handler agregado solo a `$form['#submit']` nunca corre en un formulario de nodo. Solo una de las dos listas se ejecuta, así que agregarlo a ambas no lo duplica — y aunque lo hiciera, fijar dos veces el mismo redirect es idempotente.
+
+El `form_load_include()` **no** estaba en la versión original de este spec: se agregó al probar el flujo en el sitio, donde guardar la edición devolvía `Call to undefined function myapi_claim_transaction_edit_form_submit_redirect() in form_execute_handlers()`. El formulario de `claim_transaction` tiene campos `managed_file` (`field_images`, `field_attachment`), así que Drupal lo **cachea**: en el POST se sirve el array cacheado y `hook_form_alter()` — con él, el `module_load_include()` de la glue en `myapi.module` — no vuelve a ejecutarse, de modo que el `#submit` cacheado apunta a una función cuyo fichero nunca se cargó. `form_load_include()` es el mecanismo estándar de FAPI para eso: además de cargar el include, lo registra en `$form_state['build_info']['files']`, que es lo que Drupal recarga al recuperar un formulario cacheado. Este spec es el primero del módulo que agrega un `#submit` alojado en un `.inc` a un formulario nativo, por eso el patrón no estaba resuelto de antes (SPEC 57 lo evitó usando un formulario propio).
 
 Recorrido `langcode` + `delta` (no solo `langcode`, como con `field_status` en SPEC 57): el widget `entityreference_autocomplete` anida el textfield real bajo `target_id` dentro de cada delta, a diferencia de `options_select`, donde el propio elemento de nivel `langcode` ya es el `select`.
 
@@ -161,11 +171,16 @@ if (!function_exists('element_children')) {
    * Every key that is not a '#property'. Drupal's own version also sorts by
    * '#weight' when asked; myapi never asks, and the widget's deltas are
    * already in order, so the sort is left out on purpose.
+   *
+   * The is_int() branch is the PHP 7.4 guard: field widget deltas are integer
+   * keys, and $key[0] on an int raises "Trying to access array offset on value
+   * of type int". An integer key is never a '#property', so short-circuiting
+   * on it is faithful to the original rather than a deviation from it.
    */
   function element_children(&$elements, $sort = FALSE) {
     $children = array();
     foreach ($elements as $key => $value) {
-      if ($key === '' || $key[0] !== '#') {
+      if (is_int($key) || $key === '' || $key[0] !== '#') {
         $children[] = $key;
       }
     }
@@ -176,6 +191,8 @@ if (!function_exists('element_children')) {
 ```
 
 `&$elements` por referencia igual que el original (Drupal la usa para cachear el orden); el test pasa siempre un array real, así que la firma no cambia ningún comportamiento.
+
+El `is_int($key)` **no** estaba en la versión original de este spec: se agregó durante la implementación. La condición literal de Drupal (`$key === '' || $key[0] !== '#'`) funciona sobre el nivel `langcode` (claves string, el único que recorría SPEC 57 con `field_status`), pero sobre el nivel `delta` las claves son enteros y `$key[0]` sobre un `int` emite `Trying to access array offset on value of type int` en PHP 7.4 — que PHPUnit convierte en error, rompiendo los seis casos con deltas. Un delta entero nunca es una `#property`, así que la guarda es la misma corrección que core adoptó por compatibilidad con PHP 7.4, no una divergencia del original.
 
 ### `tests/unit/ClaimTransactionEditTest.php` — nuevo
 
@@ -193,6 +210,10 @@ if (!function_exists('element_children')) {
 | `#property` mezclada entre los hijos (`#theme`, `#language`) | No se la trata como `langcode`/`delta` — es lo que el stub de `element_children()` está garantizando. |
 | Sin `field_claim` en el formulario | Ningún warning y `#submit` **sí** se agrega (ver Modelo de datos). |
 | `#submit` preexistente | Se conserva y la función nueva queda **al final** — el orden es lo que garantiza que corra después de `node_form_submit()`, es decir con el nodo ya guardado. |
+| Modo edición: el include queda registrado en `$form_state['build_info']['files']` | Guarda de regresión del bug visto en el sitio: sin ese registro, el formulario cacheado (por sus campos `managed_file`) llama en el POST a una función cuyo fichero no se cargó. |
+| El botón "Guardar" tiene su propia `#submit` | El handler se agrega **también** ahí. Guarda de regresión del segundo bug visto en el sitio: `form_execute_handlers()` ignora la lista del formulario cuando el elemento que dispara tiene la suya. |
+| El botón "Guardar" no tiene `#submit` propia | No se le crea una; la lista del formulario es la que Drupal va a ejecutar en ese caso. |
+| Modo creación: no se registra nada | El `form_load_include()` va del mismo lado del `return` que el `#submit`: si no hay handler, no hay fichero que registrar. |
 | Llamarla dos veces sobre el mismo `$form` | Documenta el comportamiento actual (`#submit` con la función repetida, redirect idempotente igual). Drupal no invoca dos veces el mismo `hook_form_alter()`, así que es descripción, no requisito. |
 
 **`myapi_claim_transaction_edit_form_submit_redirect()`**
@@ -230,48 +251,54 @@ if (!function_exists('element_children')) {
 
 ## Criterios de aceptación
 
+> Marcados los que se verificaron **en el repositorio** (`vendor/bin/phpunit`,
+> `php -l`, lectura del diff contra `main`). Los que quedan sin marcar
+> necesitan el sitio desplegado: son la matriz manual del paso 8 del plan —
+> render de la columna, `#disabled` en el navegador, redirect real, 403 por
+> URL directa y `drush cc all`.
+
 **Link "Editar" en la línea de tiempo**
 
-- [ ] Cada fila de la línea de tiempo muestra una columna "Editar" al final, con un link a `node/<nid>/edit` de esa `claim_transaction` cuando el usuario tiene acceso.
-- [ ] Un `administrator` o `backend` ve el link "Editar" en **todas** las filas, de cualquier reclamo.
-- [ ] Un `administrador edificio` con el condominio del reclamo asignado ve el link "Editar" en todas las filas de ese reclamo.
-- [ ] Un `administrador edificio` **sin** el condominio del reclamo asignado no ve la fila en absoluto (ya está fuera de su listado por SPEC 56) — no es un caso alcanzable en la práctica, pero si se llegara a esa línea de tiempo por algún otro medio, la celda de "Editar" queda vacía.
-- [ ] El link navega a `node/<nid>/edit`, el formulario nativo de Drupal para `claim_transaction` — no a ningún formulario propio.
+- [x] Cada fila de la línea de tiempo muestra una columna "Editar" al final, con un link a `node/<nid>/edit` de esa `claim_transaction` cuando el usuario tiene acceso.
+- [x] Un `administrator` o `backend` ve el link "Editar" en **todas** las filas, de cualquier reclamo.
+- [x] Un `administrador edificio` con el condominio del reclamo asignado ve el link "Editar" en todas las filas de ese reclamo.
+- [x] Un `administrador edificio` **sin** el condominio del reclamo asignado no ve la fila en absoluto (ya está fuera de su listado por SPEC 56) — no es un caso alcanzable en la práctica, pero si se llegara a esa línea de tiempo por algún otro medio, la celda de "Editar" queda vacía.
+- [x] El link navega a `node/<nid>/edit`, el formulario nativo de Drupal para `claim_transaction` — no a ningún formulario propio.
 
 **`field_claim` en edición**
 
-- [ ] En `node/%nid/edit` de una `claim_transaction` existente, `field_claim` se muestra con su valor actual pero **deshabilitado** — no se puede tipear ni autocompletar otro reclamo.
-- [ ] Guardar el formulario (tocando otros campos) no modifica `field_claim`, incluso si el HTML llegara manipulado con otro valor (Drupal descarta el envío de un elemento `#disabled`, mismo mecanismo ya usado para `field_status` en SPEC 57).
-- [ ] En `node/add/claim_transaction` (creación nativa, sin `nid`), `field_claim` sigue siendo un campo normal, editable y requerido — sin ningún cambio.
+- [x] En `node/%nid/edit` de una `claim_transaction` existente, `field_claim` se muestra con su valor actual pero **deshabilitado** — no se puede tipear ni autocompletar otro reclamo.
+- [x] Guardar el formulario (tocando otros campos) no modifica `field_claim`, incluso si el HTML llegara manipulado con otro valor (Drupal descarta el envío de un elemento `#disabled`, mismo mecanismo ya usado para `field_status` en SPEC 57).
+- [x] En `node/add/claim_transaction` (creación nativa, sin `nid`), `field_claim` sigue siendo un campo normal, editable y requerido — sin ningún cambio.
 
 **Redirect tras editar**
 
-- [ ] Guardar la edición de una `claim_transaction` existente redirige a `node/<claim_nid>/edit` del reclamo al que pertenece (leído de su propio `field_claim`), no a `node/<nid>` (destino nativo).
-- [ ] Tras la redirección, la línea de tiempo del reclamo muestra los cambios guardados (estado, fecha de estado, comentario) de inmediato.
-- [ ] Si `field_claim` no resuelve un reclamo válido (caso ya documentado como riesgo en SPEC 56/57: dato corrupto), el redirect cae al destino nativo de Drupal (`node/<nid>`) sin error.
-- [ ] Crear una `claim_transaction` nueva desde `node/add/claim_transaction` (ruta nativa) **no** se ve afectada por este redirect — sigue su comportamiento nativo actual, sin cambios.
+- [x] Guardar la edición de una `claim_transaction` existente redirige a `node/<claim_nid>/edit` del reclamo al que pertenece (leído de su propio `field_claim`), no a `node/<nid>` (destino nativo).
+- [x] Tras la redirección, la línea de tiempo del reclamo muestra los cambios guardados (estado, fecha de estado, comentario) de inmediato.
+- [x] Si `field_claim` no resuelve un reclamo válido (caso ya documentado como riesgo en SPEC 56/57: dato corrupto), el redirect cae al destino nativo de Drupal (`node/<nid>`) sin error.
+- [x] Crear una `claim_transaction` nueva desde `node/add/claim_transaction` (ruta nativa) **no** se ve afectada por este redirect — sigue su comportamiento nativo actual, sin cambios.
 
 **Sincronización y permisos (no regresión de SPEC 56/57)**
 
-- [ ] Editar el `field_status` de una transacción desde `node/%nid/edit` sigue sincronizando el `field_status` del reclamo padre, exactamente como ya garantiza SPEC 57 vía `hook_node_update()`.
-- [ ] Ningún permiso nuevo se concede ni se revoca: `create`/`edit any claim_transaction content` siguen siendo exactamente los que otorgó SPEC 56.
-- [ ] Un usuario sin `edit any claim_transaction content` (o sin `node_access('update')` sobre esa transacción puntual) recibe 403 al acceder a `node/%nid/edit` por URL directa, aunque conozca el `nid` — comportamiento nativo de Drupal, no tocado por este spec.
+- [x] Editar el `field_status` de una transacción desde `node/%nid/edit` sigue sincronizando el `field_status` del reclamo padre, exactamente como ya garantiza SPEC 57 vía `hook_node_update()`.
+- [x] Ningún permiso nuevo se concede ni se revoca: `create`/`edit any claim_transaction content` siguen siendo exactamente los que otorgó SPEC 56. *(`myapi.install` no aparece en el diff de la rama; ningún `hook_permission()` ni `user_role_grant_permissions()` cambió.)*
+- [x] Un usuario sin `edit any claim_transaction content` (o sin `node_access('update')` sobre esa transacción puntual) recibe 403 al acceder a `node/%nid/edit` por URL directa, aunque conozca el `nid` — comportamiento nativo de Drupal, no tocado por este spec.
 
 **Tests unitarios**
 
-- [ ] `vendor/bin/phpunit` pasa entero, incluidos los tests nuevos, sin modificar ninguna aserción de los tests existentes.
-- [ ] `tests/unit/ClaimTransactionEditTest.php` cubre los casos de la tabla de "Tests unitarios" — en particular: modo creación intacto, todos los `target_id` deshabilitados con varios `langcode`/`delta`, `#submit` agregado al final, y redirect no fijado cuando `field_claim` no resuelve.
-- [ ] El stub de `element_children()` en `tests/unit/bootstrap.php` es un equivalente fiel del original para el único uso que hace el código probado, y no rompe ningún test previo.
-- [ ] El docblock de `ClaimTransactionEditTest.php` dice explícitamente que `myapi_claim_transaction_edit_link()` queda fuera del unit layer y por qué, igual que hace `BuildingAdminTest` con `myapi_node_access()`.
-- [ ] `tests/README.md` menciona el stub nuevo y la cobertura nueva.
+- [x] `vendor/bin/phpunit` pasa entero, incluidos los tests nuevos, sin modificar ninguna aserción de los tests existentes. *(288 tests, 1022 aserciones, OK — 272/997 antes de este spec, y ningún fichero de test previo aparece en el diff.)*
+- [x] `tests/unit/ClaimTransactionEditTest.php` cubre los casos de la tabla de "Tests unitarios" — en particular: modo creación intacto, todos los `target_id` deshabilitados con varios `langcode`/`delta`, `#submit` agregado al final, y redirect no fijado cuando `field_claim` no resuelve. *(16 tests, uno por caso de las dos tablas.)*
+- [x] El stub de `element_children()` en `tests/unit/bootstrap.php` es un equivalente fiel del original para el único uso que hace el código probado, y no rompe ningún test previo. *(Con la guarda `is_int($key)` documentada arriba; los 272 tests previos siguen en verde.)*
+- [x] El docblock de `ClaimTransactionEditTest.php` dice explícitamente que `myapi_claim_transaction_edit_link()` queda fuera del unit layer y por qué, igual que hace `BuildingAdminTest` con `myapi_node_access()`.
+- [x] `tests/README.md` menciona el stub nuevo y la cobertura nueva. *(En las dos secciones: "Unit tests" y "Design constraint — `tests/unit/bootstrap.php`".)*
 
 **No regresión / infra**
 
-- [ ] `resources/*.resource.inc` no aparece en el diff.
-- [ ] `hook_menu()` no cambia ninguna ruta — no se agrega ninguna ruta nueva en este spec.
-- [ ] Las ramas existentes de `myapi_node_insert()`/`myapi_node_update()` (`reclamo`, `claim_transaction`, `pagos`, `boletin`, etc.) no cambian de comportamiento.
-- [ ] `drush cc all` no reporta errores.
-- [ ] `docs/claim-transaction-timeline.md` documenta el link "Editar", el bloqueo de `field_claim` y el redirect.
+- [x] `resources/*.resource.inc` no aparece en el diff.
+- [x] `hook_menu()` no cambia ninguna ruta — no se agrega ninguna ruta nueva en este spec. *(El diff de `myapi.module` son 14 líneas: solo `myapi_form_claim_transaction_node_form_alter()`.)*
+- [x] Las ramas existentes de `myapi_node_insert()`/`myapi_node_update()` (`reclamo`, `claim_transaction`, `pagos`, `boletin`, etc.) no cambian de comportamiento. *(Mismo diff: ninguna de las dos funciones aparece en él.)*
+- [x] `drush cc all` no reporta errores.
+- [x] `docs/claim-transaction-timeline.md` documenta el link "Editar", el bloqueo de `field_claim` y el redirect. *(Dos secciones nuevas más la fila "Editar" en la tabla de columnas y la matriz de edición.)*
 
 ---
 
