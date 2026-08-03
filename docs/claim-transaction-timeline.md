@@ -28,6 +28,7 @@ and their fields).
 | `includes/myapi.claim_transaction_admin.inc` | Everything else: the timeline query and its render, the creation form and its submit handler, the creation page callback, the automatic initial transaction, and the status sync. Loaded by the `file` key of the menu entry and by `module_load_include()` from `myapi.module`. |
 | `includes/myapi.claims_admin.inc` | Reused, not duplicated: `myapi_claims_status_options()` and `myapi_claims_status_label()` (SPEC 56) label `field_status` for this screen too — it is a single field shared by both the `reclamo` and `claim_transaction` bundles. |
 | `includes/myapi.building_admin.inc` | Reused, not duplicated: `myapi_building_admin_field_value()` / `_field_target_id()` (SPEC 49), pure field-reading helpers, back the automatic creation and the status sync. |
+| `myapi.install` | Configuration of `field_status_date` only: `_myapi_claims_install()` declares it with `hour`/`minute` granularity and a `'Y-m-d H:i'` `date_select` widget, and `myapi_update_7019()` (SPEC 58) applies that same configuration to sites installed earlier. Configuration only — no row of `field_data_field_status_date` is ever rewritten. |
 
 After adding or modifying any of this, run:
 
@@ -101,6 +102,12 @@ The only way to change an existing claim's status is the creation page (or,
 for `administrator`/`backend`, the native `claim_transaction` forms) — never
 this form.
 
+On those native forms (`node/add/claim_transaction`, `node/%nid/edit` of a
+transaction) `field_status_date` keeps its own Date module `date_select`
+widget, which since SPEC 58 offers **hour and minute** selectors alongside
+day/month/year. That widget is untouched by the custom form's textfield
+decision: they are two independent entry paths into the same field.
+
 ---
 
 ## Timeline
@@ -112,10 +119,25 @@ transaction node's own `uid` (its author). Ordered `field_status_date`
 **descending**, `nid` descending as a deterministic tie-break. No pager: the
 expected volume per claim is low (status changes, not a chat).
 
+`field_status_date` carries **date and time**, to the minute (SPEC 58). The
+query selects the stored column as-is — the `SUBSTR(..., 1, 10)` that used to
+truncate it to its date part is gone — and the cell renders it with
+`format_date(strtotime(...), 'custom', 'd/m/Y H:i')`, the same custom format
+`myapi.reservation_calendar.inc` and `myapi.reservation_notification.inc`
+already use. Ordering by the raw column still works: `'Y-m-d H:i:s'` sorts
+lexicographically exactly as it sorts chronologically, so the `nid` tie-break
+now only applies to transactions sharing the same *minute*.
+
+> **Transactions created before SPEC 58** were saved by a day-only field and
+> therefore display `00:00` as their time (`15/07/2026 00:00`). That is the
+> value actually recorded, not a formatting bug: the spec deliberately
+> performed **no data migration**, since no real time was ever captured for
+> those rows and inventing one would be worse than showing the truth.
+
 | Column | Source | When empty or the reference is deleted |
 |---|---|---|
 | Estado | `field_status`, labelled with `myapi_claims_status_label()` (SPEC 56) | `—` if empty (should not happen: required) |
-| Fecha de estado | `field_status_date` | `—` if empty |
+| Fecha de estado | `field_status_date`, formatted `d/m/Y H:i` (e.g. `01/08/2026 14:35`) | `—` if empty |
 | Comentario | `field_comment` | `—` if empty |
 | Autor | `node.uid` → the account's username | Account deleted: `Usuario eliminado (#uid)` |
 
@@ -146,7 +168,7 @@ own (not the native `claim_transaction` node form), so it shows **exactly**:
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `field_status` | `select` | Yes | Options from `myapi_claims_status_options()` (SPEC 56) |
-| `field_status_date` | `textfield`, plain `'AAAA-MM-DD'` text | Yes | Defaults to today; validated server-side by `myapi_claim_transaction_validate_status_date()` (`#element_validate`), which reuses `myapi_reservation_valid_date()` (`resources/reservation.resource.inc`) — the same `'YYYY-MM-DD'` + `checkdate()` rule `includes/myapi.claims_admin.inc` already reuses for its own date filters. Two combo-style date widgets were tried first — `date_popup` (Date module) and core's own `#type => 'date'` — and both were reverted: each brought its own layout CSS (`container-inline-date`, then `container-inline`) that broke alignment with the rest of the form. A plain textfield uses the exact same wrapper as `field_status`/`field_comment`, with nothing special left to fight (see SPEC 57 "Decisiones tomadas y descartadas") |
+| `field_status_date` | `textfield`, plain `'AAAA-MM-DD HH:MM'` text | Yes | Defaults to the current date **and time** (e.g. `2026-08-01 14:35`); validated server-side by `myapi_claim_transaction_validate_status_date()` (`#element_validate`), which splits the value on its space and reuses `myapi_reservation_valid_date()` **and** `myapi_reservation_valid_time()` (`resources/reservation.resource.inc`) — the same `'YYYY-MM-DD'` + `checkdate()` and `'HH:MM'` 24h rules `includes/myapi.claims_admin.inc` already reuses for its own date filters, so SPEC 58 added no new regex. A value with no time part is rejected. The submit handler saves it as `'Y-m-d H:i:00'` — seconds pinned to `00`, since the form does not capture them. Two combo-style date widgets were tried first — `date_popup` (Date module) and core's own `#type => 'date'` — and both were reverted: each brought its own layout CSS (`container-inline-date`, then `container-inline`) that broke alignment with the rest of the form. A plain textfield uses the exact same wrapper as `field_status`/`field_comment`, with nothing special left to fight (see SPEC 57 "Decisiones tomadas y descartadas") |
 | `field_comment` | `textarea` | **Yes** | Required at the request of the user, after seeing the form live. Only this custom form enforces it — the underlying field instance (SPEC 55) is still optional, so `node/add/claim_transaction` (native) does not require it |
 | `field_images` | `managed_file` | No | Validators/upload URI read live from the field instance via core's `file_field_widget_upload_validators()`/`file_field_widget_uri()` — never hard-coded |
 | `field_attachment` | `managed_file` | No | Same as above |
@@ -172,8 +194,12 @@ nothing in this handler touches it directly.
 ```php
 $transaction->field_claim[LANGUAGE_NONE][0]['target_id']  = $node->nid;
 $transaction->field_status[LANGUAGE_NONE][0]['value']     = myapi_building_admin_field_value($node, 'field_status');
-$transaction->field_status_date[LANGUAGE_NONE][0]['value'] = date('Y-m-d');
+$transaction->field_status_date[LANGUAGE_NONE][0]['value'] = date('Y-m-d H:i:00');
 ```
+
+The initial transaction records the real instant the claim was created, not
+that day at midnight (SPEC 58) — same pinned `:00` seconds as the creation
+form's submit handler.
 
 `field_status` is **copied** from the claim as chosen on `node/add/reclamo`
 — never forced to `received`. Because the transaction is born with the same
@@ -238,14 +264,15 @@ drush cc all
 | `node/add/reclamo` | `field_status` editable, no timeline fieldset |
 | `node/%nid/edit`, existing claim | `field_status` visible but disabled; timeline fieldset below |
 | Save the edit form (other fields changed) | `field_status` unchanged, even with a tampered POST value |
-| Timeline row order | `field_status_date` descending, `nid` descending on a tie |
+| Timeline row order | `field_status_date` descending (date **and** time), `nid` descending on a tie |
+| Timeline date cell | `d/m/Y H:i`; a row created before SPEC 58 shows `00:00`, a `NULL` one shows `—` |
 | "Crear transacción" position | First, above the table |
 
 **Automatic initial transaction matrix**:
 
 | Case | Expected |
 |---|---|
-| Create claim with `field_status = received` | Initial transaction with `field_status = received`, `field_status_date` = today |
+| Create claim with `field_status = received` | Initial transaction with `field_status = received`, `field_status_date` = the exact date and time of creation |
 | Create claim with `field_status = in_progress` | Initial transaction copies `in_progress`, not forced to `received` |
 | Reload `node/%nid/edit` right after creation | Initial transaction already in the timeline |
 | Claim creation | No extra `node_save()` of the claim itself (sync finds no difference) |
@@ -256,8 +283,10 @@ drush cc all
 |---|---|
 | Click "Crear transacción" | Navigates to `node/%nid/claim-transaction/add`, full page form |
 | Fields shown | Exactly `field_status`, `field_status_date`, `field_comment`, `field_images`, `field_attachment` — never `field_claim` |
-| `field_status_date` default | Today, as plain 'AAAA-MM-DD' text; label aligned above the field, same as `field_status`/`field_comment` |
-| `field_status_date` malformed or non-existent (e.g. `2026-02-30`) | Validation error from `myapi_claim_transaction_validate_status_date()`, transaction not created |
+| `field_status_date` default | Current date and time, as plain 'AAAA-MM-DD HH:MM' text; label aligned above the field, same as `field_status`/`field_comment` |
+| `field_status_date` malformed or non-existent date (e.g. `2026-02-30 10:00`) | Validation error from `myapi_claim_transaction_validate_status_date()`, transaction not created |
+| `field_status_date` impossible time (e.g. `2026-08-01 25:99`), or no time part at all | Same validation error, transaction not created |
+| `field_status_date` valid (e.g. `2026-08-01 14:35`) | Saved as `2026-08-01 14:35:00`, shown as `01/08/2026 14:35` in the timeline |
 | Submit with no `field_comment` | Native required-field error, transaction not created |
 | Submit | Creates the transaction, redirects to `node/%nid/edit`, full reload |
 | After redirect | New transaction is first in the timeline |
