@@ -2,11 +2,14 @@
 
 use PHPUnit\Framework\TestCase;
 
-require_once __DIR__ . '/../../includes/myapi.claims_admin.inc';
+require_once __DIR__ . '/../../includes/myapi.claims_common.inc';
 
 /**
  * Unit tests for the status whitelist of the claims listing (SPEC 62),
- * myapi_claims_valid_status() in includes/myapi.claims_admin.inc.
+ * myapi_claims_valid_status() in includes/myapi.claims_common.inc — where
+ * SPEC 64 moved it from includes/myapi.claims_admin.inc so the read-only
+ * claims API could share it with the back office. Only the require_once above
+ * changed: the function is the same one, and so is every assert below.
  *
  * The function is the one place that decides which '?status=' values the
  * listing accepts, and it is hard-coded on purpose (see its docblock): it does
