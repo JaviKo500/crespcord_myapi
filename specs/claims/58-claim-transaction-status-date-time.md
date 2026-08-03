@@ -1,6 +1,6 @@
 # SPEC 58 — Fecha y hora de `field_status_date` en `claim_transaction`
 
-> **Estado:** Draft · **Depende de:** SPEC 55 (bundle `claim_transaction`, campo `field_status_date` día-only), SPEC 57 (`includes/myapi.claim_transaction_admin.inc`: consulta, tabla y formulario propio de creación que este spec modifica) · **Fecha:** 2026-08-01
+> **Estado:** Approved · **Depende de:** SPEC 55 (bundle `claim_transaction`, campo `field_status_date` día-only), SPEC 57 (`includes/myapi.claim_transaction_admin.inc`: consulta, tabla y formulario propio de creación que este spec modifica) · **Fecha:** 2026-08-01
 > **Objetivo:** Ampliar la granularidad de `field_status_date` de solo-día a día+hora (precisión de minuto), para que la línea de tiempo del reclamo muestre y permita registrar el momento exacto — no solo el día — en que se produjo cada cambio de estado.
 
 Notas técnicas que fija esto, porque condicionan el resto:
