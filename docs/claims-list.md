@@ -142,7 +142,7 @@ errors: a junk parameter falls back to "no filter".
 | Parameter | Accepted values | Default | If invalid |
 |---|---|---|---|
 | `condominium` | Positive integer, a `condominio` nid | no filter | No filter |
-| `status` | `received`, `in_progress`, `resolved`, `closed`, `duplicated` | no filter | No filter |
+| `status` | `received`, `in_progress`, `resolved`, `closed` | no filter | No filter |
 | `claim_type` | `requirement`, `claim` | no filter | No filter |
 | `date_from` | `YYYY-MM-DD`, validated with `myapi_reservation_valid_date()` | no filter | Ignored |
 | `date_to` | `YYYY-MM-DD`, validated with `myapi_reservation_valid_date()` | no filter | Ignored |
@@ -156,6 +156,14 @@ admin/content/claims?condominium=7&status=received
 admin/content/claims?claim_type=claim&date_from=2026-01-01&date_to=2026-06-30
 admin/content/claims?status=inventado&date_from=hola&condominium=abc   -> every filter falls back to none
 ```
+
+`date_from` / `date_to` compare **days**, not instants: since SPEC 63
+`field_reception_date` stores an hour too, and both bounds are matched against
+the first ten characters of the stored value, so `date_to` stays inclusive —
+a claim received that day at 14:30 is inside the range.
+
+`?status=duplicated` was valid until SPEC 62 removed that status; a bookmarked
+URL carrying it now falls back to "no filter", like any other unknown value.
 
 The reception-date range uses two native HTML5 `<input type="date">` fields,
 same reasoning as the calendar's own date field: the browser supplies its own
@@ -200,7 +208,7 @@ site's claims for them, with no scoping at all.
 | Estado | `field_status`, labelled from the field's own `allowed_values` | `—` when the field is empty (should not happen: the field is required) |
 | Tipo | `field_claim_type`, labelled from the field's own `allowed_values` | `—` when empty |
 | Solicitante | `field_requester` → the account's username | No `field_requester`: `Sin solicitante`. Account deleted: `Usuario eliminado (#uid)`. |
-| Fecha de recepción | `field_reception_date` | `—` when empty |
+| Fecha de recepción | `field_reception_date`, shown as `d/m/Y H:i` (SPEC 63) | `—` when empty |
 
 Every value coming from the database is printed through `check_plain()` or
 Drupal's `l()` (which escapes its text argument by default), so a claim

@@ -50,20 +50,24 @@ module_load_include('inc', 'myapi', 'includes/myapi.claim_query');
  * ------------------------------------------------------------------------ */
 
 /**
- * Normalises a raw GET value into one of the five allowed statuses, or NULL.
+ * Normalises a raw GET value into one of the four allowed statuses, or NULL.
  *
  * The whitelist is hard-coded rather than read from field_info_field(): the
- * five stored values are part of the data model this spec was written
+ * four stored values are part of the data model this spec was written
  * against, and validation must not silently change if a site administrator
  * edits the field's allowed values from the UI. Labels, which carry no such
  * risk, ARE read from the field (see myapi_claims_status_options()).
+ *
+ * 'duplicated' was the fifth until SPEC 62 dropped it from the catalogue; a
+ * bookmarked '?status=duplicated' now falls back to "no filter", like any
+ * other unknown value.
  *
  * @param mixed $value  Raw $_GET value.
  *
  * @return string|null
  */
 function myapi_claims_valid_status($value) {
-  $allowed = array('received', 'in_progress', 'resolved', 'closed', 'duplicated');
+  $allowed = array('received', 'in_progress', 'resolved', 'closed');
   return (is_scalar($value) && in_array((string) $value, $allowed, TRUE)) ? (string) $value : NULL;
 }
 
@@ -94,7 +98,7 @@ function myapi_claims_field_allowed_values($field_name) {
 }
 
 /**
- * Status select options: the five allowed keys, labelled from field_status'
+ * Status select options: the four allowed keys, labelled from field_status'
  * own allowed_values (myapi.install) so the Spanish text lives in one place.
  * A key with no matching label — the field missing in this environment —
  * falls back to the raw key rather than disappearing from the select.
@@ -104,7 +108,7 @@ function myapi_claims_field_allowed_values($field_name) {
 function myapi_claims_status_options() {
   $labels = myapi_claims_field_allowed_values('field_status');
   $options = array();
-  foreach (array('received', 'in_progress', 'resolved', 'closed', 'duplicated') as $key) {
+  foreach (array('received', 'in_progress', 'resolved', 'closed') as $key) {
     $options[$key] = isset($labels[$key]) ? $labels[$key] : $key;
   }
   return $options;
@@ -241,7 +245,10 @@ function myapi_claims_list_table_rows(array $rows, array $condominium_options) {
       myapi_claims_status_label($row->status),
       myapi_claims_claim_type_label($row->claim_type),
       myapi_claims_requester_label($row),
-      $row->reception_date === NULL ? '—' : check_plain(format_date(strtotime($row->reception_date), 'custom', 'd/m/Y')),
+      // 'd/m/Y H:i' since SPEC 63, same format the transaction timeline uses
+      // for field_status_date: claims saved before that spec carry a '00:00'
+      // time and are shown with it, without any data migration.
+      $row->reception_date === NULL ? '—' : check_plain(format_date(strtotime($row->reception_date), 'custom', 'd/m/Y H:i')),
     );
   }
 

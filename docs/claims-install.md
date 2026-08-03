@@ -48,7 +48,7 @@ defining a new one.
 | `field_description` | text_long | Yes | — | `default_value[0]['format'] = 'plain_text'`, pinned on purpose — see [Why `plain_text`](#why-plain_text-and-not-full_html) below. |
 | `field_status` | list_text | Yes | `received` | Shared with `claim_transaction`; see [the status catalogue](#field_status-catalogue) below. |
 | `field_claim_type` | list_text | Yes | — (no default) | `requirement\|Requerimiento`, `claim\|Reclamo`. |
-| `field_reception_date` | datetime (Date) | Yes | — | Day granularity only (`Y-m-d`), `tz_handling = none`. |
+| `field_reception_date` | datetime (Date) | Yes | — | Day + hour + minute (`Y-m-d H:i`) since SPEC 63 — it was day-only until then; `tz_handling = none`. |
 | `field_visibility` | list_text | Yes | `private` | `private\|Privado`, `public\|Público`. |
 | `field_images` | image | No | — | Shared with `claim_transaction` (see below). Cardinality `-1`. |
 | `field_attachment` | file | No | — | Shared with `claim_transaction` (see below). Cardinality 1. |
@@ -70,7 +70,7 @@ Its machine name is new — no prior spec reserved it.
 | Field | Type | Required | Default | Notes |
 |---|---|---|---|---|
 | `field_status` | list_text | Yes | — (no default) | **Same field** as the `reclamo` instance, different default — see below. |
-| `field_status_date` | datetime (Date) | Yes | — | Same granularity as `field_reception_date`. |
+| `field_status_date` | datetime (Date) | Yes | — | Same granularity as `field_reception_date`: day + hour + minute (SPEC 58 widened this one, SPEC 63 the other). |
 | `field_comment` | text_long | No | — | `default_value[0]['format'] = 'plain_text'`. |
 | `field_claim` | entityreference → node | Yes | — | Bundle `reclamo`. Cardinality 1. |
 | `field_images` | image | No | — | Shared with `reclamo` (see below). |
@@ -90,7 +90,12 @@ SPEC 32, which needed two separate fields because their catalogues differed.
 | `in_progress` | En proceso |
 | `resolved` | Resuelto |
 | `closed` | Cerrado |
-| `duplicated` | Duplicado |
+
+A fifth value, `duplicated` (Duplicado), existed until **SPEC 62** dropped it
+from the catalogue (`myapi_update_7021()`), for both bundles at once — it is a
+single shared field. That update rewrites any node still stored as
+`duplicated` to `closed` before removing the value, because core's options
+module refuses to delete an allowed value that still has data.
 
 The two **instances** of this field differ only in `default_value`:
 

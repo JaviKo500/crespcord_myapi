@@ -44,8 +44,8 @@
  *   given, same as ->addTag('node_access') trusts the query alter to narrow
  *   the rows underneath regardless of what is asked for here.
  * @param string|null $status
- *   One of 'received'/'in_progress'/'resolved'/'closed'/'duplicated', or NULL
- *   for no filter.
+ *   One of 'received'/'in_progress'/'resolved'/'closed', or NULL for no
+ *   filter.
  * @param string|null $claim_type
  *   'requirement' or 'claim', or NULL for no filter.
  * @param string|null $date_from
@@ -77,11 +77,12 @@ function myapi_claims_list_rows($condominium_id = NULL, $status = NULL, $claim_t
   $query->leftJoin('field_data_field_claim_type', 'fct', "fct.entity_id = n.nid AND fct.entity_type = 'node' AND fct.deleted = 0");
   $query->addField('fct', 'field_claim_type_value', 'claim_type');
 
-  // SUBSTR: field_reception_date is a day-granularity 'datetime' field (same
-  // storage shape as field_date on 'reservation'), so only the first 10
-  // characters carry the date.
+  // The full stored value ('Y-m-d H:i:s'): since SPEC 63 field_reception_date
+  // carries day + hour + minute, and the listing prints the time too. The
+  // SUBSTR is kept below, where it belongs — the two date filters are still
+  // day-granularity.
   $query->leftJoin('field_data_field_reception_date', 'frd', "frd.entity_id = n.nid AND frd.entity_type = 'node' AND frd.deleted = 0");
-  $query->addExpression('SUBSTR(frd.field_reception_date_value, 1, 10)', 'reception_date');
+  $query->addField('frd', 'field_reception_date_value', 'reception_date');
 
   $query->leftJoin('field_data_field_requester', 'fr', "fr.entity_id = n.nid AND fr.entity_type = 'node' AND fr.deleted = 0");
   $query->addField('fr', 'field_requester_target_id', 'requester_uid');
@@ -100,6 +101,10 @@ function myapi_claims_list_rows($condominium_id = NULL, $status = NULL, $claim_t
   if ($claim_type !== NULL) {
     $query->condition('fct.field_claim_type_value', $claim_type);
   }
+  // SUBSTR on the two date bounds, and only here: both are 'Y-m-d', so
+  // comparing the stored day alone is what makes date_to INCLUSIVE — against
+  // the full value, a claim received on date_to at 14:30 would fall outside
+  // the range.
   if ($date_from !== NULL) {
     $query->where('SUBSTR(frd.field_reception_date_value, 1, 10) >= :date_from', array(':date_from' => $date_from));
   }
