@@ -30,6 +30,10 @@
  * drupal_get_path() and $base_url (SPEC 54) are the environment counterpart:
  * myapi_mail_logo_url() builds the header logo URL out of both, and every HTML
  * email template calls it, so without them the whole email suite fatals.
+ *
+ * element_children() (SPEC 59) is the same kind again: the only Drupal function
+ * myapi_claim_transaction_transaction_form_alter() calls from inside, to walk
+ * the langcode/delta levels of the field_claim widget.
  */
 
 if (!function_exists('module_load_include')) {
@@ -111,5 +115,23 @@ if (!function_exists('form_set_error')) {
     $GLOBALS['myapi_test_form_errors'] = $GLOBALS['myapi_test_form_errors'] ?? [];
     $GLOBALS['myapi_test_form_errors'][$name] = $message;
     return $GLOBALS['myapi_test_form_errors'];
+  }
+}
+
+if (!function_exists('element_children')) {
+  /**
+   * Every key that is not a '#property'. Drupal's own version also sorts by
+   * '#weight' when asked; myapi never asks, and the widget's deltas are
+   * already in order, so the sort is left out on purpose.
+   */
+  function element_children(&$elements, $sort = FALSE) {
+    $children = array();
+    foreach ($elements as $key => $value) {
+      if ($key === '' || $key[0] !== '#') {
+        $children[] = $key;
+      }
+    }
+
+    return $children;
   }
 }
