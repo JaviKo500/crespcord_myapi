@@ -18,9 +18,18 @@ Covers only the functions that don't touch the database or Drupal APIs:
 token generation/hashing (`includes/myapi.token.inc`), bearer header parsing
 (`includes/myapi.auth.inc`), the length-validation early-returns of
 `myapi_auth_password_reset_execute()` (`resources/auth.resource.inc`), the
-reservation grid/availability arithmetic (`includes/myapi.reservation_*.inc`)
-and, since SPEC 50, the cancellation-reason validation plus the notification
-and email texts that carry the reason.
+reservation grid/availability arithmetic (`includes/myapi.reservation_*.inc`),
+since SPEC 50 the cancellation-reason validation plus the notification and
+email texts that carry the reason, and since SPEC 59 the two pure functions
+behind editing a claim transaction
+(`includes/myapi.claim_transaction_admin.inc`):
+`myapi_claim_transaction_transaction_form_alter()`, the FAPI walk that
+disables `field_claim` and appends the redirect handler, and
+`myapi_claim_transaction_edit_form_submit_redirect()`, which reads that field
+off the saved node. Its sibling `myapi_claim_transaction_edit_link()` is
+`node_load()` + `node_access()` and therefore stays out, like every other
+Drupal-dependent function here — `tests/unit/ClaimTransactionEditTest.php`
+says so in its docblock rather than omitting it silently.
 
 **Prerequisites:** PHP 7.4, Composer.
 
@@ -49,7 +58,15 @@ functions under test (the cancellation-reason validation and the notification
 and email texts of SPEC 50). It also stubs `drupal_get_path()` and sets
 `$base_url` (SPEC 54): `myapi_mail_logo_url()` builds the email header logo URL
 out of both, and every HTML email template calls it, so without them the whole
-email suite fatals. They keep the suite's rule intact: still no
+email suite fatals. `element_children()` (SPEC 59) is the newest of this kind:
+it is the only Drupal function
+`myapi_claim_transaction_transaction_form_alter()` calls from inside, to walk
+the `langcode`/`delta` levels of the `field_claim` widget. The stub leaves out
+the `#weight` sort of the original — which `myapi` never asks for — and adds an
+`is_int($key)` guard the original lacks, because a widget's deltas are integer
+keys and `$key[0]` on an `int` raises a PHP 7.4 warning; an integer key is
+never a `#property`, so the branch is faithful rather than a deviation.
+These stubs keep the suite's rule intact: still no
 database, still pure logic. Anything that runs `db_select()`, `node_load()` or
 the mail queue stays out of `tests/unit` — that is why
 `myapi_reservation_calendar_rows()` and

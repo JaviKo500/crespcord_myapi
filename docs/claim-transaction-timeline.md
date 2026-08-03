@@ -24,8 +24,8 @@ and their fields).
 
 | File | Role |
 |------|------|
-| `myapi.module` | `hook_menu()` entry for the creation route, `myapi_claim_transaction_add_access()`, `myapi_form_reclamo_node_form_alter()` (glue only, delegates), and the `'reclamo'`/`'claim_transaction'` branches of `myapi_node_insert()`/`myapi_node_update()`. |
-| `includes/myapi.claim_transaction_admin.inc` | Everything else: the timeline query and its render, the creation form and its submit handler, the creation page callback, the automatic initial transaction, and the status sync. Loaded by the `file` key of the menu entry and by `module_load_include()` from `myapi.module`. |
+| `myapi.module` | `hook_menu()` entry for the creation route, `myapi_claim_transaction_add_access()`, `myapi_form_reclamo_node_form_alter()` and `myapi_form_claim_transaction_node_form_alter()` (glue only, both delegate), and the `'reclamo'`/`'claim_transaction'` branches of `myapi_node_insert()`/`myapi_node_update()`. |
+| `includes/myapi.claim_transaction_admin.inc` | Everything else: the timeline query and its render, the "Editar" link and its access check, the creation form and its submit handler, the creation page callback, the edit-form alter and its redirect handler, the automatic initial transaction, and the status sync. Loaded by the `file` key of the menu entry and by `module_load_include()` from `myapi.module`. |
 | `includes/myapi.claims_admin.inc` | Reused, not duplicated: `myapi_claims_status_options()` and `myapi_claims_status_label()` (SPEC 56) label `field_status` for this screen too — it is a single field shared by both the `reclamo` and `claim_transaction` bundles. |
 | `includes/myapi.building_admin.inc` | Reused, not duplicated: `myapi_building_admin_field_value()` / `_field_target_id()` (SPEC 49), pure field-reading helpers, back the automatic creation and the status sync. |
 | `myapi.install` | Configuration of `field_status_date` only: `_myapi_claims_install()` declares it with `hour`/`minute` granularity and a `'Y-m-d H:i'` `date_select` widget, and `myapi_update_7019()` (SPEC 58) applies that same configuration to sites installed earlier. Configuration only — no row of `field_data_field_status_date` is ever rewritten. |
@@ -140,10 +140,128 @@ now only applies to transactions sharing the same *minute*.
 | Fecha de estado | `field_status_date`, formatted `d/m/Y H:i` (e.g. `01/08/2026 14:35`) | `—` if empty |
 | Comentario | `field_comment` | `—` if empty |
 | Autor | `node.uid` → the account's username | Account deleted: `Usuario eliminado (#uid)` |
+| Editar | `myapi_claim_transaction_edit_link()` — a link to `node/<nid>/edit` of that transaction (SPEC 59) | **Empty cell**, with no substitute text, when the user may not update that transaction |
 
 The **"Crear transacción"** link renders **first**, above the table — a
 plain link (`l()`, `class="button"` only, no `use-ajax`) pointing at
 `node/<claim_nid>/claim-transaction/add`.
+
+---
+
+## "Editar" link (SPEC 59)
+
+The last cell of every timeline row links to the **native** Drupal edit form
+of that transaction — `node/<nid>/edit`, not a custom form of this module:
+
+```php
+function myapi_claim_transaction_edit_link($nid) {
+  $transaction_node = node_load($nid);
+  if (!$transaction_node || !node_access('update', $transaction_node)) {
+    return '';
+  }
+  return l(t('Editar'), 'node/' . $nid . '/edit');
+}
+```
+
+- The link is **hidden**, not disabled, for a user without access: a link
+  that leads to a 403 is worse than no link. Same criterion as
+  `myapi_claim_transaction_add_access()` above, which also resolves access
+  before its own link is shown.
+- `node_access('update', ...)` is the single source of truth — it already
+  covers `bypass node access` for `administrator`/`backend` **and** the
+  per-condominium `via_claim` filter SPEC 56 gave `administrador edificio`.
+  Nothing about that rule is reimplemented here.
+- That is why the row's raw `nid` is not enough and `node_load()` runs **once
+  per row**: `node_access()` needs the node object. The cost is the one
+  SPEC 56 already accepted for `via_claim`, over the low per-claim volume this
+  screen assumes (no pager). If the volume ever grew, caching the per-`uid`
+  verdict within the request is the bounded fix.
+- The cell is a `'#markup'` render element, not a plain string:
+  `theme_table()` runs `check_plain()` over string cells, which would print
+  the `<a>` tag instead of rendering the link.
+
+---
+
+## `field_claim` read-only in edition, and the redirect back (SPEC 59)
+
+`myapi_form_claim_transaction_node_form_alter()` (glue) delegates to
+`myapi_claim_transaction_transaction_form_alter()`
+(`includes/myapi.claim_transaction_admin.inc`):
+
+```php
+function myapi_claim_transaction_transaction_form_alter(&$form, &$form_state) {
+  if (empty($form['#node']->nid)) {
+    return;
+  }
+  if (isset($form['field_claim'])) {
+    foreach (element_children($form['field_claim']) as $langcode) {
+      foreach (element_children($form['field_claim'][$langcode]) as $delta) {
+        if (isset($form['field_claim'][$langcode][$delta]['target_id'])) {
+          $form['field_claim'][$langcode][$delta]['target_id']['#disabled'] = TRUE;
+        }
+      }
+    }
+  }
+  $form['#submit'][] = 'myapi_claim_transaction_edit_form_submit_redirect';
+}
+```
+
+- **`node/add/claim_transaction`** (no `nid` yet): untouched. `field_claim`
+  stays a normal, editable, required field, and no redirect is forced — a
+  transaction being created belongs to no claim yet, so there is nothing to
+  protect and nowhere to send the operator. Same criterion as
+  `myapi_claim_transaction_reclamo_form_alter()` on `node/add/reclamo`.
+- **`node/%nid/edit`** of an existing transaction: `field_claim` renders
+  **disabled** — its value stays visible, so the operator sees which claim the
+  transaction belongs to, but it cannot be retyped or autocompleted to another
+  one. `#disabled`, not `#access = FALSE`, for the same reason as
+  `field_status` above: Drupal resubmits a disabled element's value and
+  discards whatever a tampered POST sends for it.
+- The walk goes **one level deeper** than the `field_status` one: `field_claim`
+  uses the `entityreference_autocomplete` widget, which nests the real
+  textfield under `target_id` inside each delta, whereas `options_select`
+  makes the langcode-level element itself the `select`.
+- The `isset()` guards the **loop only**, not the `#submit`: if another module
+  or a `field_access` rule removed `field_claim` from the form, there is
+  nothing to disable, but redirecting to the claim is still right — the
+  handler resolves it from the saved node, not from the form.
+- No other field of the native form is restricted: `field_status`,
+  `field_status_date`, `field_comment`, `field_images` and `field_attachment`
+  stay fully editable. `field_claim` is locked for one specific risk — moving
+  a transaction to a different claim by accident.
+
+The redirect handler runs **last**, after `node_form_submit()` has saved the
+node:
+
+```php
+function myapi_claim_transaction_edit_form_submit_redirect($form, &$form_state) {
+  if (empty($form_state['node'])) {
+    return;
+  }
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+  $claim_nid = myapi_building_admin_field_target_id($form_state['node'], 'field_claim');
+  if ($claim_nid) {
+    $form_state['redirect'] = 'node/' . $claim_nid . '/edit';
+  }
+}
+```
+
+- Saving lands on **`node/<claim_nid>/edit`**, the claim's edit form with its
+  timeline already reflecting the change — not on Drupal's native
+  `node/<nid>`. Same destination as creating a transaction, so both flows end
+  in the same place.
+- Overriding `$form_state['redirect']` is the standard FAPI way to change
+  where a form lands, and is why this is a submit handler rather than a
+  `drupal_goto()` inside `hook_node_update()`: a `goto` there would abort the
+  other `hook_node_update()` implementations queued behind it — including this
+  module's own status sync.
+- When `field_claim` does not resolve (the corrupt-data case), the redirect is
+  left **alone** rather than set to something invalid, and Drupal falls back
+  to `node/<nid>`. The `empty($form_state['node'])` guard is the counterpart
+  for a submit chain another module altered.
+- This applies to **any** entry point into that edit form, including
+  `/admin/content` — accepted deliberately: the transaction lives inside its
+  claim's context regardless of where the operator came from.
 
 ---
 
@@ -248,10 +366,16 @@ if ($claim && myapi_building_admin_field_value($node, 'field_status') !== myapi_
 
 ## Manual verification
 
-No unit test: every function here touches `db_select()`, the Field API, or
-`$_POST`/`$form_state`, the same criterion the rest of `tests/unit/` already
-applies to comparable back-office screens (`myapi_reservation_calendar_page()`,
-`myapi_claims_list_page()`).
+Two functions of this file **are** unit tested, in
+`tests/unit/ClaimTransactionEditTest.php` (SPEC 59):
+`myapi_claim_transaction_transaction_form_alter()`, which is FAPI array
+manipulation, and `myapi_claim_transaction_edit_form_submit_redirect()`, which
+is a field read plus an assignment. Everything else here — including
+`myapi_claim_transaction_edit_link()`, which is `node_load()` +
+`node_access()` — touches `db_select()`, the Field API or `$_POST`, the same
+criterion the rest of `tests/unit/` already applies to comparable back-office
+screens (`myapi_reservation_calendar_page()`, `myapi_claims_list_page()`), and
+is verified by the matrices below instead.
 
 ```bash
 drush cc all
@@ -267,6 +391,10 @@ drush cc all
 | Timeline row order | `field_status_date` descending (date **and** time), `nid` descending on a tie |
 | Timeline date cell | `d/m/Y H:i`; a row created before SPEC 58 shows `00:00`, a `NULL` one shows `—` |
 | "Crear transacción" position | First, above the table |
+| "Editar" column | Last column of the table; one link per row the user may update |
+| `administrator` / `backend` | "Editar" on **every** row, of any claim |
+| `administrador edificio` with the claim's condominium | "Editar" on every row of that claim |
+| `administrador edificio` without it | The claim is already outside their listing (SPEC 56); reached by any other means, the "Editar" cell is empty |
 
 **Automatic initial transaction matrix**:
 
@@ -293,6 +421,19 @@ drush cc all
 | No `create claim_transaction content`, or no condominium access (SPEC 56) | 403 on this route, even with the `nid` known |
 | Image > 3 MB, or wrong extension; attachment outside `pdf/doc/docx/xls/xlsx` | Rejected with the native field validation message |
 
+**Edit matrix** (SPEC 59) — `node/%nid/edit` of a `claim_transaction`:
+
+| Case | Expected |
+|---|---|
+| Click "Editar" in the timeline | Navigates to `node/<nid>/edit`, the native Drupal form |
+| `field_claim` on that form | Visible with its current value, but **disabled** — cannot be retyped or autocompleted |
+| `node/add/claim_transaction` (native creation) | `field_claim` normal, editable and required; no forced redirect |
+| Save after changing status / date / comment | Redirects to `node/<claim_nid>/edit`, timeline already showing the change |
+| Tampered POST sending another `field_claim` | Discarded — the transaction stays on its claim |
+| `field_claim` empty or corrupt | Redirect falls back to Drupal's native `node/<nid>`, no error |
+| Editing `field_status` there | Claim's `field_status` still syncs (SPEC 57, `hook_node_update()`) |
+| No `edit any claim_transaction content`, or no condominium access | 403 on `node/<nid>/edit` even with the `nid` known — native Drupal, untouched by this spec |
+
 **Status sync matrix**:
 
 | Case | Expected |
@@ -307,8 +448,11 @@ drush cc all
 **No regression / infra**:
 
 - `resources/*.resource.inc` does not appear in the diff of this spec.
-- `hook_menu()` gained exactly one new route, `node/%node/claim-transaction/add`;
-  no `api/v1/...` path changed.
+- `hook_menu()` gained exactly one new route, `node/%node/claim-transaction/add`
+  (SPEC 57); SPEC 59 added **none** — the "Editar" link points at Drupal's own
+  `node/%/edit`. No `api/v1/...` path changed.
+- No permission was granted or revoked by SPEC 59: `create` / `edit any
+  claim_transaction content` are exactly the ones SPEC 56 gave.
 - The existing `'pagos'`, `'boletin'`, `'recibo'`, `'alicuota_extra'`,
   `'reservation'` branches of `myapi_node_insert()`/`myapi_node_update()`
   are unchanged.
