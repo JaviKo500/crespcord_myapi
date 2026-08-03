@@ -323,6 +323,93 @@ function myapi_claim_transaction_reclamo_form_alter(&$form, &$form_state) {
 }
 
 /* ---------------------------------------------------------------------------
+ * 'claim_transaction' node form alter (SPEC 59).
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Delegate of myapi_form_claim_transaction_node_form_alter() (myapi.module).
+ *
+ * Two things, both only in edit mode ($form['#node']->nid set): field_claim is
+ * locked, and the redirect handler below is appended. On
+ * node/add/claim_transaction nothing is touched — a transaction being created
+ * does not belong to any claim yet, so there is nothing to protect and nowhere
+ * to redirect to; same criterion as myapi_claim_transaction_reclamo_form_alter()
+ * on node/add/reclamo.
+ *
+ * #disabled, not #access = FALSE, for the same reason as field_status in that
+ * other alter (SPEC 57): the operator keeps seeing WHICH claim the transaction
+ * belongs to, and Drupal resubmits a disabled element's value, so saving never
+ * blanks it — nor accepts a different one sent by a hand-crafted POST, which
+ * is the risk this lock exists for.
+ *
+ * The walk goes one level deeper than the field_status one: field_claim uses
+ * the 'entityreference_autocomplete' widget, which nests the real textfield
+ * under 'target_id' inside each delta, whereas 'options_select' makes the
+ * langcode-level element itself the select.
+ *
+ * The isset() guards the LOOP only, not the #submit: if another module (or a
+ * field_access rule) removed field_claim from the form there is nothing to
+ * disable, but redirecting to the claim is still right — the handler resolves
+ * it from the saved node, not from the form.
+ *
+ * @param array $form
+ * @param array $form_state
+ */
+function myapi_claim_transaction_transaction_form_alter(&$form, &$form_state) {
+  if (empty($form['#node']->nid)) {
+    return;
+  }
+
+  if (isset($form['field_claim'])) {
+    foreach (element_children($form['field_claim']) as $langcode) {
+      foreach (element_children($form['field_claim'][$langcode]) as $delta) {
+        if (isset($form['field_claim'][$langcode][$delta]['target_id'])) {
+          $form['field_claim'][$langcode][$delta]['target_id']['#disabled'] = TRUE;
+        }
+      }
+    }
+  }
+
+  $form['#submit'][] = 'myapi_claim_transaction_edit_form_submit_redirect';
+}
+
+/**
+ * Sends the operator back to the claim after saving a transaction (SPEC 59).
+ *
+ * Appended to the END of $form['#submit'] by the alter above, so it runs after
+ * node_form_submit() has saved the node and left the updated object in
+ * $form_state['node'] — field_claim included, which Drupal resubmits despite
+ * the #disabled (same mechanism SPEC 57 documents for field_status).
+ *
+ * Overriding $form_state['redirect'] is the standard FAPI way to change where
+ * a form lands, and is why this is a submit handler rather than a
+ * drupal_goto() inside hook_node_update(): a goto there would abort the other
+ * hook_node_update() implementations queued behind it — including this
+ * module's own status sync.
+ *
+ * When field_claim does not resolve (the corrupt-data case SPEC 56/57 already
+ * document) the redirect is left ALONE rather than set to something invalid:
+ * Drupal then falls back to its native destination, node/<nid>. The
+ * empty($form_state['node']) guard is the counterpart for a submit chain
+ * another module altered — reading a missing index would be a PHP notice.
+ *
+ * @param array $form
+ * @param array $form_state
+ */
+function myapi_claim_transaction_edit_form_submit_redirect($form, &$form_state) {
+  if (empty($form_state['node'])) {
+    return;
+  }
+
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+
+  $claim_nid = myapi_building_admin_field_target_id($form_state['node'], 'field_claim');
+  if ($claim_nid) {
+    $form_state['redirect'] = 'node/' . $claim_nid . '/edit';
+  }
+}
+
+/* ---------------------------------------------------------------------------
  * Timeline render.
  * ------------------------------------------------------------------------ */
 
@@ -346,6 +433,42 @@ function myapi_claim_transaction_author_label($row) {
 }
 
 /**
+ * The 'Editar' link of one timeline row, or nothing when it may not be used
+ * (SPEC 59).
+ *
+ * The link is HIDDEN rather than disabled for users without access: a link
+ * that leads to a 403 is worse than no link, and it is the same criterion the
+ * creation route already follows (myapi_claim_transaction_add_access(),
+ * myapi.module, which also resolves access before showing its own link).
+ *
+ * node_access('update', ...) is the single source of truth here, not a
+ * hand-rolled rule: it already covers 'bypass node access' for
+ * administrator/backend AND the per-condominium 'via_claim' filter that
+ * SPEC 56 gave 'administrador edificio'. Reimplementing that here would
+ * duplicate logic (Regla 3 de CLAUDE.md) and could silently drift from it.
+ *
+ * This is why the row's raw nid is not enough and node_load() is called per
+ * row: node_access() needs the node object. The cost is the one SPEC 56
+ * already accepted for 'via_claim' ("se paga por nodo cargado") over the low
+ * per-claim volume SPEC 57 assumes (no pager).
+ *
+ * @param int $nid
+ *   The 'claim_transaction' node id of the row.
+ *
+ * @return string
+ *   The rendered link, or '' when the node is gone or the user may not update
+ *   it. No substitute text: the cell is simply left empty.
+ */
+function myapi_claim_transaction_edit_link($nid) {
+  $transaction_node = node_load($nid);
+  if (!$transaction_node || !node_access('update', $transaction_node)) {
+    return '';
+  }
+
+  return l(t('Editar'), 'node/' . $nid . '/edit');
+}
+
+/**
  * Builds the timeline table body from the query rows.
  *
  * Status is labelled with myapi_claims_status_label() (SPEC 56,
@@ -358,6 +481,12 @@ function myapi_claim_transaction_author_label($row) {
  * for their timestamps. Transactions created before SPEC 58 were stored with
  * a '00:00' time and therefore display as such: that is the value actually
  * recorded, not a formatting bug.
+ *
+ * The last cell is the 'Editar' link (SPEC 59), which is already-rendered
+ * markup and therefore goes in as a '#markup' render element rather than as a
+ * plain string: theme_table() runs check_plain() over a string cell, which
+ * would print the <a> tag instead of the link. Empty for the rows the current
+ * user may not update — see myapi_claim_transaction_edit_link().
  *
  * @param array $rows  Rows from myapi_claim_transaction_timeline_rows().
  *
@@ -372,6 +501,7 @@ function myapi_claim_transaction_timeline_table_rows(array $rows) {
       $row->status_date === NULL ? '—' : check_plain(format_date(strtotime($row->status_date), 'custom', 'd/m/Y H:i')),
       ($row->comment === NULL || $row->comment === '') ? '—' : check_plain($row->comment),
       myapi_claim_transaction_author_label($row),
+      array('data' => array('#markup' => myapi_claim_transaction_edit_link($row->nid))),
     );
   }
 
@@ -407,7 +537,7 @@ function myapi_claim_transaction_timeline_build($claim_node) {
 
   $build['table'] = array(
     '#theme' => 'table',
-    '#header' => array(t('Estado'), t('Fecha de estado'), t('Comentario'), t('Autor')),
+    '#header' => array(t('Estado'), t('Fecha de estado'), t('Comentario'), t('Autor'), t('Editar')),
     '#rows' => myapi_claim_transaction_timeline_table_rows($rows),
     '#empty' => t('Todavía no hay transacciones para este reclamo.'),
   );

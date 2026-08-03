@@ -123,11 +123,16 @@ if (!function_exists('element_children')) {
    * Every key that is not a '#property'. Drupal's own version also sorts by
    * '#weight' when asked; myapi never asks, and the widget's deltas are
    * already in order, so the sort is left out on purpose.
+   *
+   * The is_int() branch is the PHP 7.4 guard: field widget deltas are integer
+   * keys, and $key[0] on an int raises "Trying to access array offset on value
+   * of type int". An integer key is never a '#property', so short-circuiting
+   * on it is faithful to the original rather than a deviation from it.
    */
   function element_children(&$elements, $sort = FALSE) {
     $children = array();
     foreach ($elements as $key => $value) {
-      if ($key === '' || $key[0] !== '#') {
+      if (is_int($key) || $key === '' || $key[0] !== '#') {
         $children[] = $key;
       }
     }
