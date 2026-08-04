@@ -1,6 +1,6 @@
 # SPEC 68 — Notificaciones de reclamos y de sus transacciones
 
-> **Estado:** Approved · **Fecha:** 2026-08-04
+> **Estado:** Implemented · **Fecha:** 2026-08-04
 >
 > **Depende de:**
 > - **SPEC 55** — bundles `reclamo` y `claim_transaction` y sus campos
@@ -649,110 +649,110 @@ está hoy, con todo el código de los pasos 1–5 inerte.
 
 **Creación desde la app (Caso 2) — solicitante**
 
-- [ ] Un `POST /api/v1/claims` exitoso inserta una fila en `myapi_notifications` con `uid` = `field_requester`, `type = "claim_created"`, `source_type = "claim"`, `source_nid` = nid del reclamo, `deep_link_target = "claim"` y `deep_link_id` = nid del reclamo.
-- [ ] `condominium_id` de esa fila es el nid de `field_condominium`, y `unit_id` es `NULL`.
-- [ ] El `title` es exactamente `Reclamo recibido`, o `Requerimiento recibido` cuando `field_claim_type = "requirement"`.
-- [ ] El `body` es exactamente `{asunto}\nRecibido el {d/m/Y H:i}`, con la fecha tomada de `field_reception_date`.
-- [ ] Se encola el push correspondiente en `myapi_onesignal_push` con ese mismo título y cuerpo.
-- [ ] Se encola un email `claim_created_requester` al correo del solicitante, con asunto `Reclamo recibido — {asunto}`.
+- [x] Un `POST /api/v1/claims` exitoso inserta una fila en `myapi_notifications` con `uid` = `field_requester`, `type = "claim_created"`, `source_type = "claim"`, `source_nid` = nid del reclamo, `deep_link_target = "claim"` y `deep_link_id` = nid del reclamo.
+- [x] `condominium_id` de esa fila es el nid de `field_condominium`, y `unit_id` es `NULL`.
+- [x] El `title` es exactamente `Reclamo recibido`, o `Requerimiento recibido` cuando `field_claim_type = "requirement"`.
+- [x] El `body` es exactamente `{asunto}\nRecibido el {d/m/Y H:i}`, con la fecha tomada de `field_reception_date`.
+- [x] Se encola el push correspondiente en `myapi_onesignal_push` con ese mismo título y cuerpo.
+- [x] Se encola un email `claim_created_requester` al correo del solicitante, con asunto `Reclamo recibido — {asunto}`.
 
 **Creación desde la app (Caso 2) — back office**
 
-- [ ] Se encola un email `claim_created_admin` **por cada** usuario activo con rol `backend` que tenga correo.
-- [ ] Se encola uno **por cada** usuario activo con rol `administrador edificio` cuyo `field_condominio_admin` incluya el condominio del reclamo.
-- [ ] Un usuario que tiene **ambos** roles recibe **un solo** email, no dos.
-- [ ] Un `administrador edificio` de **otro** condominio no recibe nada.
-- [ ] Un usuario con rol `backend` **bloqueado** no recibe email; el `uid 1` tampoco, salvo que tenga el rol asignado.
-- [ ] El asunto es `Nuevo reclamo #{nid} — {condominio}`.
-- [ ] El email muestra Reclamo, Asunto, Tipo, Visibilidad, Estado, Solicitante, Email, Condominio, Recibido el, Adjuntos y Descripción; **no** muestra ninguna línea "Vivienda".
-- [ ] La línea `Adjuntos` refleja el conteo real (`2 imágenes, 1 documento`) y **se omite** cuando el reclamo no tiene ninguno.
-- [ ] El botón `Abrir en el back office` apunta a la URL absoluta de `node/{nid}` y abre el reclamo tras el login.
-- [ ] Se envía **un email por destinatario**; ninguno lleva a otro operador en copia.
+- [x] Se encola un email `claim_created_admin` **por cada** usuario activo con rol `backend` que tenga correo.
+- [x] Se encola uno **por cada** usuario activo con rol `administrador edificio` cuyo `field_condominio_admin` incluya el condominio del reclamo.
+- [x] Un usuario que tiene **ambos** roles recibe **un solo** email, no dos.
+- [x] Un `administrador edificio` de **otro** condominio no recibe nada.
+- [x] Un usuario con rol `backend` **bloqueado** no recibe email; el `uid 1` tampoco, salvo que tenga el rol asignado.
+- [x] El asunto es `Nuevo reclamo #{nid} — {condominio}`.
+- [x] El email muestra Reclamo, Asunto, Tipo, Visibilidad, Estado, Solicitante, Email, Condominio, Recibido el, Adjuntos y Descripción; **no** muestra ninguna línea "Vivienda".
+- [x] La línea `Adjuntos` refleja el conteo real (`2 imágenes, 1 documento`) y **se omite** cuando el reclamo no tiene ninguno.
+- [x] El botón `Abrir en el back office` apunta a la URL absoluta de `node/{nid}` y abre el reclamo tras el login.
+- [x] Se envía **un email por destinatario**; ninguno lleva a otro operador en copia.
 
 **Creación desde el back office (Caso 1)**
 
-- [ ] Crear un `reclamo` desde `node/add/reclamo` notifica al solicitante exactamente igual que el Caso 2 (misma fila, mismo título, mismo cuerpo, mismo email).
-- [ ] **Ningún** usuario con rol `backend` ni `administrador edificio` recibe email en este caso.
-- [ ] Lo mismo para un alta programática (`node_save()` vía drush, migración o import): notifica al residente y a nadie de back office.
+- [x] Crear un `reclamo` desde `node/add/reclamo` notifica al solicitante exactamente igual que el Caso 2 (misma fila, mismo título, mismo cuerpo, mismo email).
+- [x] **Ningún** usuario con rol `backend` ni `administrador edificio` recibe email en este caso.
+- [x] Lo mismo para un alta programática (`node_save()` vía drush, migración o import): notifica al residente y a nadie de back office.
 
 **Visibilidad pública en la creación**
 
-- [ ] Un reclamo creado con `visibility = "public"` inserta, además de la del solicitante, una fila `type = "claim_published"` para **cada** propietario y ocupante activo de las viviendas del condominio.
-- [ ] El solicitante recibe **una sola** notificación (`claim_created`) aunque sea propietario u ocupante de ese condominio; nunca dos.
-- [ ] El `title` del vecino es `Nuevo reclamo en tu condominio` y el `body` es `{asunto}\nPublicado el {d/m/Y H:i}`.
-- [ ] Cada vecino recibe un email `claim_published_neighbour`.
-- [ ] Un reclamo creado con `visibility = "private"` no genera **ninguna** fila para nadie que no sea el solicitante.
+- [x] Un reclamo creado con `visibility = "public"` inserta, además de la del solicitante, una fila `type = "claim_published"` para **cada** propietario y ocupante activo de las viviendas del condominio.
+- [x] El solicitante recibe **una sola** notificación (`claim_created`) aunque sea propietario u ocupante de ese condominio; nunca dos.
+- [x] El `title` del vecino es `Nuevo reclamo en tu condominio` y el `body` es `{asunto}\nPublicado el {d/m/Y H:i}`.
+- [x] Cada vecino recibe un email `claim_published_neighbour`.
+- [x] Un reclamo creado con `visibility = "private"` no genera **ninguna** fila para nadie que no sea el solicitante.
 
 **Transición privado → público**
 
-- [ ] `POST /api/v1/claims/{id}` cambiando `visibility` de `private` a `public` inserta una fila `claim_published` para cada usuario del condominio **excepto** el solicitante.
-- [ ] El mismo cambio hecho en `node/{nid}/edit` del back office produce exactamente el mismo resultado.
-- [ ] La línea `Publicado el` muestra la **hora del guardado**, no la fecha de recepción original del reclamo.
-- [ ] El solicitante **no** recibe nada por esta transición.
-- [ ] El cambio inverso (`public` → `private`) no genera fila, push ni email para nadie.
-- [ ] Editar un reclamo **sin** tocar `field_visibility` (cambiar asunto, descripción, condominio, archivos) no genera nada.
-- [ ] Editar un reclamo que ya era `public` dejándolo `public` no genera nada.
-- [ ] `POST /api/v1/claims/{id}` sigue respondiendo `200` con el mismo cuerpo que definió SPEC 67, con y sin transición.
+- [x] `POST /api/v1/claims/{id}` cambiando `visibility` de `private` a `public` inserta una fila `claim_published` para cada usuario del condominio **excepto** el solicitante.
+- [x] El mismo cambio hecho en `node/{nid}/edit` del back office produce exactamente el mismo resultado.
+- [x] La línea `Publicado el` muestra la **hora del guardado**, no la fecha de recepción original del reclamo.
+- [x] El solicitante **no** recibe nada por esta transición.
+- [x] El cambio inverso (`public` → `private`) no genera fila, push ni email para nadie.
+- [x] Editar un reclamo **sin** tocar `field_visibility` (cambiar asunto, descripción, condominio, archivos) no genera nada.
+- [x] Editar un reclamo que ya era `public` dejándolo `public` no genera nada.
+- [x] `POST /api/v1/claims/{id}` sigue respondiendo `200` con el mismo cuerpo que definió SPEC 67, con y sin transición.
 
 **Transacciones**
 
-- [ ] La transacción inicial automática (`myapi_claim_transaction_create_initial()`) **no** genera fila, push ni email — ni al crear el reclamo desde la app ni desde el back office.
-- [ ] Una transacción creada después inserta una fila `type = "claim_transaction_created"` para el solicitante, con `source_nid` y `deep_link_id` = nid del **reclamo**, nunca el de la transacción.
-- [ ] El `title` del solicitante es `Tu reclamo pasó a "En proceso"` (o `Tu requerimiento pasó a …`), con la etiqueta del catálogo de SPEC 62.
-- [ ] Su `body` es `{asunto}\n{comentario}\n{d/m/Y H:i}`.
-- [ ] Sobre un reclamo **público**, cada vecino recibe además una fila con `title = "Novedad en un reclamo de tu condominio"` y `body = "{asunto}\nEstado: En proceso · {d/m/Y H:i}\n{comentario}"`.
-- [ ] Sobre un reclamo **privado**, ningún vecino recibe nada.
-- [ ] El solicitante recibe **una sola** notificación aunque el reclamo sea público.
-- [ ] Se encolan los emails `claim_transaction_requester` y `claim_transaction_neighbour` correspondientes, con el comentario **completo** (sin recorte) en el cuerpo.
-- [ ] **Editar** una transacción existente no genera fila, push ni email.
-- [ ] Una transacción creada desde `node/add/claim_transaction` (formulario nativo) notifica igual que una creada desde el formulario propio de SPEC 57.
+- [x] La transacción inicial automática (`myapi_claim_transaction_create_initial()`) **no** genera fila, push ni email — ni al crear el reclamo desde la app ni desde el back office.
+- [x] Una transacción creada después inserta una fila `type = "claim_transaction_created"` para el solicitante, con `source_nid` y `deep_link_id` = nid del **reclamo**, nunca el de la transacción.
+- [x] El `title` del solicitante es `Tu reclamo pasó a "En proceso"` (o `Tu requerimiento pasó a …`), con la etiqueta del catálogo de SPEC 62.
+- [x] Su `body` es `{asunto}\n{comentario}\n{d/m/Y H:i}`.
+- [x] Sobre un reclamo **público**, cada vecino recibe además una fila con `title = "Novedad en un reclamo de tu condominio"` y `body = "{asunto}\nEstado: En proceso · {d/m/Y H:i}\n{comentario}"`.
+- [x] Sobre un reclamo **privado**, ningún vecino recibe nada.
+- [x] El solicitante recibe **una sola** notificación aunque el reclamo sea público.
+- [x] Se encolan los emails `claim_transaction_requester` y `claim_transaction_neighbour` correspondientes, con el comentario **completo** (sin recorte) en el cuerpo.
+- [x] **Editar** una transacción existente no genera fila, push ni email.
+- [x] Una transacción creada desde `node/add/claim_transaction` (formulario nativo) notifica igual que una creada desde el formulario propio de SPEC 57.
 
 **Recorte y formato de los textos**
 
-- [ ] Un asunto de más de 80 caracteres aparece recortado con `…` en el título/cuerpo del push y en el asunto del email; uno de 80 o menos aparece íntegro y **sin** `…`.
-- [ ] Un comentario de más de 120 caracteres aparece recortado con `…` en el push; el email lo muestra completo.
-- [ ] Todas las fechas de push, inbox y emails usan `d/m/Y H:i`; en ningún texto aparece el formato `YYYY-MM-DD`.
-- [ ] Con el asunto ya recortado a 80, `myapi_onesignal_truncate_body()` nunca corta la primera línea del cuerpo.
+- [x] Un asunto de más de 80 caracteres aparece recortado con `…` en el título/cuerpo del push y en el asunto del email; uno de 80 o menos aparece íntegro y **sin** `…`.
+- [x] Un comentario de más de 120 caracteres aparece recortado con `…` en el push; el email lo muestra completo.
+- [x] Todas las fechas de push, inbox y emails usan `d/m/Y H:i`; en ningún texto aparece el formato `YYYY-MM-DD`.
+- [x] Con el asunto ya recortado a 80, `myapi_onesignal_truncate_body()` nunca corta la primera línea del cuerpo.
 
 **Degradados**
 
-- [ ] Un reclamo con `field_requester` vacío no notifica a nadie por la vía del solicitante, deja un `watchdog` de warning, y —si es público— el fan-out al condominio ocurre igual.
-- [ ] Un solicitante sin correo recibe push e inbox; su email se salta con un `watchdog` y la creación responde igual.
-- [ ] Un reclamo sin condominio resuelto no produce fan-out al condominio ni emails a `administrador edificio`, y su fila lleva `condominium_id = NULL`.
-- [ ] Una transacción con `field_comment` vacío produce un cuerpo de dos líneas, sin línea en blanco colgando.
-- [ ] Un `field_status` sin etiqueta resoluble produce el título `Novedad en tu reclamo` y omite la línea `Estado:` del vecino, sin errores PHP.
-- [ ] Un `field_claim_type` ausente o desconocido produce el sustantivo `Reclamo`, igual que SPEC 61.
-- [ ] Un condominio sin propietarios ni ocupantes activos no encola nada y no produce error.
-- [ ] Si no hay ningún usuario activo con rol `backend` ni `administrador edificio` del condominio, la creación desde la app funciona igual y no se encola ningún email de detalle.
-- [ ] Un correo inválido en la lista de destinatarios no impide el envío a los demás.
-- [ ] Un fallo de envío reintenta hasta 3 veces y luego se descarta con un `watchdog` de error; la cola no queda atascada.
+- [x] Un reclamo con `field_requester` vacío no notifica a nadie por la vía del solicitante, deja un `watchdog` de warning, y —si es público— el fan-out al condominio ocurre igual.
+- [x] Un solicitante sin correo recibe push e inbox; su email se salta con un `watchdog` y la creación responde igual.
+- [x] Un reclamo sin condominio resuelto no produce fan-out al condominio ni emails a `administrador edificio`, y su fila lleva `condominium_id = NULL`.
+- [x] Una transacción con `field_comment` vacío produce un cuerpo de dos líneas, sin línea en blanco colgando.
+- [x] Un `field_status` sin etiqueta resoluble produce el título `Novedad en tu reclamo` y omite la línea `Estado:` del vecino, sin errores PHP.
+- [x] Un `field_claim_type` ausente o desconocido produce el sustantivo `Reclamo`, igual que SPEC 61.
+- [x] Un condominio sin propietarios ni ocupantes activos no encola nada y no produce error.
+- [x] Si no hay ningún usuario activo con rol `backend` ni `administrador edificio` del condominio, la creación desde la app funciona igual y no se encola ningún email de detalle.
+- [x] Un correo inválido en la lista de destinatarios no impide el envío a los demás.
+- [x] Un fallo de envío reintenta hasta 3 veces y luego se descarta con un `watchdog` de error; la cola no queda atascada.
 
 **Integridad y guardián**
 
-- [ ] Ningún uid recibe dos filas por el mismo evento, en ninguna combinación de visibilidad, rol y pertenencia al condominio.
-- [ ] Un re-guardado del mismo nodo dentro de la misma request notifica como máximo una vez (`drupal_static()` por nid).
-- [ ] Un fallo dentro de cualquiera de los tres orquestadores no impide el guardado del nodo ni cambia la respuesta del endpoint.
+- [x] Ningún uid recibe dos filas por el mismo evento, en ninguna combinación de visibilidad, rol y pertenencia al condominio.
+- [x] Un re-guardado del mismo nodo dentro de la misma request notifica como máximo una vez (`drupal_static()` por nid).
+- [x] Un fallo dentro de cualquiera de los tres orquestadores no impide el guardado del nodo ni cambia la respuesta del endpoint.
 
 **Colas y transporte**
 
-- [ ] `drush cron` drena `myapi_mail_send` y `myapi_onesignal_push`, y los correos salen.
-- [ ] Los cinco emails llegan en **HTML** (no convertidos a texto plano) tras `drush updb`.
-- [ ] Los emails se arman con los datos capturados en el momento del disparo: borrar el reclamo entre el disparo y la corrida de cron no impide ni altera el envío.
+- [x] `drush cron` drena `myapi_mail_send` y `myapi_onesignal_push`, y los correos salen.
+- [x] Los cinco emails llegan en **HTML** (no convertidos a texto plano) tras `drush updb`.
+- [x] Los emails se arman con los datos capturados en el momento del disparo: borrar el reclamo entre el disparo y la corrida de cron no impide ni altera el envío.
 
 **No regresión**
 
-- [ ] `POST /api/v1/claims` sigue respondiendo `201` con el mismo cuerpo; `POST /api/v1/claims/{id}`, `200`; los `GET` de claims, idénticos.
-- [ ] Las notificaciones de reserva (SPEC 48) siguen funcionando idénticas tras generalizar sus dos resolutores de destinatarios: mismos uids, mismos emails, mismos asuntos.
-- [ ] Las notificaciones de pago (27/30), alícuota (28) y boletín (25/26) no cambian.
-- [ ] El email de password reset (SPEC 07) sigue llegando en HTML.
-- [ ] La línea de tiempo del reclamo (SPEC 57) muestra las mismas transacciones que antes: este spec no crea ni borra ninguna.
-- [ ] El sync de estado transacción → reclamo (SPEC 57) sigue funcionando.
-- [ ] La suite PHPUnit queda en verde, con los tests nuevos de `ClaimNotificationTest.php` incluidos.
-- [ ] `drush updb && drush cc all` no reporta errores.
+- [x] `POST /api/v1/claims` sigue respondiendo `201` con el mismo cuerpo; `POST /api/v1/claims/{id}`, `200`; los `GET` de claims, idénticos.
+- [x] Las notificaciones de reserva (SPEC 48) siguen funcionando idénticas tras generalizar sus dos resolutores de destinatarios: mismos uids, mismos emails, mismos asuntos.
+- [x] Las notificaciones de pago (27/30), alícuota (28) y boletín (25/26) no cambian.
+- [x] El email de password reset (SPEC 07) sigue llegando en HTML.
+- [x] La línea de tiempo del reclamo (SPEC 57) muestra las mismas transacciones que antes: este spec no crea ni borra ninguna.
+- [x] El sync de estado transacción → reclamo (SPEC 57) sigue funcionando.
+- [x] La suite PHPUnit queda en verde, con los tests nuevos de `ClaimNotificationTest.php` incluidos.
+- [x] `drush updb && drush cc all` no reporta errores.
 
 **Documentación**
 
-- [ ] `docs/claim-notifications.md` documenta los tres disparadores, la matriz de destinatarios, los textos exactos, las dos banderas, el `deep_link.target = "claim"` nuevo y los casos degradados.
+- [x] `docs/claim-notifications.md` documenta los tres disparadores, la matriz de destinatarios, los textos exactos, las dos banderas, el `deep_link.target = "claim"` nuevo y los casos degradados.
 
 ---
 
