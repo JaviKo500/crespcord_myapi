@@ -584,6 +584,29 @@ function myapi_mail($key, &$message, $params) {
     case 'reservation_cancelled_admin':
       myapi_mail_format_reservation_admin($message, $params, $key);
       break;
+
+    // SPEC 68. Five claim keys, four formatters: the two transaction ones
+    // differ in their subject and their context sentence and in nothing else.
+    case 'claim_created_requester':
+      myapi_mail_format_claim_created_user($message, $params);
+      break;
+
+    // Serves the two ways a claim reaches a neighbour — born public, or turned
+    // public later — because from their side both facts are the same one.
+    case 'claim_published_neighbour':
+      myapi_mail_format_claim_published_neighbour($message, $params);
+      break;
+
+    case 'claim_transaction_requester':
+    case 'claim_transaction_neighbour':
+      myapi_mail_format_claim_transaction_user($message, $params, $key);
+      break;
+
+    // Only fires for a claim created from the app: an operator who files one
+    // from the back office already knows it exists.
+    case 'claim_created_admin':
+      myapi_mail_format_claim_created_admin($message, $params);
+      break;
   }
 }
 
@@ -631,7 +654,13 @@ function myapi_node_presave($node) {
  * - 'reclamo': delegates to myapi_claim_transaction_create_initial() in
  *   includes/myapi.claim_transaction_admin.inc (SPEC 57), which creates the
  *   claim's automatic initial transaction. Runs for every 'reclamo' creation
- *   path, not only the admin form — see that function's docblock.
+ *   path, not only the admin form — see that function's docblock. Then, and
+ *   only then, to myapi_claim_notify_created() (SPEC 68,
+ *   includes/myapi.claim_notification.inc): after and not before, so the claim
+ *   already has its initial transaction by the time it is announced, and a
+ *   failure of the notifier can never keep that transaction from being created.
+ *   The second argument is the transient origin flag, which is what tells the
+ *   two creation paths apart — see myapi_claim_is_creation_from_api().
  * - 'claim_transaction': delegates to
  *   myapi_claim_transaction_sync_claim_status() (SPEC 57, same include),
  *   which syncs the parent claim's field_status when it differs. Covers
@@ -641,6 +670,10 @@ function myapi_node_presave($node) {
  *   hook. Never finds a difference for
  *   the automatic initial transaction above, since it is born with the
  *   claim's own current status — no insert-triggers-update cascade.
+ *   Then, again after the data and never before, to
+ *   myapi_claim_notify_transaction() (SPEC 68) — but only when
+ *   myapi_claim_transaction_is_notifiable() says so, which is what keeps the
+ *   automatic initial transaction silent.
  * - Published 'boletin' node: delegates the notification fan-out + push
  *   enqueue to includes/myapi.notification.inc. A bulletin saved as a draft
  *   (status 0) does not notify anyone; editing or publishing it later does
@@ -657,11 +690,17 @@ function myapi_node_insert($node) {
   if ($node->type === 'reclamo') {
     module_load_include('inc', 'myapi', 'includes/myapi.claim_transaction_admin');
     myapi_claim_transaction_create_initial($node);
+    module_load_include('inc', 'myapi', 'includes/myapi.claim_notification');
+    myapi_claim_notify_created($node, myapi_claim_is_creation_from_api($node));
     return;
   }
   if ($node->type === 'claim_transaction') {
     module_load_include('inc', 'myapi', 'includes/myapi.claim_transaction_admin');
     myapi_claim_transaction_sync_claim_status($node);
+    module_load_include('inc', 'myapi', 'includes/myapi.claim_notification');
+    if (myapi_claim_transaction_is_notifiable($node)) {
+      myapi_claim_notify_transaction($node);
+    }
     return;
   }
   if ($node->type !== 'boletin' || $node->status != 1) {
@@ -697,7 +736,18 @@ function myapi_node_insert($node) {
  *   includes/myapi.claim_transaction_admin.inc) — same function
  *   myapi_node_insert()'s 'claim_transaction' branch calls, so editing an
  *   existing transaction's field_status (node/%nid/edit, the native form)
- *   syncs the claim exactly like creating one does.
+ *   syncs the claim exactly like creating one does. It deliberately does NOT
+ *   notify: SPEC 68 covers the creation of a transaction and not its edition.
+ * - 'reclamo' (SPEC 68): delegates to myapi_claim_is_publication_transition() /
+ *   myapi_claim_notify_published() in includes/myapi.claim_notification.inc,
+ *   notifying the neighbours of the condominium — requester excluded — the one
+ *   time a claim goes from private to public. Covers the two paths that produce
+ *   that transition, POST /api/v1/claims/{id} and node/%nid/edit. Every other
+ *   edition of a claim notifies nobody: the inverse transition, a new subject,
+ *   a new description or a new file change nothing about who can see it.
+ *   The type is compared against the literal, like the four branches above,
+ *   and not against MYAPI_BUILDING_ADMIN_CLAIM_TYPE: that constant lives in an
+ *   include this function has not loaded yet at that point.
  */
 function myapi_node_update($node) {
   if ($node->type === 'pagos') {
@@ -727,6 +777,13 @@ function myapi_node_update($node) {
   if ($node->type === 'claim_transaction') {
     module_load_include('inc', 'myapi', 'includes/myapi.claim_transaction_admin');
     myapi_claim_transaction_sync_claim_status($node);
+    return;
+  }
+  if ($node->type === 'reclamo') {
+    module_load_include('inc', 'myapi', 'includes/myapi.claim_notification');
+    if (myapi_claim_is_publication_transition($node)) {
+      myapi_claim_notify_published($node);
+    }
     return;
   }
 }

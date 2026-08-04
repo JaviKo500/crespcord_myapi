@@ -641,3 +641,548 @@ function myapi_claim_transaction_neighbour_push_body($subject, $status_label, $c
 
   return implode("\n", $lines);
 }
+
+/**
+ * Human count of the files attached to a claim, for the back-office email.
+ *
+ * A count and never a link: the files live in private:// and their download
+ * requires a token (SPEC 65), so a link from a mail client would answer 404.
+ * What the operator needs from the email is whether it is worth opening.
+ *
+ * @param int  $image_count     Files in field_images.
+ * @param bool $has_attachment  Whether field_attachment carries one.
+ *
+ * @return string  '2 imágenes, 1 documento'. Empty string when there is
+ *   nothing, which is what drops the line from the email.
+ */
+function myapi_claim_attachment_label($image_count, $has_attachment) {
+  $parts = array();
+
+  $image_count = (int) $image_count;
+  if ($image_count === 1) {
+    $parts[] = t('1 imagen');
+  }
+  elseif ($image_count > 1) {
+    // '@number' and not '@count': the latter is the placeholder format_plural()
+    // reserves, and this function does its own branching to stay pure.
+    $parts[] = t('@number imágenes', array('@number' => $image_count));
+  }
+
+  if ($has_attachment) {
+    // field_attachment holds at most one file, so the singular is the only
+    // form this branch can produce.
+    $parts[] = t('1 documento');
+  }
+
+  return implode(', ', $parts);
+}
+
+/**
+ * Human label of a claim's visibility, for the back-office email.
+ *
+ * NULL is treated as private, the same way every other read of
+ * field_visibility in this file does: only the explicit 'public' value opens
+ * anything.
+ *
+ * @param string|null $visibility  field_visibility, as stored.
+ *
+ * @return string  'Público' or 'Privado'.
+ */
+function myapi_claim_visibility_label($visibility) {
+  return ($visibility === MYAPI_CLAIM_VISIBILITY_PUBLIC) ? t('Público') : t('Privado');
+}
+
+/* ---------------------------------------------------------------------------
+ * Detectors.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Whether a claim was created from the app rather than from the back office.
+ *
+ * Reads the transient flag myapi_claim_create() sets right before its
+ * node_save() (SPEC 66) — a property of the object, never a stored field, so it
+ * lives only for that save. The same mechanism SPEC 30 and SPEC 48 already run
+ * in production.
+ *
+ * The DEFAULT IS THE CONSERVATIVE ONE: with no flag there is no detail email to
+ * the back office. A future path that creates claims without marking anything —
+ * a migration, an import, drush — notifies the resident and nobody else, which
+ * is the safe failure, not a silent flood of operator emails.
+ *
+ * Detecting the origin by the current user's role was rejected on purpose: an
+ * administrator using the API in the future would stop notifying the back
+ * office, silently.
+ *
+ * @param object $node  The just-inserted 'reclamo' node.
+ *
+ * @return bool
+ */
+function myapi_claim_is_creation_from_api($node) {
+  return !empty($node->myapi_claim_from_api);
+}
+
+/**
+ * Whether this save is the moment a claim became public.
+ *
+ * Three conditions, all required: it is an update of a stored node (so there is
+ * a previous value to compare against), that previous value was NOT public, and
+ * the incoming one is. Any other combination answers FALSE — including the
+ * inverse transition, which deliberately notifies nobody: you cannot un-notify
+ * whoever already read the claim, and pointing at something that stopped being
+ * visible is worse than silence.
+ *
+ * The literal comes from MYAPI_CLAIM_VISIBILITY_PUBLIC and never from a repeated
+ * string, so a change to field_visibility's allowed_values has one place to be
+ * reflected instead of failing silently here.
+ *
+ * @param object $node  The 'reclamo' node being updated.
+ *
+ * @return bool
+ */
+function myapi_claim_is_publication_transition($node) {
+  if (!isset($node->original)) {
+    return FALSE;
+  }
+
+  $previous = myapi_building_admin_field_value($node->original, 'field_visibility');
+  $incoming = myapi_building_admin_field_value($node, 'field_visibility');
+
+  return $incoming === MYAPI_CLAIM_VISIBILITY_PUBLIC
+    && $previous !== MYAPI_CLAIM_VISIBILITY_PUBLIC;
+}
+
+/**
+ * Whether a just-inserted transaction is one that has to be notified.
+ *
+ * Two ways to say no:
+ * - The transient opt-out flag is set. That is how the automatic initial
+ *   transaction (SPEC 57) stays silent: the fact it records — "the claim was
+ *   received" — is already notified by the creation of the claim itself, and
+ *   announcing both would be the same message twice, two seconds apart.
+ * - field_claim does not resolve to a loadable claim. Without the claim there
+ *   is no subject, no condominium and no requester, i.e. nobody to notify and
+ *   nothing to say. The corrupt-field_claim case SPEC 56/57 already document.
+ *
+ * Counting the claim's existing transactions was rejected: the count depends on
+ * the save order inside the claim's own node_save() and breaks the day somebody
+ * deletes the initial transaction. The flag is explicit, costs no query, and
+ * its default — notify — is the expected one for any future path.
+ *
+ * @param object $node  The just-inserted 'claim_transaction' node.
+ *
+ * @return bool
+ */
+function myapi_claim_transaction_is_notifiable($node) {
+  if (!empty($node->myapi_skip_claim_notification)) {
+    return FALSE;
+  }
+
+  $claim_nid = myapi_building_admin_field_target_id($node, 'field_claim');
+
+  return $claim_nid !== NULL && node_load($claim_nid) !== FALSE;
+}
+
+/* ---------------------------------------------------------------------------
+ * Channel helpers.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Inserts the inbox rows and enqueues the push for one claim event.
+ *
+ * The six common keys of every myapi_notifications row this spec writes live
+ * here and nowhere else. source_nid and deep_link_id are ALWAYS the claim's,
+ * never the transaction's: the app opens the claim detail, where the timeline
+ * gives the news its context. unit_id is always NULL — the 'reclamo' bundle has
+ * no field_unit.
+ *
+ * Each "text + audience" combination is its own call, because
+ * myapi_notification_create() writes one single body for every uid it receives.
+ *
+ * @param object $row    Claim row from myapi_claim_notification_row().
+ * @param string $type   Notification type constant.
+ * @param string $title  Push and inbox title.
+ * @param string $body   Push and inbox body.
+ * @param array  $uids   Recipients. A no-op when empty.
+ */
+function myapi_claim_notify_inbox($row, $type, $title, $body, array $uids) {
+  if (empty($uids)) {
+    return;
+  }
+
+  module_load_include('inc', 'myapi', 'includes/myapi.notification');
+
+  myapi_notification_create(array(
+    'source_type'      => MYAPI_NOTIFICATION_SOURCE_CLAIM,
+    'source_nid'       => $row->nid,
+    'type'             => $type,
+    'title'            => $title,
+    'body'             => $body,
+    'deep_link_target' => MYAPI_NOTIFICATION_DEEP_LINK_CLAIM,
+    'deep_link_id'     => $row->nid,
+    'condominium_id'   => $row->condominium_id,
+    'unit_id'          => NULL,
+    'uids'             => $uids,
+  ));
+}
+
+/**
+ * Enqueues one email per recipient uid.
+ *
+ * One queue item per address, never one message with everybody in copy: an
+ * invalid address does not drag the rest down, and no neighbour sees the mailbox
+ * of the others. Same criterion as SPEC 48.
+ *
+ * An account with no address is skipped by myapi_mail_queue_enqueue(), which
+ * logs the reason — the push and the inbox row, which are the immediate
+ * channel, already went out.
+ *
+ * @param string $key     Mail key.
+ * @param array  $uids    Recipient uids.
+ * @param array  $params  Already resolved and escaped params.
+ */
+function myapi_claim_enqueue_mails($key, array $uids, array $params) {
+  if (empty($uids)) {
+    return;
+  }
+
+  module_load_include('inc', 'myapi', 'includes/myapi.mail_queue');
+
+  foreach (user_load_multiple($uids) as $account) {
+    myapi_mail_queue_enqueue($key, (string) $account->mail, $params);
+  }
+}
+
+/**
+ * Params of the two creation/publication emails.
+ *
+ * Everything travels already resolved and escaped — strings, not nids: the
+ * queue drains on cron, long after the save, and the email must describe what
+ * was true at the instant of the trigger. A claim deleted or a condominium
+ * renamed in between changes nothing.
+ *
+ * @param object $row  Claim row.
+ *
+ * @return array
+ */
+function myapi_claim_mail_params($row) {
+  return array(
+    'nid'            => $row->nid,
+    'type_label'     => myapi_claim_type_label($row->claim_type),
+    'type_noun'      => myapi_claim_type_noun($row->claim_type),
+    // The full subject for the data block; the cut one only for the mail
+    // subject line, which is the one the spec limits to 80.
+    'subject'        => check_plain($row->subject),
+    'subject_short'  => check_plain(myapi_claim_excerpt($row->subject, MYAPI_CLAIM_SUBJECT_EXCERPT)),
+    'condominium'    => check_plain($row->condominium_name),
+    'status'         => $row->status_label !== NULL ? check_plain($row->status_label) : '—',
+    'reception_date' => check_plain(myapi_claim_date_label($row->reception_date)),
+    'description'    => check_plain($row->description),
+  );
+}
+
+/**
+ * Params of the two transaction emails.
+ *
+ * The comment travels WHOLE, unlike in the push where it is cut at 120: there
+ * is no 200-character budget to respect in an email.
+ *
+ * @param object      $row           Claim row.
+ * @param string|null $status_label  Resolved status of the TRANSACTION.
+ * @param string|null $comment       field_comment of the transaction.
+ * @param int         $timestamp     Timestamp of field_status_date.
+ *
+ * @return array
+ */
+function myapi_claim_transaction_mail_params($row, $status_label, $comment, $timestamp) {
+  return array(
+    'nid'           => $row->nid,
+    'type_label'    => myapi_claim_type_label($row->claim_type),
+    'type_noun'     => myapi_claim_type_noun($row->claim_type),
+    'subject'       => check_plain($row->subject),
+    'subject_short' => check_plain(myapi_claim_excerpt($row->subject, MYAPI_CLAIM_SUBJECT_EXCERPT)),
+    'status'        => $status_label !== NULL ? check_plain($status_label) : '—',
+    'date'          => check_plain(myapi_claim_date_label($timestamp)),
+    'comment'       => check_plain((string) $comment),
+  );
+}
+
+/**
+ * Enqueues the detail email to the back office: 'backend' plus the building
+ * admins of the claim's condominium.
+ *
+ * The union is deduplicated, so somebody holding both roles gets ONE email. A
+ * claim with no condominium resolved reaches no building admin — there is
+ * nobody to scope to — but still reaches the 'backend' role, which is
+ * site-wide.
+ *
+ * The subject of this key carries the nid and the condominium, so it is the
+ * only one of the five that is not truncated to 80.
+ *
+ * @param object $row  Claim row.
+ */
+function myapi_claim_enqueue_admin_mails($row) {
+  module_load_include('inc', 'myapi', 'includes/myapi.notification');
+
+  $uids = array_values(array_unique(array_merge(
+    myapi_notification_role_uids(MYAPI_CLAIM_NOTIFY_ROLE),
+    myapi_notification_building_admin_uids($row->condominium_id)
+  )));
+
+  if (empty($uids)) {
+    return;
+  }
+
+  $params = myapi_claim_mail_params($row) + array(
+    'visibility'  => myapi_claim_visibility_label($row->visibility),
+    'requester'   => $row->requester_name !== NULL ? check_plain($row->requester_name) : t('Sin solicitante'),
+    'email'       => $row->requester_mail !== NULL ? check_plain($row->requester_mail) : '—',
+    'attachments' => check_plain(myapi_claim_attachment_label($row->image_count, $row->has_attachment)),
+    // Absolute so the link works from any mail client; check_plain() because
+    // url() does not encode the '&' between query arguments for HTML output.
+    'node_url'    => check_plain(url('node/' . $row->nid, array('absolute' => TRUE))),
+  );
+
+  myapi_claim_enqueue_mails('claim_created_admin', $uids, $params);
+}
+
+/**
+ * Notifies the neighbours that a claim became visible to them.
+ *
+ * Shared by the two events that produce that fact — a claim born public and a
+ * claim turned public later — because from the neighbour's side they are the
+ * same one. The caller passes the instant: the reception date for a claim born
+ * public, the save time for one published later. In both cases the line states
+ * the moment THIS neighbour could see it.
+ *
+ * The requester is excluded from the fan-out, which is what guarantees one
+ * single notification per person with the text that belongs to them.
+ *
+ * @param object $row        Claim row.
+ * @param int    $timestamp  Instant the claim became visible.
+ */
+function myapi_claim_notify_neighbours($row, $timestamp) {
+  $uids = myapi_claim_condominium_uids($row->condominium_id, $row->requester_uid);
+  if (empty($uids)) {
+    return;
+  }
+
+  myapi_claim_notify_inbox(
+    $row,
+    MYAPI_NOTIFICATION_TYPE_CLAIM_PUBLISHED,
+    myapi_claim_published_push_title($row->claim_type),
+    myapi_claim_published_push_body($row->subject, $timestamp),
+    $uids
+  );
+
+  $params = myapi_claim_mail_params($row);
+  // The neighbour email carries no 'name': resolving the display name of every
+  // owner and occupant would be one query per recipient just for a greeting.
+  $params['reception_date'] = check_plain(myapi_claim_date_label($timestamp));
+
+  myapi_claim_enqueue_mails('claim_published_neighbour', $uids, $params);
+}
+
+/* ---------------------------------------------------------------------------
+ * The three orchestrators.
+ *
+ * All three open with a drupal_static() guard by nid — same mechanism as
+ * myapi_fee_notify_issued() (SPEC 28) and the three reservation notifiers
+ * (SPEC 48) — so a re-save of the same node inside the same request (a Rule
+ * recalculating something, a chained node_save()) notifies AT MOST once.
+ *
+ * All three are best-effort by contract: they run inside the node_save() of an
+ * endpoint that has already committed, so nothing here may bubble up and turn a
+ * successful 201 into a 500. Any failure is logged and swallowed.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Notifies the creation of a claim.
+ *
+ * Called from myapi_node_insert()'s 'reclamo' branch, which covers EVERY
+ * creation path — POST /api/v1/claims, node/add/reclamo, drush, a migration —
+ * because that is the whole point of hanging the trigger off the node hook
+ * rather than off the endpoint.
+ *
+ * Three audiences, in order:
+ * - The requester: push + inbox + email, always.
+ * - The neighbours, only when the claim is born public: their own text,
+ *   requester excluded.
+ * - The back office, only when $from_api: the detail email.
+ *
+ * A claim with no field_requester notifies nobody through the requester path
+ * and leaves a watchdog warning — the public fan-out, if there is one, still
+ * happens. Never an accidental fan-out, and never an acknowledgement mailed to
+ * the operator who typed the claim in.
+ *
+ * @param object $node      The just-inserted 'reclamo' node.
+ * @param bool   $from_api  TRUE when the claim was created from the app.
+ */
+function myapi_claim_notify_created($node, $from_api) {
+  $notified = &drupal_static(__FUNCTION__, array());
+  if (isset($notified[$node->nid])) {
+    return;
+  }
+  $notified[$node->nid] = TRUE;
+
+  try {
+    $row = myapi_claim_notification_row($node);
+
+    if ($row->requester_uid !== NULL) {
+      myapi_claim_notify_inbox(
+        $row,
+        MYAPI_NOTIFICATION_TYPE_CLAIM_CREATED,
+        myapi_claim_push_title($row->claim_type),
+        myapi_claim_push_body($row->subject, $row->reception_date),
+        array($row->requester_uid)
+      );
+
+      $params = myapi_claim_mail_params($row);
+      if ($row->requester_name !== NULL) {
+        $params['name'] = check_plain($row->requester_name);
+      }
+      myapi_claim_enqueue_mails('claim_created_requester', array($row->requester_uid), $params);
+    }
+    else {
+      watchdog('myapi', 'Reclamo @nid: field_requester vacío; no se notifica al solicitante.', array('@nid' => $row->nid), WATCHDOG_WARNING);
+    }
+
+    // Born public: the neighbours see it from this very instant, so the line
+    // they read is the reception date.
+    if ($row->visibility === MYAPI_CLAIM_VISIBILITY_PUBLIC) {
+      myapi_claim_notify_neighbours($row, $row->reception_date);
+    }
+
+    if ($from_api) {
+      myapi_claim_enqueue_admin_mails($row);
+    }
+  }
+  catch (Exception $e) {
+    watchdog_exception('myapi', $e);
+  }
+}
+
+/**
+ * Notifies the transition of a claim from private to public.
+ *
+ * Called from myapi_node_update()'s 'reclamo' branch, which covers both paths
+ * that produce it: POST /api/v1/claims/{id} and node/%nid/edit.
+ *
+ * The neighbours only. The requester gets nothing — they are the ones who made
+ * it public — and the back office gets nothing either: the operator who flipped
+ * the switch does not need an email about their own click.
+ *
+ * The 'Publicado el' line carries the SAVE TIME and not the original reception
+ * date: a claim published six days later would otherwise quote a date that
+ * meant nothing to the neighbour reading it.
+ *
+ * @param object $node  The 'reclamo' node that just became public.
+ */
+function myapi_claim_notify_published($node) {
+  $notified = &drupal_static(__FUNCTION__, array());
+  if (isset($notified[$node->nid])) {
+    return;
+  }
+  $notified[$node->nid] = TRUE;
+
+  try {
+    $row = myapi_claim_notification_row($node);
+
+    myapi_claim_notify_neighbours($row, REQUEST_TIME);
+  }
+  catch (Exception $e) {
+    watchdog_exception('myapi', $e);
+  }
+}
+
+/**
+ * Notifies a new transaction on a claim.
+ *
+ * Called from myapi_node_insert()'s 'claim_transaction' branch, after the
+ * status sync, and only when myapi_claim_transaction_is_notifiable() says so —
+ * which is what keeps the automatic initial transaction silent.
+ *
+ * The status, the comment and the date come from the TRANSACTION; the subject,
+ * the type, the condominium and the requester from its claim. Reading the
+ * status off the transaction and not off the claim is deliberate: the sync of
+ * SPEC 57 has already run, so both hold the same value today, but the
+ * transaction is the node that states what happened.
+ *
+ * The requester reads the status in the title; the neighbours read it in the
+ * body, because their title has to say first that the claim is not theirs.
+ *
+ * @param object $node  The just-inserted 'claim_transaction' node.
+ */
+function myapi_claim_notify_transaction($node) {
+  $notified = &drupal_static(__FUNCTION__, array());
+  if (isset($notified[$node->nid])) {
+    return;
+  }
+  $notified[$node->nid] = TRUE;
+
+  try {
+    $claim_nid = myapi_building_admin_field_target_id($node, 'field_claim');
+    $claim = $claim_nid ? node_load($claim_nid) : NULL;
+    if (!$claim) {
+      return;
+    }
+
+    $row = myapi_claim_notification_row($claim);
+
+    $status_label = myapi_claim_status_label(myapi_building_admin_field_value($node, 'field_status'));
+    $comment = myapi_building_admin_field_value($node, 'field_comment');
+
+    // field_status_date is 'Y-m-d H:i:00' since SPEC 58. An empty or
+    // unparseable value falls back to the transaction's own creation time.
+    $timestamp = isset($node->created) ? (int) $node->created : REQUEST_TIME;
+    $status_date = myapi_building_admin_field_value($node, 'field_status_date');
+    if ($status_date !== NULL && trim((string) $status_date) !== '') {
+      $parsed = strtotime((string) $status_date);
+      if ($parsed !== FALSE) {
+        $timestamp = $parsed;
+      }
+    }
+
+    $params = myapi_claim_transaction_mail_params($row, $status_label, $comment, $timestamp);
+
+    if ($row->requester_uid !== NULL) {
+      myapi_claim_notify_inbox(
+        $row,
+        MYAPI_NOTIFICATION_TYPE_CLAIM_TRANSACTION,
+        myapi_claim_transaction_push_title($row->claim_type, $status_label),
+        myapi_claim_transaction_push_body($row->subject, $comment, $timestamp),
+        array($row->requester_uid)
+      );
+
+      $requester_params = $params;
+      if ($row->requester_name !== NULL) {
+        $requester_params['name'] = check_plain($row->requester_name);
+      }
+      myapi_claim_enqueue_mails('claim_transaction_requester', array($row->requester_uid), $requester_params);
+    }
+    else {
+      watchdog('myapi', 'Reclamo @nid: field_requester vacío; no se notifica la transacción al solicitante.', array('@nid' => $row->nid), WATCHDOG_WARNING);
+    }
+
+    if ($row->visibility !== MYAPI_CLAIM_VISIBILITY_PUBLIC) {
+      return;
+    }
+
+    $uids = myapi_claim_condominium_uids($row->condominium_id, $row->requester_uid);
+    if (empty($uids)) {
+      return;
+    }
+
+    myapi_claim_notify_inbox(
+      $row,
+      MYAPI_NOTIFICATION_TYPE_CLAIM_TRANSACTION,
+      myapi_claim_transaction_neighbour_push_title($row->claim_type),
+      myapi_claim_transaction_neighbour_push_body($row->subject, $status_label, $comment, $timestamp),
+      $uids
+    );
+
+    myapi_claim_enqueue_mails('claim_transaction_neighbour', $uids, $params);
+  }
+  catch (Exception $e) {
+    watchdog_exception('myapi', $e);
+  }
+}

@@ -465,6 +465,15 @@ function myapi_html_mail_keys() {
     'myapi_reservation_cancelled_user',
     'myapi_reservation_created_admin',
     'myapi_reservation_cancelled_admin',
+    // SPEC 68. The single catalogue both myapi_mail_system_register() and
+    // ..._unregister() walk, so adding a key here is all it takes — there is no
+    // second list to keep in sync. The 'myapi_' prefix is the module name
+    // drupal_mail() prepends to the key, not part of the key itself.
+    'myapi_claim_created_requester',
+    'myapi_claim_published_neighbour',
+    'myapi_claim_transaction_requester',
+    'myapi_claim_transaction_neighbour',
+    'myapi_claim_created_admin',
   ];
 }
 
@@ -2485,4 +2494,20 @@ function myapi_update_7023() {
     '@failed'  => $failed,
     '@already' => $already,
   ));
+}
+
+/**
+ * SPEC 68: maps the five claim mail keys to MyapiHtmlMailSystem.
+ *
+ * myapi_mail_system_register() runs on install, so a fresh site already gets
+ * the mapping; this update applies it where the module is already installed.
+ * Without it the five new keys would fall back to DefaultMailSystem and their
+ * HTML body would arrive converted to plain text — the same reason SPEC 48
+ * needed myapi_update_7010().
+ *
+ * It walks myapi_html_mail_keys(), so it re-registers the previous keys too.
+ * That is a no-op: they already point at the same class.
+ */
+function myapi_update_7024() {
+  myapi_mail_system_register();
 }

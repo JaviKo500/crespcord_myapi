@@ -1250,6 +1250,13 @@ function myapi_claim_create() {
   // 10. Build and persist the node. hook_node_insert() creates the initial
   // "received" transaction on its own.
   $node = myapi_claim_build_node($uid, $subject, $claim_type, $condominium_id, $description, $visibility, $image_files, $attachment_file);
+  // SPEC 68. Transient flag, not a field: it lives only for this save and is
+  // what tells hook_node_insert() that this claim was filed FROM THE APP, so
+  // the detail email also goes to 'backend' and to the building admins of the
+  // condominium. A claim created from node/add/reclamo carries no flag and
+  // mails nobody in the back office — the operator who typed it in already
+  // knows. Same mechanism SPEC 30 and 48 already run in production.
+  $node->myapi_claim_from_api = TRUE;
   node_save($node);
 
   // 11. Tie every saved file to the node so cron does not reap it as unused.

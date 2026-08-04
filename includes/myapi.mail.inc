@@ -275,13 +275,284 @@ function myapi_mail_reservation_admin_html($params, $cancelled = FALSE) {
   );
 }
 
+/* ---------------------------------------------------------------------------
+ * Claim emails (SPEC 68).
+ *
+ * Five keys, four formatters — the two transaction ones differ in their subject
+ * and their context sentence and in nothing else, so they share one, exactly as
+ * the two resident reservation keys already do.
+ *
+ * All five reuse myapi_mail_reservation_html() below as their shell. Its name
+ * says "reservation" because SPEC 48 wrote it, but its parameters (title,
+ * heading, intro, label => value lines, footer, optional button) carry nothing
+ * of that domain: duplicating 40 lines of inline-styled table markup to rename
+ * a function would guarantee the two copies drift apart at the first change to
+ * the palette (rule 3 of CLAUDE.md). The name is left alone so SPEC 48 keeps
+ * describing exactly what it does.
+ *
+ * Every value in $params arrives ALREADY RESOLVED AND ESCAPED from the
+ * orchestrator that enqueued it: the mail queue runs on cron, long after the
+ * claim was saved, and the email must describe what was true at the instant of
+ * the trigger. A claim deleted or a condominium renamed in between changes
+ * nothing. That is also why nothing here escapes anything — see the block
+ * comment of the reservation formatters above.
+ * ------------------------------------------------------------------------ */
+
 /**
- * Shared HTML shell of the reservation emails.
+ * Formats the claim creation email sent to the requester.
+ *
+ * Called from myapi_mail() (in myapi.module) for the 'claim_created_requester'
+ * key.
+ *
+ * The context sentence is the one SPEC 61 already stores in the claim's initial
+ * transaction, in the second person: the email and the first row of the
+ * timeline say literally the same thing, so the resident never reads two
+ * versions of the same acknowledgement.
+ *
+ * @param array $message  Mail message array, altered by reference.
+ * @param array $params   'nid', 'type_label', 'type_noun', 'subject',
+ *                        'subject_short', 'condominium', 'status',
+ *                        'reception_date', 'description' and the optional
+ *                        'name', already escaped.
+ */
+function myapi_mail_format_claim_created_user(&$message, $params) {
+  $message['subject'] = decode_entities($params['type_label']) . ' recibido — '
+    . decode_entities($params['subject_short']);
+  $message['body'][] = myapi_mail_claim_html(
+    $params,
+    'Hemos recibido tu ' . $params['type_noun'] . '. Será revisado por la administración y te notificaremos cualquier novedad.'
+  );
+
+  // Full HTML replaces the default 'text/plain; format=flowed' header set by
+  // drupal_mail(); the key is mapped to MyapiHtmlMailSystem in myapi.install so
+  // the markup survives the format() step.
+  $message['headers']['Content-Type'] = 'text/html; charset=UTF-8';
+}
+
+/**
+ * Formats the claim email sent to the neighbours of the condominium.
+ *
+ * Called from myapi_mail() (in myapi.module) for the
+ * 'claim_published_neighbour' key, which serves the TWO ways a claim reaches a
+ * neighbour — born public, or turned public later. From their side both facts
+ * are the same one, so there is one key, one type and one template.
+ *
+ * @param array $message  Mail message array, altered by reference.
+ * @param array $params   Same keys as myapi_mail_format_claim_created_user().
+ */
+function myapi_mail_format_claim_published_neighbour(&$message, $params) {
+  $message['subject'] = 'Nuevo ' . decode_entities($params['type_noun']) . ' en tu condominio — '
+    . decode_entities($params['subject_short']);
+  $message['body'][] = myapi_mail_claim_html(
+    $params,
+    'Se publicó un nuevo ' . $params['type_noun'] . ' en tu condominio.'
+  );
+
+  $message['headers']['Content-Type'] = 'text/html; charset=UTF-8';
+}
+
+/**
+ * Formats the transaction email, in its two variants.
+ *
+ * Called from myapi_mail() (in myapi.module) for 'claim_transaction_requester'
+ * and 'claim_transaction_neighbour'. Both carry the very same data block — the
+ * claim is one and the transaction is one — and differ only in the subject and
+ * in the context sentence, which is why they share this formatter.
+ *
+ * The operator's comment travels WHOLE here, unlike in the push, where it is
+ * cut at 120: there is no 200-character budget to respect in an email.
+ *
+ * @param array  $message  Mail message array, altered by reference.
+ * @param array  $params   'nid', 'type_label', 'type_noun', 'subject',
+ *                         'subject_short', 'status', 'date', 'comment' and the
+ *                         optional 'name', already escaped.
+ * @param string $key      The mail key being formatted.
+ */
+function myapi_mail_format_claim_transaction_user(&$message, $params, $key) {
+  $neighbour = ($key === 'claim_transaction_neighbour');
+
+  $message['subject'] = $neighbour
+    ? 'Novedad en un ' . decode_entities($params['type_noun']) . ' de tu condominio — ' . decode_entities($params['subject_short'])
+    : 'Novedad en tu ' . decode_entities($params['type_noun']) . ' — ' . decode_entities($params['subject_short']);
+
+  $message['body'][] = myapi_mail_claim_transaction_html($params, $neighbour);
+
+  $message['headers']['Content-Type'] = 'text/html; charset=UTF-8';
+}
+
+/**
+ * Formats the claim detail email sent to the back office.
+ *
+ * Called from myapi_mail() (in myapi.module) for the 'claim_created_admin' key,
+ * which only fires when the claim was created FROM THE APP: an operator who
+ * files a claim from node/add/reclamo already knows it exists.
+ *
+ * The subject carries the nid and the condominium rather than the subject of
+ * the claim, so it is the one of the five that is NOT truncated to 80.
+ *
+ * @param array $message  Mail message array, altered by reference.
+ * @param array $params   'nid', 'type_label', 'type_noun', 'subject',
+ *                        'visibility', 'status', 'requester', 'email',
+ *                        'condominium', 'reception_date', 'description',
+ *                        'node_url' and the optional 'attachments', already
+ *                        escaped.
+ */
+function myapi_mail_format_claim_created_admin(&$message, $params) {
+  $message['subject'] = 'Nuevo ' . decode_entities($params['type_noun']) . ' #' . $params['nid']
+    . ' — ' . decode_entities($params['condominium']);
+  $message['body'][] = myapi_mail_claim_admin_html($params);
+
+  $message['headers']['Content-Type'] = 'text/html; charset=UTF-8';
+}
+
+/**
+ * Builds the HTML body of the two creation/publication emails.
+ *
+ * Same six lines for the requester and for the neighbours: what changes between
+ * them is the context sentence, which the caller passes in, and nothing else.
+ * Showing a neighbour less than the requester would be pointless — the claim is
+ * public, and they can open the very same detail in the app.
+ *
+ * The subject of the claim travels WHOLE in the data block; only the mail
+ * subject line is cut to 80.
+ *
+ * @param array  $params  Already-escaped values (see the formatters).
+ * @param string $intro   Context sentence, already escaped.
+ *
+ * @return string  Full HTML document.
+ */
+function myapi_mail_claim_html($params, $intro) {
+  $lines = array(
+    'Asunto'      => $params['subject'],
+    'Tipo'        => $params['type_label'],
+    'Condominio'  => $params['condominium'],
+    'Estado'      => $params['status'],
+    'Recibido el' => $params['reception_date'],
+  );
+
+  // nl2br() over the already-escaped value: field_description is a textarea and
+  // its line breaks are part of what the resident wrote. An empty description
+  // drops the line rather than printing an empty block.
+  if (isset($params['description']) && $params['description'] !== '') {
+    $lines['Descripción'] = nl2br($params['description']);
+  }
+
+  // The neighbour emails carry no 'name': resolving the display name of every
+  // owner and occupant of a condominium would be one query per recipient for a
+  // greeting. 'Hola' alone reads perfectly well.
+  $heading = (isset($params['name']) && $params['name'] !== '')
+    ? 'Hola ' . $params['name']
+    : 'Hola';
+
+  return myapi_mail_reservation_html(
+    $params['type_label'] . ' #' . $params['nid'],
+    $heading,
+    $intro,
+    $lines,
+    $params['type_label'] . ' #' . $params['nid']
+  );
+}
+
+/**
+ * Builds the HTML body of the two transaction emails.
+ *
+ * Four lines and no description of the claim: what happened is the transaction,
+ * and the claim's own text is one tap away in the app. The comment is printed
+ * whole, with its line breaks.
+ *
+ * @param array $params     Already-escaped values (see the formatter).
+ * @param bool  $neighbour  TRUE for the neighbour variant.
+ *
+ * @return string  Full HTML document.
+ */
+function myapi_mail_claim_transaction_html($params, $neighbour) {
+  $lines = array(
+    'Asunto' => $params['subject'],
+    'Estado' => $params['status'],
+    'Fecha'  => $params['date'],
+  );
+
+  if (isset($params['comment']) && $params['comment'] !== '') {
+    $lines['Comentario'] = nl2br($params['comment']);
+  }
+
+  $intro = $neighbour
+    ? 'Un ' . $params['type_noun'] . ' de tu condominio tiene una novedad.'
+    : 'Tu ' . $params['type_noun'] . ' tiene una novedad.';
+
+  // Same greeting rule as the creation emails: the requester's name is already
+  // resolved in the row, the neighbours' are not (see myapi_mail_claim_html()).
+  $heading = (isset($params['name']) && $params['name'] !== '')
+    ? 'Hola ' . $params['name']
+    : 'Hola';
+
+  return myapi_mail_reservation_html(
+    $params['type_label'] . ' #' . $params['nid'],
+    $heading,
+    $intro,
+    $lines,
+    $params['type_label'] . ' #' . $params['nid']
+  );
+}
+
+/**
+ * Builds the HTML body of the detail email sent to the back office.
+ *
+ * There is deliberately NO 'Vivienda' line: the 'reclamo' bundle has no
+ * field_unit, and deriving one from the requester's units is ambiguous the
+ * moment they own two in the same condominium — guessing would be worse than
+ * omitting.
+ *
+ * 'Adjuntos' is a COUNT and never a link: the files live in private:// and
+ * their download requires a token (SPEC 65), so a link from an email client
+ * would answer 404. The line disappears when the claim carries no file.
+ *
+ * @param array $params  Already-escaped values (see the formatter).
+ *
+ * @return string  Full HTML document.
+ */
+function myapi_mail_claim_admin_html($params) {
+  $lines = array(
+    $params['type_label'] => '#' . $params['nid'],
+    'Asunto'              => $params['subject'],
+    'Tipo'                => $params['type_label'],
+    'Visibilidad'         => $params['visibility'],
+    'Estado'              => $params['status'],
+    'Solicitante'         => $params['requester'],
+    'Email'               => $params['email'],
+    'Condominio'          => $params['condominium'],
+    'Recibido el'         => $params['reception_date'],
+  );
+
+  if (isset($params['attachments']) && $params['attachments'] !== '') {
+    $lines['Adjuntos'] = $params['attachments'];
+  }
+
+  if (isset($params['description']) && $params['description'] !== '') {
+    $lines['Descripción'] = nl2br($params['description']);
+  }
+
+  return myapi_mail_reservation_html(
+    $params['type_label'] . ' #' . $params['nid'],
+    'Nuevo ' . $params['type_noun'],
+    'Se registró un nuevo ' . $params['type_noun'] . ' desde la aplicación.',
+    $lines,
+    'Puedes abrirlo desde el panel de administración.',
+    array('label' => 'Abrir en el back office', 'url' => $params['node_url'])
+  );
+}
+
+/**
+ * Shared HTML shell of the reservation emails — and, since SPEC 68, of the five
+ * claim ones.
  *
  * One builder for the three keys: they differ in their heading, their context
  * sentence, the label/value pairs and the footer, and in nothing else. Every
  * value is printed as-is because the caller escaped it (see the block comment
  * above); the labels are literals authored here.
+ *
+ * Nothing in its parameters belongs to the reservation domain, which is why the
+ * claim emails call it instead of copying it. The name is SPEC 48's and stays.
  *
  * @param string     $title   Document title and card heading.
  * @param string     $heading Greeting or heading line above the intro.

@@ -855,6 +855,14 @@ function myapi_claim_transaction_create_initial($node) {
     myapi_building_admin_field_value($node, 'field_claim_type')
   );
 
+  // SPEC 68. Transient flag, not a field: it lives only for this save and is
+  // what keeps THIS transaction — and only this one — out of the notification
+  // hook. The fact it records ("the claim was received") is already notified by
+  // the creation of the claim itself; announcing both would be the same message
+  // twice, seconds apart. Every other transaction carries no flag and notifies,
+  // which is the right default for any future path.
+  $transaction->myapi_skip_claim_notification = TRUE;
+
   node_save($transaction);
 }
 
