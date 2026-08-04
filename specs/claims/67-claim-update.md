@@ -1,6 +1,6 @@
 # SPEC 67 — Edición de un reclamo por su solicitante (`POST /api/v1/claims/%`)
 
-> **Estado:** Approved · **Depende de:** SPEC 55 (bundle `reclamo` y sus campos), SPEC 64 (`myapi_claim_fetch()`, `myapi_claim_build_item()`, `myapi_claim_dispatch()`), SPEC 65 (ficheros en `private://`, `myapi_claim_build_file()`), SPEC 66 (`myapi_claim_create()`, `myapi_claim_create_save_files()`, `myapi_claim_valid_catalogue_value()`) · **Fecha:** 2026-08-04
+> **Estado:** Implemented · **Depende de:** SPEC 55 (bundle `reclamo` y sus campos), SPEC 64 (`myapi_claim_fetch()`, `myapi_claim_build_item()`, `myapi_claim_dispatch()`), SPEC 65 (ficheros en `private://`, `myapi_claim_build_file()`), SPEC 66 (`myapi_claim_create()`, `myapi_claim_create_save_files()`, `myapi_claim_valid_catalogue_value()`) · **Fecha:** 2026-08-04
 > **Objetivo:** Añadir `POST /api/v1/claims/%`, que permite al **solicitante** de un reclamo modificar todos sus campos y sus archivos mientras su estado siga siendo `received`, devolviendo el mismo objeto que `GET /api/v1/claims/%`.
 
 Tres notas técnicas que fija la cabecera, porque condicionan el resto del documento:
@@ -199,85 +199,85 @@ El **mismo objeto** que `GET /api/v1/claims/%`, envuelto igual (`data.claim`), t
 
 **Autenticación y método**
 
-- [ ] `POST /api/v1/claims/{id}` sin `Authorization` → `401 missing_authorization`.
-- [ ] Con un token inválido o expirado → `401 invalid_token`.
-- [ ] `PUT /api/v1/claims/{id}` y `DELETE /api/v1/claims/{id}` siguen respondiendo `405 method_not_allowed`.
-- [ ] `POST /api/v1/claims` (sin id) sigue creando un reclamo con `201`, sin cambios respecto a SPEC 66.
+- [x] `POST /api/v1/claims/{id}` sin `Authorization` → `401 missing_authorization`.
+- [x] Con un token inválido o expirado → `401 invalid_token`.
+- [x] `PUT /api/v1/claims/{id}` y `DELETE /api/v1/claims/{id}` siguen respondiendo `405 method_not_allowed`.
+- [x] `POST /api/v1/claims` (sin id) sigue creando un reclamo con `201`, sin cambios respecto a SPEC 66.
 
 **Acceso y estado**
 
-- [ ] `{id}` no numérico, `0` o negativo → `404 claim_not_found`.
-- [ ] Un reclamo de otro condominio, o privado de otro vecino, o inexistente → `404 claim_not_found` — los tres indistinguibles entre sí.
-- [ ] Un reclamo `public` de otro vecino (visible para el editor) → `403 claim_edit_denied`, nunca `404`.
-- [ ] El solicitante sobre un reclamo suyo con estado distinto de `received` → `409 claim_not_editable`.
-- [ ] En los tres casos anteriores, ni un solo campo, archivo ni fila cambia.
-- [ ] El solicitante sobre un reclamo suyo en `received` → la edición procede.
+- [x] `{id}` no numérico, `0` o negativo → `404 claim_not_found`.
+- [x] Un reclamo de otro condominio, o privado de otro vecino, o inexistente → `404 claim_not_found` — los tres indistinguibles entre sí.
+- [x] Un reclamo `public` de otro vecino (visible para el editor) → `403 claim_edit_denied`, nunca `404`.
+- [x] El solicitante sobre un reclamo suyo con estado distinto de `received` → `409 claim_not_editable`.
+- [x] En los tres casos anteriores, ni un solo campo, archivo ni fila cambia.
+- [x] El solicitante sobre un reclamo suyo en `received` → la edición procede.
 
 **Campos de texto**
 
-- [ ] Falta `subject`, `claim_type`, `condominium_id`, `description` o `visibility` → `422 missing_field` con `@field` el que falte, y nada se modifica.
-- [ ] `subject` de 256 caracteres o más → `422 invalid_field`.
-- [ ] `claim_type` o `visibility` fuera de sus `allowed_values` → `422 invalid_field`.
-- [ ] `description` vacío tras `trim()` → `422 invalid_field`.
-- [ ] `condominium_id` no numérico, `0` o negativo → `422 invalid_field`.
-- [ ] `condominium_id` de un condominio ajeno → `403 condominium_access_denied`.
-- [ ] `condominium_id` de otro condominio del propio usuario → el reclamo se mueve a ese condominio y el `GET` lo confirma.
-- [ ] Cambiar `visibility` de `private` a `public` hace que el reclamo aparezca en el listado de otro vecino del mismo condominio.
+- [x] Falta `subject`, `claim_type`, `condominium_id`, `description` o `visibility` → `422 missing_field` con `@field` el que falte, y nada se modifica.
+- [x] `subject` de 256 caracteres o más → `422 invalid_field`.
+- [x] `claim_type` o `visibility` fuera de sus `allowed_values` → `422 invalid_field`.
+- [x] `description` vacío tras `trim()` → `422 invalid_field`.
+- [x] `condominium_id` no numérico, `0` o negativo → `422 invalid_field`.
+- [x] `condominium_id` de un condominio ajeno → `403 condominium_access_denied`.
+- [x] `condominium_id` de otro condominio del propio usuario → el reclamo se mueve a ese condominio y el `GET` lo confirma.
+- [x] Cambiar `visibility` de `private` a `public` hace que el reclamo aparezca en el listado de otro vecino del mismo condominio.
 
 **Imágenes**
 
-- [ ] Request sin `images[]` ni `remove_image_ids[]` → las imágenes del reclamo quedan exactamente iguales, mismo orden y mismos `fid`.
-- [ ] `images[]` con 2 archivos válidos sobre un reclamo con 1 imagen → quedan 3, las nuevas **al final** del orden.
-- [ ] `remove_image_ids[]` con 1 de las 3 imágenes → quedan las otras 2, en su orden original.
-- [ ] `remove_image_ids[]` con las 3 → el reclamo queda con `"images": []`.
-- [ ] Quitar 1 y añadir 2 en la misma request sobre un reclamo con 4 → quedan 5, válido.
-- [ ] Quitar 0 y añadir 2 sobre un reclamo con 4 → `422 claim_too_many_images`, y ninguna de las 2 nuevas queda guardada.
-- [ ] `remove_image_ids[]` con un `fid` de otro reclamo, de un pago o inexistente → `422 invalid_field` con `@field: remove_image_ids`, y **ninguna** imagen se borra.
-- [ ] Un `.webp` en `images[]` → `422 claim_invalid_image`; las imágenes actuales siguen intactas.
-- [ ] Un `.php` renombrado a `.jpg` → `422 invalid_file_type`; nada se guarda ni se borra.
-- [ ] Una imagen de 4 MB junto a una válida → `422 claim_invalid_image`, ninguna de las dos queda guardada, y el reclamo conserva sus imágenes originales.
-- [ ] Una imagen eliminada desaparece de `file_managed` y del disco en `private://`; su URL responde `404 file_not_found`.
+- [x] Request sin `images[]` ni `remove_image_ids[]` → las imágenes del reclamo quedan exactamente iguales, mismo orden y mismos `fid`.
+- [x] `images[]` con 2 archivos válidos sobre un reclamo con 1 imagen → quedan 3, las nuevas **al final** del orden.
+- [x] `remove_image_ids[]` con 1 de las 3 imágenes → quedan las otras 2, en su orden original.
+- [x] `remove_image_ids[]` con las 3 → el reclamo queda con `"images": []`.
+- [x] Quitar 1 y añadir 2 en la misma request sobre un reclamo con 4 → quedan 5, válido.
+- [x] Quitar 0 y añadir 2 sobre un reclamo con 4 → `422 claim_too_many_images`, y ninguna de las 2 nuevas queda guardada.
+- [x] `remove_image_ids[]` con un `fid` de otro reclamo, de un pago o inexistente → `422 invalid_field` con `@field: remove_image_ids`, y **ninguna** imagen se borra.
+- [x] Un `.webp` en `images[]` → `422 claim_invalid_image`; las imágenes actuales siguen intactas.
+- [x] Un `.php` renombrado a `.jpg` → `422 invalid_file_type`; nada se guarda ni se borra.
+- [x] Una imagen de 4 MB junto a una válida → `422 claim_invalid_image`, ninguna de las dos queda guardada, y el reclamo conserva sus imágenes originales.
+- [x] Una imagen eliminada desaparece de `file_managed` y del disco en `private://`; su URL responde `404 file_not_found`.
 
 **Adjunto**
 
-- [ ] Request sin `attachment` ni `remove_attachment` → el adjunto queda igual.
-- [ ] `attachment` nuevo sobre un reclamo que ya tenía uno → queda solo el nuevo, y el anterior desaparece de `file_managed` y del disco.
-- [ ] `remove_attachment=1` sin `attachment` → el reclamo queda con `"attachment": null` y el archivo se borra.
-- [ ] `remove_attachment=1` **junto con** un `attachment` nuevo → el flag se ignora y queda el nuevo adjunto, sin error.
-- [ ] Un adjunto de tipo o tamaño inválido → `422 claim_invalid_attachment`; el adjunto anterior sigue ahí y las imágenes nuevas de esa misma request no quedan guardadas.
+- [x] Request sin `attachment` ni `remove_attachment` → el adjunto queda igual.
+- [x] `attachment` nuevo sobre un reclamo que ya tenía uno → queda solo el nuevo, y el anterior desaparece de `file_managed` y del disco.
+- [x] `remove_attachment=1` sin `attachment` → el reclamo queda con `"attachment": null` y el archivo se borra.
+- [x] `remove_attachment=1` **junto con** un `attachment` nuevo → el flag se ignora y queda el nuevo adjunto, sin error.
+- [x] Un adjunto de tipo o tamaño inválido → `422 claim_invalid_attachment`; el adjunto anterior sigue ahí y las imágenes nuevas de esa misma request no quedan guardadas.
 
 **Integridad**
 
-- [ ] Cualquier error de los anteriores deja el reclamo byte a byte como estaba: texto, imágenes, adjunto y `changed`.
-- [ ] Ningún archivo se borra antes del `node_save()`: en un fallo, todos los archivos originales siguen existiendo.
-- [ ] Tras una edición con éxito, no queda ninguna fila de `file_usage` apuntando a un archivo ya borrado, ni ningún archivo permanente sin uso.
+- [x] Cualquier error de los anteriores deja el reclamo byte a byte como estaba: texto, imágenes, adjunto y `changed`.
+- [x] Ningún archivo se borra antes del `node_save()`: en un fallo, todos los archivos originales siguen existiendo.
+- [x] Tras una edición con éxito, no queda ninguna fila de `file_usage` apuntando a un archivo ya borrado, ni ningún archivo permanente sin uso.
 
 **Campos inmutables**
 
-- [ ] `field_reception_date` es el mismo valor antes y después de editar.
-- [ ] `field_requester` no cambia, aunque el cliente mande un campo con ese nombre.
-- [ ] `field_status` sigue en `received` después de editar.
-- [ ] `node.uid` y `node.created` no cambian; solo `node.changed` avanza.
-- [ ] El reclamo sigue teniendo **exactamente las mismas transacciones** que antes de la edición, con los mismos `id`, `status` y `comment` — la edición no crea ninguna.
+- [x] `field_reception_date` es el mismo valor antes y después de editar.
+- [x] `field_requester` no cambia, aunque el cliente mande un campo con ese nombre.
+- [x] `field_status` sigue en `received` después de editar.
+- [x] `node.uid` y `node.created` no cambian; solo `node.changed` avanza.
+- [x] El reclamo sigue teniendo **exactamente las mismas transacciones** que antes de la edición, con los mismos `id`, `status` y `comment` — la edición no crea ninguna.
 
 **Respuesta**
 
-- [ ] Éxito → `200`, con `data.claim` teniendo exactamente las mismas claves y tipos que `GET /api/v1/claims/{id}`, y `message` traducido (`claim_updated`).
-- [ ] `transactions` viene expandido (objetos, no ints), sin necesidad de `?include=transactions`.
-- [ ] Las `url` de las imágenes nuevas apuntan a `GET /api/v1/claims/{id}/files/{fid}` y descargan con el mismo token.
-- [ ] Un `GET /api/v1/claims/{id}` inmediatamente después devuelve un objeto idéntico al del `200`.
+- [x] Éxito → `200`, con `data.claim` teniendo exactamente las mismas claves y tipos que `GET /api/v1/claims/{id}`, y `message` traducido (`claim_updated`).
+- [x] `transactions` viene expandido (objetos, no ints), sin necesidad de `?include=transactions`.
+- [x] Las `url` de las imágenes nuevas apuntan a `GET /api/v1/claims/{id}/files/{fid}` y descargan con el mismo token.
+- [x] Un `GET /api/v1/claims/{id}` inmediatamente después devuelve un objeto idéntico al del `200`.
 
 **No regresión**
 
-- [ ] `GET /api/v1/claims`, `GET /api/v1/claims/%` y `GET /api/v1/claims/%/files/%` no cambian ninguna clave, tipo ni código de estado.
-- [ ] `POST /api/v1/claims` no cambia: mismos errores, mismo `201`.
-- [ ] `myapi.install` y `myapi.module` no aparecen en el diff.
-- [ ] `node/%/edit` de un `reclamo` en el back office sigue funcionando igual.
-- [ ] `drush cc all` no reporta errores.
+- [x] `GET /api/v1/claims`, `GET /api/v1/claims/%` y `GET /api/v1/claims/%/files/%` no cambian ninguna clave, tipo ni código de estado.
+- [x] `POST /api/v1/claims` no cambia: mismos errores, mismo `201`.
+- [x] `myapi.install` y `myapi.module` no aparecen en el diff.
+- [x] `node/%/edit` de un `reclamo` en el back office sigue funcionando igual.
+- [x] `drush cc all` no reporta errores.
 
 **Documentación**
 
-- [ ] `docs/claim.md` documenta `POST /api/v1/claims/{id}` con la plantilla de `CLAUDE.md`, incluidas las tres reglas de archivos y la justificación de `POST` sobre `PUT`.
+- [x] `docs/claim.md` documenta `POST /api/v1/claims/{id}` con la plantilla de `CLAUDE.md`, incluidas las tres reglas de archivos y la justificación de `POST` sobre `PUT`.
 
 ---
 
