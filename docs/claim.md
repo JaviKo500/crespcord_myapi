@@ -1,10 +1,11 @@
-# Claims API (SPEC 64, SPEC 65, SPEC 66)
+# Claims API (SPEC 64, SPEC 65, SPEC 66, SPEC 67)
 
-Four endpoints over the `reclamo` nodes the back office manages (SPEC 55–63):
+Five endpoints over the `reclamo` nodes the back office manages (SPEC 55–63):
 a paginated list, a detail by id, the authenticated download of one claim file
-(SPEC 65), and creating a claim (SPEC 66). The Flutter app consumes them;
-nothing here edits or closes a claim, uploads or deletes a file after
-creation, or adds a transaction — those paths are back office only
+(SPEC 65), creating a claim (SPEC 66), and editing one's own claim while it is
+still `received` (SPEC 67). The Flutter app consumes them; nothing here closes
+or deletes a claim, edits a claim filed by somebody else, or adds a
+transaction — those paths are back office only
 (see [claim-transaction-timeline.md](claim-transaction-timeline.md)).
 
 Two documents cover the other half of the same data:
@@ -344,9 +345,10 @@ always expanded: the initial `"received"` transaction that
 `hook_node_insert()` creates on its own is already there, so the client never
 needs a second request to learn its `id`.
 
-Out of scope of this endpoint: editing, closing, or deleting a claim, and
-adding a transaction from the app (comments, status changes) — those remain
-back office only.
+Out of scope of this endpoint: closing or deleting a claim, and adding a
+transaction from the app (comments, status changes) — those remain back office
+only. Editing a claim one filed is `POST /api/v1/claims/{id}`, documented
+below.
 
 **Authentication:** required (Bearer access token)
 
@@ -456,7 +458,7 @@ transaction.
 | 401 | `missing_authorization` | `Authorization` header absent or not a `Bearer <token>`. |
 | 401 | `invalid_token` | Access token invalid, revoked, expired, or its user is missing/blocked. |
 | 403 | `condominium_access_denied` | `condominium_id` is a positive integer the user does not belong to, or the user has no condominium at all. Nothing is created. |
-| 405 | `method_not_allowed` | Any method other than `POST` on `/api/v1/claims`, or `POST` on `/api/v1/claims/{id}` (creation is always on the collection). |
+| 405 | `method_not_allowed` | Any method other than `GET` or `POST` on `/api/v1/claims`. Creation is always on the collection: `POST /api/v1/claims/{id}` is **not** a creation, it is the update endpoint below. |
 | 422 | `missing_field` | A required field is absent or empty (`@field` names it): `subject`, `claim_type`, `condominium_id`, `description`, or `visibility`. |
 | 422 | `invalid_field` | `subject` over 255 chars, `claim_type` not a key of its `allowed_values`, `condominium_id` not a positive integer, `description` empty after `trim()`, or `visibility` not a key of its `allowed_values`. |
 | 422 | `claim_too_many_images` | More than 5 files in `images[]`. Nothing is saved. |
@@ -479,6 +481,219 @@ curl -i -X POST https://host/api/v1/claims \
   -F 'visibility=private' \
   -F 'images[]=@mancha.jpg'
 ```
+
+---
+
+## POST /api/v1/claims/{id}
+
+Lets the **requester** of a claim modify it — every text field and its files —
+while its status is still `received`. The response is the **same object**
+`GET /api/v1/claims/%` returns, transactions always expanded.
+
+Two properties of this endpoint that the client has to know before writing
+against it:
+
+- **The update is total for text, incremental for files.** The five text fields
+  are required on *every* call: this is not a `PATCH`, and sending only
+  `description` answers `422 missing_field`. Files work the other way round —
+  `images[]` adds, `remove_image_ids[]` removes, and anything the request does
+  not mention stays exactly as it was. A request with none of the four file
+  parameters changes the text and leaves every file untouched.
+- **Only while the claim is `received`.** Once the administration moves it to
+  `in_progress`, `resolved` or `closed`, the resident no longer edits it:
+  `409 claim_not_editable`.
+
+### Why `POST` on an item and not `PUT`
+
+`PUT` is the semantically obvious verb, and it is deliberately not used. **PHP
+populates neither `$_POST` nor `$_FILES` on a `PUT`**: the `multipart/form-data`
+body would arrive raw through `php://input` and the module would have to carry a
+hand-written MIME parser — real code and real risk, in a Drupal 7 install with no
+security support, bought with nothing but a verb. The alternatives were weighed
+and dropped: `PUT` with a JSON body leaves the files out and needs a second spec
+of file-only endpoints, and `POST` + `_method=PUT` is this same request with one
+more parameter to document.
+
+This is the only `POST`-on-an-item route of the module. It is a decision, not an
+oversight.
+
+**Authentication:** required (Bearer access token) — and the caller must be the
+claim's `field_requester`.
+
+**Headers**
+| Header | Value |
+|--------|-------|
+| Authorization | Bearer `<access_token>` |
+| Content-Type | `multipart/form-data` |
+
+**Request body (form-data fields)**
+| Field | Required | Type | Effect |
+|-------|----------|------|--------|
+| `subject` | **yes** | string | Replaces `node.title`. ≤ 255 chars, otherwise → `422 invalid_field`. |
+| `claim_type` | **yes** | string | Replaces `field_claim_type`. Must be a **key** of its `allowed_values` (`requirement` \| `claim`), not the visible label. |
+| `condominium_id` | **yes** | int (nid) | Replaces `field_condominium`. Integer > 0 and one of the user's own condominiums. Bad format → `422 invalid_field`; a foreign one → `403 condominium_access_denied`. **Editable on purpose**: it is the field most easily got wrong when filing, for a resident with a unit in two condominiums. |
+| `description` | **yes** | string | Replaces `field_description`. Non-empty after `trim()`. |
+| `visibility` | **yes** | string | Replaces `field_visibility`. Must be a **key** of its `allowed_values` (`private` \| `public`). |
+| `images[]` | no | file[] | **Adds** files at the end of `field_images`. Same extension, size and MIME rules as creation. |
+| `remove_image_ids[]` | no | int[] | **Removes** those images from the claim and **deletes them from disk**. Every value must be a `fid` this claim references right now. |
+| `attachment` | no | file | Replaces `field_attachment`. The previous attachment is deleted. |
+| `remove_attachment` | no | `1` \| `true` | Leaves `field_attachment` empty and deletes the previous file. **Ignored when `attachment` also comes** in the request. |
+
+`remove_image_ids[]` is sent as a repeated field, the same shape as `images[]`
+(`-F 'remove_image_ids[]=520' -F 'remove_image_ids[]=521'`), not as a
+comma-separated string.
+
+**The three file rules, in full**
+
+1. **Adding.** `images[]` appends to the end, in upload order. The existing
+   images keep their `delta` order and **cannot be reordered** by this endpoint.
+   The ceiling is still 5 images per claim, counted *after* the removals of the
+   same request: the number of new images admitted is `5 - (current - removed)`.
+   So on a claim with 4 images, removing 1 and adding 2 is valid (5 in total),
+   while adding 2 without removing any answers `422 claim_too_many_images` — and
+   neither of the two is saved.
+2. **Removing.** Every `fid` in `remove_image_ids[]` must be an image **of this
+   claim**. A `fid` of another claim, of a payment, or of nothing at all answers
+   `422 invalid_field` with `@field: remove_image_ids`, and **not a single image
+   is deleted** — no partial removal, no silent skip. A `fid` repeated twice
+   counts once.
+3. **Deletion is real and irreversible.** A removed image, a replaced attachment
+   and a dropped attachment are deleted from `file_managed` and from disk
+   (`file_usage_delete()` + `file_delete()`); there is no bin and no undo, and
+   their `url` then answers `404 file_not_found`. **The app must confirm with the
+   user before sending a removal.** The files live in `private://` and nothing
+   else references them, so leaving them behind would only add dead weight to
+   disk on every correction a resident makes.
+
+**Fields the server never lets the client change**
+| Field | Behaviour |
+|-------|-----------|
+| `node.uid` | Untouched — the original author. |
+| `node.created` | Untouched. |
+| `field_requester` | Untouched. It is not read from the request, exactly as in creation: sending a field with that name has no effect. |
+| `field_status` | Untouched — it stays `received`, which is the precondition to get here. |
+| `field_reception_date` | **Untouched.** It is the date the administration received the claim, not the date of its last correction; re-stamping it would falsify the listing order and the `date_from`/`date_to` filters. |
+| `node.changed` | Moves on its own, through `node_save()`. |
+
+The claim's **timeline does not change**: editing creates no transaction and
+sends no notification. Transactions are the history of *statuses*, and editing
+does not change the status — the same `transactions` array, with the same `id`s,
+comes back in the response.
+
+**Nothing is ever left half-done.** Everything validates and the new files are
+saved *before* the node is written; if anything fails, those new files are
+deleted and the claim keeps its text and its original files, byte for byte. Only
+after `node_save()` succeeds are the old files deleted — which is what
+guarantees a file the node still references is never destroyed.
+
+**Success response (200)**
+
+Identical shape to `GET /api/v1/claims/%` — see **Field reference** below for
+every key. `reception_date`, `created` and `transactions` are the same values as
+before the edit.
+
+```json
+{
+  "success": true,
+  "data": {
+    "claim": {
+      "id": 141,
+      "subject": "Fuga de agua en el pasillo (corregido)",
+      "description": "La mancha llega ya hasta la puerta 3-B.",
+      "status": "received",
+      "claim_type": "claim",
+      "visibility": "private",
+      "reception_date": "2026-08-03T16:45:00",
+      "created": "2026-08-03T16:45:01",
+      "condominium_id": 7,
+      "condominium_name": "Residencias El Parque",
+      "requester_id": 34,
+      "images": [
+        {
+          "id": 521,
+          "url": "https://mi-sitio/api/v1/claims/141/files/521",
+          "filename": "pasillo.jpg"
+        },
+        {
+          "id": 530,
+          "url": "https://mi-sitio/api/v1/claims/141/files/530",
+          "filename": "puerta.jpg"
+        }
+      ],
+      "attachment": null,
+      "transactions": [
+        {
+          "id": 88,
+          "status": "received",
+          "status_date": "2026-08-03T16:45:00",
+          "comment": "Hemos recibido su reclamo. Será revisado por la administración y se le notificará cualquier novedad.",
+          "created": "2026-08-03T16:45:01",
+          "images": [],
+          "attachment": null
+        }
+      ]
+    }
+  },
+  "message": "Reclamo actualizado correctamente."
+}
+```
+
+**Possible errors**
+| Code | `error_code` | When |
+|------|--------------|------|
+| 401 | `missing_authorization` | `Authorization` header absent or not a `Bearer <token>`. |
+| 401 | `invalid_token` | Access token invalid, revoked, expired, or its user is missing/blocked. |
+| 403 | `claim_edit_denied` | The claim **is** visible to the caller (a `public` one of a neighbour) but they are not its `field_requester`. Deliberately not a `404`: there is nothing left to hide once the claim is already readable, and a `404` would only confuse the diagnosis in support. |
+| 403 | `condominium_access_denied` | `condominium_id` is a positive integer the user does not belong to. Nothing is modified. |
+| 404 | `claim_not_found` | The claim does not exist, is unpublished, belongs to another condominium, is private and filed by somebody else, or the id is not a positive integer. The four are indistinguishable — the same rule and the same message as `GET /api/v1/claims/%`. |
+| 405 | `method_not_allowed` | `PUT` or `DELETE` on `/api/v1/claims/{id}`. |
+| 409 | `claim_not_editable` | The caller is the requester, but the claim's status is no longer `received`. The payload is valid; what conflicts is the current state of the resource. |
+| 422 | `missing_field` | A required field is absent or empty (`@field` names it): `subject`, `claim_type`, `condominium_id`, `description`, or `visibility`. The update is total, so this fires even when only one field changed. |
+| 422 | `invalid_field` | `subject` over 255 chars, `claim_type` not a key of its `allowed_values`, `condominium_id` not a positive integer, `description` empty after `trim()`, `visibility` not a key of its `allowed_values`, or (`@field: remove_image_ids`) a `fid` that is not a positive integer or is not an image of this claim. |
+| 422 | `claim_too_many_images` | The new images do not fit in `5 - (current - removed)`. None of them is saved. |
+| 422 | `claim_invalid_image` | An image fails extension or size validation. All-or-nothing: the images already saved in the same request are deleted too, and the claim's own files are untouched. |
+| 422 | `claim_invalid_attachment` | The attachment fails extension or size validation. The images of that same request are deleted too, and the previous attachment stays in place. |
+| 422 | `invalid_file_type` | An image's or the attachment's real MIME (checked with `finfo`) does not match its extension. |
+
+`409` is not in the status-code list of `CLAUDE.md`; SPEC 67 introduces it on
+purpose for this one case. Validation runs in the order of the **Request body**
+table — authentication, id, visibility, requester, status, then the fields — and
+each check aborts before anything is written. See [i18n.md](i18n.md) for the
+translated `error`/`message` text.
+
+**Example (change the text, drop one image, add another, delete the attachment):**
+```bash
+curl -i -X POST https://host/api/v1/claims/141 \
+  -H 'Authorization: Bearer <access_token>' \
+  -F 'subject=Fuga de agua en el pasillo (corregido)' \
+  -F 'claim_type=claim' \
+  -F 'condominium_id=7' \
+  -F 'description=La mancha llega ya hasta la puerta 3-B.' \
+  -F 'visibility=private' \
+  -F 'remove_image_ids[]=520' \
+  -F 'images[]=@puerta.jpg' \
+  -F 'remove_attachment=1'
+```
+
+### Two things the endpoint cannot undo
+
+- **Turning `visibility` from `public` back to `private` does not unsee it.**
+  The neighbours who read the claim while it was public still know what it said.
+  That is a property of the world, not of the code — the app's UI should not
+  promise otherwise.
+- **Changing `condominium_id` moves the whole claim**, with its transactions and
+  its files: the neighbours of the previous condominium stop seeing it and those
+  of the new one start to. That is the intended behaviour of fixing a wrongly
+  filed claim, and the validation against the user's own condominiums keeps it
+  from being moved out of their reach.
+
+There is **no concurrency control**: two simultaneous edits of the same claim,
+last one wins, with no `If-Match` and no `changed` comparison. The status can
+also change between the moment the app renders the form and the moment the user
+submits it — an administrator taking the claim meanwhile — which the resident
+sees as a `409` on a form they had already filled in. The
+`claim_not_editable` message says explicitly that the status changed, so the app
+can reload the detail and explain it instead of showing a generic error.
 
 ---
 
