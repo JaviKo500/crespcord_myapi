@@ -746,10 +746,12 @@ function myapi_claim_create_delete_files(array $files) {
  * exactly like myapi_claim_transaction_create_form() (SPEC 57) does for the
  * back office — so this endpoint inherits SPEC 55's limits instead of
  * duplicating them. The real-MIME whitelist is not hardcoded either: it is
- * derived from the instance's own allowed extensions via
+ * derived from $validators['file_validate_extensions'][0] — the very string
+ * the extension check above it already enforces, not a second read of
+ * $instance['settings']['file_extensions'] under a different name — via
  * file_get_mimetype('dummy.<ext>'), Drupal core's own extension-to-mimetype
- * map, the same double-check myapi_payment_save_file() does with a hardcoded
- * list — here the list follows the field instead.
+ * map. Same double-check myapi_payment_save_file() does with a hardcoded
+ * list; here the list follows the field instead.
  *
  * On the first failure (too many files, a rejected extension/size, or a MIME
  * mismatch) every file already saved BY THIS CALL is deleted with
@@ -831,8 +833,14 @@ function myapi_claim_create_save_files($field_name, $bundle, array $files, $max_
     myapi_error($error_key, 422);
   }
 
-  $extensions = isset($instance['widget']['settings']['file_extensions'])
-    ? preg_split('/\s+/', trim($instance['widget']['settings']['file_extensions']))
+  // The extensions actually enforced by $validators itself
+  // ('file_validate_extensions', the same key file_save_upload() reads),
+  // rather than re-reading $instance['settings']['file_extensions'] under a
+  // second name: this way the MIME whitelist can never drift from what the
+  // extension check above it already validated, whichever key Drupal stores
+  // it under.
+  $extensions = isset($validators['file_validate_extensions'][0])
+    ? preg_split('/\s+/', trim($validators['file_validate_extensions'][0]))
     : [];
   $allowed_mimes = [];
   foreach ($extensions as $extension) {
