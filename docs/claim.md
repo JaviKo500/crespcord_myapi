@@ -1,10 +1,10 @@
-# Claims API (SPEC 64, SPEC 65)
+# Claims API (SPEC 64, SPEC 65, SPEC 66)
 
-Three read-only endpoints over the `reclamo` nodes the back office manages
-(SPEC 55–63): a paginated list, a detail by id, and the authenticated download
-of one claim file (SPEC 65). The Flutter app consumes them; nothing here
-creates, edits or closes a claim, uploads or deletes a file, or adds a
-transaction — those paths are back office only
+Four endpoints over the `reclamo` nodes the back office manages (SPEC 55–63):
+a paginated list, a detail by id, the authenticated download of one claim file
+(SPEC 65), and creating a claim (SPEC 66). The Flutter app consumes them;
+nothing here edits or closes a claim, uploads or deletes a file after
+creation, or adds a transaction — those paths are back office only
 (see [claim-transaction-timeline.md](claim-transaction-timeline.md)).
 
 Two documents cover the other half of the same data:
@@ -331,6 +331,154 @@ caller has already proved they can see the claim in the path, so distinguishing
 "that file is not of this claim" leaks nothing and separates two different
 problems in support. A `403` *would* leak: it would confirm that the fid exists
 somewhere else.
+
+---
+
+## POST /api/v1/claims
+
+Creates a `reclamo` node for the authenticated resident, with up to 5 images
+and one optional attachment. The request is `multipart/form-data` (text
+fields plus files), not JSON — same contract as `POST /api/v1/payments`. The
+response is the **same object** `GET /api/v1/claims/%` returns, transactions
+always expanded: the initial `"received"` transaction that
+`hook_node_insert()` creates on its own is already there, so the client never
+needs a second request to learn its `id`.
+
+Out of scope of this endpoint: editing, closing, or deleting a claim, and
+adding a transaction from the app (comments, status changes) — those remain
+back office only.
+
+**Authentication:** required (Bearer access token)
+
+**Headers**
+| Header | Value |
+|--------|-------|
+| Authorization | Bearer `<access_token>` |
+| Content-Type | `multipart/form-data` |
+
+**Request body (form-data fields)**
+| Field | Required | Type | Rule |
+|-------|----------|------|------|
+| `subject` | **yes** | string | ≤ 255 chars (`node.title` is `varchar(255)`). Otherwise → `422 invalid_field`. |
+| `claim_type` | **yes** | string | Must be a **key** of `field_claim_type`'s `allowed_values` (`requirement` \| `claim`), not the visible label. Otherwise → `422 invalid_field`. |
+| `condominium_id` | **yes** | int (nid) | Integer > 0, and one of the condominiums the authenticated user belongs to (`myapi_condominium_related_nids($uid)`, the same set `GET /api/v1/claims` uses). Bad format → `422 invalid_field`; a foreign condominium, or a user with no condominium at all → `403 condominium_access_denied`. |
+| `description` | **yes** | string | Non-empty after `trim()`. Otherwise → `422 invalid_field`. No maximum (`text_long`). |
+| `visibility` | **yes** | string | Must be a **key** of `field_visibility`'s `allowed_values` (`private` \| `public`). Otherwise → `422 invalid_field`. |
+| `images[]` | no | file[] | Up to 5 files. See file rules below. |
+| `attachment` | no | file | At most 1 file. See file rules below. |
+
+`solicitante` is **not a field of this request**: `field_requester` is always
+the `uid` of the Bearer token, never read from the body — sending a different
+value has no effect, because there is no such input to send.
+
+**Images (`images[]`) and attachment (`attachment`)**
+| Aspect | Images | Attachment |
+|--------|--------|------------|
+| Extensions | `jpg`, `jpeg`, `png` (SPEC 55, unchanged) | `pdf`, `doc`, `docx`, `xls`, `xlsx` (SPEC 55, unchanged) |
+| Size | ≤ 3 MB each | ≤ 3 MB |
+| Count | Up to 5. A 6th file → `422 claim_too_many_images`, none saved. | At most 1 — `attachment` is not an array field, so a second `attachment` part sent by the client is not receivable as two files. |
+| Real MIME | Checked with `finfo`, derived from the field's own allowed extensions (not hardcoded). Mismatch (e.g. a `.php` renamed to `.jpg`) → `422 invalid_file_type`. | Same check → `422 invalid_file_type`. |
+| Rejected extension/size | `422 claim_invalid_image` | `422 claim_invalid_attachment` |
+| Storage | Saved as **permanent** managed files under the field's configured `private://` directory, each with a `file_usage` row tied to the node. | Same. |
+
+Nothing about extensions or sizes is hardcoded in the endpoint: it reads
+`field_images` / `field_attachment`'s own Field API instance
+(`file_field_widget_upload_validators()` / `file_field_widget_uri()`), the
+same functions the native `managed_file` widget uses — if SPEC 55's limits
+change from the Drupal UI, this endpoint inherits the change automatically.
+
+**All-or-nothing on files.** Any image or attachment that fails validation
+aborts the whole request: every file already saved **in that same request**
+(earlier valid images, if the attachment is what failed) is deleted before the
+error response, and no node is created. There is no partial claim with only
+the valid files attached.
+
+**Fields the server always sets, never the client**
+| Field | Value |
+|-------|-------|
+| `node.uid` | `uid` of the Bearer token |
+| `node.status` | `1` (published) |
+| `field_requester` | `uid` of the Bearer token |
+| `field_status` | `'received'`, written explicitly — a programmatic `node_save()` does not go through `field_default_form()`, so the field's `default_value` is never applied on its own. |
+| `field_reception_date` | `date('Y-m-d H:i:00')`, the server's own instant at creation time. |
+
+**Success response (201)**
+
+Identical shape to `GET /api/v1/claims/%` — see **Field reference** below for
+every key. The only endpoint-specific detail is that `transactions` always
+carries exactly one element right after creation: the automatic `"received"`
+transaction.
+
+```json
+{
+  "success": true,
+  "data": {
+    "claim": {
+      "id": 141,
+      "subject": "Fuga de agua en el pasillo",
+      "description": "Se ve una mancha de humedad que crece desde el lunes.",
+      "status": "received",
+      "claim_type": "claim",
+      "visibility": "private",
+      "reception_date": "2026-08-03T16:45:00",
+      "created": "2026-08-03T16:45:01",
+      "condominium_id": 7,
+      "condominium_name": "Residencias El Parque",
+      "requester_id": 34,
+      "images": [
+        {
+          "id": 520,
+          "url": "https://mi-sitio/api/v1/claims/141/files/520",
+          "filename": "mancha.jpg"
+        }
+      ],
+      "attachment": null,
+      "transactions": [
+        {
+          "id": 88,
+          "status": "received",
+          "status_date": "2026-08-03T16:45:00",
+          "comment": "Hemos recibido su reclamo. Será revisado por la administración y se le notificará cualquier novedad.",
+          "created": "2026-08-03T16:45:01",
+          "images": [],
+          "attachment": null
+        }
+      ]
+    }
+  },
+  "message": "Reclamo creado correctamente."
+}
+```
+
+**Possible errors**
+| Code | `error_code` | When |
+|------|--------------|------|
+| 401 | `missing_authorization` | `Authorization` header absent or not a `Bearer <token>`. |
+| 401 | `invalid_token` | Access token invalid, revoked, expired, or its user is missing/blocked. |
+| 403 | `condominium_access_denied` | `condominium_id` is a positive integer the user does not belong to, or the user has no condominium at all. Nothing is created. |
+| 405 | `method_not_allowed` | Any method other than `POST` on `/api/v1/claims`, or `POST` on `/api/v1/claims/{id}` (creation is always on the collection). |
+| 422 | `missing_field` | A required field is absent or empty (`@field` names it): `subject`, `claim_type`, `condominium_id`, `description`, or `visibility`. |
+| 422 | `invalid_field` | `subject` over 255 chars, `claim_type` not a key of its `allowed_values`, `condominium_id` not a positive integer, `description` empty after `trim()`, or `visibility` not a key of its `allowed_values`. |
+| 422 | `claim_too_many_images` | More than 5 files in `images[]`. Nothing is saved. |
+| 422 | `claim_invalid_image` | An image fails extension or size validation. All-or-nothing: any images already saved in the same request are deleted too. |
+| 422 | `claim_invalid_attachment` | The attachment fails extension or size validation. All-or-nothing: any images already saved in the same request are deleted too. |
+| 422 | `invalid_file_type` | An image's or the attachment's real MIME (checked with `finfo`) does not match its extension. |
+
+Validation runs in the order listed in **Request body** above, and each check
+aborts before anything is created. See [i18n.md](i18n.md) for the translated
+`error`/`message` text.
+
+**Example (with one image, no attachment):**
+```bash
+curl -i -X POST https://host/api/v1/claims \
+  -H 'Authorization: Bearer <access_token>' \
+  -F 'subject=Fuga de agua en el pasillo' \
+  -F 'claim_type=claim' \
+  -F 'condominium_id=7' \
+  -F 'description=Se ve una mancha de humedad que crece desde el lunes.' \
+  -F 'visibility=private' \
+  -F 'images[]=@mancha.jpg'
+```
 
 ---
 
