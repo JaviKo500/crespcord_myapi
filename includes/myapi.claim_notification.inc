@@ -974,12 +974,15 @@ function myapi_claim_notify_neighbours($row, $timestamp) {
     $uids
   );
 
-  $params = myapi_claim_mail_params($row);
-  // The neighbour email carries no 'name': resolving the display name of every
-  // owner and occupant would be one query per recipient just for a greeting.
-  $params['reception_date'] = check_plain(myapi_claim_date_label($timestamp));
-
-  myapi_claim_enqueue_mails('claim_published_neighbour', $uids, $params);
+  // The 'Recibido el' line of the email keeps the claim's REAL reception date,
+  // even when the claim is published days later: the label says "received", and
+  // printing the publication instant under it would simply be false. The moving
+  // date is the 'Publicado el' line of the push above, whose label does say
+  // what it means.
+  //
+  // The neighbour email carries no 'name' either: resolving the display name of
+  // every owner and occupant would be one query per recipient for a greeting.
+  myapi_claim_enqueue_mails('claim_published_neighbour', $uids, myapi_claim_mail_params($row));
 }
 
 /* ---------------------------------------------------------------------------
