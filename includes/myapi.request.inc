@@ -52,6 +52,42 @@ function myapi_request_post_field($name) {
 }
 
 /**
+ * Reads a repeated field from a multipart/form-data request ($_POST).
+ *
+ * Sibling of myapi_request_post_field() for fields sent as an array (the
+ * "name[]" form), which that function returns NULL for on purpose. Keeps
+ * resources away from $_POST when they need a repeated field such as a list of
+ * file ids to remove.
+ *
+ * It does not validate types or contents beyond discarding what cannot be a
+ * value at all: casting to int, checking ranges or matching against a
+ * catalogue is the resource's job.
+ *
+ * @param string $name  The form-data field name, without the "[]" suffix.
+ *
+ * @return array  List of trimmed non-empty scalar values, reindexed from 0.
+ *                Empty array when the field is absent or is not an array.
+ */
+function myapi_request_post_field_array($name) {
+  if (!isset($_POST[$name]) || !is_array($_POST[$name])) {
+    return [];
+  }
+
+  $values = [];
+  foreach ($_POST[$name] as $value) {
+    if (!is_scalar($value)) {
+      continue;
+    }
+    $value = trim((string) $value);
+    if ($value !== '') {
+      $values[] = $value;
+    }
+  }
+
+  return $values;
+}
+
+/**
  * Validates that all required fields are present in the request body.
  *
  * Calls myapi_error() with HTTP 422 and exits if any field is missing.
