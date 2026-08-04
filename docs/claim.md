@@ -1,4 +1,4 @@
-# Claims API (SPEC 64, SPEC 65, SPEC 66, SPEC 67)
+# Claims API (SPEC 64, SPEC 65, SPEC 66, SPEC 67, SPEC 69)
 
 Five endpoints over the `reclamo` nodes the back office manages (SPEC 55–63):
 a paginated list, a detail by id, the authenticated download of one claim file
@@ -75,7 +75,7 @@ never returns `422`. The single exception is `condominium_id`, marked below.
 | `condominium_id` | absent = all the user's condominiums | Positive integer (condominium `nid`). **A valid nid the user does not belong to returns `403 condominium_access_denied`** — asking for one specific condominium is a statement of intent, and silently answering with a different set would be misleading. A non-numeric, zero or negative value (`?condominium_id=abc`) is a client bug, not an access attempt: it is **ignored silently**, no `422` and no `403`. |
 | `date_from` | absent = no lower bound | ISO `YYYY-MM-DD`, **inclusive**, compared **by day** against `reception_date`. Malformed or non-existent dates (`2026-02-30`, `01/08/2026`, `hoy`) are ignored silently. |
 | `date_to` | absent = no upper bound | Same rules, inclusive upper bound. A claim received on the `date_to` day at 14:30 **does** appear. |
-| `status` | absent = every status | One of `received`, `in_progress`, `resolved`, `closed`. Any other value (including `duplicated`, dropped by SPEC 62) means "no filter". |
+| `status` | absent = every status | One or more of `received`, `in_progress`, `resolved`, `closed`, **comma-separated** (`?status=received,in_progress` = "any of these"). Unknown items are dropped and the valid ones still filter (`?status=received,duplicated` filters by `received`); only when no item is valid does the whole filter mean "no filter". |
 | `claim_type` | absent = both types | `requirement` or `claim`. Any other value means "no filter". |
 | `include` | absent = collapsed | The exact value `transactions` expands each claim's transactions into full objects. Any other value leaves them as an array of ids. |
 
@@ -860,3 +860,14 @@ uses** — `myapi_claims_valid_status()` and `myapi_claims_valid_claim_type()` i
 `includes/myapi.claims_common.inc`. There is no second whitelist written inside
 the resource, so `admin/content/claims` and this API can never disagree about
 which values exist, and the next change to the catalogue has one file to touch.
+
+The multi-value form of `?status` (SPEC 69) does not break that: it goes
+through `myapi_claims_valid_status_list()`, which splits on commas and hands
+each item to `myapi_claims_valid_status()`. The back-office listing keeps its
+single-value filter — one `select`, one status — and the whitelist is still
+written once. In SQL the list becomes a single `IN (...)`, so filtering by four
+statuses costs exactly the same as filtering by one.
+
+Not supported, and worth saying out loud: `?status[]=received&status[]=closed`.
+PHP hands that over as an array, which falls back to "no filter" like any other
+unparsable value. The comma-separated form is the only documented one.
