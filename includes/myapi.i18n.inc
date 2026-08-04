@@ -135,6 +135,10 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'reservation_cancel_window_expired'  => 'The cancellation window for this reservation has expired.',
       'reservation_cancelled'              => 'Reservation cancelled successfully.',
       'claim_not_found'                    => 'Claim not found.',
+      'claim_created'                      => 'Claim created successfully.',
+      'claim_too_many_images'              => 'Maximum 5 images per claim.',
+      'claim_invalid_image'                => 'Invalid image. Allowed: JPG, JPEG or PNG up to 3 MB.',
+      'claim_invalid_attachment'           => 'Invalid attachment. Allowed: PDF, DOC, DOCX, XLS or XLSX up to 3 MB.',
       'file_not_found'                     => 'File not found.',
     ],
     'es' => [
@@ -203,6 +207,10 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'reservation_cancel_window_expired'  => 'La ventana de cancelación de esta reserva ya expiró.',
       'reservation_cancelled'              => 'Reserva cancelada correctamente.',
       'claim_not_found'                    => 'Reclamo no encontrado.',
+      'claim_created'                      => 'Reclamo creado correctamente.',
+      'claim_too_many_images'              => 'Máximo 5 imágenes por reclamo.',
+      'claim_invalid_image'                => 'Imagen inválida. Permitidos: JPG, JPEG o PNG hasta 3 MB.',
+      'claim_invalid_attachment'           => 'Adjunto inválido. Permitidos: PDF, DOC, DOCX, XLS o XLSX hasta 3 MB.',
       'file_not_found'                     => 'Archivo no encontrado.',
     ],
   ];

@@ -684,6 +684,276 @@ function myapi_claim_build_item($row, array $images, array $transactions) {
 }
 
 /* ---------------------------------------------------------------------------
+ * Write-path helpers (SPEC 66).
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Whether $value is a valid key of $field_name's allowed_values.
+ *
+ * One helper for both 'field_claim_type' and 'field_visibility' instead of two
+ * copies of the same lookup: neither field has a whitelist of its own in this
+ * file, they read whatever the Field API instance currently allows — same
+ * pattern as MYAPI_PAYMENT_METHOD_FIELD in payment.resource.inc. This is what
+ * lets the two field's option lists change from the Drupal UI without a code
+ * change here.
+ *
+ * @param string $field_name  Machine name of the field, e.g. 'field_claim_type'.
+ * @param mixed  $value       The raw value to check.
+ *
+ * @return bool  TRUE when $value is a key of the field's allowed_values.
+ */
+function myapi_claim_valid_catalogue_value($field_name, $value) {
+  $field_info = field_info_field($field_name);
+  $allowed = ($field_info && isset($field_info['settings']['allowed_values']))
+    ? $field_info['settings']['allowed_values']
+    : [];
+
+  return is_scalar($value) && array_key_exists($value, $allowed);
+}
+
+/**
+ * Deletes a batch of just-saved managed files.
+ *
+ * The all-or-nothing cleanup primitive: used both inside
+ * myapi_claim_create_save_files() (when a later file of the SAME field fails)
+ * and by myapi_claim_create() (when the attachment fails after the images of
+ * the same request already saved). One place for the loop instead of two.
+ *
+ * @param array $files  file_managed objects, as returned by file_save().
+ */
+function myapi_claim_create_delete_files(array $files) {
+  foreach ($files as $file) {
+    file_delete($file);
+  }
+}
+
+/**
+ * Validates and saves the files of one upload field, all-or-nothing.
+ *
+ * Serves both 'field_images' ($max_count = 5, multi-file input) and
+ * 'field_attachment' ($max_count = 1, single-file input) — one function for
+ * the two fields, since the only difference between them is which Field API
+ * instance they read. $files is the raw $_FILES entry for the input
+ * ($_FILES['images'] or $_FILES['attachment']): PHP gives a multi-file input
+ * ('images[]') as parallel arrays keyed by index, and a single-file input
+ * ('attachment') as one flat entry; both shapes are normalized here into a
+ * list of individual files before anything is validated or saved.
+ *
+ * Nothing about extensions or sizes is hardcoded: $field_name's Field API
+ * field and instance (field_info_field() / field_info_instance()) are read to
+ * build the same #upload_validators and #upload_location the native widget
+ * would use (file_field_widget_upload_validators() / file_field_widget_uri()),
+ * exactly like myapi_claim_transaction_create_form() (SPEC 57) does for the
+ * back office — so this endpoint inherits SPEC 55's limits instead of
+ * duplicating them. The real-MIME whitelist is not hardcoded either: it is
+ * derived from the instance's own allowed extensions via
+ * file_get_mimetype('dummy.<ext>'), Drupal core's own extension-to-mimetype
+ * map, the same double-check myapi_payment_save_file() does with a hardcoded
+ * list — here the list follows the field instead.
+ *
+ * On the first failure (too many files, a rejected extension/size, or a MIME
+ * mismatch) every file already saved BY THIS CALL is deleted with
+ * myapi_claim_create_delete_files() before myapi_error() ends the request:
+ * no orphaned file_managed row survives a failed images[] or attachment
+ * upload on its own. $also_delete extends that same cleanup to files saved by
+ * an EARLIER call within the same request — myapi_claim_create() passes its
+ * already-saved $image_files here when it calls this function for the
+ * attachment, so a rejected attachment does not leave the request's valid
+ * images orphaned. myapi_error() never returns to its caller (it ends the
+ * request with drupal_exit()), which is exactly why this cleanup has to
+ * happen HERE, before it is called, rather than by the orchestrator
+ * afterwards.
+ *
+ * @param string $field_name   Machine name of the field ('field_images' or
+ *                              'field_attachment').
+ * @param string $bundle       Node bundle the field is attached to
+ *                              ('reclamo').
+ * @param array  $files        The raw $_FILES[...] entry for this input, or
+ *                              an empty array when nothing was sent.
+ * @param int    $max_count    Maximum number of files allowed.
+ * @param string $error_key    i18n key to answer when a file is rejected for
+ *                              its extension or size ('claim_invalid_image'
+ *                              or 'claim_invalid_attachment'). A MIME
+ *                              mismatch always answers 'invalid_file_type'
+ *                              instead, regardless of this parameter.
+ * @param array  $also_delete  Managed file objects saved by an earlier field
+ *                              of the SAME request, to delete together with
+ *                              this call's own batch on any failure. Empty by
+ *                              default — the images call passes none, the
+ *                              attachment call passes the images.
+ *
+ * @return array  The saved, permanent file objects, in the order they were
+ *                sent. Empty when $files carried nothing.
+ */
+function myapi_claim_create_save_files($field_name, $bundle, array $files, $max_count, $error_key, array $also_delete = []) {
+  // Normalize into a flat list of individual file specs, whichever shape
+  // $files arrived in.
+  $items = [];
+  if (isset($files['name']) && is_array($files['name'])) {
+    foreach ($files['name'] as $delta => $name) {
+      if ($name === '' || (int) $files['error'][$delta] === UPLOAD_ERR_NO_FILE) {
+        continue;
+      }
+      $items[] = [
+        'name'     => $files['name'][$delta],
+        'type'     => $files['type'][$delta],
+        'tmp_name' => $files['tmp_name'][$delta],
+        'error'    => $files['error'][$delta],
+        'size'     => $files['size'][$delta],
+      ];
+    }
+  }
+  elseif (isset($files['name']) && $files['name'] !== '' && (int) $files['error'] !== UPLOAD_ERR_NO_FILE) {
+    $items[] = $files;
+  }
+
+  if (empty($items)) {
+    return [];
+  }
+
+  // The only count this module currently enforces past a field's own
+  // cardinality: 'images[]' is unlimited at the field level (SPEC 55), so the
+  // "max 5" from this spec is applied here. 'field_attachment' is a
+  // non-array PHP input, so $_FILES can never hand this function more than
+  // one item for it — this branch exists for 'field_images' in practice.
+  if (count($items) > $max_count) {
+    myapi_claim_create_delete_files($also_delete);
+    myapi_error('claim_too_many_images', 422);
+  }
+
+  $field_info = field_info_field($field_name);
+  $instance = field_info_instance('node', $field_name, $bundle);
+  $validators = file_field_widget_upload_validators($field_info, $instance);
+  $directory = file_field_widget_uri($field_info, $instance);
+
+  if (!file_prepare_directory($directory, FILE_CREATE_DIRECTORY)) {
+    myapi_claim_create_delete_files($also_delete);
+    myapi_error($error_key, 422);
+  }
+
+  $extensions = isset($instance['widget']['settings']['file_extensions'])
+    ? preg_split('/\s+/', trim($instance['widget']['settings']['file_extensions']))
+    : [];
+  $allowed_mimes = [];
+  foreach ($extensions as $extension) {
+    $allowed_mimes[] = file_get_mimetype('dummy.' . $extension);
+  }
+
+  $finfo = finfo_open(FILEINFO_MIME_TYPE);
+  $saved = [];
+
+  foreach ($items as $delta => $item) {
+    // Remap into the nested $_FILES['files'][...][<key>] shape
+    // file_save_upload() expects — the same remap myapi_payment_save_file()
+    // does for its single field, generalized to one key per item so N files
+    // of the same input can each be uploaded on their own call.
+    $form_key = $field_name . '_' . $delta;
+    foreach (['name', 'type', 'tmp_name', 'error', 'size'] as $part) {
+      $_FILES['files'][$part][$form_key] = $item[$part];
+    }
+
+    $file = file_save_upload($form_key, $validators, $directory . '/');
+    if (!is_object($file)) {
+      myapi_claim_create_delete_files($saved);
+      myapi_claim_create_delete_files($also_delete);
+      if ($finfo) {
+        finfo_close($finfo);
+      }
+      myapi_error($error_key, 422);
+    }
+
+    $real_path = drupal_realpath($file->uri);
+    $mime = $finfo ? finfo_file($finfo, $real_path) : FALSE;
+    if (!in_array($mime, $allowed_mimes, TRUE)) {
+      file_delete($file);
+      myapi_claim_create_delete_files($saved);
+      myapi_claim_create_delete_files($also_delete);
+      if ($finfo) {
+        finfo_close($finfo);
+      }
+      myapi_error('invalid_file_type', 422);
+    }
+
+    $file->status = FILE_STATUS_PERMANENT;
+    $saved[] = file_save($file);
+  }
+
+  if ($finfo) {
+    finfo_close($finfo);
+  }
+
+  return $saved;
+}
+
+/**
+ * Builds an unsaved 'reclamo' node from the validated claim input.
+ *
+ * Same pattern as myapi_payment_build_node(): every value is already
+ * validated by the caller, and the node is returned UNSAVED so the
+ * orchestrator controls the order against file_usage_add() — node_save()
+ * first, then usage, exactly as SPEC 65 assumes for every file already
+ * attached to a claim.
+ *
+ * Three fields are fixed here regardless of what travels in the request
+ * (see the Modelo de datos of SPEC 66):
+ *   - field_requester is always $uid, the token's own — never read from the
+ *     request.
+ *   - field_status is written explicitly as 'received': a programmatic
+ *     node_save() never goes through field_default_form(), so the field's
+ *     default_value would otherwise leave it empty.
+ *   - field_reception_date is the server's own instant, 'Y-m-d H:i:00' —
+ *     same format, seconds pinned to ':00', as
+ *     myapi_claim_transaction_create_initial() uses for the transaction's own
+ *     field_status_date.
+ *
+ * hook_node_insert()'s 'reclamo' branch (myapi.module) fires on the
+ * caller's node_save() and creates the initial "received" transaction on its
+ * own — nothing here calls myapi_claim_transaction_create_initial() directly.
+ *
+ * @param int         $uid             Authenticated resident (token uid):
+ *                                      node.uid and field_requester.
+ * @param string      $subject         Validated title, <= 255 chars.
+ * @param string      $claim_type      Validated field_claim_type key.
+ * @param int         $condominium_id  Validated field_condominium target nid.
+ * @param string      $description     Validated, non-empty field_description.
+ * @param string      $visibility      Validated field_visibility key.
+ * @param array       $image_files     Saved permanent file objects for
+ *                                      field_images, in upload order. May be
+ *                                      empty.
+ * @param object|null $attachment_file Saved permanent file object for
+ *                                      field_attachment, or NULL when none.
+ *
+ * @return object  The prepared, unsaved node object.
+ */
+function myapi_claim_build_node($uid, $subject, $claim_type, $condominium_id, $description, $visibility, array $image_files, $attachment_file) {
+  $node = new stdClass();
+  $node->type = 'reclamo';
+  node_object_prepare($node);
+  $node->uid = $uid;
+  $node->status = 1;
+  $node->language = LANGUAGE_NONE;
+  $node->title = $subject;
+
+  $node->field_claim_type[LANGUAGE_NONE][0]['value'] = $claim_type;
+  $node->field_condominium[LANGUAGE_NONE][0]['target_id'] = $condominium_id;
+  $node->field_requester[LANGUAGE_NONE][0]['target_id'] = $uid;
+  $node->field_description[LANGUAGE_NONE][0]['value'] = $description;
+  $node->field_visibility[LANGUAGE_NONE][0]['value'] = $visibility;
+  $node->field_status[LANGUAGE_NONE][0]['value'] = 'received';
+  $node->field_reception_date[LANGUAGE_NONE][0]['value'] = date('Y-m-d H:i:00');
+
+  foreach ($image_files as $delta => $file) {
+    $node->field_images[LANGUAGE_NONE][$delta] = ['fid' => $file->fid, 'display' => 1];
+  }
+
+  if ($attachment_file) {
+    $node->field_attachment[LANGUAGE_NONE][0] = ['fid' => $attachment_file->fid, 'display' => 1];
+  }
+
+  return $node;
+}
+
+/* ---------------------------------------------------------------------------
  * Endpoints.
  * ------------------------------------------------------------------------ */
 
@@ -694,11 +964,13 @@ function myapi_claim_build_item($row, array $images, array $transactions) {
  * One callback serves both routes: hook_menu() passes the nid for the item path
  * and nothing for the collection, so $id is what tells list from detail.
  *
- * GET is the only supported method — this resource is read-only (SPEC 64) —
- * and POST/PUT/DELETE answer 405 on BOTH paths. Authentication is deliberately
- * NOT resolved here but inside myapi_claim_list() / myapi_claim_detail(), so an
- * unsupported method answers 405 without a token rather than 401: the method is
- * wrong whoever is asking.
+ * GET is read-only (SPEC 64: list and detail). Since SPEC 66, POST with no id
+ * creates a claim (myapi_claim_create()) — creation is always on the
+ * collection, never on an item, so POST /api/v1/claims/% keeps answering 405
+ * exactly like before. Every other combination (PUT, DELETE, and POST with an
+ * id) also answers 405. Authentication is deliberately NOT resolved here but
+ * inside each handler, so an unsupported method answers 405 without a token
+ * rather than 401: the method is wrong whoever is asking.
  *
  * @param mixed $id  The nid from the item route, or NULL on the collection.
  */
@@ -711,9 +983,168 @@ function myapi_claim_dispatch($id = NULL) {
   elseif ($method === 'GET') {
     myapi_claim_detail($id);
   }
+  elseif ($method === 'POST' && $id === NULL) {
+    myapi_claim_create();
+  }
   else {
     myapi_error('method_not_allowed', 405);
   }
+}
+
+/**
+ * POST /api/v1/claims — creates a claim for the authenticated resident
+ * (SPEC 66).
+ *
+ * multipart/form-data, not JSON: text fields through myapi_request_post_field()
+ * ($_POST), files through $_FILES — same contract as POST /api/v1/payments.
+ * Every step below aborts with its own error BEFORE anything touches the
+ * database, in the exact order of the Modelo de datos section of SPEC 66:
+ *
+ *   1. Authentication.
+ *   2. Required fields present (subject, claim_type, condominium_id,
+ *      description, visibility).
+ *   3. subject <= 255 chars.
+ *   4. claim_type is a key of field_claim_type's allowed_values.
+ *   5. condominium_id is a positive integer AND one of the reader's own
+ *      condominiums (myapi_condominium_related_nids($uid), the same set
+ *      GET /api/v1/claims uses) — a user with no condominium at all simply
+ *      has an empty set, so every condominium_id falls outside it and
+ *      answers the same 403.
+ *   6. description non-empty after trim() (myapi_request_post_field()
+ *      already trims).
+ *   7. visibility is a key of field_visibility's allowed_values.
+ *   8. images[] (if any) — myapi_claim_create_save_files(), all-or-nothing.
+ *   9. attachment (if any) — same, and on failure also deletes the images
+ *      already saved by step 8 (the $also_delete parameter — see that
+ *      function's docblock for why the cleanup has to live there and not
+ *      here).
+ *
+ * field_requester is NEVER read from the request: it is always $uid, the
+ * token's own (see myapi_claim_build_node()). field_status and
+ * field_reception_date are likewise fixed by the server, not the client.
+ *
+ * hook_node_insert()'s 'reclamo' branch (myapi.module) fires on node_save()
+ * below and creates the initial "received" transaction on its own — nothing
+ * here calls myapi_claim_transaction_create_initial() directly, so the app
+ * and the back office create that first transaction through the exact same
+ * code path.
+ *
+ * The 201 response reuses myapi_claim_fetch() + myapi_claim_load_images() +
+ * myapi_claim_load_transactions() + myapi_claim_build_item() — the very same
+ * functions GET /api/v1/claims/% uses — so the two responses can never drift
+ * apart, and the client gets the freshly created claim WITH its initial
+ * transaction and authenticated file URLs in one round trip.
+ */
+function myapi_claim_create() {
+  // 1. Authentication.
+  $token = myapi_auth_require_access_token();
+  $uid = (int) $token->uid;
+  $condos = myapi_condominium_related_nids($uid);
+
+  // 2. Read the multipart/form-data text fields.
+  $subject = myapi_request_post_field('subject');
+  $claim_type = myapi_request_post_field('claim_type');
+  $condominium_raw = myapi_request_post_field('condominium_id');
+  $description = myapi_request_post_field('description');
+  $visibility = myapi_request_post_field('visibility');
+
+  $required = [
+    'subject'         => $subject,
+    'claim_type'      => $claim_type,
+    'condominium_id'  => $condominium_raw,
+    'description'     => $description,
+    'visibility'      => $visibility,
+  ];
+  foreach ($required as $name => $value) {
+    if ($value === NULL || $value === '') {
+      myapi_error('missing_field', 422, ['@field' => $name]);
+    }
+  }
+
+  // 3. subject: node.title is varchar(255).
+  if (strlen($subject) > 255) {
+    myapi_error('invalid_field', 422, ['@field' => 'subject']);
+  }
+
+  // 4. claim_type: a key of field_claim_type's allowed_values.
+  if (!myapi_claim_valid_catalogue_value('field_claim_type', $claim_type)) {
+    myapi_error('invalid_field', 422, ['@field' => 'claim_type']);
+  }
+
+  // 5. condominium_id: positive integer, then one of the reader's own
+  // condominiums. An empty $condos (no unit at all) makes every id fall
+  // outside it, so this is the SAME 403 for both cases — no special code for
+  // "no condominium" beyond the natural consequence of the rule.
+  if (!ctype_digit((string) $condominium_raw) || (int) $condominium_raw <= 0) {
+    myapi_error('invalid_field', 422, ['@field' => 'condominium_id']);
+  }
+  $condominium_id = (int) $condominium_raw;
+  if (!in_array($condominium_id, array_map('intval', $condos), TRUE)) {
+    myapi_error('condominium_access_denied', 403);
+  }
+
+  // 6. description: non-empty after trim() (already trimmed above).
+  if ($description === '') {
+    myapi_error('invalid_field', 422, ['@field' => 'description']);
+  }
+
+  // 7. visibility: a key of field_visibility's allowed_values.
+  if (!myapi_claim_valid_catalogue_value('field_visibility', $visibility)) {
+    myapi_error('invalid_field', 422, ['@field' => 'visibility']);
+  }
+
+  // 8. images[]: up to 5, all-or-nothing.
+  $image_files = myapi_claim_create_save_files(
+    'field_images',
+    'reclamo',
+    isset($_FILES['images']) ? $_FILES['images'] : [],
+    5,
+    'claim_invalid_image'
+  );
+
+  // 9. attachment: at most 1 (field_attachment is not an array input, so
+  // $_FILES can never carry more than one). On failure, the images already
+  // saved in step 8 are deleted too — see $also_delete.
+  $attachment_file = NULL;
+  $attachment_saved = myapi_claim_create_save_files(
+    'field_attachment',
+    'reclamo',
+    isset($_FILES['attachment']) ? $_FILES['attachment'] : [],
+    1,
+    'claim_invalid_attachment',
+    $image_files
+  );
+  if (!empty($attachment_saved)) {
+    $attachment_file = reset($attachment_saved);
+  }
+
+  // 10. Build and persist the node. hook_node_insert() creates the initial
+  // "received" transaction on its own.
+  $node = myapi_claim_build_node($uid, $subject, $claim_type, $condominium_id, $description, $visibility, $image_files, $attachment_file);
+  node_save($node);
+
+  // 11. Tie every saved file to the node so cron does not reap it as unused.
+  foreach ($image_files as $file) {
+    file_usage_add($file, 'myapi', 'node', $node->nid);
+  }
+  if ($attachment_file) {
+    file_usage_add($attachment_file, 'myapi', 'node', $node->nid);
+  }
+
+  // 12. Respond 201 with the same shape as GET /api/v1/claims/%, transactions
+  // always expanded — the initial transaction hook_node_insert() just created
+  // is already there.
+  $rows = myapi_claim_fetch($uid, $condos, ['nid' => $node->nid], 1, -1, 'desc');
+  $row = reset($rows);
+  $nids = [(int) $row->id];
+  $images = myapi_claim_load_images($nids);
+  $transactions = myapi_claim_load_transactions($nids, TRUE);
+
+  myapi_respond(
+    ['claim' => myapi_claim_build_item($row, $images, $transactions)],
+    201,
+    'claim_created'
+  );
 }
 
 /**
