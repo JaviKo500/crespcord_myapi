@@ -1,6 +1,6 @@
 # SPEC 66 — Creación de reclamos desde la app (`POST /api/v1/claims`)
 
-> **Estado:** Approved · **Depende de:** SPEC 55 (bundles `reclamo`/`claim_transaction` y sus campos), SPEC 57 (`myapi_claim_transaction_create_initial()` vía `hook_node_insert()`), SPEC 64 (`resources/claim.resource.inc`, `myapi_claim_build_item()`, `myapi_claim_dispatch()`), SPEC 65 (`myapi_claim_build_file()`, ficheros en `private://`) · **Fecha:** 2026-08-03
+> **Estado:** Implemented · **Depende de:** SPEC 55 (bundles `reclamo`/`claim_transaction` y sus campos), SPEC 57 (`myapi_claim_transaction_create_initial()` vía `hook_node_insert()`), SPEC 64 (`resources/claim.resource.inc`, `myapi_claim_build_item()`, `myapi_claim_dispatch()`), SPEC 65 (`myapi_claim_build_file()`, ficheros en `private://`) · **Fecha:** 2026-08-03
 > **Objetivo:** Añadir `POST /api/v1/claims`, que crea un reclamo del residente autenticado con sus imágenes y adjunto opcionales, validando que el condominio le pertenezca, y devuelve el mismo objeto que `GET /api/v1/claims/%` — con la transacción inicial "Recibido" ya incluida, porque `hook_node_insert()` la crea sola.
 
 Notas técnicas que fija la cabecera, porque condicionan el resto del documento:
@@ -163,70 +163,70 @@ Reutilizadas sin cambio: `missing_authorization`, `invalid_token`, `missing_fiel
 
 **Autenticación y método**
 
-- [ ] `POST /api/v1/claims` sin `Authorization` → `401 missing_authorization`.
-- [ ] Con un token inválido o expirado → `401 invalid_token`.
-- [ ] `POST /api/v1/claims/{id}` (con id) → `405 method_not_allowed`, nunca crea nada.
-- [ ] `GET`, `PUT`, `DELETE` sobre `api/v1/claims` siguen respondiendo como hoy (`GET` lista, el resto `405`) — este spec no les cambia el comportamiento.
+- [x] `POST /api/v1/claims` sin `Authorization` → `401 missing_authorization`.
+- [x] Con un token inválido o expirado → `401 invalid_token`.
+- [x] `POST /api/v1/claims/{id}` (con id) → `405 method_not_allowed`, nunca crea nada.
+- [x] `GET`, `PUT`, `DELETE` sobre `api/v1/claims` siguen respondiendo como hoy (`GET` lista, el resto `405`) — este spec no les cambia el comportamiento.
 
 **Campos requeridos**
 
-- [ ] Falta `subject`, `claim_type`, `condominium_id`, `description` o `visibility` → `422 missing_field` con `@field` el que falte, y no se crea ningún nodo.
-- [ ] `subject` de 256 caracteres o más → `422 invalid_field`.
-- [ ] `subject` vacío o solo espacios → `422 missing_field` (o `invalid_field` tras `trim()`, según el helper), nunca crea el nodo con un título vacío.
-- [ ] `claim_type` distinto de `requirement`/`claim` → `422 invalid_field`.
-- [ ] `visibility` distinto de `private`/`public` → `422 invalid_field`.
-- [ ] `description` vacío tras `trim()` → `422 invalid_field`.
+- [x] Falta `subject`, `claim_type`, `condominium_id`, `description` o `visibility` → `422 missing_field` con `@field` el que falte, y no se crea ningún nodo.
+- [x] `subject` de 256 caracteres o más → `422 invalid_field`.
+- [x] `subject` vacío o solo espacios → `422 missing_field` (o `invalid_field` tras `trim()`, según el helper), nunca crea el nodo con un título vacío.
+- [x] `claim_type` distinto de `requirement`/`claim` → `422 invalid_field`.
+- [x] `visibility` distinto de `private`/`public` → `422 invalid_field`.
+- [x] `description` vacío tras `trim()` → `422 invalid_field`.
 
 **Condominio**
 
-- [ ] `condominium_id` no numérico, `0` o negativo → `422 invalid_field`.
-- [ ] `condominium_id` de un condominio ajeno (el usuario no tiene vivienda ahí) → `403 condominium_access_denied`.
-- [ ] `condominium_id` de un condominio del usuario → el reclamo se crea con ese `field_condominium`.
-- [ ] Un usuario sin ninguna vivienda asociada → cualquier `condominium_id` responde `403 condominium_access_denied`, nunca `422` ni `200`.
+- [x] `condominium_id` no numérico, `0` o negativo → `422 invalid_field`.
+- [x] `condominium_id` de un condominio ajeno (el usuario no tiene vivienda ahí) → `403 condominium_access_denied`.
+- [x] `condominium_id` de un condominio del usuario → el reclamo se crea con ese `field_condominium`.
+- [x] Un usuario sin ninguna vivienda asociada → cualquier `condominium_id` responde `403 condominium_access_denied`, nunca `422` ni `200`.
 
 **Imágenes**
 
-- [ ] Sin `images[]` → el reclamo se crea con `"images": []`.
-- [ ] De 1 a 5 imágenes válidas (jpg/jpeg/png, ≤3 MB) → todas se guardan y aparecen en `images`, en el mismo orden en que se enviaron.
-- [ ] 6 imágenes → `422 claim_too_many_images`, ninguna se guarda, no se crea el nodo.
-- [ ] Una imagen de 4 MB entre varias válidas → `422 claim_invalid_image`, **ninguna** de las imágenes de esa request queda guardada (todo-o-nada), no se crea el nodo.
-- [ ] Un archivo `.webp` → `422 claim_invalid_image` (extensión no permitida; SPEC 55 sigue sin ampliarse).
-- [ ] Un `.php` renombrado a `.jpg` → `422 invalid_file_type` (el `finfo` real lo detecta), no se guarda.
+- [x] Sin `images[]` → el reclamo se crea con `"images": []`.
+- [x] De 1 a 5 imágenes válidas (jpg/jpeg/png, ≤3 MB) → todas se guardan y aparecen en `images`, en el mismo orden en que se enviaron.
+- [x] 6 imágenes → `422 claim_too_many_images`, ninguna se guarda, no se crea el nodo.
+- [x] Una imagen de 4 MB entre varias válidas → `422 claim_invalid_image`, **ninguna** de las imágenes de esa request queda guardada (todo-o-nada), no se crea el nodo.
+- [x] Un archivo `.webp` → `422 claim_invalid_image` (extensión no permitida; SPEC 55 sigue sin ampliarse).
+- [x] Un `.php` renombrado a `.jpg` → `422 invalid_file_type` (el `finfo` real lo detecta), no se guarda.
 
 **Adjunto**
 
-- [ ] Sin `attachment` → el reclamo se crea con `"attachment": null`.
-- [ ] Un adjunto válido (pdf/doc/docx/xls/xlsx, ≤3 MB) → se guarda y aparece en `attachment`.
-- [ ] Un adjunto de tipo o tamaño inválido → `422 claim_invalid_attachment`, y si ya se habían guardado imágenes válidas en la misma request, también se borran — no queda ningún archivo huérfano y no se crea el nodo.
-- [ ] Un segundo archivo enviado en el campo `attachment` (más de uno) se ignora o rechaza sin crear dos adjuntos — cardinalidad 1 respetada.
+- [x] Sin `attachment` → el reclamo se crea con `"attachment": null`.
+- [x] Un adjunto válido (pdf/doc/docx/xls/xlsx, ≤3 MB) → se guarda y aparece en `attachment`.
+- [x] Un adjunto de tipo o tamaño inválido → `422 claim_invalid_attachment`, y si ya se habían guardado imágenes válidas en la misma request, también se borran — no queda ningún archivo huérfano y no se crea el nodo.
+- [x] Un segundo archivo enviado en el campo `attachment` (más de uno) se ignora o rechaza sin crear dos adjuntos — cardinalidad 1 respetada.
 
 **Creación y transacción inicial**
 
-- [ ] El nodo se crea con `status = 1` (publicado), `field_requester` = el `uid` del token, sin importar qué haya mandado el cliente (el campo no se lee del request).
-- [ ] `field_status` queda en `received` inmediatamente después de crear, sin depender de `default_value`.
-- [ ] `field_reception_date` queda con la fecha y hora del servidor en el momento de la creación, no una enviada por el cliente (no hay tal campo en el request).
-- [ ] Tras el `POST`, existe exactamente **una** transacción (`claim_transaction`) para ese reclamo, con `status: received` y el comentario automático de SPEC 61.
-- [ ] Esa transacción aparece en `GET /api/v1/claims/{id}` inmediatamente después, con el mismo `id` que trajo la respuesta del `POST`.
+- [x] El nodo se crea con `status = 1` (publicado), `field_requester` = el `uid` del token, sin importar qué haya mandado el cliente (el campo no se lee del request).
+- [x] `field_status` queda en `received` inmediatamente después de crear, sin depender de `default_value`.
+- [x] `field_reception_date` queda con la fecha y hora del servidor en el momento de la creación, no una enviada por el cliente (no hay tal campo en el request).
+- [x] Tras el `POST`, existe exactamente **una** transacción (`claim_transaction`) para ese reclamo, con `status: received` y el comentario automático de SPEC 61.
+- [x] Esa transacción aparece en `GET /api/v1/claims/{id}` inmediatamente después, con el mismo `id` que trajo la respuesta del `POST`.
 
 **Respuesta**
 
-- [ ] Éxito → `201`, con `data.claim` teniendo exactamente las mismas claves y tipos que `GET /api/v1/claims/%`, y `message` traducido (`claim_created`).
-- [ ] Las `url` de `images`/`attachment` en la respuesta del `201` ya son las autenticadas de `GET /api/v1/claims/%/files/%` (SPEC 65) y descargan con el mismo token.
-- [ ] `transactions` viene expandido (objetos, no ints) en la respuesta del `201`, igual que en el detalle — sin necesidad de `?include=transactions`.
+- [x] Éxito → `201`, con `data.claim` teniendo exactamente las mismas claves y tipos que `GET /api/v1/claims/%`, y `message` traducido (`claim_created`).
+- [x] Las `url` de `images`/`attachment` en la respuesta del `201` ya son las autenticadas de `GET /api/v1/claims/%/files/%` (SPEC 65) y descargan con el mismo token.
+- [x] `transactions` viene expandido (objetos, no ints) en la respuesta del `201`, igual que en el detalle — sin necesidad de `?include=transactions`.
 
 **No regresión**
 
-- [ ] `GET /api/v1/claims` y `GET /api/v1/claims/%` no cambian ninguna clave, tipo ni código de estado respecto a SPEC 64/65.
-- [ ] `GET /api/v1/claims/%/files/%` no cambia.
-- [ ] `myapi.install` no aparece en el diff: ningún campo, tabla ni bundle nuevo.
-- [ ] `myapi.module` no aparece en el diff: no hay rutas nuevas ni cambios en `hook_menu()`.
-- [ ] `node/add/reclamo` (back office) sigue funcionando igual: mismos campos, mismos validadores, mismo comportamiento.
-- [ ] Crear un reclamo desde `node/add/reclamo` (back office) y desde `POST /api/v1/claims` (app) produce el mismo tipo de transacción inicial, por la misma función (`myapi_claim_transaction_create_initial()`), sin lógica duplicada.
-- [ ] `drush cc all` no reporta errores.
+- [x] `GET /api/v1/claims` y `GET /api/v1/claims/%` no cambian ninguna clave, tipo ni código de estado respecto a SPEC 64/65.
+- [x] `GET /api/v1/claims/%/files/%` no cambia.
+- [x] `myapi.install` no aparece en el diff: ningún campo, tabla ni bundle nuevo.
+- [x] `myapi.module` no aparece en el diff: no hay rutas nuevas ni cambios en `hook_menu()`.
+- [x] `node/add/reclamo` (back office) sigue funcionando igual: mismos campos, mismos validadores, mismo comportamiento.
+- [x] Crear un reclamo desde `node/add/reclamo` (back office) y desde `POST /api/v1/claims` (app) produce el mismo tipo de transacción inicial, por la misma función (`myapi_claim_transaction_create_initial()`), sin lógica duplicada.
+- [x] `drush cc all` no reporta errores.
 
 **Documentación**
 
-- [ ] `docs/claim.md` documenta `POST /api/v1/claims` con la plantilla de `CLAUDE.md`: método, auth, campos, respuesta, tabla de errores.
+- [x] `docs/claim.md` documenta `POST /api/v1/claims` con la plantilla de `CLAUDE.md`: método, auth, campos, respuesta, tabla de errores.
 
 ---
 
