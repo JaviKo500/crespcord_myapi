@@ -50,6 +50,26 @@ field off the node and saving the transaction is
 last case composes a title out of the comment, so the two SPEC 60/61 functions
 are also checked together.
 
+Since SPEC 68, `tests/unit/ClaimNotificationTest.php` covers the pure half of
+`includes/myapi.claim_notification.inc`: the noun taken from
+`field_claim_type` (`myapi_claim_type_label()` / `..._noun()`), the four status
+labels of SPEC 62's catalogue (`myapi_claim_status_label()`, which answers
+`NULL` for anything it cannot resolve), the 80/120 cuts with `…`
+(`myapi_claim_excerpt()`) and the **four title/body pairs** of the push and
+inbox texts — creation and publication, transaction to the requester and
+transaction to the neighbours. The degraded shapes are the point of the class:
+an empty comment, a status with no resolvable label, an unknown claim type and
+an empty subject each drop their line or their clause instead of leaving a
+dangling separator, and two cross-cutting cases assert that no text ever prints
+a `YYYY-MM-DD` date and that the first line of a body can never be reached by
+`myapi_onesignal_truncate_body()`'s 200-character cut. Same split as above: the
+Field API half (`myapi_claim_notification_row()`), the recipient resolvers
+(`db_select()` plus `myapi_condominium_member_uids()`), the three detectors and
+the three orchestrators all stay out, and the class docblock names them one by
+one rather than omitting them in silence. This file needed **no new stub** in
+`bootstrap.php`: its only Drupal calls are `t()`, `format_date()` and
+`truncate_utf8()`, all already there.
+
 **Prerequisites:** PHP 7.4, Composer.
 
 **Run:**
