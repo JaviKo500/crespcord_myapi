@@ -174,18 +174,12 @@ function myapi_reservation_notification_row($node) {
  * @return array  Unique uids as integers. Empty when nobody holds the role.
  */
 function myapi_reservation_backend_uids() {
-  $query = db_select('users', 'u');
-  $query->fields('u', array('uid'));
-  $query->innerJoin('users_roles', 'ur', 'ur.uid = u.uid');
-  $query->innerJoin('role', 'r', 'r.rid = ur.rid');
-  $query->condition('r.name', MYAPI_RESERVATION_NOTIFY_ROLE);
-  $query->condition('u.status', 1);
-  $query->condition('u.uid', 0, '>');
-  $query->distinct();
+  // Body generalized into myapi_notification_role_uids() by SPEC 68, which needs
+  // the very same query for the 'backend' recipients of a claim. This signature
+  // and its callers stay untouched; only the role name became a parameter.
+  module_load_include('inc', 'myapi', 'includes/myapi.notification');
 
-  $uids = $query->execute()->fetchCol();
-
-  return array_map('intval', $uids);
+  return myapi_notification_role_uids(MYAPI_RESERVATION_NOTIFY_ROLE);
 }
 
 /**
@@ -209,31 +203,13 @@ function myapi_reservation_backend_uids() {
  * @return array  Unique uids as integers. Empty when nobody matches.
  */
 function myapi_reservation_building_admin_uids($condominium_id) {
-  if ($condominium_id === NULL) {
-    return array();
-  }
+  // Body generalized into myapi_notification_building_admin_uids() by SPEC 68,
+  // which needs the very same query for the building admins of a claim's
+  // condominium. Signature, callers and behaviour — including both empty-list
+  // shortcuts — stay exactly as SPEC 48 documented them.
+  module_load_include('inc', 'myapi', 'includes/myapi.notification');
 
-  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
-
-  $field = MYAPI_BUILDING_ADMIN_CONDO_FIELD;
-  if (!field_info_field($field)) {
-    return array();
-  }
-
-  $query = db_select('users', 'u');
-  $query->fields('u', array('uid'));
-  $query->innerJoin('users_roles', 'ur', 'ur.uid = u.uid');
-  $query->innerJoin('role', 'r', 'r.rid = ur.rid');
-  $query->innerJoin('field_data_' . $field, 'fca', "fca.entity_id = u.uid AND fca.entity_type = 'user' AND fca.deleted = 0");
-  $query->condition('r.name', MYAPI_BUILDING_ADMIN_ROLE);
-  $query->condition('fca.' . $field . '_target_id', $condominium_id);
-  $query->condition('u.status', 1);
-  $query->condition('u.uid', 0, '>');
-  $query->distinct();
-
-  $uids = $query->execute()->fetchCol();
-
-  return array_map('intval', $uids);
+  return myapi_notification_building_admin_uids($condominium_id);
 }
 
 /**

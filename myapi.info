@@ -51,3 +51,4 @@ files[] = includes/myapi.claims_admin.inc
 files[] = includes/myapi.claim_transaction_admin.inc
 files[] = includes/myapi.claims_files.inc
 files[] = resources/claim.resource.inc
+files[] = includes/myapi.claim_notification.inc

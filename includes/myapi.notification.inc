@@ -267,6 +267,85 @@ function myapi_boletin_recipient_uids($node) {
 }
 
 /**
+ * Lists the uids of the ACTIVE users holding one role, matched by NAME.
+ *
+ * Generalized from myapi_reservation_backend_uids() (SPEC 48), which now
+ * delegates here: the same three rules apply to every caller.
+ * - Role matched by name and never by rid, because the rid differs between
+ *   environments (same reasoning documented for myapi_calendar_admin_roles()).
+ * - Blocked accounts excluded by users.status = 1.
+ * - No implicit membership for uid 1: it only appears if the role is actually
+ *   assigned to it.
+ *
+ * @param string $role_name  Role name, e.g. 'backend'.
+ *
+ * @return array  Unique uids as integers. Empty when nobody holds the role.
+ */
+function myapi_notification_role_uids($role_name) {
+  $query = db_select('users', 'u');
+  $query->fields('u', array('uid'));
+  $query->innerJoin('users_roles', 'ur', 'ur.uid = u.uid');
+  $query->innerJoin('role', 'r', 'r.rid = ur.rid');
+  $query->condition('r.name', $role_name);
+  $query->condition('u.status', 1);
+  $query->condition('u.uid', 0, '>');
+  $query->distinct();
+
+  $uids = $query->execute()->fetchCol();
+
+  return array_map('intval', $uids);
+}
+
+/**
+ * Lists the uids of the ACTIVE building admins of one condominium (SPEC 49).
+ *
+ * Generalized from myapi_reservation_building_admin_uids() (SPEC 48), which now
+ * delegates here. Same shape as myapi_notification_role_uids() — role matched by
+ * name, blocked accounts out, no implicit membership for uid 1 — plus a join on
+ * the user's field_condominio_admin, so only the operators of THIS condominium
+ * come back. Sending the detail to the admins of other buildings would be noise
+ * and a leak of other residents' data.
+ *
+ * Two cases return an empty list without touching the database:
+ * - No condominium resolved. There is nobody to scope to.
+ * - An environment where field_condominio_admin does not exist yet, i.e. the
+ *   deploy window between pushing this code and running `drush updb`. Querying
+ *   its data table there would be a fatal error in the middle of a node save.
+ *   field_info_field() is served from cache, so the check is free.
+ *
+ * @param int|NULL $condominium_id  Condominium nid to scope to.
+ *
+ * @return array  Unique uids as integers. Empty when nobody matches.
+ */
+function myapi_notification_building_admin_uids($condominium_id) {
+  if ($condominium_id === NULL) {
+    return array();
+  }
+
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+
+  $field = MYAPI_BUILDING_ADMIN_CONDO_FIELD;
+  if (!field_info_field($field)) {
+    return array();
+  }
+
+  $query = db_select('users', 'u');
+  $query->fields('u', array('uid'));
+  $query->innerJoin('users_roles', 'ur', 'ur.uid = u.uid');
+  $query->innerJoin('role', 'r', 'r.rid = ur.rid');
+  $query->innerJoin('field_data_' . $field, 'fca', "fca.entity_id = u.uid AND fca.entity_type = 'user' AND fca.deleted = 0");
+  $query->condition('r.name', MYAPI_BUILDING_ADMIN_ROLE);
+  $query->condition('fca.' . $field . '_target_id', $condominium_id);
+  $query->condition('u.status', 1);
+  $query->condition('u.uid', 0, '>');
+  $query->distinct();
+
+  $uids = $query->execute()->fetchCol();
+
+  return array_map('intval', $uids);
+}
+
+/**
  * Creates a notification: fan-out to myapi_notifications (one row per uid) and
  * enqueue of the OneSignal push. Reusable entry point for any trigger.
  *
