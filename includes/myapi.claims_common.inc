@@ -49,6 +49,51 @@ function myapi_claims_valid_status($value) {
 }
 
 /**
+ * Normalises a raw GET value into a LIST of allowed statuses, or NULL.
+ *
+ * The multi-value form of the filter (SPEC 69): '?status=received,in_progress'
+ * means "any of these", where '?status=received' means "exactly this one". A
+ * single value is therefore just a list of one, which is why the API can call
+ * this function for every request and the single-value contract keeps working
+ * unchanged.
+ *
+ * The whitelist is NOT repeated here: each item goes through
+ * myapi_claims_valid_status() above, so the catalogue still lives in exactly
+ * one place and the next change to it has one line to touch.
+ *
+ * Parsing stays as lax as everywhere else in the query string, item by item:
+ * unknown values are dropped and the valid ones still filter
+ * ('?status=received,inventado' filters by 'received'). Only when NOTHING
+ * survives does the whole filter fall back to NULL, "every status" — the same
+ * answer '?status=inventado' has given since SPEC 62. Duplicates collapse
+ * ('?status=received,received' is one condition), and empty items from a
+ * trailing or doubled comma are ignored.
+ *
+ * @param mixed $value  Raw $_GET value. A comma-separated string; anything
+ *                      non-scalar (e.g. '?status[]=received', which PHP hands
+ *                      over as an array) is NULL, like any other unparsable
+ *                      value.
+ *
+ * @return array|null  Non-empty list of distinct valid statuses, or NULL for
+ *                     "no filter".
+ */
+function myapi_claims_valid_status_list($value) {
+  if (!is_scalar($value)) {
+    return NULL;
+  }
+
+  $statuses = array();
+  foreach (explode(',', (string) $value) as $item) {
+    $status = myapi_claims_valid_status(trim($item));
+    if ($status !== NULL && !in_array($status, $statuses, TRUE)) {
+      $statuses[] = $status;
+    }
+  }
+
+  return $statuses ? $statuses : NULL;
+}
+
+/**
  * Normalises a raw GET value into one of the two allowed claim types, or
  * NULL. Same reasoning as myapi_claims_valid_status().
  *

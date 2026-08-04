@@ -71,9 +71,13 @@ module_load_include('inc', 'myapi', 'includes/myapi.claims_common');
  * because it can cut the request short with a 403.
  *
  * There is no status or claim_type validator here either: those are
- * myapi_claims_valid_status() and myapi_claims_valid_claim_type() in
- * includes/myapi.claims_common.inc, shared verbatim with the back office so
- * both consumers accept exactly the same values (Regla 3 de CLAUDE.md).
+ * myapi_claims_valid_status_list() and myapi_claims_valid_claim_type() in
+ * includes/myapi.claims_common.inc, built on the same two whitelists the back
+ * office uses, so both consumers accept exactly the same values (Regla 3 de
+ * CLAUDE.md). '?status' is multi-value in this endpoint
+ * ('?status=received,in_progress'), which is the only thing the API reads
+ * differently from the back-office listing — and even that goes through
+ * myapi_claims_valid_status() item by item.
  * ------------------------------------------------------------------------ */
 
 /**
@@ -239,7 +243,9 @@ function myapi_claim_parse_condominium_id(array $allowed) {
  *                        non-empty — the callers answer an empty list without
  *                        querying, since an "IN ()" is invalid SQL in D7.
  * @param array $filters  ['nid' => int|NULL, 'condominium_id' => int|NULL,
- *                        'status' => string|NULL, 'claim_type' => string|NULL,
+ *                        'status' => array|string|NULL (list of statuses; a
+ *                        bare string is accepted and treated as a list of one),
+ *                        'claim_type' => string|NULL,
  *                        'from' => string|NULL, 'to' => string|NULL]. Every key
  *                        optional; NULL means no filter on that column. 'nid'
  *                        is what turns this into the detail query: one claim,
@@ -284,8 +290,11 @@ function myapi_claim_base_query($uid, array $condos, array $filters = []) {
   if (!empty($filters['condominium_id'])) {
     $query->condition('fc.field_condominium_target_id', $filters['condominium_id']);
   }
+  // 'status' arrives as a LIST since SPEC 69 ('?status=received,in_progress'),
+  // so the condition is always an IN — with one element for the single-value
+  // form, which MySQL resolves exactly like the '=' it replaced.
   if (!empty($filters['status'])) {
-    $query->condition('fs.field_status_value', $filters['status']);
+    $query->condition('fs.field_status_value', (array) $filters['status'], 'IN');
   }
   if (!empty($filters['claim_type'])) {
     $query->condition('fct.field_claim_type_value', $filters['claim_type']);
@@ -1614,14 +1623,16 @@ function myapi_claim_list() {
     ? $_GET['sort']
     : 'desc';
 
-  // 4. Filters. status and claim_type go through the SAME validators the back
-  // office uses (includes/myapi.claims_common.inc): no whitelist is written
-  // here, so '?status=duplicated' falls back to "no filter" through one line of
-  // code shared by both consumers.
+  // 4. Filters. status and claim_type go through the SAME whitelists the back
+  // office uses (includes/myapi.claims_common.inc): none is written here, so
+  // '?status=duplicated' falls back to "no filter" through one line of code
+  // shared by both consumers. The only difference is that this endpoint takes
+  // a LIST of statuses (SPEC 69) — myapi_claims_valid_status_list() splits on
+  // commas and validates each item with the very same function.
   $range = myapi_claim_parse_date_range();
   $filters = [
     'condominium_id' => myapi_claim_parse_condominium_id($condos),
-    'status'         => isset($_GET['status']) ? myapi_claims_valid_status($_GET['status']) : NULL,
+    'status'         => isset($_GET['status']) ? myapi_claims_valid_status_list($_GET['status']) : NULL,
     'claim_type'     => isset($_GET['claim_type']) ? myapi_claims_valid_claim_type($_GET['claim_type']) : NULL,
     'from'           => $range['from'],
     'to'             => $range['to'],
