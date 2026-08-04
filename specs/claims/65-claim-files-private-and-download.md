@@ -1,6 +1,6 @@
 # SPEC 65 — Imágenes y adjuntos de reclamos en `private://` con descarga autenticada
 
-> **Estado:** Approved · **Depende de:** SPEC 55 (`field_images` y `field_attachment`, creados sin `uri_scheme`), SPEC 56 (`myapi_claims_admin_roles()` y el modo `via_claim` que acota a `administrador edificio`), SPEC 64 (`myapi_claim_base_query()`, la regla de visibilidad y el contrato de `docs/claim.md`) · **Fecha:** 2026-08-03
+> **Estado:** Implemented · **Depende de:** SPEC 55 (`field_images` y `field_attachment`, creados sin `uri_scheme`), SPEC 56 (`myapi_claims_admin_roles()` y el modo `via_claim` que acota a `administrador edificio`), SPEC 64 (`myapi_claim_base_query()`, la regla de visibilidad y el contrato de `docs/claim.md`) · **Fecha:** 2026-08-03
 > **Objetivo:** Cerrar el acceso público a las imágenes y adjuntos de reclamos migrándolos a `private://`, y devolverles una vía de lectura a cada consumidor — `hook_file_download()` para el operador del back-office y `GET /api/v1/claims/%/files/%` con Bearer para la app.
 
 Notas técnicas que fija la cabecera, porque condicionan el resto del documento:
@@ -207,28 +207,28 @@ El orden está pensado para que **la migración vaya al final**, cuando las dos 
 
 **Migración e instalación**
 
-- [ ] Con `file_private_path` **sin** configurar, `drush updb` falla con un mensaje que nombra `file_private_path` y `settings.php`, y **no** cambia el `uri_scheme` de ningún campo.
-- [ ] Con `file_private_path` configurado, `drush updb` deja `field_info_field('field_images')['settings']['uri_scheme']` y el de `field_attachment` en `private`.
-- [ ] Tras el update, ningún fichero de `field_images` ni de `field_attachment` referenciado desde un nodo conserva una `file_managed.uri` que empiece por `public://`.
-- [ ] La URL pública anterior de una imagen migrada (`sites/default/files/...`) deja de servir el fichero.
-- [ ] Tras `drush updb` y `drush image-flush --all`, la URL de un derivado ya generado (`sites/default/files/styles/...`) deja de servir la imagen.
-- [ ] Ninguna fila de `field_data_field_images`, `field_data_field_attachment` ni de sus tablas `field_revision_*` cambia: el `fid` de cada nodo es el mismo antes y después.
-- [ ] Un reclamo con tres imágenes sigue mostrando las tres tras la migración, en el mismo orden de `delta`.
-- [ ] Un fichero cuyo `file_move()` falla no aborta el update: queda registrado en `watchdog` y el resto se migra igual.
-- [ ] Ejecutar `myapi_update_7023` una segunda vez reporta `0 movidos` y no altera ningún fichero.
-- [ ] En un sitio limpio, `drush en myapi` crea los dos campos ya con `uri_scheme = 'private'`, sin necesidad de ejecutar el update.
-- [ ] Un fichero subido **después** de la migración desde `node/add/reclamo` aterriza en `private://`, no en `public://`.
+- [x] Con `file_private_path` **sin** configurar, `drush updb` falla con un mensaje que nombra `file_private_path` y `settings.php`, y **no** cambia el `uri_scheme` de ningún campo.
+- [x] Con `file_private_path` configurado, `drush updb` deja `field_info_field('field_images')['settings']['uri_scheme']` y el de `field_attachment` en `private`.
+- [x] Tras el update, ningún fichero de `field_images` ni de `field_attachment` referenciado desde un nodo conserva una `file_managed.uri` que empiece por `public://`.
+- [x] La URL pública anterior de una imagen migrada (`sites/default/files/...`) deja de servir el fichero.
+- [x] Tras `drush updb` y `drush image-flush --all`, la URL de un derivado ya generado (`sites/default/files/styles/...`) deja de servir la imagen.
+- [x] Ninguna fila de `field_data_field_images`, `field_data_field_attachment` ni de sus tablas `field_revision_*` cambia: el `fid` de cada nodo es el mismo antes y después.
+- [x] Un reclamo con tres imágenes sigue mostrando las tres tras la migración, en el mismo orden de `delta`.
+- [x] Un fichero cuyo `file_move()` falla no aborta el update: queda registrado en `watchdog` y el resto se migra igual.
+- [x] Ejecutar `myapi_update_7023` una segunda vez reporta `0 movidos` y no altera ningún fichero.
+- [x] En un sitio limpio, `drush en myapi` crea los dos campos ya con `uri_scheme = 'private'`, sin necesidad de ejecutar el update.
+- [x] Un fichero subido **después** de la migración desde `node/add/reclamo` aterriza en `private://`, no en `public://`.
 
 **Back-office (`hook_file_download()`)**
 
-- [ ] Un `administrator` ve las miniaturas de `field_images` en `node/%/edit` de un reclamo y descarga su `field_attachment`.
-- [ ] Las imágenes de las transacciones se ven en la línea de tiempo del reclamo (SPEC 57).
-- [ ] Un `administrador edificio` ve los ficheros de un reclamo de un condominio asignado.
-- [ ] Un `administrador edificio` que pega la URL de un fichero de un reclamo de **otro** condominio recibe 403.
-- [ ] Un usuario autenticado sin ninguno de los tres roles recibe 403 sobre cualquier fichero de reclamos.
-- [ ] Un anónimo recibe 403.
-- [ ] Un comprobante de pago (`private://comprobantes_pago`) sigue devolviendo 403 para todos, igual que antes de este spec: el hook devuelve `NULL` y nadie más concede.
-- [ ] Ningún otro fichero privado del sitio cambia de comportamiento.
+- [x] Un `administrator` ve las miniaturas de `field_images` en `node/%/edit` de un reclamo y descarga su `field_attachment`.
+- [x] Las imágenes de las transacciones se ven en la línea de tiempo del reclamo (SPEC 57).
+- [x] Un `administrador edificio` ve los ficheros de un reclamo de un condominio asignado.
+- [x] Un `administrador edificio` que pega la URL de un fichero de un reclamo de **otro** condominio recibe 403.
+- [x] Un usuario autenticado sin ninguno de los tres roles recibe 403 sobre cualquier fichero de reclamos.
+- [x] Un anónimo recibe 403.
+- [x] Un comprobante de pago (`private://comprobantes_pago`) sigue devolviendo 403 para todos, igual que antes de este spec: el hook devuelve `NULL` y nadie más concede.
+- [x] Ningún otro fichero privado del sitio cambia de comportamiento.
 
 **Endpoint — autenticación y método**
 
