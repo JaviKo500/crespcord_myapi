@@ -1089,9 +1089,12 @@ function myapi_claim_update_delete_files(array $fids, $nid) {
  *
  * GET is read-only (SPEC 64: list and detail). Since SPEC 66, POST with no id
  * creates a claim (myapi_claim_create()) — creation is always on the
- * collection, never on an item, so POST /api/v1/claims/% keeps answering 405
- * exactly like before. Every other combination (PUT, DELETE, and POST with an
- * id) also answers 405. Authentication is deliberately NOT resolved here but
+ * collection, never on an item. Since SPEC 67, POST WITH an id updates that
+ * claim (myapi_claim_update()): POST and not PUT because PHP fills neither
+ * $_POST nor $_FILES on a PUT, so the multipart body of an edit with files
+ * would need a hand-written MIME parser. It is the only POST-on-an-item route
+ * of the module, and it is documented as a decision, not an oversight. PUT and
+ * DELETE still answer 405. Authentication is deliberately NOT resolved here but
  * inside each handler, so an unsupported method answers 405 without a token
  * rather than 401: the method is wrong whoever is asking.
  *
@@ -1108,6 +1111,9 @@ function myapi_claim_dispatch($id = NULL) {
   }
   elseif ($method === 'POST' && $id === NULL) {
     myapi_claim_create();
+  }
+  elseif ($method === 'POST') {
+    myapi_claim_update($id);
   }
   else {
     myapi_error('method_not_allowed', 405);
@@ -1267,6 +1273,272 @@ function myapi_claim_create() {
     ['claim' => myapi_claim_build_item($row, $images, $transactions)],
     201,
     'claim_created'
+  );
+}
+
+/**
+ * POST /api/v1/claims/% — the requester edits their own claim (SPEC 67).
+ *
+ * POST on an item and not PUT: PHP fills neither $_POST nor $_FILES on a PUT,
+ * so a multipart/form-data body would arrive raw through php://input and would
+ * need a hand-written MIME parser. POST reuses myapi_request_post_field() and
+ * myapi_claim_create_save_files() unchanged. It is the only POST-on-an-item
+ * route of the module, and that is a decision, not an oversight.
+ *
+ * The update is TOTAL, not partial: the five text fields are required on every
+ * call, exactly like POST /api/v1/claims. Files are the one incremental part —
+ * images[] appends, remove_image_ids[] removes, and what the request does not
+ * mention stays as it is, so a forgotten parameter never destroys anything.
+ *
+ * Every step aborts with its own error before anything is written, in this
+ * order:
+ *
+ *   1. Authentication.
+ *   2. {id} is a positive integer, or 404 claim_not_found.
+ *   3. Visibility: myapi_claim_fetch() with no row, 404 claim_not_found — the
+ *      same rule, the same query and the same uniform 404 as
+ *      GET /api/v1/claims/%.
+ *   4. Requester: row.requester_id !== uid, 403 claim_edit_denied. NOT a 404:
+ *      the claim is already visible to whoever is asking (a public claim of a
+ *      neighbour), so there is nothing left to hide and a 404 would only
+ *      confuse the diagnosis.
+ *   5. Status: row.status !== 'received', 409 claim_not_editable. The payload
+ *      is valid; what fails is the current state of the resource — once the
+ *      administration took the claim, the resident no longer edits it.
+ *   6-11. The five text fields, with the exact same checks as
+ *      myapi_claim_create().
+ *   12. remove_image_ids[] — myapi_claim_update_parse_removals(), which is
+ *      where a fid that is not one of THIS claim's images answers 422.
+ *   13. Image quota: the number of new images admissible is
+ *      5 - (current - removed), passed as $max_count to
+ *      myapi_claim_create_save_files(), which already answers
+ *      claim_too_many_images. No counting code of its own.
+ *   14-15. images[] and attachment, same all-or-nothing helper as creation.
+ *
+ * The write order is what keeps nothing half-done: everything above validates
+ * and saves the NEW files first — a failure there deletes them and leaves the
+ * claim untouched, text and files alike. Then the node is saved, then the new
+ * files are tied to it with file_usage_add(), and only THEN the old ones are
+ * deleted (myapi_claim_update_delete_files()). Deleting after node_save() is
+ * what guarantees a file the node still references is never destroyed.
+ *
+ * The node is node_load()ed and only the request's fields are overwritten, so
+ * the immutable ones (node.uid, node.created, field_requester, field_status,
+ * field_reception_date) stay intact BY CONSTRUCTION — no line preserves them
+ * by hand and no future field can be forgotten. hook_node_update() has no
+ * 'reclamo' branch, so this node_save() fires no transaction and no
+ * notification: the timeline is exactly the same after editing.
+ *
+ * @param mixed $id  The nid from the route. Anything that is not a positive
+ *                   integer is a 404, never a PHP error.
+ */
+function myapi_claim_update($id) {
+  // 1. Authentication.
+  $token = myapi_auth_require_access_token();
+  $uid = (int) $token->uid;
+
+  // 2. '/api/v1/claims/abc' answers the same 404 as a missing claim.
+  if (!is_scalar($id) || !ctype_digit((string) $id) || (int) $id <= 0) {
+    myapi_error('claim_not_found', 404);
+  }
+  $nid = (int) $id;
+
+  // 3. Visibility: the very same fetch GET /api/v1/claims/% runs. A claim of
+  // another condominium, a private one of another resident and a
+  // non-existent one are indistinguishable here, exactly as in the detail.
+  $condos = myapi_condominium_related_nids($uid);
+  if (empty($condos)) {
+    myapi_error('claim_not_found', 404);
+  }
+  $rows = myapi_claim_fetch($uid, $condos, ['nid' => $nid], 1, -1, 'desc');
+  if (empty($rows)) {
+    myapi_error('claim_not_found', 404);
+  }
+  $row = reset($rows);
+
+  // 4. Only the requester edits. Visible but not yours: 403, never 404.
+  if ((int) $row->requester_id !== $uid) {
+    myapi_error('claim_edit_denied', 403);
+  }
+
+  // 5. Only while the administration has not taken it yet.
+  if ($row->status !== 'received') {
+    myapi_error('claim_not_editable', 409);
+  }
+
+  // 6. The five text fields, all required on every call.
+  $subject = myapi_request_post_field('subject');
+  $claim_type = myapi_request_post_field('claim_type');
+  $condominium_raw = myapi_request_post_field('condominium_id');
+  $description = myapi_request_post_field('description');
+  $visibility = myapi_request_post_field('visibility');
+
+  $required = [
+    'subject'         => $subject,
+    'claim_type'      => $claim_type,
+    'condominium_id'  => $condominium_raw,
+    'description'     => $description,
+    'visibility'      => $visibility,
+  ];
+  foreach ($required as $name => $value) {
+    if ($value === NULL || $value === '') {
+      myapi_error('missing_field', 422, ['@field' => $name]);
+    }
+  }
+
+  // 7. subject: node.title is varchar(255).
+  if (strlen($subject) > 255) {
+    myapi_error('invalid_field', 422, ['@field' => 'subject']);
+  }
+
+  // 8. claim_type: a key of field_claim_type's allowed_values.
+  if (!myapi_claim_valid_catalogue_value('field_claim_type', $claim_type)) {
+    myapi_error('invalid_field', 422, ['@field' => 'claim_type']);
+  }
+
+  // 9. condominium_id: positive integer, then one of the editor's own
+  // condominiums — the same rule as creation, which is what lets a resident
+  // fix a wrongly filed claim without being able to move it out of reach.
+  if (!ctype_digit((string) $condominium_raw) || (int) $condominium_raw <= 0) {
+    myapi_error('invalid_field', 422, ['@field' => 'condominium_id']);
+  }
+  $condominium_id = (int) $condominium_raw;
+  if (!in_array($condominium_id, array_map('intval', $condos), TRUE)) {
+    myapi_error('condominium_access_denied', 403);
+  }
+
+  // 10. description: non-empty after trim() (already trimmed above).
+  if ($description === '') {
+    myapi_error('invalid_field', 422, ['@field' => 'description']);
+  }
+
+  // 11. visibility: a key of field_visibility's allowed_values.
+  if (!myapi_claim_valid_catalogue_value('field_visibility', $visibility)) {
+    myapi_error('invalid_field', 422, ['@field' => 'visibility']);
+  }
+
+  // 12. The node itself. Everything the request does not name is preserved by
+  // loading it instead of building a new one.
+  $node = node_load($nid);
+  if (!$node) {
+    myapi_error('claim_not_found', 404);
+  }
+
+  $current_image_fids = myapi_claim_node_file_fids($node, 'field_images');
+  $current_attachment_fids = myapi_claim_node_file_fids($node, 'field_attachment');
+
+  // 13. remove_image_ids[]: validated against what the claim references right
+  // now. A fid of another claim, of a payment or of nothing answers 422 here,
+  // before a single file is saved or deleted.
+  $removed_image_fids = myapi_claim_update_parse_removals($current_image_fids);
+
+  // 14. Image quota: what is left after the removals decides how many new
+  // images fit. myapi_claim_create_save_files() already answers
+  // claim_too_many_images when the request sends more than that.
+  $kept_count = count($current_image_fids) - count($removed_image_fids);
+  $max_new_images = 5 - $kept_count;
+  if ($max_new_images < 0) {
+    $max_new_images = 0;
+  }
+
+  // 15. images[]: all-or-nothing. On failure nothing has been written yet, so
+  // the claim keeps its text and its original files.
+  $image_files = myapi_claim_create_save_files(
+    'field_images',
+    'reclamo',
+    isset($_FILES['images']) ? $_FILES['images'] : [],
+    $max_new_images,
+    'claim_invalid_image'
+  );
+
+  // 16. attachment: at most 1. On failure the images just saved by step 15 are
+  // deleted too ($also_delete), so a rejected attachment leaves no orphan.
+  $attachment_file = NULL;
+  $attachment_saved = myapi_claim_create_save_files(
+    'field_attachment',
+    'reclamo',
+    isset($_FILES['attachment']) ? $_FILES['attachment'] : [],
+    1,
+    'claim_invalid_attachment',
+    $image_files
+  );
+  if (!empty($attachment_saved)) {
+    $attachment_file = reset($attachment_saved);
+  }
+
+  // remove_attachment is ignored when a new attachment came with the request:
+  // field_attachment has cardinality 1, so uploading one already replaces the
+  // previous file — the outcome with and without the flag is identical, and a
+  // 422 would reject a request whose meaning is unambiguous.
+  $remove_attachment_raw = myapi_request_post_field('remove_attachment');
+  $remove_attachment = !$attachment_file
+    && $remove_attachment_raw !== NULL
+    && in_array(strtolower($remove_attachment_raw), ['1', 'true'], TRUE);
+
+  // 17. Overwrite ONLY the request's fields on the loaded node.
+  $node->title = $subject;
+  $node->field_claim_type[LANGUAGE_NONE][0]['value'] = $claim_type;
+  $node->field_condominium[LANGUAGE_NONE][0]['target_id'] = $condominium_id;
+  $node->field_description[LANGUAGE_NONE][0]['value'] = $description;
+  $node->field_visibility[LANGUAGE_NONE][0]['value'] = $visibility;
+
+  // 18. The final field_images: what survives the removals, in its current
+  // delta order, plus the new files at the end. Reordering the existing ones
+  // is out of this spec's scope.
+  $items = [];
+  if (isset($node->field_images[LANGUAGE_NONE]) && is_array($node->field_images[LANGUAGE_NONE])) {
+    foreach ($node->field_images[LANGUAGE_NONE] as $item) {
+      if (isset($item['fid']) && in_array((int) $item['fid'], $removed_image_fids, TRUE)) {
+        continue;
+      }
+      $items[] = $item;
+    }
+  }
+  foreach ($image_files as $file) {
+    $items[] = ['fid' => $file->fid, 'display' => 1];
+  }
+  $node->field_images[LANGUAGE_NONE] = array_values($items);
+
+  // 19. The attachment: replaced, emptied, or left exactly as it was.
+  $deleted_attachment_fids = [];
+  if ($attachment_file) {
+    $node->field_attachment[LANGUAGE_NONE][0] = ['fid' => $attachment_file->fid, 'display' => 1];
+    $deleted_attachment_fids = $current_attachment_fids;
+  }
+  elseif ($remove_attachment) {
+    $node->field_attachment[LANGUAGE_NONE] = [];
+    $deleted_attachment_fids = $current_attachment_fids;
+  }
+
+  // 20. Persist. hook_node_update() has no 'reclamo' branch, so this creates
+  // no transaction and sends no notification.
+  node_save($node);
+
+  // 21. Tie every new file to the node so cron does not reap it as unused.
+  foreach ($image_files as $file) {
+    file_usage_add($file, 'myapi', 'node', $node->nid);
+  }
+  if ($attachment_file) {
+    file_usage_add($attachment_file, 'myapi', 'node', $node->nid);
+  }
+
+  // 22. Only now the files that left the claim are deleted for real. After the
+  // node_save(), never before: this is what guarantees no file the node still
+  // references is ever destroyed.
+  myapi_claim_update_delete_files(array_merge($removed_image_fids, $deleted_attachment_fids), $node->nid);
+
+  // 23. Respond 200 with the same object as GET /api/v1/claims/%, transactions
+  // always expanded — the same helpers, so the two responses cannot drift.
+  $rows = myapi_claim_fetch($uid, $condos, ['nid' => $node->nid], 1, -1, 'desc');
+  $row = reset($rows);
+  $nids = [(int) $row->id];
+  $images = myapi_claim_load_images($nids);
+  $transactions = myapi_claim_load_transactions($nids, TRUE);
+
+  myapi_respond(
+    ['claim' => myapi_claim_build_item($row, $images, $transactions)],
+    200,
+    'claim_updated'
   );
 }
 
