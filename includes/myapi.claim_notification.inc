@@ -4,7 +4,8 @@
  * @file
  * Claim notification helpers for the myapi module (SPEC 68).
  *
- * Three events, and only three:
+ * Three events hanging off the node hooks, plus a fourth one the endpoint that
+ * produces it calls directly (SPEC 70, at the bottom of this file):
  * - A 'reclamo' node is created. The requester gets push + inbox + email; when
  *   the claim is born public, every other owner and occupant of its condominium
  *   gets the neighbour text; and ONLY when the claim comes from the app (the
@@ -19,7 +20,13 @@
  *   requester gets one text, the neighbours another, and the claim — never the
  *   transaction — is what the deep link and source_nid point at.
  *
- * All three triggers hang off hook_node_insert() / hook_node_update() in
+ * - The requester closes their own claim from the app (SPEC 70). The only event
+ *   that notifies nobody inside the app: the back office gets the detail email
+ *   and the resident gets the 200 of their own request. Called from
+ *   myapi_claim_close() and not from a node hook, because it is the endpoint —
+ *   and not the transaction — that knows the closure came from the requester.
+ *
+ * The first three triggers hang off hook_node_insert() / hook_node_update() in
  * myapi.module rather than off the endpoints, because a claim is created by two
  * paths (POST /api/v1/claims and node/add/reclamo) and published by two more.
  * The API contributes one flag and nothing else; no endpoint changes its
@@ -907,13 +914,34 @@ function myapi_claim_transaction_mail_params($row, $status_label, $comment, $tim
 }
 
 /**
- * Enqueues the detail email to the back office: 'backend' plus the building
- * admins of the claim's condominium.
+ * The back office of one claim: 'backend' plus the building admins of its
+ * condominium, deduplicated.
+ *
+ * Extracted in SPEC 70, when a second email to the same audience appeared (the
+ * requester closing their own claim). One single place computing WHO the back
+ * office of a claim is, so the day a third role joins there is one line to
+ * touch — Regla 3 de CLAUDE.md.
  *
  * The union is deduplicated, so somebody holding both roles gets ONE email. A
  * claim with no condominium resolved reaches no building admin — there is
  * nobody to scope to — but still reaches the 'backend' role, which is
  * site-wide.
+ *
+ * @param int|null $condominium_id  The claim's condominium, or NULL.
+ *
+ * @return array  Distinct uids, possibly empty.
+ */
+function myapi_claim_admin_uids($condominium_id) {
+  module_load_include('inc', 'myapi', 'includes/myapi.notification');
+
+  return array_values(array_unique(array_merge(
+    myapi_notification_role_uids(MYAPI_CLAIM_NOTIFY_ROLE),
+    myapi_notification_building_admin_uids($condominium_id)
+  )));
+}
+
+/**
+ * Enqueues the creation detail email to the back office.
  *
  * The subject of this key carries the nid and the condominium, so it is the
  * only one of the five that is not truncated to 80.
@@ -921,12 +949,7 @@ function myapi_claim_transaction_mail_params($row, $status_label, $comment, $tim
  * @param object $row  Claim row.
  */
 function myapi_claim_enqueue_admin_mails($row) {
-  module_load_include('inc', 'myapi', 'includes/myapi.notification');
-
-  $uids = array_values(array_unique(array_merge(
-    myapi_notification_role_uids(MYAPI_CLAIM_NOTIFY_ROLE),
-    myapi_notification_building_admin_uids($row->condominium_id)
-  )));
+  $uids = myapi_claim_admin_uids($row->condominium_id);
 
   if (empty($uids)) {
     return;
@@ -1184,6 +1207,66 @@ function myapi_claim_notify_transaction($node) {
     );
 
     myapi_claim_enqueue_mails('claim_transaction_neighbour', $uids, $params);
+  }
+  catch (Exception $e) {
+    watchdog_exception('myapi', $e);
+  }
+}
+
+/**
+ * Notifies the back office that the requester closed their own claim
+ * (SPEC 70).
+ *
+ * Fourth orchestrator, and the only one that notifies NOBODY in the app: the
+ * resident just pressed the button and the 200 of
+ * PUT /api/v1/claims/%/close is the acknowledgement, so there is no inbox row
+ * and no push here — announcing their own click back to them would be noise.
+ * The closing transaction carries myapi_skip_claim_notification for the same
+ * reason, which is what keeps myapi_claim_notify_transaction() out of this
+ * path.
+ *
+ * The audience is exactly the one of 'claim_created_admin' — 'backend' plus the
+ * building admins of the condominium — through the shared
+ * myapi_claim_admin_uids(). Nothing here recomputes it.
+ *
+ * Same drupal_static() guard by nid and same best-effort try/catch as the three
+ * orchestrators above: the closure is already committed by the time this runs,
+ * so no failure may turn a successful 200 into a 500.
+ *
+ * @param object $claim      The claim node, reloaded AFTER the status sync so
+ *                           its status reads 'closed'.
+ * @param string $comment    The closing reason, as the requester wrote it.
+ * @param int    $timestamp  Instant of the closure (field_status_date).
+ */
+function myapi_claim_notify_closed_by_requester($claim, $comment, $timestamp) {
+  $notified = &drupal_static(__FUNCTION__, array());
+  if (isset($notified[$claim->nid])) {
+    return;
+  }
+  $notified[$claim->nid] = TRUE;
+
+  try {
+    $row = myapi_claim_notification_row($claim);
+
+    $uids = myapi_claim_admin_uids($row->condominium_id);
+    if (empty($uids)) {
+      return;
+    }
+
+    // The transaction params carry the four lines of the event itself (claim,
+    // status, date, comment); the three added here are the ones the back office
+    // needs and the requester's own email does not — who closed it, where, and
+    // the link to the node. Everything travels already escaped, because the
+    // queue drains on cron long after the save.
+    $params = myapi_claim_transaction_mail_params($row, $row->status_label, $comment, $timestamp) + array(
+      'condominium' => check_plain($row->condominium_name),
+      'requester'   => $row->requester_name !== NULL ? check_plain($row->requester_name) : t('Sin solicitante'),
+      // Absolute so the link works from any mail client; check_plain() because
+      // url() does not encode the '&' between query arguments for HTML output.
+      'node_url'    => check_plain(url('node/' . $row->nid, array('absolute' => TRUE))),
+    );
+
+    myapi_claim_enqueue_mails('claim_closed_admin', $uids, $params);
   }
   catch (Exception $e) {
     watchdog_exception('myapi', $e);

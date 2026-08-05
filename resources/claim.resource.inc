@@ -55,6 +55,15 @@ module_load_include('inc', 'myapi', 'includes/myapi.auth');
 module_load_include('inc', 'myapi', 'includes/myapi.unit_access');
 module_load_include('inc', 'myapi', 'includes/myapi.claims_common');
 
+/**
+ * Maximum length, in CHARACTERS, of the closing reason (SPEC 70).
+ *
+ * field_comment is a text_long column, so this is the spec's limit and not the
+ * column's: a closing reason is a sentence, and the timeline and the email both
+ * print it whole.
+ */
+define('MYAPI_CLAIM_CLOSE_REASON_MAX', 1000);
+
 /* ---------------------------------------------------------------------------
  * Query-string parsing.
  *
@@ -1127,6 +1136,224 @@ function myapi_claim_dispatch($id = NULL) {
   else {
     myapi_error('method_not_allowed', 405);
   }
+}
+
+/**
+ * Dispatcher for /api/v1/claims/%/close (SPEC 70).
+ *
+ * Its own route and its own dispatcher, not a fifth branch of
+ * myapi_claim_dispatch(): closing is a state transition, not an edition of the
+ * resource, and the module already spells that shape twice —
+ * PUT /api/v1/reservations/%/cancel and PUT /api/v1/payments/%/cancel.
+ *
+ * PUT and not POST: the body is JSON, so the PHP limitation that forced SPEC 67
+ * to use POST on the item (neither $_POST nor $_FILES are filled on a PUT) does
+ * not apply — myapi_request_body() reads php://input with no help from PHP.
+ *
+ * Authentication lives inside myapi_claim_close(), not here, so an unsupported
+ * method answers 405 without a token: the method is wrong whoever is asking.
+ *
+ * @param mixed $id  The claim's nid from the route.
+ */
+function myapi_claim_close_dispatch($id) {
+  $method = myapi_request_method();
+
+  if ($method === 'PUT') {
+    myapi_claim_close($id);
+  }
+  else {
+    myapi_error('method_not_allowed', 405);
+  }
+}
+
+/**
+ * Validates the mandatory 'close_reason' of a close request (SPEC 70).
+ *
+ * Pure: takes the already-decoded body and returns a verdict, never touching
+ * HTTP output nor a node, so the caller decides when to abort — and so the rule
+ * is testable from tests/unit without a site. Same shape as
+ * myapi_reservation_validate_cancel_reason() (SPEC 50), with the one difference
+ * that matters: there the reason is optional, here it is required. An absent
+ * key, a body that is not an array and a whitespace-only string are therefore
+ * all 'missing_field', not "no reason".
+ *
+ * Length is measured with drupal_strlen() (characters) and not strlen()
+ * (bytes): field_comment is a text_long column, so the 1000 is this spec's
+ * limit and not the column's, and counting bytes would reject a perfectly
+ * storable reason written with accents — the language the residents of this
+ * product write in.
+ *
+ * @param mixed $body  Decoded request body, or NULL when there was none.
+ *
+ * @return array  ['ok' => TRUE, 'value' => string] when accepted, or
+ *                ['ok' => FALSE, 'error_code' => '...', 'replacements' => [...]]
+ *                when it must answer 422.
+ */
+function myapi_claim_validate_close_reason($body) {
+  $replacements = ['@field' => 'close_reason'];
+
+  if (!is_array($body) || !array_key_exists('close_reason', $body)) {
+    return ['ok' => FALSE, 'error_code' => 'missing_field', 'replacements' => $replacements];
+  }
+
+  // Present but not a string (array, number, boolean, NULL): the client sent
+  // the key on purpose with the wrong type, which is a format error and not a
+  // missing one.
+  if (!is_string($body['close_reason'])) {
+    return ['ok' => FALSE, 'error_code' => 'invalid_field', 'replacements' => $replacements];
+  }
+
+  $value = trim($body['close_reason']);
+  if ($value === '') {
+    return ['ok' => FALSE, 'error_code' => 'missing_field', 'replacements' => $replacements];
+  }
+  if (drupal_strlen($value) > MYAPI_CLAIM_CLOSE_REASON_MAX) {
+    return ['ok' => FALSE, 'error_code' => 'field_too_long', 'replacements' => $replacements];
+  }
+
+  return ['ok' => TRUE, 'value' => $value];
+}
+
+/**
+ * PUT /api/v1/claims/%/close — the requester closes their own claim (SPEC 70).
+ *
+ * The claim's field_status is NEVER written here. What this function does is
+ * create a 'claim_transaction' with field_status = 'closed', and
+ * hook_node_insert() -> myapi_claim_transaction_sync_claim_status() (SPEC 57)
+ * is what syncs the claim. That is the only path that keeps the invariant "a
+ * claim's status is its last transaction's status" and the only one that leaves
+ * an entry in the timeline; writing field_status directly would leave the
+ * timeline ending in 'received' while the claim reads 'closed'.
+ *
+ * Every step aborts with its own error before anything is written, in this
+ * order:
+ *
+ *   1. Authentication.
+ *   2. {id} is a positive integer, or 404 claim_not_found.
+ *   3. Visibility: myapi_claim_fetch() with no row, 404 claim_not_found — the
+ *      same rule, the same query and the same uniform 404 as
+ *      GET /api/v1/claims/%.
+ *   4. Requester: row.requester_id !== uid, 403 claim_close_denied. NOT a 404,
+ *      for the same reason as myapi_claim_update(): a public claim of a
+ *      neighbour is already visible, so there is nothing left to hide.
+ *   5. Status: row.status !== 'received', 409 claim_not_closable. Exactly
+ *      'received' and not "anything but closed": once the administration took
+ *      the claim, closing it is their call. An already-closed claim lands here
+ *      too, which is what makes a double click harmless.
+ *   6. close_reason, mandatory — myapi_claim_validate_close_reason().
+ *
+ * The reason is validated LAST, after the two business checks, so a claim the
+ * caller may not close keeps answering 403/409 even when the body is empty or
+ * carries garbage. Same criterion as step 6 of myapi_reservation_cancel().
+ *
+ * The requester is notified of nothing: they just pressed the button, and the
+ * 200 is the acknowledgement. That is what myapi_skip_claim_notification is
+ * for — without it myapi_claim_notify_transaction() (SPEC 68) would push and
+ * email them "your claim has news" about news they wrote themselves. The back
+ * office does get an email, best-effort and after the save.
+ *
+ * @param mixed $id  The nid from the route. Anything that is not a positive
+ *                   integer is a 404, never a PHP error.
+ */
+function myapi_claim_close($id) {
+  // 1. Authentication.
+  $token = myapi_auth_require_access_token();
+  $uid = (int) $token->uid;
+
+  // 2. '/api/v1/claims/abc/close' answers the same 404 as a missing claim.
+  if (!is_scalar($id) || !ctype_digit((string) $id) || (int) $id <= 0) {
+    myapi_error('claim_not_found', 404);
+  }
+  $nid = (int) $id;
+
+  // 3. Visibility: the very same fetch GET /api/v1/claims/% runs. A claim of
+  // another condominium, a private one of another resident and a non-existent
+  // one are indistinguishable here, exactly as in the detail.
+  $condos = myapi_condominium_related_nids($uid);
+  if (empty($condos)) {
+    myapi_error('claim_not_found', 404);
+  }
+  $rows = myapi_claim_fetch($uid, $condos, ['nid' => $nid], 1, -1, 'desc');
+  if (empty($rows)) {
+    myapi_error('claim_not_found', 404);
+  }
+  $row = reset($rows);
+
+  // 4. Only the requester closes. Visible but not yours: 403, never 404.
+  if ((int) $row->requester_id !== $uid) {
+    myapi_error('claim_close_denied', 403);
+  }
+
+  // 5. Only while the administration has not taken it yet.
+  if ($row->status !== 'received') {
+    myapi_error('claim_not_closable', 409);
+  }
+
+  // 6. The reason, mandatory. Nothing has been written yet at this point.
+  $reason = myapi_claim_validate_close_reason(myapi_request_body());
+  if (!$reason['ok']) {
+    myapi_error($reason['error_code'], 422, $reason['replacements']);
+  }
+
+  // 7. The closing transaction. uid is the requester's, which is what makes
+  // the back-office timeline print their name as the author
+  // (myapi_claim_transaction_author_label(), SPEC 57). The title is not
+  // written: hook_node_presave() composes it (SPEC 60). The seconds of
+  // field_status_date are pinned to ':00' like every other path that creates a
+  // transaction (SPEC 58).
+  $status_date = date('Y-m-d H:i:00');
+
+  $transaction = (object) [
+    'type'   => 'claim_transaction',
+    'uid'    => $uid,
+    'status' => 1,
+  ];
+  node_object_prepare($transaction);
+
+  $transaction->field_claim[LANGUAGE_NONE][0]['target_id'] = $nid;
+  $transaction->field_status[LANGUAGE_NONE][0]['value'] = 'closed';
+  $transaction->field_status_date[LANGUAGE_NONE][0]['value'] = $status_date;
+  // Only 'value' is written, no 'format', exactly like the other two paths
+  // that create a transaction: the timeline reads the raw column and
+  // check_plain()s it itself.
+  $transaction->field_comment[LANGUAGE_NONE][0]['value'] = $reason['value'];
+  // Transient flag (SPEC 68), not a field: it lives only for this save and is
+  // what keeps the requester from being notified about their own click. The
+  // claim's own node_save(), fired by the status sync, reaches
+  // hook_node_update()'s 'reclamo' branch, which only notifies on the
+  // private -> public transition — and visibility does not change here.
+  $transaction->myapi_skip_claim_notification = TRUE;
+
+  node_save($transaction);
+
+  // 8. Email the detail to the back office (SPEC 70). After the save and
+  // best-effort by contract: the closure is already stored, so nothing here
+  // may turn the 200 into a 500. The claim is reloaded from the database
+  // ($reset = TRUE) so the email prints the status the sync just wrote.
+  $claim = node_load($nid, NULL, TRUE);
+  if ($claim) {
+    module_load_include('inc', 'myapi', 'includes/myapi.claim_notification');
+    myapi_claim_notify_closed_by_requester($claim, $reason['value'], strtotime($status_date));
+  }
+
+  // 9. Respond 200 with the same object as GET /api/v1/claims/%, transactions
+  // always expanded — the same helpers, so the two responses cannot drift. The
+  // row is re-fetched, so 'status' is the 'closed' the sync wrote and the new
+  // transaction is already in the timeline.
+  $rows = myapi_claim_fetch($uid, $condos, ['nid' => $nid], 1, -1, 'desc');
+  if (empty($rows)) {
+    myapi_error('claim_not_found', 404);
+  }
+  $row = reset($rows);
+  $nids = [(int) $row->id];
+  $images = myapi_claim_load_images($nids);
+  $transactions = myapi_claim_load_transactions($nids, TRUE);
+
+  myapi_respond(
+    ['claim' => myapi_claim_build_item($row, $images, $transactions)],
+    200,
+    'claim_closed'
+  );
 }
 
 /**

@@ -543,6 +543,73 @@ function myapi_mail_claim_admin_html($params) {
 }
 
 /**
+ * Formats the email the back office gets when a requester closes their own
+ * claim (SPEC 70).
+ *
+ * Called from myapi_mail() (in myapi.module) for the 'claim_closed_admin' key,
+ * which only fires for PUT /api/v1/claims/%/close: it is the one status change
+ * the back office does not make itself, so it is the one it has to be told
+ * about.
+ *
+ * The subject carries the nid and the condominium rather than the subject of
+ * the claim, exactly like 'claim_created_admin', and is therefore not truncated
+ * to 80 either — both are the two emails an operator triages by claim, not by
+ * headline.
+ *
+ * @param array $message  Mail message array, altered by reference.
+ * @param array $params   'nid', 'type_label', 'type_noun', 'subject',
+ *                        'subject_short', 'status', 'date', 'comment',
+ *                        'condominium', 'requester' and 'node_url', already
+ *                        escaped.
+ */
+function myapi_mail_format_claim_closed_admin(&$message, $params) {
+  $message['subject'] = 'El solicitante cerró el ' . decode_entities($params['type_noun'])
+    . ' #' . $params['nid'] . ' — ' . decode_entities($params['condominium']);
+  $message['body'][] = myapi_mail_claim_closed_admin_html($params);
+
+  $message['headers']['Content-Type'] = 'text/html; charset=UTF-8';
+}
+
+/**
+ * Builds the HTML body of the closure email sent to the back office.
+ *
+ * The reason is the point of this email and is the one line that can be long,
+ * so it goes last and travels WHOLE, nl2br()'d like every other free-text line
+ * of this file — there is no 200-character budget to respect in an email.
+ *
+ * There is no 'Descripción' line: the operator opening the claim from the
+ * button sees it in full, and repeating it here would bury the reason, which is
+ * the only thing this email adds to what they already knew.
+ *
+ * @param array $params  Already-escaped values (see the formatter).
+ *
+ * @return string  Full HTML document.
+ */
+function myapi_mail_claim_closed_admin_html($params) {
+  $lines = array(
+    $params['type_label'] => '#' . $params['nid'],
+    'Asunto'              => $params['subject'],
+    'Condominio'          => $params['condominium'],
+    'Solicitante'         => $params['requester'],
+    'Estado'              => $params['status'],
+    'Cerrado el'          => $params['date'],
+  );
+
+  if (isset($params['comment']) && $params['comment'] !== '') {
+    $lines['Motivo'] = nl2br($params['comment']);
+  }
+
+  return myapi_mail_reservation_html(
+    $params['type_label'] . ' #' . $params['nid'],
+    $params['type_label'] . ' cerrado',
+    'El solicitante cerró su ' . $params['type_noun'] . ' desde la aplicación.',
+    $lines,
+    'Puedes revisarlo desde el panel de administración.',
+    array('label' => 'Abrir en el back office', 'url' => $params['node_url'])
+  );
+}
+
+/**
  * Shared HTML shell of the reservation emails — and, since SPEC 68, of the five
  * claim ones.
  *

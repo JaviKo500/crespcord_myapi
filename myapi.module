@@ -285,6 +285,18 @@ function myapi_menu() {
     'file'             => 'resources/claim.resource.inc',
   ];
 
+  // Closing of a claim by its requester (SPEC 70). Its own route and its own
+  // dispatcher, not a branch of myapi_claim_dispatch(): a state transition is
+  // not an edition of the resource, and the module already spells this shape
+  // twice — api/v1/reservations/%/cancel and api/v1/payments/%/cancel.
+  $items['api/v1/claims/%/close'] = [
+    'page callback'    => 'myapi_claim_close_dispatch',
+    'page arguments'   => [3],
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/claim.resource.inc',
+  ];
+
   // Authenticated download of a claim file (SPEC 65). Its own dispatcher and
   // not a third case of myapi_claim_dispatch(): see myapi_claim_file_dispatch().
   // The two wildcards are the CLAIM's nid and the fid — arguments 3 and 5 —
@@ -587,6 +599,7 @@ function myapi_mail($key, &$message, $params) {
 
     // SPEC 68. Five claim keys, four formatters: the two transaction ones
     // differ in their subject and their context sentence and in nothing else.
+    // SPEC 70 added a sixth key with a formatter of its own, below.
     case 'claim_created_requester':
       myapi_mail_format_claim_created_user($message, $params);
       break;
@@ -606,6 +619,13 @@ function myapi_mail($key, &$message, $params) {
     // from the back office already knows it exists.
     case 'claim_created_admin':
       myapi_mail_format_claim_created_admin($message, $params);
+      break;
+
+    // SPEC 70. Only fires for PUT /api/v1/claims/%/close: the requester closed
+    // their own claim from the app, which is the one status change the back
+    // office does not make itself.
+    case 'claim_closed_admin':
+      myapi_mail_format_claim_closed_admin($message, $params);
       break;
   }
 }
