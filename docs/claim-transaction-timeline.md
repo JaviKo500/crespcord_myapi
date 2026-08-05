@@ -104,6 +104,14 @@ The only way to change an existing claim's status is the creation page (or,
 for `administrator`/`backend`, the native `claim_transaction` forms) — never
 this form.
 
+Since SPEC 70 there is one more entry path, and it obeys the same rule: the
+requester closing their own claim from the app
+(`PUT /api/v1/claims/%/close`, see [claim.md](claim.md)) also writes a
+`claim_transaction` — `closed`, with their reason as the comment and their uid
+as the author — and lets the same status sync propagate it. It is the only
+transition available to a resident, it is only allowed while the claim is
+`received`, and it shows up in this timeline like any operator's.
+
 On those native forms (`node/add/claim_transaction`, `node/%nid/edit` of a
 transaction) `field_status_date` keeps its own Date module `date_select`
 widget, which since SPEC 58 offers **hour and minute** selectors alongside

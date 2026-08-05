@@ -1,11 +1,12 @@
-# Claims API (SPEC 64, SPEC 65, SPEC 66, SPEC 67, SPEC 69)
+# Claims API (SPEC 64, SPEC 65, SPEC 66, SPEC 67, SPEC 69, SPEC 70)
 
-Five endpoints over the `reclamo` nodes the back office manages (SPEC 55–63):
+Six endpoints over the `reclamo` nodes the back office manages (SPEC 55–63):
 a paginated list, a detail by id, the authenticated download of one claim file
-(SPEC 65), creating a claim (SPEC 66), and editing one's own claim while it is
-still `received` (SPEC 67). The Flutter app consumes them; nothing here closes
-or deletes a claim, edits a claim filed by somebody else, or adds a
-transaction — those paths are back office only
+(SPEC 65), creating a claim (SPEC 66), editing one's own claim while it is
+still `received` (SPEC 67), and closing one's own claim under that same
+condition (SPEC 70). The Flutter app consumes them; nothing here deletes a
+claim, edits or closes a claim filed by somebody else, or adds a transaction of
+any other status — those paths are back office only
 (see [claim-transaction-timeline.md](claim-transaction-timeline.md)).
 
 Two documents cover the other half of the same data:
@@ -697,6 +698,135 @@ can reload the detail and explain it instead of showing a generic error.
 
 ---
 
+## PUT /api/v1/claims/{id}/close
+
+Lets the **requester** of a claim close it — and only while its status is still
+`received`. The response is the **same object** `GET /api/v1/claims/%` returns,
+transactions always expanded, already carrying the new status and the new
+timeline entry.
+
+Three properties the client has to know before writing against it:
+
+- **The reason is mandatory.** `close_reason` is a string of 1–1000 characters.
+  It is what stays in the timeline explaining why a claim died without an
+  answer, so an absent, empty or whitespace-only value answers
+  `422 missing_field`.
+- **Only while the claim is `received`.** Once the administration moves it to
+  `in_progress`, `resolved` or `closed`, closing it is their call:
+  `409 claim_not_closable`. An already-closed claim lands here too, which is
+  what makes a double tap harmless.
+- **Closing is not deleting, and it is not reversible from the app.** The claim
+  and its whole history stay visible in the list and in the detail; only the
+  back office can move it out of `closed` afterwards.
+
+### What the server writes
+
+Not `field_status` of the claim. The endpoint creates a **`claim_transaction`**
+with `status = closed`, the current instant as its status date, and
+`close_reason` as its comment; Drupal's own `hook_node_insert()` is what then
+syncs the claim (SPEC 57). That is why the closure shows up in the timeline like
+any other status change, with the resident's own name as its author in the back
+office — and why the claim's status can never drift from its last transaction.
+
+**Authentication:** required (Bearer access token) — and the caller must be the
+claim's `field_requester`.
+
+**Headers**
+| Header | Value |
+|--------|-------|
+| Authorization | Bearer `<access_token>` |
+| Content-Type | `application/json` |
+
+**Request body**
+```json
+{ "close_reason": "Ya lo resolví directamente con el vecino." }
+```
+
+| Field | Required | Type | Notes |
+|-------|----------|------|-------|
+| `close_reason` | Yes | string, 1–1000 characters | Trimmed before storing. The limit counts **characters**, not bytes, so a full-length reason written with accents fits. |
+
+**Success response (200)**
+
+The same envelope and the same item as `GET /api/v1/claims/%`, plus the
+translated `message`:
+
+```json
+{
+  "success": true,
+  "data": {
+    "claim": {
+      "id": 140,
+      "subject": "Filtración en el techo del pasillo",
+      "status": "closed",
+      "transactions": [
+        {
+          "id": 12,
+          "status": "received",
+          "status_date": "2026-08-01T14:30:00",
+          "comment": "Hemos recibido su reclamo. Será revisado por la administración y se le notificará cualquier novedad.",
+          "created": "2026-08-01T14:31:12",
+          "images": [],
+          "attachment": null
+        },
+        {
+          "id": 18,
+          "status": "closed",
+          "status_date": "2026-08-05T11:20:00",
+          "comment": "Ya lo resolví directamente con el vecino.",
+          "created": "2026-08-05T11:20:03",
+          "images": [],
+          "attachment": null
+        }
+      ]
+    }
+  },
+  "message": "Reclamo cerrado correctamente."
+}
+```
+
+(The item is abbreviated here; it carries every key of the
+[field reference](#field-reference) below.)
+
+**Possible errors**
+| Code | `error_code` | When |
+|------|--------------|------|
+| 401 | `missing_authorization` | `Authorization` header absent or not a `Bearer <token>`. |
+| 401 | `invalid_token` | Access token invalid, revoked, expired, or its user is missing/blocked. |
+| 403 | `claim_close_denied` | The claim **is** visible to the caller (a `public` one of a neighbour) but they are not its `field_requester`. Deliberately not a `404`, same reasoning as `claim_edit_denied`. |
+| 404 | `claim_not_found` | The claim does not exist, is unpublished, belongs to another condominium, is private and filed by somebody else, or the id is not a positive integer. The five are indistinguishable. |
+| 405 | `method_not_allowed` | Any method other than `PUT` on `/api/v1/claims/{id}/close`. |
+| 409 | `claim_not_closable` | The caller is the requester, but the claim's status is no longer `received` — including a claim already `closed`. Nothing is written. |
+| 422 | `missing_field` | `close_reason` absent, or empty after `trim()` (`@field: close_reason`). |
+| 422 | `invalid_field` | `close_reason` present but not a string (a number, a boolean, `null`, an array). |
+| 422 | `field_too_long` | `close_reason` over 1000 characters, measured after trimming. |
+
+Validation runs in that order — authentication, id, visibility, requester,
+status, and **the reason last** — so a claim the caller may not close keeps
+answering `403`/`409` even when the body is empty or malformed. See
+[i18n.md](i18n.md) for the translated `error`/`message` text.
+
+**Example:**
+```bash
+curl -i -X PUT https://host/api/v1/claims/140/close \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"close_reason":"Ya lo resolví directamente con el vecino."}'
+```
+
+### Who gets notified
+
+The requester gets **nothing** — no push, no inbox row, no email. They pressed
+the button and the `200` is the acknowledgement.
+
+The back office does: the `backend` role and the building admins of the claim's
+condominium receive the `claim_closed_admin` email with the reason, since it is
+the one status change they did not make themselves. It is enqueued after the
+closure is stored and is best-effort — a mail failure never turns the `200` into
+a `500`. See [claim-notifications.md](claim-notifications.md).
+
+---
+
 ## Field reference
 
 **Claim item**
@@ -871,3 +1001,12 @@ statuses costs exactly the same as filtering by one.
 Not supported, and worth saying out loud: `?status[]=received&status[]=closed`.
 PHP hands that over as an array, which falls back to "no filter" like any other
 unparsable value. The comma-separated form is the only documented one.
+
+**Closing writes a transaction, never the claim's status** (SPEC 70). The one
+line `myapi_claim_close()` does not contain is
+`$claim->field_status[...] = 'closed'`: it saves a `claim_transaction` and lets
+`myapi_claim_transaction_sync_claim_status()` — the same function the back-office
+form relies on — propagate it. Two consequences worth stating: the timeline can
+never end in a status different from the claim's, and the closure is visible in
+`admin/content/claims` and in `node/%/edit` exactly like an operator's own status
+change, with the resident as its author.

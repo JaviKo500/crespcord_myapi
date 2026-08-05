@@ -1,7 +1,7 @@
-# Claim notifications (created / published / new transaction)
+# Claim notifications (created / published / new transaction / closed)
 
 These are **not REST endpoints**. They are three behaviors triggered around the
-claim lifecycle (SPEC 68):
+claim lifecycle (SPEC 68), plus a fourth one added by SPEC 70:
 
 - A claim **created** notifies its requester (push + inbox + email) and, when
   the claim is public, every other owner and occupant of its condominium. Only
@@ -12,16 +12,27 @@ claim lifecycle (SPEC 68):
 - A **new transaction** on a claim notifies the requester and, when the claim is
   public, the neighbours — each with their own text. The automatic initial
   transaction is deliberately silent.
+- A **claim closed by its own requester** from the app (`PUT /api/v1/claims/%/close`,
+  SPEC 70) notifies **only the back office**, by email. No push and no inbox row
+  for anybody: the resident pressed the button and the `200` is their
+  acknowledgement.
 
 No endpoint changed its contract: `POST /api/v1/claims` still answers `201` with
 the same body, `POST /api/v1/claims/{id}` still answers `200` with the same body
 of SPEC 67, and every `GET` is byte for byte what it was. See `docs/claim.md`
 for the API itself.
 
-**The three triggers live in node hooks, not in the endpoints.** A claim is
+**The first three triggers live in node hooks, not in the endpoints.** A claim is
 created by two paths (`POST /api/v1/claims` and `node/add/reclamo`) and turned
 public by two more, so hooking the endpoints would have duplicated the call and
 left the back office out. The API contributes **one flag** and nothing else.
+
+The fourth one is the exception that proves the rule: the closure of a claim is
+a `claim_transaction` like any other, and nothing in the node tells you the
+requester wrote it rather than an operator. Only the endpoint knows, so only the
+endpoint can call it — and the transaction it saves carries
+`myapi_skip_claim_notification`, which is what keeps the regular transaction
+notification from reaching the resident about their own click.
 
 **A claim has no unit.** The `reclamo` bundle carries `field_condominium` and no
 `field_unit`, which is why `unit_id` is `NULL` in every `myapi_notifications`
@@ -33,11 +44,11 @@ row this feature writes, and why the back-office email has no `Vivienda` line.
 
 | File | Role |
 |------|------|
-| `includes/myapi.claim_notification.inc` | The whole behavior: constants, the equivalent row, the three detectors, the recipient resolvers, the pure text builders and the three orchestrators. |
+| `includes/myapi.claim_notification.inc` | The whole behavior: constants, the equivalent row, the three detectors, the recipient resolvers (`myapi_claim_admin_uids()` among them), the pure text builders and the four orchestrators. |
 | `includes/myapi.notification.inc` | `myapi_notification_create()` (inbox row + push enqueue) and, since this spec, the two generalized back-office recipient queries: `myapi_notification_role_uids()` and `myapi_notification_building_admin_uids()`. |
 | `includes/myapi.mail_queue.inc` | Generic deferred mail queue (`myapi_mail_send`), shared with the reservation emails. |
-| `includes/myapi.mail.inc` | The four mail formatters and their three HTML builders, on the shared CrespCord shell. |
-| `myapi.module` | Glue only: the five `hook_mail()` branches, the two `hook_node_insert()` calls and the new `reclamo` branch of `hook_node_update()`. |
+| `includes/myapi.mail.inc` | The five mail formatters and their four HTML builders, on the shared CrespCord shell. |
+| `myapi.module` | Glue only: the six `hook_mail()` branches, the two `hook_node_insert()` calls and the new `reclamo` branch of `hook_node_update()`. |
 | `resources/claim.resource.inc` | **One line**: the origin flag, before the `node_save()` of `myapi_claim_create()`. |
 | `includes/myapi.claim_transaction_admin.inc` | **One line**: the opt-out flag, before the `node_save()` of `myapi_claim_transaction_create_initial()`. |
 | `myapi.install` | Maps the five mail keys to `MyapiHtmlMailSystem` (`myapi_html_mail_keys()`, applied by `myapi_update_7024()`). |
@@ -278,8 +289,8 @@ say first that the claim is not theirs.
 
 ## Emails
 
-All five are HTML (CrespCord branding, inline styles, the logo of
-`myapi_mail_logo_url()`) and all five leave through the deferred mail queue.
+All six are HTML (CrespCord branding, inline styles, the logo of
+`myapi_mail_logo_url()`) and all six leave through the deferred mail queue.
 
 | Mail key | Recipient | Subject |
 |----------|-----------|---------|
@@ -288,11 +299,17 @@ All five are HTML (CrespCord branding, inline styles, the logo of
 | `claim_transaction_requester` | The requester | `Novedad en tu reclamo — {asunto}` |
 | `claim_transaction_neighbour` | The neighbours | `Novedad en un reclamo de tu condominio — {asunto}` |
 | `claim_created_admin` | `backend` + the building admins of the condominium | `Nuevo reclamo #{nid} — {condominio}` |
+| `claim_closed_admin` | `backend` + the building admins of the condominium | `El solicitante cerró el reclamo #{nid} — {condominio}` |
 
 The noun of every subject follows `field_claim_type`. The claim's subject is cut
 to 80 characters in the **mail subject line** only — the data block always shows
-it whole. `claim_created_admin` carries the nid and the condominium instead, so
-it is the one key that is never truncated.
+it whole. `claim_created_admin` and `claim_closed_admin` carry the nid and the
+condominium instead, so they are the two keys that are never truncated — they
+are the two an operator triages by claim, not by headline.
+
+The two back-office keys share their audience, resolved once by
+`myapi_claim_admin_uids()`: `backend` plus the building admins of the claim's
+condominium, deduplicated, so somebody holding both roles gets one email.
 
 ### To the residents
 
@@ -376,6 +393,39 @@ Se registró un nuevo reclamo desde la aplicación.
 - **One email per recipient**, never one with everybody in copy: an invalid
   address does not drag the rest down, and no operator sees the others'
   addresses.
+
+### To the back office (`claim_closed_admin`)
+
+The only status change the back office did not make itself, so the only one it
+has to be told about (SPEC 70):
+
+```
+El solicitante cerró su reclamo desde la aplicación.
+
+  Reclamo        #141
+  Asunto         Fuga de agua en el pasillo
+  Condominio     Residencias El Parque
+  Solicitante    Javier Correa
+  Estado         Cerrado
+  Cerrado el     05/08/2026 11:20
+
+  Motivo
+  Ya lo resolví directamente con el vecino.
+
+        [ Abrir en el back office ]   →   {base}/node/141
+```
+
+- **The reason is the point of this email** and is the only line that can be
+  long, so it goes last and travels whole — `check_plain()` + `nl2br()`, like
+  every other free-text line.
+- **No `Descripción` line**: the operator opening the claim from the button sees
+  it in full, and repeating it here would bury the reason, which is the only
+  thing this email adds to what they already knew.
+- **Best-effort and after the write**: the closure is already stored when the
+  mail is enqueued, so no mail failure can turn the endpoint's `200` into a
+  `500`. A condominium with no `backend` user and no building admin simply
+  notifies nobody.
+- **The requester is not in copy.** They are the one who closed it.
 
 ---
 
