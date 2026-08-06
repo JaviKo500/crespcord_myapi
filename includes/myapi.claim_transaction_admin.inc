@@ -343,6 +343,79 @@ function myapi_claim_transaction_create_form($form, &$form_state, $claim_node) {
 }
 
 /**
+ * The field item of a 'managed_file' element, or NULL when nothing was
+ * uploaded.
+ *
+ * This exists because of a real bug: the two file fields of the creation form
+ * were never saved. The submit handler read
+ * $form_state['values']['field_images']['fid'], which is the shape of the
+ * NATIVE file/image widget — and not of the '#type' => 'managed_file' element
+ * this form builds by hand.
+ *
+ * The difference is core's #extended flag. file_field_widget_form()
+ * (modules/file/file.field.inc) declares its element with '#extended' => TRUE,
+ * so its value stays an array with a 'fid' key; a bare managed_file leaves it
+ * at its FALSE default, and file_managed_file_validate() (modules/file/
+ * file.module) ends with:
+ *
+ *   // Consolidate the array value of this field to a single FID.
+ *   if (!$element['#extended']) {
+ *     form_set_value($element, $element['fid']['#value'], $form_state);
+ *   }
+ *
+ * so the submitted value is the bare fid. Reading ['fid'] off an integer
+ * yields NULL under PHP 7.4 and empty() swallows it silently — no warning, no
+ * error message, a transaction saved without its file. That is exactly what
+ * the operator saw, both when pressing "Subir al servidor" first and when
+ * saving straight after picking the file (the upload happens either way,
+ * inside file_managed_file_value()), and why editing the same transaction
+ * afterwards DID attach it: node/%nid/edit uses the native widget.
+ *
+ * Both shapes are accepted here, so the helper keeps working if a future
+ * change adds '#extended' => TRUE to those elements.
+ *
+ * 'display' is a column of the 'file' field type only (file_field_schema(),
+ * NOT NULL DEFAULT 1) — field_attachment. field_sql_storage writes the columns
+ * the field declares and nothing else, so the key is simply ignored by
+ * field_images, an 'image' field whose columns are fid/alt/title/width/height.
+ * One item shape therefore serves both, and the value is 1 for the same reason
+ * core's own file_field_widget_value() uses it: 'display_field' is 0 on both
+ * instances (myapi.install), and with it off file_field_displayed() ignores the
+ * column altogether. Omitting the key is NOT an option: NULL into a NOT NULL
+ * column fails on MySQL under the STRICT_TRANS_TABLES the Drupal 7 driver sets.
+ *
+ * Nothing else is needed to make the file permanent: file_field_presave()
+ * flips its status and file_field_insert() registers the usage, both invoked by
+ * field_attach_*() during node_save(); image_field_presave() additionally fills
+ * width/height. Same reuse criterion as the upload validators in the form
+ * above — the rules stay core's.
+ *
+ * @param mixed $value
+ *   $form_state['values']['<field_name>'] as submitted: the bare fid, the
+ *   extended array, or NULL when the element is not in the form at all.
+ *
+ * @return array|NULL
+ *   A field item ready for $node-><field>[LANGUAGE_NONE][0], or NULL when no
+ *   file was uploaded.
+ */
+function myapi_claim_transaction_file_item($value) {
+  $fid = is_array($value)
+    ? (isset($value['fid']) ? $value['fid'] : 0)
+    : $value;
+
+  // is_numeric() before the cast: an unexpected string must resolve to "no
+  // file", not to fid 0 pretending to be one.
+  if (!is_numeric($fid) || (int) $fid <= 0) {
+    return NULL;
+  }
+
+  return array(
+    'fid' => (int) $fid,
+    'display' => 1,
+  );
+}
+
+/**
  * #element_validate callback of the field_status_date textfield.
  *
  * Splits the typed 'AAAA-MM-DD HH:MM' on its single space and validates each
@@ -404,12 +477,18 @@ function myapi_claim_transaction_create_form_submit($form, &$form_state) {
   $transaction->field_status_date[LANGUAGE_NONE][0]['value'] = $status_date_parts[0] . ' ' . $status_date_parts[1] . ':00';
   $transaction->field_comment[LANGUAGE_NONE][0]['value'] = $form_state['values']['field_comment'];
 
-  if (!empty($form_state['values']['field_images']['fid'])) {
-    $transaction->field_images[LANGUAGE_NONE][0]['fid'] = $form_state['values']['field_images']['fid'];
-  }
-
-  if (!empty($form_state['values']['field_attachment']['fid'])) {
-    $transaction->field_attachment[LANGUAGE_NONE][0]['fid'] = $form_state['values']['field_attachment']['fid'];
+  // Both file fields at once, from the same list SPEC 65 keeps in
+  // myapi_claims_file_claim_nid() (includes/myapi.claims_files.inc): a third
+  // file field added to this bundle has to be declared in both places. The
+  // value shape is core's, not this form's — see
+  // myapi_claim_transaction_file_item() above for why reading ['fid'] here was
+  // wrong and silently dropped every upload.
+  foreach (array('field_images', 'field_attachment') as $field_name) {
+    $value = isset($form_state['values'][$field_name]) ? $form_state['values'][$field_name] : NULL;
+    $item = myapi_claim_transaction_file_item($value);
+    if ($item !== NULL) {
+      $transaction->{$field_name}[LANGUAGE_NONE][0] = $item;
+    }
   }
 
   node_save($transaction);

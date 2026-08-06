@@ -319,7 +319,7 @@ own (not the native `claim_transaction` node form), so it shows **exactly**:
 | `field_status` | `select` | Yes | Options from `myapi_claims_status_options()` (SPEC 56) |
 | `field_status_date` | `textfield`, plain `'AAAA-MM-DD HH:MM'` text | Yes | Defaults to the current date **and time** (e.g. `2026-08-01 14:35`); validated server-side by `myapi_claim_transaction_validate_status_date()` (`#element_validate`), which splits the value on its space and reuses `myapi_reservation_valid_date()` **and** `myapi_reservation_valid_time()` (`resources/reservation.resource.inc`) — the same `'YYYY-MM-DD'` + `checkdate()` and `'HH:MM'` 24h rules `includes/myapi.claims_admin.inc` already reuses for its own date filters, so SPEC 58 added no new regex. A value with no time part is rejected. The submit handler saves it as `'Y-m-d H:i:00'` — seconds pinned to `00`, since the form does not capture them. Two combo-style date widgets were tried first — `date_popup` (Date module) and core's own `#type => 'date'` — and both were reverted: each brought its own layout CSS (`container-inline-date`, then `container-inline`) that broke alignment with the rest of the form. A plain textfield uses the exact same wrapper as `field_status`/`field_comment`, with nothing special left to fight (see SPEC 57 "Decisiones tomadas y descartadas") |
 | `field_comment` | `textarea` | **Yes** | Required at the request of the user, after seeing the form live. Only this custom form enforces it — the underlying field instance (SPEC 55) is still optional, so `node/add/claim_transaction` (native) does not require it |
-| `field_images` | `managed_file` | No | Validators/upload URI read live from the field instance via core's `file_field_widget_upload_validators()`/`file_field_widget_uri()` — never hard-coded |
+| `field_images` | `managed_file` | No | Validators/upload URI read live from the field instance via core's `file_field_widget_upload_validators()`/`file_field_widget_uri()` — never hard-coded. Its submitted value is the **bare fid**, not an array: see "Los archivos del formulario de creación" below |
 | `field_attachment` | `managed_file` | No | Same as above |
 
 `field_claim` is **not** shown: it travels fixed as `$form['claim_nid']`
@@ -331,6 +331,71 @@ current user), calls `node_save()`, and sets
 `$form_state['redirect'] = 'node/<claim_nid>/edit'` — a normal POST, full
 page reload. The status sync (below) is what actually updates the claim;
 nothing in this handler touches it directly.
+
+### Los archivos del formulario de creación
+
+The handler attached neither the image nor the attachment: **every**
+transaction created from this form was saved without its files, while editing
+the same transaction afterwards from `node/%nid/edit` did attach them. Both
+symptoms have one cause.
+
+The submit handler read the value of each file element like this:
+
+```php
+// Wrong: this is the shape of the NATIVE widget, not of this form's element.
+if (!empty($form_state['values']['field_images']['fid'])) { … }
+```
+
+That shape belongs to core's `file_field_widget_form()`
+(`modules/file/file.field.inc`), which declares its element with
+`'#extended' => TRUE` and therefore keeps an array with a `fid` key — which is
+why `node/%nid/edit`, the native form, always worked. A bare
+`'#type' => 'managed_file'`, the one this form builds, leaves `#extended` at
+its `FALSE` default, and `file_managed_file_validate()`
+(`modules/file/file.module`) ends by consolidating the value:
+
+```php
+// Consolidate the array value of this field to a single FID.
+if (!$element['#extended']) {
+  form_set_value($element, $element['fid']['#value'], $form_state);
+}
+```
+
+So the submitted value is the plain fid. Reading `['fid']` off an integer is
+`NULL` in PHP 7.4 and `empty()` swallowed it: no warning, no error message, a
+transaction saved without its file. It made no difference whether the operator
+pressed **"Subir al servidor"** first or saved straight after choosing the
+file — the upload itself happens on both paths, inside
+`file_managed_file_value()`, and it was the read afterwards that failed.
+
+The value is now normalised by `myapi_claim_transaction_file_item($value)`,
+which accepts **both** shapes (so flipping `#extended` on those elements can
+never bring the bug back), rejects everything that is not a positive fid, and
+returns the field item:
+
+```php
+array('fid' => 12, 'display' => 1)
+```
+
+`display` is a column of the `file` field type only (`file_field_schema()`,
+`NOT NULL DEFAULT 1`) — `field_attachment`. `field_images` is an `image` field
+(`fid`/`alt`/`title`/`width`/`height`) and field storage writes only the
+columns the field declares, so the key is ignored there and one item shape
+serves both. It cannot simply be omitted: `NULL` into a `NOT NULL` column fails
+on MySQL under the `STRICT_TRANS_TABLES` the Drupal 7 driver sets. The value is
+`1` for the same reason core's `file_field_widget_value()` uses it — both
+instances have `display_field = 0` (`myapi.install`), and with it off
+`file_field_displayed()` ignores the column entirely.
+
+Nothing else is written by hand: `file_field_presave()` flips the file's status
+to permanent, `file_field_insert()` registers its usage, and
+`image_field_presave()` fills `width`/`height` — all invoked by
+`field_attach_*()` during `node_save()`, exactly as they are for the native
+widget. The two field names are iterated from the same list SPEC 65 keeps in
+`myapi_claims_file_claim_nid()` (`includes/myapi.claims_files.inc`): **a third
+file field added to this bundle has to be declared in both places**.
+
+Covered by `tests/unit/ClaimTransactionFileItemTest.php`.
 
 ---
 
@@ -503,7 +568,7 @@ if ($claim && myapi_building_admin_field_value($node, 'field_status') !== myapi_
 
 ## Manual verification
 
-Three functions of this file **are** unit tested.
+Four functions of this file **are** unit tested.
 `tests/unit/ClaimTransactionEditTest.php` (SPEC 59, extended by SPEC 60 with
 the hidden title field) covers
 `myapi_claim_transaction_transaction_form_alter()`, which is FAPI array
@@ -513,7 +578,11 @@ is a field read plus an assignment.
 `myapi_claim_transaction_title()`, pure string composition — which is why it
 takes the four values already resolved instead of the node: the Field API half
 lives in `myapi_claim_transaction_set_title()`, and that one is **not** unit
-tested. Everything else here — including
+tested. `tests/unit/ClaimTransactionFileItemTest.php` covers
+`myapi_claim_transaction_file_item()`, the normalisation of a `managed_file`
+value into a field item — a regression suite for the bug that saved every
+transaction of the creation form without its files (see "Los archivos del
+formulario de creación" above). Everything else here — including
 `myapi_claim_transaction_edit_link()`, which is `node_load()` +
 `node_access()` — touches `db_select()`, the Field API or `$_POST`, the same
 criterion the rest of `tests/unit/` already applies to comparable back-office
@@ -563,6 +632,19 @@ drush cc all
 | After redirect | New transaction is first in the timeline |
 | No `create claim_transaction content`, or no condominium access (SPEC 56) | 403 on this route, even with the `nid` known |
 | Image > 3 MB, or wrong extension; attachment outside `pdf/doc/docx/xls/xlsx` | Rejected with the native field validation message |
+
+**Files matrix** — the creation form only; on `node/%nid/edit` these are the
+native widgets and were never affected:
+
+| Case | Expected |
+|---|---|
+| Choose an image, press **"Subir al servidor"**, then "Guardar" | The transaction is saved **with** the image; it is listed on `node/<nid>/edit` and opens from there |
+| Choose an image and press "Guardar" **without** uploading first | Same result: the upload happens on submit, and the file is attached |
+| Same two cases for the attachment | Same result on `field_attachment` |
+| Both files at once | Both attached to the same transaction |
+| Save with no file at all | Transaction created normally, both fields empty, no error |
+| `file_managed` after saving | The file's `status` is `1` (permanent) and `file_usage` has a row for the transaction node — the same as a file uploaded from `node/%nid/edit` |
+| Open the file from `node/<nid>/edit` | Served: it is now a claim file, so `hook_file_download()` resolves it (SPEC 65) |
 
 **Title matrix** (SPEC 60):
 
