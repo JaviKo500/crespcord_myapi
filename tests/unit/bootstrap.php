@@ -39,6 +39,40 @@
  * title of a 'claim_transaction' be asserted character by character: the title
  * cuts the operator's comment at 60 characters without breaking a word, and
  * that cut is core's, not myapi's.
+ *
+ * variable_get() and url() (SPEC 73) are the last of the Drupal kind: the reset
+ * page reads its deep-link base out of a variable and builds its form action
+ * with url(), and neither has any meaning outside a site.
+ *
+ * variable_get() and url() (SPEC 73) are the last of the Drupal kind: the reset
+ * page reads its deep-link base out of a variable and builds its form action
+ * with url(), and neither has any meaning outside a site.
+ *
+ * drupal_exit(), drupal_add_http_header() and drupal_json_encode() (SPEC 73)
+ * are the three that opened the biggest door in this suite. Everything that
+ * ANSWERS in this module — myapi_respond(), myapi_error(), and through them
+ * every dispatcher and the password/reset page — ends by printing a body and
+ * calling drupal_exit(). Stubbing that trio means the real helpers can run
+ * here: the body goes to an output buffer, the status goes to a recorded
+ * header, and the "and then the request ends" becomes a thrown MyapiExit.
+ * myapi_test_capture() below is the only place that knows this, and no test
+ * asserts against a reimplementation of the envelope — they assert against the
+ * envelope production actually prints.
+ *
+ * ip_address() and the three Flood API functions (SPEC 73) are the same idea
+ * for the brute-force helpers: myapi_flood_is_allowed() and
+ * myapi_flood_register() are pure arithmetic over Drupal variables, and what is
+ * worth testing about them is precisely the arguments they hand to
+ * flood_is_allowed()/flood_register_event(). The stubs record every call so a
+ * test can read them back.
+ *
+ * myapi_user_fetch_profile_fields() (SPEC 73) is the one stub in this file that
+ * replaces a MYAPI function rather than a Drupal one, and it carries a cost
+ * worth stating: because the real definition in includes/myapi.user.inc is not
+ * function_exists()-guarded, a future test file that require's that .inc will
+ * fatal with "Cannot redeclare". That is deliberate — the real function is four
+ * LEFT JOINs and belongs to tests/integration — but whoever hits that fatal
+ * should read this block, not fight the guard.
  */
 
 if (!function_exists('module_load_include')) {
@@ -193,6 +227,209 @@ if (!function_exists('element_children')) {
     }
 
     return $children;
+  }
+}
+
+if (!function_exists('variable_get')) {
+  /**
+   * Reads from an in-memory map instead of the variables table (SPEC 73).
+   *
+   * Faithful for the only thing myapi asks of it: a site with no override
+   * answers the default the call site passed, which is exactly what a test
+   * asserting the shipped behaviour wants. A test that needs the overridden
+   * branch sets $GLOBALS['myapi_test_variables'][$name] first and resets the
+   * map in tearDown(), the same way a site administrator would set the
+   * variable and the same way Drupal would then return it.
+   */
+  function variable_get($name, $default = NULL) {
+    return isset($GLOBALS['myapi_test_variables'][$name])
+      ? $GLOBALS['myapi_test_variables'][$name]
+      : $default;
+  }
+}
+
+if (!function_exists('url')) {
+  /**
+   * The root-relative half of Drupal's url() (SPEC 73).
+   *
+   * Two declared divergences, neither reachable from the code under test: path
+   * aliases are not resolved (myapi passes system paths only), and 'absolute'
+   * is ignored (the reset form posts to itself, relatively). What IS faithful
+   * is the query string, which is the part the tests assert: Drupal builds it
+   * with drupal_http_build_query(), whose difference from http_build_query()
+   * is the encoding of the '/' character — no myapi query value contains one.
+   */
+  function url($path = NULL, array $options = []) {
+    $url = '/' . ltrim((string) $path, '/');
+
+    if (!empty($options['query'])) {
+      $url .= '?' . http_build_query($options['query']);
+    }
+
+    return $url;
+  }
+}
+
+/**
+ * The end of the request, as an exception (SPEC 73).
+ *
+ * drupal_exit() does not return, and neither does anything that calls it. The
+ * throw is what reproduces that here: the code after a myapi_error() call
+ * never runs in a test either, exactly as it never runs in production.
+ */
+class MyapiExit extends RuntimeException {
+}
+
+if (!function_exists('drupal_exit')) {
+  function drupal_exit($destination = NULL) {
+    throw new MyapiExit('drupal_exit()');
+  }
+}
+
+if (!function_exists('drupal_add_http_header')) {
+  /**
+   * Records the header instead of sending it.
+   *
+   * Drupal keeps these in a static and flushes them with the response, which
+   * is not observable from a unit test. The recorded map is what lets a test
+   * assert the STATUS CODE of a response — 401 vs 422 vs 429 is half of this
+   * API's contract, and asserting the body alone would miss it entirely.
+   */
+  function drupal_add_http_header($name, $value, $append = FALSE) {
+    $GLOBALS['myapi_test_http_headers'][$name] = $value;
+  }
+}
+
+if (!function_exists('drupal_json_encode')) {
+  /**
+   * Core's own (includes/common.inc), reproduced: json_encode() with the four
+   * JSON_HEX_* flags that escape <, >, ' and & so a JSON response is safe to
+   * embed in HTML.
+   *
+   * Faithful rather than convenient on purpose: the flags change the BYTES of
+   * every response this module sends, and a test asserting a raw body would
+   * silently disagree with production if this used a plain json_encode().
+   */
+  function drupal_json_encode($var) {
+    return json_encode($var, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
+  }
+}
+
+if (!function_exists('ip_address')) {
+  function ip_address() {
+    return isset($GLOBALS['myapi_test_ip']) ? $GLOBALS['myapi_test_ip'] : '203.0.113.7';
+  }
+}
+
+if (!function_exists('flood_is_allowed')) {
+  /**
+   * Answers what the test told it to, and records how it was asked.
+   *
+   * The real one counts rows in the {flood} table, which is not what
+   * myapi_flood_is_allowed() is responsible for. What IS its responsibility is
+   * resolving a limit and a window out of two Drupal variable names and
+   * passing them here in the right order — a threshold and a window swapped,
+   * or a variable name misspelled, produces a silently wrong rate limit and no
+   * error anywhere. Recording the arguments is what makes that assertable.
+   */
+  function flood_is_allowed($name, $threshold, $window = 3600, $identifier = NULL) {
+    $GLOBALS['myapi_test_flood_calls'][] = [
+      'call'       => 'is_allowed',
+      'event'      => $name,
+      'threshold'  => $threshold,
+      'window'     => $window,
+      'identifier' => $identifier,
+    ];
+
+    return isset($GLOBALS['myapi_test_flood_allowed']) ? $GLOBALS['myapi_test_flood_allowed'] : TRUE;
+  }
+}
+
+if (!function_exists('flood_register_event')) {
+  function flood_register_event($name, $window = 3600, $identifier = NULL) {
+    $GLOBALS['myapi_test_flood_calls'][] = [
+      'call'       => 'register',
+      'event'      => $name,
+      'window'     => $window,
+      'identifier' => $identifier,
+    ];
+  }
+}
+
+if (!function_exists('flood_clear_event')) {
+  function flood_clear_event($name, $identifier = NULL) {
+    $GLOBALS['myapi_test_flood_calls'][] = [
+      'call'       => 'clear',
+      'event'      => $name,
+      'identifier' => $identifier,
+    ];
+  }
+}
+
+/**
+ * Runs a responder and returns everything it produced (SPEC 73).
+ *
+ * The single seam between "a function that answers and ends the request" and
+ * an assertion. Every caller of myapi_respond()/myapi_error(), and every
+ * render path of the password/reset page, goes through here.
+ *
+ * The output buffer is closed in a finally block: a callable that throws
+ * something other than MyapiExit — a real bug in the code under test — must
+ * not leave the buffer open and swallow the rest of the suite's output.
+ *
+ * @param callable $callable  The dispatcher, resource function or renderer.
+ *
+ * @return array  'exited'  — whether the request ended (it always should),
+ *                'output'  — the raw printed body,
+ *                'json'    — that body decoded, or NULL when it is not JSON,
+ *                'status'  — the 'Status' header as an int, or NULL,
+ *                'headers' — every header the call set.
+ */
+function myapi_test_capture(callable $callable) {
+  $GLOBALS['myapi_test_http_headers'] = [];
+  $exited = FALSE;
+
+  ob_start();
+  try {
+    $callable();
+  }
+  catch (MyapiExit $e) {
+    $exited = TRUE;
+  }
+  finally {
+    $output = ob_get_clean();
+  }
+
+  $headers = $GLOBALS['myapi_test_http_headers'];
+
+  return [
+    'exited'  => $exited,
+    'output'  => $output,
+    'json'    => json_decode($output, TRUE),
+    'status'  => isset($headers['Status']) ? (int) $headers['Status'] : NULL,
+    'headers' => $headers,
+  ];
+}
+
+if (!function_exists('myapi_user_fetch_profile_fields')) {
+  /**
+   * Returns a caller-provided profile row instead of running the field joins.
+   *
+   * The real function (includes/myapi.user.inc) is four LEFT JOINs over
+   * field_data_field_nombre/apellidos/cedula/telefono; there is no way to
+   * exercise it without a database, and no reason to, since what SPEC 73 tests
+   * is its CONSUMER: myapi_auth_build_user_payload(), the "user" sub-object
+   * that login and refresh both return and must never let drift apart.
+   *
+   * The default is the all-NULL row the real function answers for an account
+   * with no profile values — the shape a test gets when it sets nothing.
+   */
+  function myapi_user_fetch_profile_fields($uid) {
+    $default = ['first_name' => NULL, 'last_name' => NULL, 'dni' => NULL, 'phone' => NULL];
+
+    return isset($GLOBALS['myapi_test_profile_fields'])
+      ? $GLOBALS['myapi_test_profile_fields'] + $default
+      : $default;
   }
 }
 

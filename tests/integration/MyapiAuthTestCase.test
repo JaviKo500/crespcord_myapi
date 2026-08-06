@@ -39,16 +39,40 @@ class MyapiAuthTestCase extends DrupalWebTestCase {
     // module_load_include() in resources/auth.resource.inc.
     module_load_include('inc', 'myapi', 'includes/myapi.token');
 
+    // Guard, and the reason it exists: this method writes the 'mail_system'
+    // variable, and everything below parent::setUp() assumes the sandbox is
+    // active. If parent::setUp() ever fails PART WAY — a module that errors on
+    // install, a sandbox database that is not created, a timeout — the prefix
+    // is not in place and those writes land on the REAL site's variable table.
+    // That is not hypothetical: it happened, and it set the live site's
+    // 'default-system' to TestingMailSystem, which does not send mail at all.
+    // Every email on the site stopped silently until it was found by hand.
+    //
+    // databasePrefix is set by DrupalWebTestCase::setUp() and is always
+    // 'simpletest' + digits inside a sandbox, so an empty or foreign value
+    // means the isolation is not there and this test must stop before it
+    // writes anything.
+    if (empty($this->databasePrefix) || strpos($this->databasePrefix, 'simpletest') !== 0) {
+      throw new Exception('Refusing to run: the SimpleTest sandbox is not active (databasePrefix = ' . var_export($this->databasePrefix, TRUE) . '). Writing variables now would hit the live site.');
+    }
+
     // myapi_enable() (in myapi.install) maps the 'myapi_password_reset' mail
     // key to MyapiHtmlMailSystem, whose mail() really sends the message instead
     // of storing it in SimpleTest's collector — so drupalGetMails() would come
     // back empty and the reset roundtrip could never read the token. Point that
-    // key back at TestingMailSystem for the sandbox only: this rewrites the
-    // sandbox's mail_system variable, never production code. The token survives
+    // key back at TestingMailSystem for the sandbox only. The token survives
     // TestingMailSystem's html_to_text conversion intact (verified: the reset
     // URL is emitted as an unwrapped footnote), so extractResetTokenFromLastMail()
     // still matches it.
-    $mail_system = variable_get('mail_system', array('default-system' => 'TestingMailSystem'));
+    //
+    // The default of this variable_get() is an empty array ON PURPOSE. It used
+    // to be array('default-system' => 'TestingMailSystem'), which meant that on
+    // a site with no 'mail_system' variable this line CREATED one that silences
+    // all outgoing mail. Inside a sandbox the variable is always set already —
+    // core's DrupalWebTestCase::setUp() sets it — so the fallback is dead code
+    // in the only place this may legitimately run, and harmless everywhere it
+    // may not.
+    $mail_system = variable_get('mail_system', array());
     $mail_system['myapi_password_reset'] = 'TestingMailSystem';
     variable_set('mail_system', $mail_system);
 

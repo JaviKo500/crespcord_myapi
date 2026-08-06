@@ -2,7 +2,9 @@
 
 Three independent layers, all covering the 5 JSON endpoints of `/api/v1/auth`
 documented in [`docs/auth.md`](../docs/auth.md). The HTML page
-`GET/POST password/reset` is out of scope (see `specs/21-auth-testing.md`).
+`GET/POST password/reset` was out of scope in `specs/auth/21-auth-testing.md`;
+since SPEC 73 it is unit-tested in full — its four renderers and its three
+request handlers, up to the first `db_select()`.
 
 | Layer | Location | Framework | Runs against |
 |---|---|---|---|
@@ -70,6 +72,92 @@ one rather than omitting them in silence. This file needed **no new stub** in
 `bootstrap.php`: its only Drupal calls are `t()`, `format_date()` and
 `truncate_utf8()`, all already there.
 
+Since SPEC 73 the layer also covers four things that are pure but were never
+reached, three of them shared by every resource rather than by `auth` alone:
+
+- `tests/unit/RequestValidationTest.php` — `includes/myapi.request.inc`: the
+  presence check (`myapi_request_require_fields()`), the presence+type+length
+  check (`myapi_request_require_strings()`), the lax date-range filter
+  (`myapi_valid_iso_date()` / `myapi_parse_date_range_param()`) and the thin
+  readers over `$_SERVER`/`$_POST`. These are the validators the whole API
+  funnels its input through, so a change here changes every endpoint at once.
+  They had gone untested because they reject by calling `myapi_error()`, which
+  never returns — see the stub note below. Two behaviours are **pinned rather
+  than fixed** and say so in their docblocks: length is measured in bytes
+  (`strlen()`, matching the 255-byte column) and is measured *without*
+  trimming, though emptiness is judged *with* it. Where the limit is editorial
+  instead of structural the resources deliberately don't use this helper —
+  `myapi_claim_validate_close_reason()` counts characters (SPEC 70) and
+  `ClaimCloseReasonTest` asserts the opposite outcome for the same input.
+- `tests/unit/I18nTest.php` — `includes/myapi.i18n.inc`. The parity cases are
+  the point: a key present in `es` and missing from `en` doesn't fail, it
+  silently ships the raw key (`reservation_overlap`) to the app's screen. The
+  class reads the key list out of the source of `myapi_t()` by reflection
+  (the catalogue is a local array, so there is no runtime handle) and asserts
+  that both languages carry the same keys, the same `@placeholder` set per
+  key, no duplicates, and no key resolving to empty. `myapi_get_lang()` is
+  tested with `@runInSeparateProcess`, one case per process, because it
+  memoises the resolved language in a static that no test can reset.
+- `tests/unit/AuthUserPayloadTest.php` — `myapi_auth_build_user_payload()`,
+  the `data.user` sub-object login and refresh share so they cannot drift
+  apart. The app picks its screens off `data.user.roles[].uid`, so the int
+  casts and the list (not object) shape of `roles` are the assertions that
+  matter; the payload is compared whole, which pins the key order too.
+- `tests/unit/PasswordResetPageTest.php` — the whole `password/reset` page: the
+  four renderers (`..._html_shell()`, `..._html_message()`, `..._html_form()`,
+  `..._page_script()`) and the three request handlers (`..._page()`,
+  `..._page_get()`, `..._page_post()`). This is the only screen of the project
+  a real user looks at and the only place an attacker-supplied value (the
+  token, straight off the query string) is printed into a document, so the
+  escaping cases — `check_plain()` on the token and the error message,
+  `rawurlencode()` before it on the deep link — are what the class is for, and
+  the handler cases prove that escaping is applied on the real route and not
+  only when a renderer is called by hand.
+- `tests/unit/ResponseEnvelopeTest.php` — `myapi_respond()` and `myapi_error()`
+  themselves. The envelope CLAUDE.md calls "no exceptions" had never been
+  asserted anywhere, because both functions end in `drupal_exit()`. These cases
+  run the REAL helpers and assert the REAL bytes they print — envelope shape
+  and key order, status codes, the optional translated `message`, and the
+  `JSON_HEX_*` escaping `drupal_json_encode()` applies to every response.
+- `tests/unit/FloodTest.php` — `includes/myapi.flood.inc` (SPEC 06), which
+  until now had exactly **one** test in the whole project, over seven
+  counters. What these functions are responsible for is arithmetic over Drupal
+  variables, and the failure mode is silent by construction: a misspelled
+  variable name falls back to the catch-all 10/3600 and a swapped
+  threshold/window still returns a boolean. The class carries the seven
+  documented thresholds transcribed from SPECS 06/07 — a second, independent
+  statement of the numbers — and two cases read the real call sites in
+  `auth.resource.inc` to check that each event uses its own variables and that
+  no counter stopped being consulted.
+- `tests/unit/PingTest.php` — `resources/ping.resource.inc` (SPEC 01), the
+  reference resource every other one is copied from, which had no coverage in
+  any layer.
+- `tests/unit/AuthEndpointGuardsTest.php` — the guards in front of the 5 JSON
+  endpoints: method routing (all POST-only), the flood gate, and the first
+  validation gate of each. **Read the scope carefully**: this covers each
+  endpoint up to its first `db_select()` and no further. Credentials, token
+  lookups, rotation, the email and the password write remain entirely
+  `tests/integration`'s job.
+- `tests/unit/TokenTest.php` grew the three TTL resolvers. Nothing asserted
+  them at any layer before — the integration suite executes them but never
+  reads their value, and `expires_in` is not checked anywhere — so a typo in a
+  variable name would have pinned a TTL to its default for ever.
+
+SPEC 73 also made the one production change this layer has ever caused, and it
+came from a failing test: `myapi_valid_iso_date()` matched `"2026-08-06\n"`,
+because PCRE lets `$` match just before a trailing newline, and returned the
+value **with** the newline still in it. The pattern now carries the `D`
+modifier.
+
+**Run one class in isolation** when you touch this layer —
+`vendor/bin/phpunit --filter FloodTest`. Every class here passes alone as well
+as in the suite, which is what keeps the globals the stubs read
+(`myapi_test_variables`, `myapi_test_flood_*`, `myapi_test_ip`) from turning
+into order-dependent state. Five classes assert `myapi_get_lang() === 'es'` in
+`setUp()` for the same reason: the language is memoised in a static for the
+whole process, so a file that resolved it to `en` first would silently change
+what every later class expects.
+
 **Prerequisites:** PHP 7.4, Composer.
 
 **Run:**
@@ -114,12 +202,42 @@ ellipsis discounts its own character, `$min_wordsafe_length` bounds the search,
 and a string with no boundary in range is cut hard — with one declared
 divergence: core finds the cut with its `PREG_CLASS_UNICODE_WORD_BOUNDARY`
 class and the stub uses `\s`. Every fixture in `ClaimTransactionTitleTest` cuts
-on a plain space, where the two agree. These stubs keep the
+on a plain space, where the two agree. `variable_get()` and `url()` (SPEC 73)
+are the last two of this kind: the reset page reads its deep-link base out of a
+variable and builds its form action with `url()`, and neither has any meaning
+outside a site. `variable_get()` answers the call site's default unless the
+test put a value in `$GLOBALS['myapi_test_variables']` first — the same two
+outcomes a site with and without an override produces. These stubs keep the
 suite's rule intact: still no
 database, still pure logic. Anything that runs `db_select()`, `node_load()` or
 the mail queue stays out of `tests/unit` — that is why
 `myapi_reservation_calendar_rows()` and
 `myapi_reservation_enqueue_admin_mails()` have no unit test.
+
+**The three stubs that opened the biggest door** are `drupal_exit()`,
+`drupal_add_http_header()` and `drupal_json_encode()` (SPEC 73). Everything
+that *answers* in this module — `myapi_respond()`, `myapi_error()`, and through
+them every dispatcher and the whole `password/reset` page — ends by printing a
+body and calling `drupal_exit()`, which is why none of it could be tested here
+before. With that trio stubbed, the body goes to an output buffer, the status
+goes to a recorded header, and "and then the request ends" becomes a thrown
+`MyapiExit`. `myapi_test_capture()` is the single helper that knows this: it
+returns `output` / `json` / `status` / `headers`, and closes the buffer in a
+`finally` so a callable that throws something else — a real bug in the code
+under test — cannot swallow the rest of the suite's output. **Never nest one
+capture inside another**; the inner one consumes the buffer and the outer sees
+an empty string. `ip_address()` and the three Flood API functions are the same
+idea for `myapi.flood.inc`: they record every call so a test can assert the
+threshold, window and identifier it was handed.
+
+Worth stating because it is not free: `myapi_user_fetch_profile_fields()` is
+the one stub here that replaces a **myapi** function rather than a Drupal one
+(it returns a row the test controls instead of running four `LEFT JOIN`s,
+because what SPEC 73 tests is that function's *consumer*). The real definition
+in `includes/myapi.user.inc` is **not** `function_exists()`-guarded, so a
+future test file that `require`s that `.inc` will fatal with *"Cannot
+redeclare"*. That is deliberate, and `bootstrap.php` says so in its `@file`
+block, which is where the fatal points.
 
 ---
 
