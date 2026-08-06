@@ -158,13 +158,20 @@ function myapi_parse_date_range_param() {
 /**
  * Validates a single 'YYYY-MM-DD' date string.
  *
+ * The 'D' modifier is not decorative (SPEC 73): without it PCRE lets '$' match
+ * just before a trailing newline, so "2026-08-06\n" passed the pattern and was
+ * returned WITH the newline still in it — an unvalidated shape reaching the
+ * query the caller builds out of the return value. 'D' anchors '$' at the true
+ * end of the subject, so that value is now rejected like any other malformed
+ * one.
+ *
  * @param mixed $value  Raw query-string value, or NULL when absent.
  *
  * @return string|NULL  The value when it is a real ISO calendar date,
  *                       NULL otherwise.
  */
 function myapi_valid_iso_date($value) {
-  if (!is_string($value) || !preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $value, $m)) {
+  if (!is_string($value) || !preg_match('/^(\d{4})-(\d{2})-(\d{2})$/D', $value, $m)) {
     return NULL;
   }
   if (!checkdate((int) $m[2], (int) $m[3], (int) $m[1])) {
