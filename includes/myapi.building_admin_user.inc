@@ -318,10 +318,27 @@ function myapi_building_admin_user_view_access($account = NULL) {
  *
  * Two guards, in this order:
  * 1. The filter is active. Everybody else leaves before anything is touched.
- * 2. The query really selects from 'users'. The tag does NOT imply it, exactly
- *    like 'node_access' does not imply 'node': without this check the condition
- *    would land on a query with no such column and break unrelated pages with
- *    an SQL error.
+ * 2. The query is really ABOUT users, i.e. 'users' is its BASE table. The tag
+ *    does NOT imply it, exactly like 'node_access' does not imply 'node':
+ *    without this check the condition would land on a query with no such column
+ *    and break unrelated pages with an SQL error.
+ *
+ *    Requiring the BASE table and not merely the presence of 'users' is
+ *    SPEC 72, and it repairs a listing this filter emptied. Views adds the
+ *    access tag of every relationship's base table
+ *    (views_handler_relationship::query()), so /admin/content — whose base
+ *    table is 'node' — carries the 'user_access' tag as soon as it has a
+ *    relationship to the author. This alter then found the joined 'users' alias
+ *    and constrained node.uid, i.e. the AUTHOR of each row, turning the content
+ *    listing into "content written by a resident of my condominiums". Since the
+ *    condominiums, units and areas of the site are authored by an operator who
+ *    is nobody's neighbour, a building admin saw an empty /admin/content for
+ *    EVERY content type. The condominium scoping of that listing is, and always
+ *    was, myapi_building_admin_alter_node_query()'s job.
+ *
+ *    Both legitimate consumers of the tag keep working, because in both 'users'
+ *    IS the base table: the field_requester autocomplete (EntityFieldQuery over
+ *    the user entity) and any Views listing of people, /admin/people included.
  *
  * There is deliberately no third "empty list" guard: the list always carries at
  * least the operator's own uid. See myapi_building_admin_visible_uids().
@@ -341,15 +358,16 @@ function myapi_building_admin_alter_user_query($query) {
     return;
   }
 
-  // Guard 2 — 'users' among the tables. The 'table' key holds a Select object
-  // for a subquery, hence the is_string() before comparing.
-  $users_alias = NULL;
-  foreach ($query->getTables() as $table) {
-    if (isset($table['table']) && is_string($table['table']) && $table['table'] === 'users') {
-      $users_alias = $table['alias'];
-      break;
-    }
-  }
+  // Guard 2 — 'users' is the BASE table, not just one of the joined ones.
+  //
+  // The include is explicit rather than inherited from guard 1 — which does
+  // reach it through myapi_building_admin_user_filter_is_active() — because the
+  // cost of being wrong about that is an undefined function on every listing of
+  // the site, and it is only paid by an operator holding the role. Same
+  // criterion as myapi_building_admin_visible_uids() below.
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+
+  $users_alias = myapi_building_admin_query_base_table_alias($query->getTables(), 'users');
   if ($users_alias === NULL) {
     return;
   }

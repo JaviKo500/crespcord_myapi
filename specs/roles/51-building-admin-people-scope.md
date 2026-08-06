@@ -252,6 +252,14 @@ Es deliberadamente más simple que el alter de nodos, que necesita un `LEFT JOIN
 por tipo: aquí los uids ya vienen resueltos en PHP, así que la consulta alterada
 no crece ni en tablas ni en ramas `OR`.
 
+> **Corregido por SPEC 72.** Ese alias tiene que ser el de la tabla **base** de
+> la consulta, no el de cualquier tabla `users` presente en ella. Views añade la
+> *access query tag* de la tabla base de **cada relación**, así que el listado de
+> contenido de `/admin/content` —tabla base `node`— arrastra la etiqueta
+> `user_access` en cuanto tiene una relación al autor; con la guarda original
+> esta condición aterrizaba sobre `node.uid` y dejaba el listado vacío para todo
+> tipo de contenido. Ver `specs/roles/72-query-base-table-guard.md`.
+
 ---
 
 ## Plan de implementación

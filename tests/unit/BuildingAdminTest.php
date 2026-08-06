@@ -640,4 +640,109 @@ class BuildingAdminTest extends TestCase {
       myapi_building_admin_filter_available_permissions(myapi_building_admin_permissions(FALSE), array())
     );
   }
+
+  /* -------------------------------------------------------------------------
+   * Guard 2 of both query alters —
+   * myapi_building_admin_query_base_table_alias().
+   *
+   * The shape is the one $query->getTables() returns: alias => array with
+   * 'table', 'alias' and 'join type', the base table first and with a NULL
+   * join type, exactly as db_select() registers it in its constructor.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * Builds a getTables() result: the first entry is the base table.
+   *
+   * @param string $base  Base table name.
+   * @param array $joins  Joined tables as alias => table name.
+   */
+  private function tables($base, array $joins = array(), $base_alias = NULL) {
+    $base_alias = $base_alias === NULL ? $base : $base_alias;
+
+    $tables = array(
+      $base_alias => array('join type' => NULL, 'table' => $base, 'alias' => $base_alias),
+    );
+
+    foreach ($joins as $alias => $table) {
+      $tables[$alias] = array('join type' => 'LEFT OUTER', 'table' => $table, 'alias' => $alias);
+    }
+
+    return $tables;
+  }
+
+  /**
+   * The base table is found, under its own alias.
+   */
+  public function testBaseTableAliasIsReturned() {
+    $this->assertSame('node', myapi_building_admin_query_base_table_alias($this->tables('node'), 'node'));
+    $this->assertSame('users', myapi_building_admin_query_base_table_alias($this->tables('users'), 'users'));
+  }
+
+  /**
+   * An alias other than the table name — myapi_claims_list_rows() builds its
+   * query as db_select('node', 'n') — is returned as it is.
+   */
+  public function testBaseTableAliasIsNotAssumedToBeTheTableName() {
+    $tables = $this->tables('node', array('nc' => 'node'), 'n');
+
+    $this->assertSame('n', myapi_building_admin_query_base_table_alias($tables, 'node'));
+  }
+
+  /**
+   * GUARD (SPEC 72): a JOINED table is never mistaken for the base one.
+   *
+   * This is the bug that emptied /admin/content. Views adds the access tag of
+   * every relationship's base table, so the content listing carries the
+   * 'user_access' tag because of its relationship to the author; matching the
+   * joined 'users' alias landed the people filter on the node's uid and hid
+   * every row from a building admin. If this test ever passes an alias back,
+   * that listing is empty again.
+   */
+  public function testJoinedTableIsNeverTakenForTheBaseTable() {
+    $content_listing = $this->tables('node', array(
+      'users_node' => 'users',
+      'taxonomy_index' => 'taxonomy_index',
+    ));
+
+    $this->assertNull(myapi_building_admin_query_base_table_alias($content_listing, 'users'));
+    $this->assertSame('node', myapi_building_admin_query_base_table_alias($content_listing, 'node'));
+  }
+
+  /**
+   * The mirror case: a listing of people that joins content is not narrowed by
+   * the content filter either.
+   */
+  public function testTheMirrorCaseIsGuardedToo() {
+    $people_listing = $this->tables('users', array('node_users' => 'node'));
+
+    $this->assertNull(myapi_building_admin_query_base_table_alias($people_listing, 'node'));
+    $this->assertSame('users', myapi_building_admin_query_base_table_alias($people_listing, 'users'));
+  }
+
+  /**
+   * A base table that is a subquery object fails closed: NULL, so the alter
+   * leaves the query untouched instead of building SQL against an alias whose
+   * columns it knows nothing about.
+   */
+  public function testASubqueryBaseTableFailsClosed() {
+    $tables = array(
+      'subquery' => array('join type' => NULL, 'table' => new stdClass(), 'alias' => 'subquery'),
+    );
+
+    $this->assertNull(myapi_building_admin_query_base_table_alias($tables, 'node'));
+  }
+
+  /**
+   * No tables at all, and a table list carrying only joins, are both NULL and
+   * neither raises a notice.
+   */
+  public function testAnEmptyOrJoinOnlyTableListIsNull() {
+    $this->assertNull(myapi_building_admin_query_base_table_alias(array(), 'node'));
+
+    $joins_only = array(
+      'users_node' => array('join type' => 'INNER', 'table' => 'users', 'alias' => 'users_node'),
+    );
+
+    $this->assertNull(myapi_building_admin_query_base_table_alias($joins_only, 'users'));
+  }
 }

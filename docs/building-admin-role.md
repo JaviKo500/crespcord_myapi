@@ -21,7 +21,7 @@ responses are byte for byte what they were before.
 
 | File | Role |
 |------|------|
-| `includes/myapi.building_admin.inc` | The NODE axis: the four catalogues, the pure decision logic, the bulletin validation and the node query alter. Single source of truth for what content the role reaches. |
+| `includes/myapi.building_admin.inc` | The NODE axis: the four catalogues, the pure decision logic, the bulletin validation and the node query alter. Single source of truth for what content the role reaches — and for `myapi_building_admin_query_base_table_alias()`, the guard both alters share (SPEC 72). |
 | `includes/myapi.building_admin_user.inc` | The USER axis (SPEC 51): who the role may see. The visible-uid set, the pure visibility rule, the `user/%user` access callback, the `user_access` query alter and the reservation-form validation. |
 | `myapi.module` | Glue only: `hook_node_access()`, `hook_query_node_access_alter()`, `hook_menu_alter()`, `hook_query_user_access_alter()`, the `boletin` and `reservation` branches of `hook_node_validate()`, and the role added to `myapi_calendar_admin_roles()`. |
 | `myapi.install` | `_myapi_building_admin_install()` — the role, the user field and the permissions — called from `hook_install()` and from `myapi_update_7012()` / `7013` / `7014`. Plus `hook_requirements('runtime')`, which warns when the role has lost `access user profiles`. |
@@ -327,10 +327,14 @@ no `recibo` and no `gastos` at `/admin/content`, not even of their own
 condominium, because they do not manage those.
 
 Three guards run before anything is altered: the user holds the role; the query
-really selects from the `node` table (the tag does **not** imply it — other
-modules apply it to taxonomy, search or other entities, and altering those
-would break unrelated pages with an SQL error); and the user has at least one
-condominium assigned.
+is really **about** nodes, i.e. `node` is its **base table** (the tag does
+**not** imply it — other modules apply it to taxonomy, search or other
+entities, and altering those would break unrelated pages with an SQL error);
+and the user has at least one condominium assigned.
+
+**Base table, not merely present** — see *Why the tag is not enough* below. Both
+alters ask the same question through the same helper,
+`myapi_building_admin_query_base_table_alias()`.
 
 No query of this module carries the `node_access` tag, so the `api/v1/...`
 endpoints are untouched.
@@ -405,10 +409,8 @@ resolved in PHP.
 >   tag*, so a back-office listing of people is scoped for free.
 
 The two guards, in order: the filter is active for this operator (everybody else
-leaves on the first line, at the cost of one role lookup), and the query really
-selects from `users` — the tag does **not** imply it, exactly as `node_access`
-does not imply `node`, and without the check the condition would land on a query
-with no such column and break unrelated pages with an SQL error.
+leaves on the first line, at the cost of one role lookup), and the query is
+really **about** users — `users` is its **base table**. See the next section.
 
 There is deliberately no third "empty list" guard, because the list is never
 empty.
@@ -420,6 +422,61 @@ endpoints are untouched — the same as on the node side.
 > ticked** lists every user of the site, exactly like the `/admin/content`
 > case above and with the same fix: untick the checkbox in the view. Do not add
 > code to compensate.
+
+### Why the tag is not enough: base table, not merely present (SPEC 72)
+
+> **This section exists because of a bug that emptied `/admin/content` for the
+> role, in every content type at once, while every other part of it worked.**
+
+An access query tag says **what the query is about**, not which tables it
+contains — and the two only coincide for the **base** table.
+
+Views adds the access tag of **every relationship's** base table, not just the
+view's own:
+
+```php
+// views_handler_relationship::query()
+// Add access tags if the base table provide it.
+if (empty($this->query->options['disable_sql_rewrite']) && isset($table_data['table']['base']['access query tag'])) {
+  $this->query->add_tag($table_data['table']['base']['access query tag']);
+}
+```
+
+The `/admin/content` view has a `Contenido: Autor` relationship so it can show
+and filter by the author. `users` declares `'access query tag' => 'user_access'`,
+so that **content** listing — base table `node` — also carries the `user_access`
+tag. The people filter then found the joined `users` alias and constrained
+`node.uid`, i.e. the **author** of each row, turning the listing into *"content
+written by a resident of my condominiums"*. Everything on this site is authored
+by an operator who lives in no unit, so the answer was zero rows, for every type,
+with no error on screen — `views_plugin_query_default::execute()` catches the
+query in a `try/catch` and an empty view is indistinguishable from "no content".
+
+Both alters now resolve their table with the shared pure helper
+`myapi_building_admin_query_base_table_alias()`, which returns the alias of the
+**base** table — the only entry of `$query->getTables()` with no `join type`,
+because `db_select()` registers it with `addJoin(NULL, ...)` before any join can
+exist — and `NULL` for anything else, including a subquery base, where `NULL`
+means *leave the query alone*.
+
+Nothing legitimate lost scope: `users` **is** the base table of the
+`field_requester` autocomplete (`EntityFieldQuery` over the user entity) and of
+any Views listing of people, and `node` is the base table of the content view,
+of the `entityreference` condominium selectors and of `myapi_claims_list_rows()`.
+
+**The accepted consequence, stated out loud:** a query about something else that
+merely *joins* the table is no longer narrowed — a Views listing of people with
+a relationship to the content they authored would show node titles unscoped by
+condominium. No view on this site has that shape, both direct-URL halves are
+untouched, and the rule lives in one function, so tightening it later is a
+one-function edit. The alternative was measured in the field: landing a filter on
+a column that means something else took the whole back office down.
+
+> **Symptom to recognise:** a listing that comes back **completely** empty for
+> this role — not short, empty, and for every content type — while
+> `/node/N` answers 200 and the `entityreference` selectors offer the right
+> condominiums, is a filter landing on the wrong column, not a scoping rule
+> doing its job. A scoping rule removes *some* rows.
 
 ### The one exception: `administer users`
 

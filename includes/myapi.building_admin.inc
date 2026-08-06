@@ -724,6 +724,61 @@ function myapi_building_admin_filter_available_permissions(array $wanted, array 
   return $granted;
 }
 
+/**
+ * Returns the alias of a query's BASE table, when it is the one asked for.
+ *
+ * Shared by the two query alters of this role — the node one below and the
+ * user one in includes/myapi.building_admin_user.inc — and the reason both
+ * exist in this shape is a bug that emptied /admin/content for the role
+ * (SPEC 72).
+ *
+ * An access tag says "this query is ABOUT nodes" or "about users". It does not
+ * say the table is merely present, and the two are not the same thing: Views
+ * adds the access tag of EVERY relationship's base table
+ * (views_handler_relationship::query()), so the content listing at
+ * /admin/content — base table 'node' — also carries the 'user_access' tag the
+ * moment it grows a relationship to the author. Matching any table named
+ * 'users' there landed the people filter on node.uid, which turned the listing
+ * into "content written by a resident of my condominiums" and showed nothing at
+ * all. See docs/building-admin-role.md.
+ *
+ * The base table is the only entry with no 'join type': db_select() registers
+ * it with addJoin(NULL, ...) in its constructor, before any join can exist, and
+ * PHP preserves that insertion order. That also makes the choice explicit where
+ * a query joins the same table twice — myapi_claims_list_rows() joins 'node' a
+ * second time as 'nc' to read the condominium title — instead of leaving it to
+ * whichever entry came first.
+ *
+ * Pure: it takes the array $query->getTables() returns and nothing else.
+ *
+ * @param array $tables
+ *   The result of $query->getTables(): alias => array with 'table', 'alias' and
+ *   'join type' keys. The 'table' key holds a Select object for a subquery,
+ *   hence the is_string() before comparing.
+ * @param string $table_name
+ *   The table the caller is about, e.g. 'node' or 'users'.
+ *
+ * @return string|null
+ *   The alias of the base table when it is $table_name, NULL otherwise —
+ *   including when the base table is a subquery, which fails closed by leaving
+ *   the query untouched.
+ */
+function myapi_building_admin_query_base_table_alias(array $tables, $table_name) {
+  foreach ($tables as $table) {
+    if (!is_array($table) || !empty($table['join type'])) {
+      continue;
+    }
+
+    // The first join-less entry IS the base table; there is never a second one,
+    // so a mismatch here ends the search rather than continuing it.
+    return (isset($table['table']) && is_string($table['table']) && $table['table'] === $table_name && isset($table['alias']))
+      ? $table['alias']
+      : NULL;
+  }
+
+  return NULL;
+}
+
 /* ---------------------------------------------------------------------------
  * Drupal-facing helpers.
  *
@@ -1044,10 +1099,20 @@ function myapi_building_admin_join_field($query, $field, $left_expression, array
  * Three guards run before anything is touched, in this order:
  * 1. The current user holds the role. Everyone else leaves immediately, so the
  *    cost for the rest of the site is one function call.
- * 2. The query really selects from 'node'. The tag does NOT imply it: other
- *    modules apply it to taxonomy, search or non-node entity queries. Without
- *    this check the JOIN and the conditions would land on a query with no such
- *    column and break unrelated pages with an SQL error.
+ * 2. The query is really ABOUT nodes, i.e. 'node' is its BASE table. The tag
+ *    does NOT imply it: other modules apply it to taxonomy, search or non-node
+ *    entity queries. Without this check the JOIN and the conditions would land
+ *    on a query with no such column and break unrelated pages with an SQL
+ *    error.
+ *
+ *    The consequence of asking for the BASE table (SPEC 72, the mirror of the
+ *    repair on the people side) is deliberate and worth stating: a query about
+ *    something else that merely JOINS 'node' — a Views listing of people with a
+ *    relationship to the content they authored would be one — is left alone,
+ *    where before its joined node table was narrowed. That is the price of not
+ *    landing this filter on a column that means something else, which is
+ *    exactly what emptied /admin/content. The direct-URL half,
+ *    myapi_node_access(), is unaffected and still answers 403 per node.
  * 3. The user has at least one condominium assigned. With none, '1 = 0' ends
  *    it: the role sees nothing, which is the documented meaning of an empty
  *    assignment.
@@ -1084,15 +1149,10 @@ function myapi_building_admin_alter_node_query($query) {
     return;
   }
 
-  // Guard 2 — 'node' among the tables. The 'table' key holds a Select object
-  // for a subquery, hence the is_string() before comparing.
-  $node_alias = NULL;
-  foreach ($query->getTables() as $table) {
-    if (isset($table['table']) && is_string($table['table']) && $table['table'] === 'node') {
-      $node_alias = $table['alias'];
-      break;
-    }
-  }
+  // Guard 2 — 'node' is the BASE table, not just one of the joined ones. Same
+  // criterion as the people filter, for the same reason (SPEC 72); see
+  // myapi_building_admin_query_base_table_alias().
+  $node_alias = myapi_building_admin_query_base_table_alias($query->getTables(), 'node');
   if ($node_alias === NULL) {
     return;
   }
