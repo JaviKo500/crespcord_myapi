@@ -973,6 +973,18 @@ function myapi_claim_transaction_create_initial($node) {
  * (includes/myapi.building_admin.inc, SPEC 49) are reused as-is — same
  * reasoning as everywhere else in this spec.
  *
+ * SPEC 71. Before deciding anything, the claim's PREVIOUS status is stashed on
+ * the transaction as a transient property. This function is the last place in
+ * the request where that value still exists — right after it, either the claim
+ * has been re-saved with the new one or it already carried it — and
+ * myapi_claim_notify_transaction() runs immediately afterwards
+ * (myapi.module), on this very same object. Without the stash the notifier
+ * cannot tell a real status change from a transaction that only adds a
+ * comment, and titles every one of them "Tu reclamo pasó a X".
+ *
+ * A property and not a field, same mechanism as the two flags of SPEC 68: it
+ * lives only for this save and is never persisted.
+ *
  * @param object $node
  *   The just-saved 'claim_transaction' node.
  */
@@ -988,6 +1000,10 @@ function myapi_claim_transaction_sync_claim_status($node) {
 
   $transaction_status = myapi_building_admin_field_value($node, 'field_status');
   $claim_status = myapi_building_admin_field_value($claim, 'field_status');
+
+  // SPEC 71. NULL is a legitimate value here (a claim with no field_status), so
+  // the notifier tests the property with property_exists() and not isset().
+  $node->myapi_claim_previous_status = $claim_status;
 
   if ($transaction_status === $claim_status) {
     return;

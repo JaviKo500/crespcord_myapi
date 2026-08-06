@@ -2,6 +2,7 @@
 
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/../../includes/myapi.building_admin.inc';
 require_once __DIR__ . '/../../includes/myapi.claim_notification.inc';
 
 /**
@@ -44,6 +45,24 @@ class ClaimNotificationTest extends TestCase {
    */
   private function transactionDate() {
     return mktime(9, 30, 0, 8, 5, 2026);
+  }
+
+  /**
+   * 05/08/2026 18:00 — a 'now' on the SAME day as transactionDate(), i.e. the
+   * ordinary case: the operator writes the transaction and the resident is
+   * notified minutes later. SPEC 71 drops the date line here.
+   */
+  private function sameDay() {
+    return mktime(18, 0, 0, 8, 5, 2026);
+  }
+
+  /**
+   * 07/08/2026 10:00 — a 'now' two days AFTER transactionDate(), i.e. the
+   * backdated case: the operator registers today a visit made on the 5th. The
+   * date line survives, because no surface can show that one.
+   */
+  private function laterDay() {
+    return mktime(10, 0, 0, 8, 7, 2026);
   }
 
   /* -------------------------------------------------------------------------
@@ -217,12 +236,45 @@ class ClaimNotificationTest extends TestCase {
   public function testTransactionTitleCarriesTheStatus() {
     $this->assertSame(
       'Tu reclamo pasó a "En proceso"',
-      myapi_claim_transaction_push_title('claim', myapi_claim_status_label('in_progress'))
+      myapi_claim_transaction_push_title('claim', myapi_claim_status_label('in_progress'), TRUE, TRUE)
     );
 
     $this->assertSame(
       'Tu requerimiento pasó a "Resuelto"',
-      myapi_claim_transaction_push_title('requirement', myapi_claim_status_label('resolved'))
+      myapi_claim_transaction_push_title('requirement', myapi_claim_status_label('resolved'), TRUE, FALSE)
+    );
+  }
+
+  /**
+   * SPEC 71, the bug this spec exists for: a follow-up transaction on a claim
+   * that is ALREADY 'in_progress' does not move it anywhere, so it must not be
+   * titled "Tu reclamo pasó a …". Two consecutive follow-ups used to arrive as
+   * two byte-identical headlines and the resident could not tell them apart —
+   * nor tell either of them from a duplicate — from the lock screen.
+   */
+  public function testTransactionTitleDoesNotClaimATransitionThatDidNotHappen() {
+    $label = myapi_claim_status_label('in_progress');
+
+    $this->assertSame(
+      'Nueva respuesta en tu reclamo',
+      myapi_claim_transaction_push_title('claim', $label, FALSE, TRUE)
+    );
+
+    $this->assertSame(
+      'Nueva respuesta en tu requerimiento',
+      myapi_claim_transaction_push_title('requirement', $label, FALSE, TRUE)
+    );
+  }
+
+  /**
+   * No transition and nothing said either: there is no "respuesta" to announce,
+   * so the title falls back to the generic event. The status is deliberately
+   * NOT quoted — it is the same one the resident was already told about.
+   */
+  public function testTransactionTitleWithoutTransitionNorCommentIsGeneric() {
+    $this->assertSame(
+      'Novedad en tu reclamo',
+      myapi_claim_transaction_push_title('claim', myapi_claim_status_label('in_progress'), FALSE, FALSE)
     );
   }
 
@@ -242,27 +294,75 @@ class ClaimNotificationTest extends TestCase {
     );
   }
 
-  public function testTransactionBodyIsSubjectCommentAndDate() {
+  /**
+   * The pre-SPEC-71 signature still produces the pre-SPEC-71 text: a caller
+   * that cannot tell whether the status moved keeps the wording that shipped,
+   * which is the conservative default documented on the function.
+   */
+  public function testTransactionTitleDefaultsToTheTransitionWording() {
     $this->assertSame(
-      "Fuga de agua en el pasillo\nSe asignó un técnico para revisar la tubería del tercer piso.\n05/08/2026 09:30",
+      'Tu reclamo pasó a "En proceso"',
+      myapi_claim_transaction_push_title('claim', myapi_claim_status_label('in_progress'))
+    );
+  }
+
+  /**
+   * SPEC 71: for an event of the day the date line is gone. The push banner is
+   * already stamped "ahora" by the OS and the inbox renders `created`, so the
+   * line was repeating what the reader had in front of them — and displacing
+   * the comment, which is the only part that says what happened.
+   */
+  public function testTransactionBodyOfTodayIsSubjectAndComment() {
+    $this->assertSame(
+      "Fuga de agua en el pasillo\nSe asignó un técnico para revisar la tubería del tercer piso.",
       myapi_claim_transaction_push_body(
         'Fuga de agua en el pasillo',
         'Se asignó un técnico para revisar la tubería del tercer piso.',
-        $this->transactionDate()
+        $this->transactionDate(),
+        $this->sameDay()
+      )
+    );
+  }
+
+  /**
+   * A backdated field_status_date — the operator registering today a visit made
+   * on the 5th — keeps its line: that date is a fact neither the banner nor the
+   * inbox can show.
+   */
+  public function testTransactionBodyOfAnotherDayKeepsTheDate() {
+    $this->assertSame(
+      "Fuga de agua en el pasillo\nSe asignó un técnico.\n05/08/2026 09:30",
+      myapi_claim_transaction_push_body(
+        'Fuga de agua en el pasillo',
+        'Se asignó un técnico.',
+        $this->transactionDate(),
+        $this->laterDay()
       )
     );
   }
 
   /**
    * field_comment is optional on a transaction saved from the native node form.
-   * Its line disappears and the body stays at two, with no blank line dangling
-   * in the middle.
+   * Its line disappears and, for an event of the day, the body is the subject
+   * alone — no blank line, no dangling date.
    */
-  public function testTransactionBodyWithoutCommentIsTwoLines() {
-    $body = myapi_claim_transaction_push_body('Fuga de agua en el pasillo', '   ', $this->transactionDate());
+  public function testTransactionBodyWithoutCommentIsTheSubjectAlone() {
+    $this->assertSame(
+      'Fuga de agua en el pasillo',
+      myapi_claim_transaction_push_body('Fuga de agua en el pasillo', '   ', $this->transactionDate(), $this->sameDay())
+    );
+  }
 
-    $this->assertSame("Fuga de agua en el pasillo\n05/08/2026 09:30", $body);
-    $this->assertSame(2, substr_count($body, "\n") + 1);
+  /**
+   * Both lines gone at once — corrupt subject AND no comment — would leave an
+   * empty push body, which is worse than a redundant one. The date comes back
+   * for that case and only for it.
+   */
+  public function testTransactionBodyNeverComesBackEmpty() {
+    $this->assertSame(
+      '05/08/2026 09:30',
+      myapi_claim_transaction_push_body('', NULL, $this->transactionDate(), $this->sameDay())
+    );
   }
 
   /**
@@ -274,7 +374,8 @@ class ClaimNotificationTest extends TestCase {
     $body = myapi_claim_transaction_push_body(
       trim(str_repeat('asunto ', 20)),
       trim(str_repeat('comentario ', 30)),
-      $this->transactionDate()
+      $this->transactionDate(),
+      $this->laterDay()
     );
 
     $lines = explode("\n", $body);
@@ -304,33 +405,69 @@ class ClaimNotificationTest extends TestCase {
   }
 
   /**
-   * The neighbour's status travels in the BODY, because their title has to
-   * spend itself on saying the claim is not theirs.
+   * SPEC 71, the neighbour's half of the same fix: a follow-up that moves
+   * nothing announces itself as the comment it is. Their title never carried
+   * the status, so this is the only word that changes.
    */
-  public function testNeighbourTransactionBodyCarriesStatusAndDateTogether() {
+  public function testNeighbourTransactionTitleSaysWhenItIsOnlyAComment() {
     $this->assertSame(
-      "Fuga de agua en el pasillo\nEstado: En proceso · 05/08/2026 09:30\nSe asignó un técnico para revisar la tubería del tercer piso.",
+      'Nueva respuesta en un reclamo de tu condominio',
+      myapi_claim_transaction_neighbour_push_title('claim', FALSE, TRUE)
+    );
+
+    $this->assertSame(
+      'Novedad en un reclamo de tu condominio',
+      myapi_claim_transaction_neighbour_push_title('claim', FALSE, FALSE)
+    );
+  }
+
+  /**
+   * The neighbour's status travels in the BODY, because their title has to
+   * spend itself on saying the claim is not theirs. For an event of the day the
+   * line is the status alone (SPEC 71).
+   */
+  public function testNeighbourTransactionBodyCarriesTheStatusWithoutTheDate() {
+    $this->assertSame(
+      "Fuga de agua en el pasillo\nEstado: En proceso\nSe asignó un técnico para revisar la tubería del tercer piso.",
       myapi_claim_transaction_neighbour_push_body(
         'Fuga de agua en el pasillo',
         myapi_claim_status_label('in_progress'),
         'Se asignó un técnico para revisar la tubería del tercer piso.',
-        $this->transactionDate()
+        $this->transactionDate(),
+        $this->sameDay()
+      )
+    );
+  }
+
+  /**
+   * A backdated event keeps status and date together on the one line, which is
+   * the shape SPEC 68 defined and SPEC 71 narrowed to this case.
+   */
+  public function testNeighbourTransactionBodyOfAnotherDayJoinsStatusAndDate() {
+    $this->assertSame(
+      "Fuga de agua en el pasillo\nEstado: En proceso · 05/08/2026 09:30\nSe asignó un técnico.",
+      myapi_claim_transaction_neighbour_push_body(
+        'Fuga de agua en el pasillo',
+        myapi_claim_status_label('in_progress'),
+        'Se asignó un técnico.',
+        $this->transactionDate(),
+        $this->laterDay()
       )
     );
   }
 
   /**
    * With no resolvable status the 'Estado: … · ' prefix disappears and the line
-   * is left as the bare date. Dropping the whole line would take the only
-   * timestamp of the notification with it; what the spec asks for is that no
-   * line starts with 'Estado:' when there is no label.
+   * is left as the bare date, when there is a date to print at all: no line may
+   * start with 'Estado:' without a label.
    */
-  public function testNeighbourTransactionBodyWithoutStatusKeepsTheDate() {
+  public function testNeighbourTransactionBodyWithoutStatusKeepsABackdatedDate() {
     $body = myapi_claim_transaction_neighbour_push_body(
       'Fuga de agua en el pasillo',
       NULL,
       'Se asignó un técnico.',
-      $this->transactionDate()
+      $this->transactionDate(),
+      $this->laterDay()
     );
 
     $this->assertSame(
@@ -341,14 +478,90 @@ class ClaimNotificationTest extends TestCase {
   }
 
   /**
-   * Both optional lines gone at once: the body still reads correctly, with no
-   * dangling separator and no blank line.
+   * No status AND an event of the day leaves nothing for the middle line to
+   * say, so the line goes entirely: an empty 'Estado:' or a redundant date read
+   * worse than two clean lines.
    */
-  public function testNeighbourTransactionBodyWithoutStatusNorCommentIsTwoLines() {
+  public function testNeighbourTransactionBodyDropsAnEmptyMiddleLine() {
     $this->assertSame(
-      "Fuga de agua en el pasillo\n05/08/2026 09:30",
-      myapi_claim_transaction_neighbour_push_body('Fuga de agua en el pasillo', NULL, NULL, $this->transactionDate())
+      "Fuga de agua en el pasillo\nSe asignó un técnico.",
+      myapi_claim_transaction_neighbour_push_body(
+        'Fuga de agua en el pasillo',
+        NULL,
+        'Se asignó un técnico.',
+        $this->transactionDate(),
+        $this->sameDay()
+      )
     );
+  }
+
+  /**
+   * Every optional line gone at once still produces a body, for the same reason
+   * the requester's does: an empty push is worse than a redundant date.
+   */
+  public function testNeighbourTransactionBodyNeverComesBackEmpty() {
+    $this->assertSame(
+      '05/08/2026 09:30',
+      myapi_claim_transaction_neighbour_push_body('', NULL, NULL, $this->transactionDate(), $this->sameDay())
+    );
+  }
+
+  /* -------------------------------------------------------------------------
+   * The status-change detector (SPEC 71).
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * Builds a 'claim_transaction' node carrying a status and, optionally, the
+   * transient property myapi_claim_transaction_sync_claim_status() stashes.
+   */
+  private function transactionNode($status, $previous = NULL, $stash = TRUE) {
+    $node = new stdClass();
+    // The stored shape, langcode => delta => item, with the literal 'und' the
+    // rest of the suite uses: LANGUAGE_NONE is a Drupal constant and tests/unit
+    // runs outside Drupal.
+    $node->field_status = array('und' => array(0 => array('value' => $status)));
+    if ($stash) {
+      $node->myapi_claim_previous_status = $previous;
+    }
+
+    return $node;
+  }
+
+  public function testChangedStatusComparesAgainstTheStash() {
+    $this->assertTrue(myapi_claim_transaction_changed_status(
+      $this->transactionNode('in_progress', 'received')
+    ));
+
+    $this->assertFalse(myapi_claim_transaction_changed_status(
+      $this->transactionNode('in_progress', 'in_progress')
+    ));
+  }
+
+  /**
+   * A claim with no field_status stashes NULL, which is a legitimate previous
+   * value and not an absence — hence property_exists() and not isset(). The
+   * first transaction of such a claim DID move it somewhere.
+   */
+  public function testChangedStatusTreatsAStashedNullAsAValue() {
+    $this->assertTrue(myapi_claim_transaction_changed_status(
+      $this->transactionNode('received', NULL)
+    ));
+
+    $this->assertFalse(myapi_claim_transaction_changed_status(
+      $this->transactionNode(NULL, NULL)
+    ));
+  }
+
+  /**
+   * No stash at all — a path that saved a transaction without going through the
+   * sync — answers TRUE, the conservative default: claiming the status did not
+   * move would be inventing a fact, while "pasó a X" is at worst the wording
+   * that shipped before this spec.
+   */
+  public function testChangedStatusWithoutTheStashDefaultsToTrue() {
+    $this->assertTrue(myapi_claim_transaction_changed_status(
+      $this->transactionNode('in_progress', NULL, FALSE)
+    ));
   }
 
   /* -------------------------------------------------------------------------
@@ -363,13 +576,36 @@ class ClaimNotificationTest extends TestCase {
     $texts = array(
       myapi_claim_push_body('Fuga', $this->receptionDate()),
       myapi_claim_published_push_body('Fuga', $this->receptionDate()),
-      myapi_claim_transaction_push_body('Fuga', 'Comentario', $this->transactionDate()),
-      myapi_claim_transaction_neighbour_push_body('Fuga', 'En proceso', 'Comentario', $this->transactionDate()),
+      // Backdated, so the two transaction bodies still carry their date line
+      // and there is something to assert on.
+      myapi_claim_transaction_push_body('Fuga', 'Comentario', $this->transactionDate(), $this->laterDay()),
+      myapi_claim_transaction_neighbour_push_body('Fuga', 'En proceso', 'Comentario', $this->transactionDate(), $this->laterDay()),
     );
 
     foreach ($texts as $text) {
       $this->assertDoesNotMatchRegularExpression('/\d{4}-\d{2}-\d{2}/', $text);
       $this->assertMatchesRegularExpression('#\d{2}/\d{2}/\d{4} \d{2}:\d{2}#', $text);
+    }
+  }
+
+  /**
+   * SPEC 71. The same person is the requester of one claim and the neighbour of
+   * another, so both bodies land in the same notification tray — as the report
+   * that opened this spec showed. The comment must sit in the SAME place in
+   * both: last. Before this spec the neighbour's body put it third and the
+   * requester's second, which read as two unrelated formats.
+   */
+  public function testBothTransactionBodiesEndWithTheComment() {
+    $comment = 'Se asignó un técnico.';
+
+    $requester = myapi_claim_transaction_push_body('Fuga', $comment, $this->transactionDate(), $this->sameDay());
+    $neighbour = myapi_claim_transaction_neighbour_push_body('Fuga', 'En proceso', $comment, $this->transactionDate(), $this->sameDay());
+
+    foreach (array($requester, $neighbour) as $body) {
+      $lines = explode("\n", $body);
+
+      $this->assertSame('Fuga', $lines[0]);
+      $this->assertSame($comment, end($lines));
     }
   }
 
@@ -385,7 +621,10 @@ class ClaimNotificationTest extends TestCase {
       trim(str_repeat('asunto ', 20)),
       'En proceso',
       trim(str_repeat('comentario ', 30)),
-      $this->transactionDate()
+      $this->transactionDate(),
+      // The longest shape this builder can produce is the backdated one, where
+      // the middle line carries both the status and the date.
+      $this->laterDay()
     );
 
     $lines = explode("\n", $body);

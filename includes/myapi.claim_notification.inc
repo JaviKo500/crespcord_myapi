@@ -37,6 +37,12 @@
  * only the API-born half would leave two notifications of the same claim in two
  * different languages. Same criterion as SPEC 27/28/30/48.
  *
+ * SPEC 71 rewrote the four transaction texts without touching a trigger, an
+ * audience or an email: a transaction that does not move the status no longer
+ * claims one, the date line only survives when the event is not of the day, and
+ * the two bodies end with the operator's comment so the person who is requester
+ * of one claim and neighbour of another reads the same shape twice.
+ *
  * Everything here is best-effort: no branch throws, so a failure to notify can
  * never break a node save or an API response.
  */
@@ -446,6 +452,34 @@ function myapi_claim_date_label($timestamp) {
 }
 
 /**
+ * Whether an event falls on the same calendar day it is being notified on
+ * (SPEC 71).
+ *
+ * What decides whether the two transaction bodies spend one of their three
+ * lines on a date. A push banner is already stamped by the OS with "ahora" /
+ * "hace 2 min", and the inbox renders myapi_notifications.created, so for an
+ * event that just happened the printed date says nothing the reader is not
+ * looking at — while costing the line the operator's comment needs.
+ *
+ * field_status_date is typed by the operator and CAN be backdated: registering
+ * today a visit made last Friday is a normal back-office move. That date is a
+ * fact neither surface can show, so it stays.
+ *
+ * The comparison goes through format_date() and not through PHP's date(): the
+ * timestamp must be read in the site's timezone, the same one that formats the
+ * label two lines below, or an event at 23:50 would change day halfway through
+ * the body.
+ *
+ * @param int $timestamp  Instant of the event.
+ * @param int $now        Instant the notification is produced.
+ *
+ * @return bool
+ */
+function myapi_claim_date_is_today($timestamp, $now) {
+  return format_date($timestamp, 'custom', 'Ymd') === format_date($now, 'custom', 'Ymd');
+}
+
+/**
  * Push + inbox title of the creation event, addressed to the requester.
  *
  * The title carries the EVENT, not the subject: the three events of one claim
@@ -540,19 +574,39 @@ function myapi_claim_published_push_body($subject, $timestamp) {
  * Push + inbox title of a transaction, addressed to the requester.
  *
  *   Tu reclamo pasó a "En proceso"
+ *   Nueva respuesta en tu reclamo
+ *   Novedad en tu reclamo
  *
  * The status goes in the TITLE here because it is the whole point of the event
  * and the only thing read on a locked screen. The neighbour's title cannot
  * spend itself on it — it has to say first that the claim is not theirs — so
  * there the status travels in the body.
  *
- * @param string|null $claim_type    field_claim_type, as stored.
- * @param string|null $status_label  Resolved status label, or NULL.
+ * SPEC 71 adds the second branch. A transaction does NOT have to move the
+ * status: an operator recording a follow-up on a claim that is already
+ * 'in_progress' produces one whose status equals the claim's. Until now every
+ * one of them was titled "Tu reclamo pasó a 'En proceso'", so two consecutive
+ * follow-ups reached the resident as two identical headlines and there was no
+ * way, from the lock screen, to tell a real transition from a comment — or from
+ * a duplicate. The claim only "pasa a" a status the one time it actually does.
+ *
+ * @param string|null $claim_type      field_claim_type, as stored.
+ * @param string|null $status_label    Resolved status label, or NULL.
+ * @param bool        $status_changed  Whether this transaction moved the claim's
+ *   status. Defaults to TRUE, which is the pre-SPEC-71 wording: a caller that
+ *   cannot tell keeps the behaviour it had.
+ * @param bool        $has_comment     Whether the transaction carries a comment.
  *
  * @return string  With no resolvable status: 'Novedad en tu reclamo'.
  */
-function myapi_claim_transaction_push_title($claim_type, $status_label) {
+function myapi_claim_transaction_push_title($claim_type, $status_label, $status_changed = TRUE, $has_comment = FALSE) {
   $noun = myapi_claim_type_noun($claim_type);
+
+  if (!$status_changed) {
+    return $has_comment
+      ? t('Nueva respuesta en tu @noun', array('@noun' => $noun))
+      : t('Novedad en tu @noun', array('@noun' => $noun));
+  }
 
   if ($status_label === NULL || $status_label === '') {
     return t('Novedad en tu @noun', array('@noun' => $noun));
@@ -566,19 +620,29 @@ function myapi_claim_transaction_push_title($claim_type, $status_label) {
  *
  *   Fuga de agua en el pasillo
  *   Se asignó un técnico para revisar la tubería del tercer piso.
- *   05/08/2026 09:30
  *
- * An empty comment drops its line and the body stays at two, with no blank line
+ * An empty comment drops its line and the body stays at one, with no blank line
  * dangling in the middle. The email carries the comment in full; the cut to 120
  * only exists so the 200-character push limit can never reach the first line.
+ *
+ * SPEC 71 drops the date line for an event of the day, which is the overwhelming
+ * majority: both surfaces stamp their own time (the push banner says "ahora",
+ * the inbox renders `created`), so the line was repeating what the reader had in
+ * front of them while displacing the comment — the only part that says what
+ * actually happened. A backdated field_status_date still prints, because that
+ * one is a fact neither surface can show. See myapi_claim_date_is_today().
+ *
+ * When everything else is empty the date comes back regardless: an empty push
+ * body is worse than a redundant one.
  *
  * @param string|null $subject    node.title of the claim.
  * @param string|null $comment    field_comment of the transaction.
  * @param int         $timestamp  Timestamp of field_status_date.
+ * @param int         $now        Instant the notification is produced.
  *
  * @return string
  */
-function myapi_claim_transaction_push_body($subject, $comment, $timestamp) {
+function myapi_claim_transaction_push_body($subject, $comment, $timestamp, $now) {
   $lines = array();
 
   $subject = myapi_claim_excerpt($subject, MYAPI_CLAIM_SUBJECT_EXCERPT);
@@ -591,7 +655,9 @@ function myapi_claim_transaction_push_body($subject, $comment, $timestamp) {
     $lines[] = $comment;
   }
 
-  $lines[] = myapi_claim_date_label($timestamp);
+  if (!myapi_claim_date_is_today($timestamp, $now) || empty($lines)) {
+    $lines[] = myapi_claim_date_label($timestamp);
+  }
 
   return implode("\n", $lines);
 }
@@ -599,25 +665,43 @@ function myapi_claim_transaction_push_body($subject, $comment, $timestamp) {
 /**
  * Push + inbox title of a transaction, addressed to the neighbours.
  *
- * @param string|null $claim_type  field_claim_type, as stored.
+ * Same SPEC 71 branch as the requester's title, minus the status: theirs never
+ * carried it, so the only thing that changes is 'Novedad' vs 'Nueva respuesta'
+ * — a follow-up comment on a claim that did not move announces itself as what
+ * it is.
+ *
+ * @param string|null $claim_type      field_claim_type, as stored.
+ * @param bool        $status_changed  Whether the transaction moved the status.
+ * @param bool        $has_comment     Whether it carries a comment.
  *
  * @return string  'Novedad en un reclamo de tu condominio'.
  */
-function myapi_claim_transaction_neighbour_push_title($claim_type) {
-  return t('Novedad en un @noun de tu condominio', array('@noun' => myapi_claim_type_noun($claim_type)));
+function myapi_claim_transaction_neighbour_push_title($claim_type, $status_changed = TRUE, $has_comment = FALSE) {
+  $noun = myapi_claim_type_noun($claim_type);
+
+  if (!$status_changed && $has_comment) {
+    return t('Nueva respuesta en un @noun de tu condominio', array('@noun' => $noun));
+  }
+
+  return t('Novedad en un @noun de tu condominio', array('@noun' => $noun));
 }
 
 /**
  * Push + inbox body of a transaction, addressed to the neighbours.
  *
  *   Fuga de agua en el pasillo
- *   Estado: En proceso · 05/08/2026 09:30
+ *   Estado: En proceso
  *   Se asignó un técnico para revisar la tubería del tercer piso.
  *
- * With no resolvable status label the 'Estado: … · ' prefix disappears and the
- * middle line is left as the bare date: dropping the whole line would take the
- * only timestamp of the notification with it, and the spec's rule — no line
- * starting with 'Estado:' when there is no label — is what actually matters.
+ * Three lines in the same order as the requester's body — subject, then the
+ * event, then the comment — which is what SPEC 71 aligns: the two texts reach
+ * the same person (requester of one claim, neighbour of another) and used to put
+ * the comment in a different position each.
+ *
+ * The status line carries the date only when the event is not of the day, same
+ * rule and same reason as the requester's body. With no resolvable status label
+ * the 'Estado: … · ' prefix disappears; if there is no date to print either, the
+ * whole line goes, because a line saying nothing is worse than a missing one.
  *
  * An empty comment drops its line, same as the requester's body.
  *
@@ -625,10 +709,11 @@ function myapi_claim_transaction_neighbour_push_title($claim_type) {
  * @param string|null $status_label  Resolved status label, or NULL.
  * @param string|null $comment       field_comment of the transaction.
  * @param int         $timestamp     Timestamp of field_status_date.
+ * @param int         $now           Instant the notification is produced.
  *
  * @return string
  */
-function myapi_claim_transaction_neighbour_push_body($subject, $status_label, $comment, $timestamp) {
+function myapi_claim_transaction_neighbour_push_body($subject, $status_label, $comment, $timestamp, $now) {
   $lines = array();
 
   $subject = myapi_claim_excerpt($subject, MYAPI_CLAIM_SUBJECT_EXCERPT);
@@ -636,14 +721,26 @@ function myapi_claim_transaction_neighbour_push_body($subject, $status_label, $c
     $lines[] = $subject;
   }
 
-  $date = myapi_claim_date_label($timestamp);
-  $lines[] = ($status_label === NULL || $status_label === '')
-    ? $date
-    : t('Estado: @status · @date', array('@status' => $status_label, '@date' => $date));
+  $has_status = ($status_label !== NULL && $status_label !== '');
+  $date = myapi_claim_date_is_today($timestamp, $now) ? NULL : myapi_claim_date_label($timestamp);
+
+  if ($has_status && $date !== NULL) {
+    $lines[] = t('Estado: @status · @date', array('@status' => $status_label, '@date' => $date));
+  }
+  elseif ($has_status) {
+    $lines[] = t('Estado: @status', array('@status' => $status_label));
+  }
+  elseif ($date !== NULL) {
+    $lines[] = $date;
+  }
 
   $comment = myapi_claim_excerpt($comment, MYAPI_CLAIM_COMMENT_EXCERPT);
   if ($comment !== '') {
     $lines[] = $comment;
+  }
+
+  if (empty($lines)) {
+    $lines[] = myapi_claim_date_label($timestamp);
   }
 
   return implode("\n", $lines);
@@ -787,6 +884,37 @@ function myapi_claim_transaction_is_notifiable($node) {
   $claim_nid = myapi_building_admin_field_target_id($node, 'field_claim');
 
   return $claim_nid !== NULL && node_load($claim_nid) !== FALSE;
+}
+
+/**
+ * Whether a transaction actually moved its claim's status (SPEC 71).
+ *
+ * Reads the transient property myapi_claim_transaction_sync_claim_status()
+ * stashes right before deciding whether to re-save the claim — the last instant
+ * of the request where the previous status still exists. The comparison is
+ * repeated here rather than stashed as a boolean because the notifier is the
+ * one that knows what it wants to do with it, and a raw value ages better than
+ * somebody else's conclusion.
+ *
+ * property_exists() and not isset(): a claim with no field_status stashes NULL,
+ * which is a legitimate previous value and not an absence.
+ *
+ * THE DEFAULT IS TRUE, i.e. the pre-SPEC-71 wording. With no property there is
+ * no previous status to compare against — a path that saves a transaction
+ * without going through the sync, a future migration — and claiming the status
+ * did not move would be inventing a fact. Saying "pasó a X" is at worst the
+ * behaviour that shipped before this spec.
+ *
+ * @param object $node  The just-inserted 'claim_transaction' node.
+ *
+ * @return bool
+ */
+function myapi_claim_transaction_changed_status($node) {
+  if (!property_exists($node, 'myapi_claim_previous_status')) {
+    return TRUE;
+  }
+
+  return myapi_building_admin_field_value($node, 'field_status') !== $node->myapi_claim_previous_status;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1170,12 +1298,19 @@ function myapi_claim_notify_transaction($node) {
 
     $params = myapi_claim_transaction_mail_params($row, $status_label, $comment, $timestamp);
 
+    // SPEC 71. The two inputs the four texts branch on, resolved once: whether
+    // this transaction moved the status, and whether it says anything. The
+    // emails ignore both — they always print the status and the date, because
+    // they have the room the push does not.
+    $status_changed = myapi_claim_transaction_changed_status($node);
+    $has_comment = (trim((string) $comment) !== '');
+
     if ($row->requester_uid !== NULL) {
       myapi_claim_notify_inbox(
         $row,
         MYAPI_NOTIFICATION_TYPE_CLAIM_TRANSACTION,
-        myapi_claim_transaction_push_title($row->claim_type, $status_label),
-        myapi_claim_transaction_push_body($row->subject, $comment, $timestamp),
+        myapi_claim_transaction_push_title($row->claim_type, $status_label, $status_changed, $has_comment),
+        myapi_claim_transaction_push_body($row->subject, $comment, $timestamp, REQUEST_TIME),
         array($row->requester_uid)
       );
 
@@ -1201,8 +1336,8 @@ function myapi_claim_notify_transaction($node) {
     myapi_claim_notify_inbox(
       $row,
       MYAPI_NOTIFICATION_TYPE_CLAIM_TRANSACTION,
-      myapi_claim_transaction_neighbour_push_title($row->claim_type),
-      myapi_claim_transaction_neighbour_push_body($row->subject, $status_label, $comment, $timestamp),
+      myapi_claim_transaction_neighbour_push_title($row->claim_type, $status_changed, $has_comment),
+      myapi_claim_transaction_neighbour_push_body($row->subject, $status_label, $comment, $timestamp, REQUEST_TIME),
       $uids
     );
 

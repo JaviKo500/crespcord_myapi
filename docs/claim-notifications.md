@@ -50,7 +50,7 @@ row this feature writes, and why the back-office email has no `Vivienda` line.
 | `includes/myapi.mail.inc` | The five mail formatters and their four HTML builders, on the shared CrespCord shell. |
 | `myapi.module` | Glue only: the six `hook_mail()` branches, the two `hook_node_insert()` calls and the new `reclamo` branch of `hook_node_update()`. |
 | `resources/claim.resource.inc` | **One line**: the origin flag, before the `node_save()` of `myapi_claim_create()`. |
-| `includes/myapi.claim_transaction_admin.inc` | **One line**: the opt-out flag, before the `node_save()` of `myapi_claim_transaction_create_initial()`. |
+| `includes/myapi.claim_transaction_admin.inc` | **Two lines**: the opt-out flag, before the `node_save()` of `myapi_claim_transaction_create_initial()`, and the previous-status stash of SPEC 71, inside `myapi_claim_transaction_sync_claim_status()`. |
 | `myapi.install` | Maps the five mail keys to `MyapiHtmlMailSystem` (`myapi_html_mail_keys()`, applied by `myapi_update_7024()`). |
 
 After deploying, run:
@@ -144,23 +144,34 @@ emails behave exactly as before.
 
 ---
 
-## The two transient flags
+## The three transient properties
 
-Both are **object properties, not fields**: they are never persisted and live
-only for the `node_save()` that carries them. In Drupal 7 the node hooks receive
-the same `$node` object the caller modified, which is what makes them visible —
-the same mechanism SPEC 30 and SPEC 48 already run in production.
+All three are **object properties, not fields**: they are never persisted and
+live only for the `node_save()` that carries them. In Drupal 7 the node hooks
+receive the same `$node` object the caller modified, which is what makes them
+visible — the same mechanism SPEC 30 and SPEC 48 already run in production.
 
-| Flag | Set by | Read by | Effect |
-|------|--------|---------|--------|
+| Property | Set by | Read by | Effect |
+|----------|--------|---------|--------|
 | `$node->myapi_claim_from_api` | `myapi_claim_create()` (SPEC 66), before its `node_save()` | `myapi_claim_is_creation_from_api()` | Present → the detail email also goes to the back office. Absent → only the resident is notified. |
 | `$transaction->myapi_skip_claim_notification` | `myapi_claim_transaction_create_initial()` (SPEC 57), before its `node_save()` | `myapi_claim_transaction_is_notifiable()` | Present → notifies nobody. This is what tells "the first transaction" apart from the rest, with no row counting. |
+| `$transaction->myapi_claim_previous_status` | `myapi_claim_transaction_sync_claim_status()` (SPEC 57), before it decides whether to re-save the claim | `myapi_claim_transaction_changed_status()` (SPEC 71) | Carries the claim's status **before** the sync, which is what tells a real transition from a follow-up comment. |
 
 **The default of each one is the safe one.** With no origin flag no back-office
-email goes out; with no opt-out flag a transaction does notify. A future path
-that creates claims or transactions without marking anything — drush, a
-migration, an import — does the conservative thing in the first case and the
-expected thing in the second.
+email goes out; with no opt-out flag a transaction does notify; with no previous
+status the title keeps the pre-SPEC-71 wording. A future path that creates claims
+or transactions without marking anything — drush, a migration, an import — does
+the conservative thing in each case.
+
+The third one is where it is because **that is the last instant of the request
+where the claim's previous status still exists**: right after it, either the
+claim has been re-saved with the new one or it already carried it. `hook_node_insert()`
+calls the sync first and the notifier immediately afterwards, on the same object,
+so the value arrives intact. The raw value travels, not a boolean: the notifier
+is the one that knows what to do with it, and a value ages better than somebody
+else's conclusion. It is read with `property_exists()` and never `isset()`,
+because a claim with no `field_status` stashes `NULL` — a legitimate previous
+value, not an absence.
 
 Silencing a new path is one line:
 
@@ -240,7 +251,6 @@ thing: the instant that neighbour could see it.
 Título:  Tu reclamo pasó a "En proceso"
 Cuerpo:  Fuga de agua en el pasillo
          Se asignó un técnico para revisar la tubería del tercer piso.
-         05/08/2026 09:30
 ```
 
 ### Transaction — to the neighbours (same `type`)
@@ -248,13 +258,63 @@ Cuerpo:  Fuga de agua en el pasillo
 ```
 Título:  Novedad en un reclamo de tu condominio
 Cuerpo:  Fuga de agua en el pasillo
-         Estado: En proceso · 05/08/2026 09:30
+         Estado: En proceso
          Se asignó un técnico para revisar la tubería del tercer piso.
 ```
 
 The status goes in the **title** for the requester — it is the only thing read
 on a locked screen — and in the **body** for the neighbour, whose title has to
-say first that the claim is not theirs.
+say first that the claim is not theirs. Both bodies follow the **same order** —
+subject, the event, the comment — so the comment always sits last: the same
+person reads both texts (requester of one claim, neighbour of another).
+
+#### A transaction does not always change the status (SPEC 71)
+
+An operator recording a follow-up on a claim that is already `in_progress`
+produces a transaction whose status equals the claim's. **The claim only "pasa
+a" a status the one time it actually does**; otherwise the title says what the
+event really is:
+
+| The transaction… | To the requester | To the neighbours |
+|------------------|------------------|-------------------|
+| moved the status | `Tu reclamo pasó a "En proceso"` | `Novedad en un reclamo de tu condominio` |
+| moved nothing, has a comment | `Nueva respuesta en tu reclamo` | `Nueva respuesta en un reclamo de tu condominio` |
+| moved nothing, no comment | `Novedad en tu reclamo` | `Novedad en un reclamo de tu condominio` |
+| moved the status, no resolvable label | `Novedad en tu reclamo` | `Novedad en un reclamo de tu condominio` |
+
+Without this, two consecutive follow-ups reached the resident as two
+byte-identical headlines and there was no way, from the lock screen, to tell a
+real transition from a comment — or from a duplicate.
+
+#### The date line (SPEC 71)
+
+The two transaction bodies print a date **only when the event is not of the
+day**:
+
+| Case | To the requester | To the neighbours |
+|------|------------------|-------------------|
+| Event of the day | no date line | `Estado: En proceso` |
+| Backdated `field_status_date` | `05/08/2026 09:30` last | `Estado: En proceso · 05/08/2026 09:30` |
+| Backdated, no status label | `05/08/2026 09:30` last | `05/08/2026 09:30` alone |
+| Of the day, no status label | no date line | the middle line disappears entirely |
+
+For an event that just happened the push banner is already stamped `ahora` by
+the OS and the inbox renders `myapi_notifications.created`, so the printed date
+repeated what the reader had in front of them while displacing the operator's
+comment — the only part that says what happened. **A backdated
+`field_status_date` still prints**: the operator typed it, it can point at last
+Friday, and that is a fact neither surface can show.
+
+> **The app must render `created` on every inbox row.** It is already in
+> `GET /api/v1/notifications` (SPEC 25) and nothing about that contract changed,
+> but a list drawn without a timestamp would now leave a same-day transaction
+> with no time at all.
+
+The comparison goes through `format_date()` and never through PHP's `date()`, so
+both timestamps are read in the site's timezone — otherwise an event at 23:50
+would change day halfway through the body. **No body can come back empty**: if
+every line drops (corrupt subject, no comment, event of the day) the date comes
+back, because an empty push is worse than a redundant one.
 
 ### Rules that apply to every text
 
@@ -280,10 +340,12 @@ say first that the claim is not theirs.
 
 | Case | Behavior |
 |------|----------|
-| Empty comment | Its line is dropped; the body stays at two lines, with no blank line dangling. |
-| `field_status` with no resolvable label | The requester's title falls back to `Novedad en tu reclamo`; the neighbour's middle line loses its `Estado: … · ` prefix and keeps the bare date. |
+| Empty comment | Its line is dropped, with no blank line dangling. |
+| `field_status` with no resolvable label | The requester's title falls back to `Novedad en tu reclamo`; the neighbour's middle line loses its `Estado: ` prefix and keeps the date, or disappears when there is no date to print either. |
 | Missing or unknown `field_claim_type` | Reads as `reclamo` / `Reclamo`, the same criterion as SPEC 61. |
 | Empty subject | Its line is dropped rather than opening the body with a blank one. |
+| Every line of a transaction body dropped at once | The date comes back, so the push is never sent with an empty body. |
+| A transaction saved without going through the status sync | `myapi_claim_transaction_changed_status()` answers `TRUE` — the pre-SPEC-71 wording. Claiming the status did not move would be inventing a fact. |
 
 ---
 
