@@ -73,6 +73,23 @@
  * fatal with "Cannot redeclare". That is deliberate — the real function is four
  * LEFT JOINs and belongs to tests/integration — but whoever hits that fatal
  * should read this block, not fight the guard.
+ *
+ * db_select(), user_load() and REQUEST_TIME (SPEC 74) are the newest kind and
+ * the one that needs the loudest disclaimer. db_select() here is a FIXTURE
+ * QUERY BUILDER, not a database: the rows a test seeds with
+ * myapi_test_db_seed() are what execute() answers, after applying the
+ * conditions and the ORDER BY over the columns the fixture carries and
+ * projecting the fields/aliases the query asked for. What that makes testable
+ * is the PHP half of a resource — the loops that turn rows into a response,
+ * the delta precedence, the name fallbacks, the maps — running as production
+ * runs it. What it does NOT do is execute SQL: joins are recorded, never
+ * resolved (a joined column is seeded flat on the row, under the alias the
+ * query gives it), and a condition on a column the fixture does not carry is
+ * not applied. Everything SQL decides on its own — that a LEFT JOIN to a
+ * multi-value field duplicates rows, that a real ORDER BY is what makes the
+ * delta loop correct — stays tests/integration's job. Every query is recorded
+ * in $GLOBALS['myapi_test_db_queries'] so a test can assert the SHAPE it built
+ * (table, conditions, joins, order) where it cannot assert the SQL's outcome.
  */
 
 if (!function_exists('module_load_include')) {
@@ -430,6 +447,403 @@ if (!function_exists('myapi_user_fetch_profile_fields')) {
     return isset($GLOBALS['myapi_test_profile_fields'])
       ? $GLOBALS['myapi_test_profile_fields'] + $default
       : $default;
+  }
+}
+
+/**
+ * The request timestamp (SPEC 74).
+ *
+ * Drupal defines it once per request in bootstrap.inc. Token expiry is compared
+ * against it, so a fixture expressed as REQUEST_TIME +/- N seconds means the
+ * same thing here as it does in production.
+ */
+if (!defined('REQUEST_TIME')) {
+  define('REQUEST_TIME', time());
+}
+
+/**
+ * A SELECT over fixtures (SPEC 74).
+ *
+ * Implements the subset of Drupal 7's SelectQuery that myapi's read paths
+ * actually use: fields(), addField(), condition(), the join family, orderBy(),
+ * range() and execute(). Anything else throws instead of returning a wrong
+ * answer quietly — a resource that starts using groupBy() must extend this
+ * class knowingly, not discover that its test passed for the wrong reason.
+ *
+ * The rules, in full:
+ *  - The base table names the fixture: myapi_test_db_seed(['node' => [...]])
+ *    is what a SELECT ... FROM node reads.
+ *  - Conditions are applied over the fixture's own columns, with the alias
+ *    prefix stripped ('n.status' matches the 'status' key). A condition on a
+ *    column the fixture row does not carry is skipped, which is what lets a
+ *    test seed only the columns its case is about.
+ *  - Joins are recorded, never resolved. A joined column is seeded flat on the
+ *    row under the alias the query gives it ('area_m2', not
+ *    'field_total_m2_value'), because that alias is what production reads off
+ *    the result.
+ *  - The projection is the field list: each requested field/alias is copied
+ *    from the row when present and NULL otherwise, in the order it was added.
+ *    fields($alias) with no column list selects the row whole, as in Drupal.
+ */
+class MyapiTestSelectQuery implements IteratorAggregate {
+
+  private $table;
+  private $alias;
+  private $fields = [];
+  private $select_all = FALSE;
+  private $conditions = [];
+  private $joins = [];
+  private $order = [];
+  private $range = NULL;
+
+  public function __construct($table, $alias) {
+    $this->table = $table;
+    $this->alias = $alias;
+  }
+
+  public function fields($table_alias, array $fields = []) {
+    if (empty($fields)) {
+      $this->select_all = TRUE;
+    }
+    foreach ($fields as $field) {
+      $this->fields[] = $field;
+    }
+
+    return $this;
+  }
+
+  public function addField($table_alias, $field, $alias = NULL) {
+    $this->fields[] = $alias !== NULL ? $alias : $field;
+
+    return $this;
+  }
+
+  public function condition($field, $value = NULL, $operator = NULL) {
+    if (!is_string($field)) {
+      throw new RuntimeException('MyapiTestSelectQuery: only string conditions are supported.');
+    }
+    $this->conditions[] = [
+      'field'    => $field,
+      'value'    => $value,
+      'operator' => $operator !== NULL ? strtoupper($operator) : (is_array($value) ? 'IN' : '='),
+    ];
+
+    return $this;
+  }
+
+  public function isNull($field) {
+    $this->conditions[] = ['field' => $field, 'value' => NULL, 'operator' => 'IS NULL'];
+
+    return $this;
+  }
+
+  public function isNotNull($field) {
+    $this->conditions[] = ['field' => $field, 'value' => NULL, 'operator' => 'IS NOT NULL'];
+
+    return $this;
+  }
+
+  public function leftJoin($table, $alias = NULL, $condition = NULL) {
+    return $this->addJoin('LEFT', $table, $alias, $condition);
+  }
+
+  public function innerJoin($table, $alias = NULL, $condition = NULL) {
+    return $this->addJoin('INNER', $table, $alias, $condition);
+  }
+
+  public function join($table, $alias = NULL, $condition = NULL) {
+    return $this->addJoin('INNER', $table, $alias, $condition);
+  }
+
+  private function addJoin($type, $table, $alias, $condition) {
+    $this->joins[] = ['type' => $type, 'table' => $table, 'alias' => $alias, 'condition' => $condition];
+
+    return $alias;
+  }
+
+  public function orderBy($field, $direction = 'ASC') {
+    $this->order[] = ['field' => $field, 'direction' => strtoupper($direction)];
+
+    return $this;
+  }
+
+  public function range($start = NULL, $length = NULL) {
+    $this->range = ['start' => (int) $start, 'length' => $length];
+
+    return $this;
+  }
+
+  public function __call($name, $arguments) {
+    throw new RuntimeException('MyapiTestSelectQuery: ' . $name . '() is not supported by the fixture query builder.');
+  }
+
+  #[\ReturnTypeWillChange]
+  public function getIterator() {
+    return new ArrayIterator($this->rows());
+  }
+
+  /**
+   * Records the query and answers the fixture rows it selects.
+   */
+  public function execute() {
+    $GLOBALS['myapi_test_db_queries'][] = [
+      'table'      => $this->table,
+      'alias'      => $this->alias,
+      'fields'     => $this->fields,
+      'select_all' => $this->select_all,
+      'conditions' => $this->conditions,
+      'joins'      => $this->joins,
+      'order'      => $this->order,
+      'range'      => $this->range,
+    ];
+
+    return new MyapiTestStatement($this->rows());
+  }
+
+  /**
+   * Filter, then order, then range, then project — the order a database
+   * applies them in.
+   */
+  private function rows() {
+    $rows = isset($GLOBALS['myapi_test_db'][$this->table]) ? $GLOBALS['myapi_test_db'][$this->table] : [];
+    $rows = array_map(function ($row) {
+      return (array) $row;
+    }, $rows);
+
+    $rows = array_values(array_filter($rows, [$this, 'matches']));
+    $rows = $this->sort($rows);
+
+    if ($this->range !== NULL) {
+      $rows = array_slice($rows, $this->range['start'], $this->range['length']);
+    }
+
+    return array_map([$this, 'project'], $rows);
+  }
+
+  private function matches(array $row) {
+    foreach ($this->conditions as $condition) {
+      $column = $this->column($condition['field']);
+      if (!array_key_exists($column, $row)) {
+        continue;
+      }
+      if (!$this->compare($row[$column], $condition['value'], $condition['operator'])) {
+        return FALSE;
+      }
+    }
+
+    return TRUE;
+  }
+
+  /**
+   * Loose comparison on purpose: a real result set answers '1' where a fixture
+   * writes 1, and no myapi condition depends on telling the two apart.
+   */
+  private function compare($actual, $expected, $operator) {
+    switch ($operator) {
+      case '=':
+        return $actual == $expected;
+
+      case '!=':
+      case '<>':
+        return $actual != $expected;
+
+      case '>':
+        return $actual > $expected;
+
+      case '>=':
+        return $actual >= $expected;
+
+      case '<':
+        return $actual < $expected;
+
+      case '<=':
+        return $actual <= $expected;
+
+      case 'IN':
+        return in_array($actual, (array) $expected);
+
+      case 'NOT IN':
+        return !in_array($actual, (array) $expected);
+
+      case 'IS NULL':
+        return $actual === NULL;
+
+      case 'IS NOT NULL':
+        return $actual !== NULL;
+    }
+
+    throw new RuntimeException('MyapiTestSelectQuery: unsupported operator "' . $operator . '".');
+  }
+
+  private function sort(array $rows) {
+    foreach (array_reverse($this->order) as $order) {
+      $column = $this->column($order['field']);
+      $direction = $order['direction'] === 'DESC' ? -1 : 1;
+      // usort() is not stable in PHP 7.4, so the original position is carried
+      // as the tie-breaker: two rows with the same delta keep the order the
+      // fixture wrote them in.
+      $indexed = [];
+      foreach ($rows as $position => $row) {
+        $indexed[] = [$position, $row];
+      }
+      usort($indexed, function ($a, $b) use ($column, $direction) {
+        $left = isset($a[1][$column]) ? $a[1][$column] : NULL;
+        $right = isset($b[1][$column]) ? $b[1][$column] : NULL;
+        if ($left == $right) {
+          return $a[0] <=> $b[0];
+        }
+
+        return ($left < $right ? -1 : 1) * $direction;
+      });
+      $rows = array_column($indexed, 1);
+    }
+
+    return $rows;
+  }
+
+  private function project(array $row) {
+    if ($this->select_all) {
+      return $row;
+    }
+
+    $projected = [];
+    foreach ($this->fields as $field) {
+      $projected[$field] = array_key_exists($field, $row) ? $row[$field] : NULL;
+    }
+
+    return $projected;
+  }
+
+  private function column($field) {
+    $position = strpos($field, '.');
+
+    return $position === FALSE ? $field : substr($field, $position + 1);
+  }
+
+}
+
+/**
+ * The result of a fixture SELECT (SPEC 74).
+ *
+ * Answers the four fetchers myapi's read paths use, plus iteration, which is
+ * how most of them consume a result. Rows come out as stdClass, exactly as
+ * Drupal's default fetch mode delivers them.
+ */
+class MyapiTestStatement implements IteratorAggregate, Countable {
+
+  private $rows;
+
+  public function __construct(array $rows) {
+    $this->rows = $rows;
+  }
+
+  #[\ReturnTypeWillChange]
+  public function getIterator() {
+    return new ArrayIterator($this->fetchAll());
+  }
+
+  public function fetchAll() {
+    return array_map(function ($row) {
+      return (object) $row;
+    }, $this->rows);
+  }
+
+  public function fetchAllAssoc($key) {
+    $result = [];
+    foreach ($this->fetchAll() as $row) {
+      $result[$row->{$key}] = $row;
+    }
+
+    return $result;
+  }
+
+  public function fetchCol($index = 0) {
+    $column = [];
+    foreach ($this->rows as $row) {
+      $values = array_values($row);
+      $column[] = isset($values[$index]) ? $values[$index] : NULL;
+    }
+
+    return $column;
+  }
+
+  public function fetchObject() {
+    $rows = $this->fetchAll();
+
+    return empty($rows) ? FALSE : $rows[0];
+  }
+
+  public function fetchAssoc() {
+    return empty($this->rows) ? FALSE : $this->rows[0];
+  }
+
+  public function fetchField($index = 0) {
+    $column = $this->fetchCol($index);
+
+    return empty($column) ? FALSE : $column[0];
+  }
+
+  public function rowCount() {
+    return count($this->rows);
+  }
+
+  #[\ReturnTypeWillChange]
+  public function count() {
+    return count($this->rows);
+  }
+
+}
+
+if (!function_exists('db_select')) {
+  function db_select($table, $alias = NULL, array $options = []) {
+    return new MyapiTestSelectQuery($table, $alias);
+  }
+}
+
+/**
+ * Replaces every fixture table and clears the recorded queries (SPEC 74).
+ *
+ * Called from setUp(), so no test inherits another's rows. Tables not named
+ * here answer an empty result set, which is the same thing an empty table
+ * answers in production.
+ *
+ * @param array $tables  Table name => list of rows (arrays or objects).
+ */
+function myapi_test_db_seed(array $tables = []) {
+  $GLOBALS['myapi_test_db'] = $tables;
+  $GLOBALS['myapi_test_db_queries'] = [];
+}
+
+/**
+ * Every query executed since the last seed, in order, as recorded by
+ * MyapiTestSelectQuery::execute().
+ */
+function myapi_test_db_queries($table = NULL) {
+  $queries = isset($GLOBALS['myapi_test_db_queries']) ? $GLOBALS['myapi_test_db_queries'] : [];
+  if ($table === NULL) {
+    return $queries;
+  }
+
+  return array_values(array_filter($queries, function ($query) use ($table) {
+    return $query['table'] === $table;
+  }));
+}
+
+if (!function_exists('user_load')) {
+  /**
+   * Answers an account out of $GLOBALS['myapi_test_users'] (SPEC 74).
+   *
+   * Faithful for the only two things myapi asks of it in a read path: whether
+   * the account exists (FALSE when it does not, exactly as Drupal answers for
+   * a deleted uid) and its 'status'. Nothing loads fields, roles or the
+   * profile — a test that needs those builds them into the fixture account.
+   */
+  function user_load($uid, $reset = FALSE) {
+    if (!isset($GLOBALS['myapi_test_users'][$uid])) {
+      return FALSE;
+    }
+
+    return (object) $GLOBALS['myapi_test_users'][$uid];
   }
 }
 

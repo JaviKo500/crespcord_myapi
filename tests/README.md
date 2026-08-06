@@ -149,6 +149,43 @@ because PCRE lets `$` match just before a trailing newline, and returned the
 value **with** the newline still in it. The pattern now carries the `D`
 modifier.
 
+Since SPEC 74 the layer also covers **the whole of `GET /api/v1/units`** (SPECS
+08/09/10), which is the first resource here whose functions start at a
+`db_select()`. Three classes:
+
+- `tests/unit/UnitBuildPropertiesTest.php` — `myapi_unit_build_properties()`,
+  the one pure function of the endpoint: the grouping by condominium, the drop
+  of a unit whose parent condominium is not visible, the NULL of every value
+  that may be missing, and the casts (a result row carries `"92.00"` and `"3"`
+  as strings, and the app reads numbers).
+- `tests/unit/UnitQueriesTest.php` — the four fetchers plus
+  `myapi_unit_related_nids()`: the maps they build, the fallback chains
+  (`field_ocupantes` before `field_ocupante`, `"nombre apellidos"` before
+  `users.name`), the early returns that skip a query for an empty input, and
+  the shape of the SQL built.
+- `tests/unit/UnitEndpointTest.php` — `myapi_unit_dispatch()` and
+  `myapi_unit_list()` end to end: the dispatcher is called the way
+  `hook_menu()` calls it and the assertions read the printed JSON and the
+  status code, including the five ways an access token can fail and the two
+  ways its user can.
+
+**Read the scope carefully.** `db_select()` in `bootstrap.php` is a *fixture
+query builder*, not a database (its `@file` block states the rules in full).
+What runs for real is every line of production PHP after the query; what is
+asserted structurally is the SQL *built* (`type`, `status`, `deleted = 0`,
+`entity_type`, the `IN` list, the `ORDER BY delta`); what is not covered at all
+is the engine's own semantics — whether a `LEFT JOIN` over a multi-value field
+duplicates a row is a question only `tests/integration` can answer. Because a
+fake can make a suite green without proving anything, SPEC 74 verified the
+harness by mutation: seven deliberate breakages of `resources/unit.resource.inc`
+and `includes/myapi.unit_access.inc`, each one caught. The spec lists them, and
+lists the one equivalent mutant that correctly does *not* fail.
+
+SPEC 74 also pinned a fact about the response that is documented in
+`docs/unit.md` and changes nothing in production: `json_encode()` prints a float
+with no fractional part as an integer literal, so `area_m2` travels as `92` for
+one unit and `15.5` for the next.
+
 **Run one class in isolation** when you touch this layer —
 `vendor/bin/phpunit --filter FloodTest`. Every class here passes alone as well
 as in the suite, which is what keeps the globals the stubs read
@@ -207,12 +244,24 @@ are the last two of this kind: the reset page reads its deep-link base out of a
 variable and builds its form action with `url()`, and neither has any meaning
 outside a site. `variable_get()` answers the call site's default unless the
 test put a value in `$GLOBALS['myapi_test_variables']` first — the same two
-outcomes a site with and without an override produces. These stubs keep the
-suite's rule intact: still no
-database, still pure logic. Anything that runs `db_select()`, `node_load()` or
-the mail queue stays out of `tests/unit` — that is why
+outcomes a site with and without an override produces. Up to SPEC 73 these stubs kept the suite's rule
+intact: no database, pure logic only, and anything running `db_select()`,
+`node_load()` or the mail queue stayed out — that is why
 `myapi_reservation_calendar_rows()` and
 `myapi_reservation_enqueue_admin_mails()` have no unit test.
+
+**SPEC 74 moved that line, once and deliberately**, with `db_select()`,
+`user_load()` and `REQUEST_TIME`. The rule now reads: no *database*, but a
+function that reads one is testable here **through fixtures**, for the part of
+it that is PHP. `MyapiTestSelectQuery` answers the rows a test seeded with
+`myapi_test_db_seed()`, applying the conditions and the `ORDER BY` over the
+columns the fixture carries and projecting the fields the query asked for; it
+records every call in `$GLOBALS['myapi_test_db_queries']` (read them back with
+`myapi_test_db_queries()`), and it throws on any query method it does not
+support, so an unhandled `groupBy()` fails loudly instead of passing for the
+wrong reason. Joins are recorded, never resolved: a joined column is seeded flat
+on the row under the alias the query gives it. `node_load()` and the mail queue
+are still out.
 
 **The three stubs that opened the biggest door** are `drupal_exit()`,
 `drupal_add_http_header()` and `drupal_json_encode()` (SPEC 73). Everything
@@ -374,8 +423,11 @@ followed by `node tests/e2e/password-reset-roundtrip.js`.
 
 ## Scope note
 
-`tests/` covers `auth` only. The pattern here (three layers, `myapi_test`
-companion module for integration, Postman + Node for e2e) is meant to be
-replicated for other resources (`unit`, `receipt`, `extra_fee`, `payment`,
-`expense`) in future specs — see `specs/21-auth-testing.md`, "Fuera de este
-spec".
+`tests/integration/` and `tests/e2e/` cover `auth` only. `tests/unit/` covers
+`auth`, the shared helpers, the reservation and claim logic, and — since
+SPEC 74 — the whole `units` endpoint. The pattern here (three layers,
+`myapi_test` companion module for integration, Postman + Node for e2e) is meant
+to be replicated for the remaining resources (`receipt`, `extra_fee`, `payment`,
+`expense`) in future specs — see `specs/auth/21-auth-testing.md`, "Fuera de este
+spec", and `specs/units/74-units-unit-tests.md` for what the unit layer can and
+cannot say about a database-backed resource.

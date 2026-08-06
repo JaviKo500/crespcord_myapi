@@ -27,12 +27,12 @@ volume per user is a handful of units).
             "id": 45,
             "name": "Depto. 4B",
             "category": "departamento",
-            "area_m2": 92.0,
+            "area_m2": 92,
             "owner_uid": 3,
             "owner_name": "Priscila Cordero",
             "occupant_uid": 7,
             "occupant_name": "Juan Pérez",
-            "current_balance": -3393.0
+            "current_balance": -3393
           }
         ]
       }
@@ -88,6 +88,13 @@ Notes:
   including a negative sign — no transformation and no business meaning is
   attached to the sign by this endpoint. `field_saldo_actual` is a single-value
   field on the `vivienda` bundle, so there is one balance per unit.
+- **Numbers with no fractional part are sent without a decimal point.**
+  `area_m2` and `current_balance` are JSON numbers, and PHP's `json_encode()`
+  prints `92.00` as `92` and `-3393.0000` as `-3393`, while `15.50` is sent as
+  `15.5`. The same field is therefore an integer literal for one unit and a
+  decimal one for the next; clients must parse both as generic numbers (`num`
+  in Dart), never strictly as `double`. Pinned by
+  `UnitEndpointTest::testWholeNumbersTravelWithoutADecimalPoint`.
 - `category` is `taxonomy_term_data.name` exactly as stored, with no
   slug/lowercase transformation.
 - `payment_information` is the condominium's `field_informacion_pago_value`
