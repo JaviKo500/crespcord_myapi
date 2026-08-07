@@ -28,6 +28,20 @@ define('MYAPI_RESERVATIONS_DESTRUCTIVE_UNINSTALL', FALSE);
 define('MYAPI_CLAIMS_DESTRUCTIVE_UNINSTALL', FALSE);
 
 /**
+ * Whether uninstalling the module also destroys the services marketplace
+ * content types, their fields, the category vocabulary and ALL their data
+ * (providers, requests, offers, ratings and their timeline).
+ *
+ * Kept FALSE on purpose, same criterion as the two constants above: providers
+ * and requests hold real client data, so an accidental `drush pm-uninstall
+ * myapi` must never wipe them. Flip this to TRUE only for a deliberate,
+ * one-off teardown where losing that data is intended. Independent from the
+ * reservations and claims constants: flipping one must not drag another
+ * feature's data down with it.
+ */
+define('MYAPI_SERVICES_DESTRUCTIVE_UNINSTALL', FALSE);
+
+/**
  * Implements hook_schema().
  */
 function myapi_schema() {
@@ -264,6 +278,12 @@ function myapi_install() {
   myapi_mail_system_register();
   _myapi_reservations_install();
   _myapi_claims_install();
+  // SPEC 77. After claims: it reuses field_description, field_images and
+  // field_attachment, which _myapi_claims_install() creates — and creates them
+  // private:// at field level, which is what the request's photos inherit.
+  // Before the role installer, for the same ordering reason as the two above,
+  // even though SPEC 77 grants this role nothing yet.
+  _myapi_services_install();
   // After the reservations and claims installs: 'area', 'reservation' and
   // 'reclamo' must exist before their 'create'/'edit any' permissions can be
   // found in module_invoke_all('permission') and granted to the
@@ -352,6 +372,12 @@ function myapi_uninstall() {
   // its own independent constant.
   if (MYAPI_CLAIMS_DESTRUCTIVE_UNINSTALL) {
     _myapi_claims_uninstall_destructive();
+  }
+
+  // Same conservative default for the services marketplace (SPEC 77), gated by
+  // its own independent constant.
+  if (MYAPI_SERVICES_DESTRUCTIVE_UNINSTALL) {
+    _myapi_services_uninstall_destructive();
   }
 }
 
@@ -611,12 +637,42 @@ function _myapi_entityreference_field_settings() {
   // like every other use of it in this file: an .install runs early enough that
   // the D7 registry may not have the files[] entries warm.
   module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+  // SPEC 77: the marketplace bundle names live in their own catalogue, loaded
+  // for the same reason and in the same explicit way.
+  module_load_include('inc', 'myapi', 'includes/myapi.services_common');
 
   $condominium = [
     'target_type'      => 'node',
     'handler'          => 'base',
     'handler_settings' => [
       'target_bundles' => ['condominio' => 'condominio'],
+      'sort'           => ['type' => 'none'],
+    ],
+  ];
+
+  // SPEC 77. Three targets reused by six field entries below; written once
+  // here so a bundle rename is one edit and not six.
+  $provider = [
+    'target_type'      => 'node',
+    'handler'          => 'base',
+    'handler_settings' => [
+      'target_bundles' => [MYAPI_SERVICES_PROVIDER_TYPE => MYAPI_SERVICES_PROVIDER_TYPE],
+      'sort'           => ['type' => 'none'],
+    ],
+  ];
+  $service_request = [
+    'target_type'      => 'node',
+    'handler'          => 'base',
+    'handler_settings' => [
+      'target_bundles' => [MYAPI_SERVICES_REQUEST_TYPE => MYAPI_SERVICES_REQUEST_TYPE],
+      'sort'           => ['type' => 'none'],
+    ],
+  ];
+  $service_offer = [
+    'target_type'      => 'node',
+    'handler'          => 'base',
+    'handler_settings' => [
+      'target_bundles' => [MYAPI_SERVICES_OFFER_TYPE => MYAPI_SERVICES_OFFER_TYPE],
       'sort'           => ['type' => 'none'],
     ],
   ];
@@ -665,6 +721,32 @@ function _myapi_entityreference_field_settings() {
         'sort' => ['type' => 'none'],
       ],
     ],
+    // The second field targeting 'user' (SPEC 77): the accounts that operate a
+    // provider. Same shape as field_requester and for the same reason — the
+    // user entity has a single bundle, so the absence of target_bundles is the
+    // correct configuration. Unlimited cardinality is a field property and is
+    // not part of these settings.
+    'field_provider_users' => [
+      'target_type'      => 'user',
+      'handler'          => 'base',
+      'handler_settings' => [
+        'sort' => ['type' => 'none'],
+      ],
+    ],
+    // SPEC 77, the six node references of the marketplace. Two of them are
+    // SHARED by two bundles each — field_request by 'service_offer' and
+    // 'service_transaction', which is why it appears once — and the remaining
+    // four are separate fields on purpose even where two of them point at the
+    // same bundle: 'the provider that offered' (field_provider) and 'the
+    // provider that was awarded' (field_assigned_provider, denormalised on the
+    // request) are different facts, and a shared field would put them in one
+    // table where no query could tell them apart.
+    'field_request'           => $service_request,
+    'field_provider'          => $provider,
+    'field_assigned_offer'    => $service_offer,
+    'field_assigned_provider' => $provider,
+    'field_rating_offer'      => $service_offer,
+    'field_rating_provider'   => $provider,
   ];
 }
 
@@ -1630,6 +1712,869 @@ function _myapi_claims_install() {
 }
 
 /**
+ * Ensures a taxonomy vocabulary exists (idempotent).
+ *
+ * The counterpart of _myapi_reservations_ensure_node_type() for vocabularies,
+ * and the first one this module needs: the banks vocabulary (SPEC 76) is READ
+ * by an endpoint but created by hand on the site, while service_category
+ * (SPEC 77) is part of this module's schema and has fields of its own.
+ *
+ * taxonomy_vocabulary_machine_name_load() answers FALSE for a machine name
+ * that is not there, which is the whole check. A vocabulary that already
+ * exists is left exactly as it is — its name, description and hierarchy may
+ * have been adjusted on the site, and this is not the place to overrule that.
+ *
+ * @param string $machine_name
+ *   Machine name of the vocabulary (e.g. 'service_category').
+ * @param string $name
+ *   Human name shown in the admin UI.
+ * @param string $description
+ *   Admin description.
+ */
+function _myapi_services_ensure_vocabulary($machine_name, $name, $description) {
+  if (taxonomy_vocabulary_machine_name_load($machine_name)) {
+    return;
+  }
+
+  $vocabulary = (object) [
+    'name'         => $name,
+    'machine_name' => $machine_name,
+    'description'  => $description,
+    // Flat: the marketplace has categories, not sub-categories.
+    'hierarchy'    => 0,
+    'module'       => 'taxonomy',
+    'weight'       => 0,
+  ];
+
+  taxonomy_vocabulary_save($vocabulary);
+}
+
+/**
+ * Creates the services marketplace schema (idempotent) — SPEC 77.
+ *
+ * Called from hook_install() on fresh sites and from myapi_update_7025() where
+ * the module is already installed, exactly like _myapi_reservations_install()
+ * and _myapi_claims_install(). Re-running it never duplicates anything nor
+ * throws, because every creation goes through the idempotent _ensure_*
+ * sub-helpers — no new sub-helper here except the vocabulary one, which had no
+ * equivalent.
+ *
+ * Order matters and is not cosmetic:
+ *   (a) the vocabulary and its two fields — the category reference fields of
+ *       the bundles below name it in their allowed_values;
+ *   (b) the five node types, in the order of myapi_services_node_types(). An
+ *       entityreference field names a target bundle, and a bundle that does
+ *       not exist yet leaves the autocomplete resolving nothing;
+ *   (c) every field at storage level, the shared ones included;
+ *   (d) the per-bundle instances.
+ *
+ * Five fields are REUSED rather than created, each with a new instance and no
+ * change to the field itself: field_requester and field_condominium (SPEC 32),
+ * field_description, field_images and field_attachment (SPEC 55/65 — the last
+ * two are private:// at field level, so the photos of a request are born
+ * private for the same reason a claim's are), plus field_status_date and
+ * field_comment on the timeline bundle.
+ *
+ * entityreference note, same as the two installers above: 'target_type',
+ * 'handler' and 'handler_settings' are FIELD-level settings, so they come from
+ * _myapi_entityreference_field_settings() and never appear on an instance.
+ *
+ * What this does NOT do, deliberately (see the spec's out-of-scope list): no
+ * api/v1 route, no permission granted to any role, no entry in
+ * myapi_building_admin_condominium_map(), no auto-generated titles, no
+ * form_alter hiding the denormalised fields, and no validation of the status
+ * graph — myapi_services_request_transitions() exists but nothing reads it
+ * yet.
+ */
+function _myapi_services_install() {
+  // The bundle names and the status catalogues. Explicit load, like every
+  // other include used from this file: an .install runs early enough that the
+  // D7 registry may not have the files[] entries warm.
+  module_load_include('inc', 'myapi', 'includes/myapi.services_common');
+
+  $provider_type    = MYAPI_SERVICES_PROVIDER_TYPE;
+  $request_type     = MYAPI_SERVICES_REQUEST_TYPE;
+  $offer_type       = MYAPI_SERVICES_OFFER_TYPE;
+  $rating_type      = MYAPI_SERVICES_RATING_TYPE;
+  $transaction_type = MYAPI_SERVICES_TRANSACTION_TYPE;
+
+  // (a) The category vocabulary and its own fields.
+  _myapi_services_ensure_vocabulary(
+    MYAPI_SERVICES_CATEGORY_VOCABULARY,
+    'Categoría de servicio',
+    'Categorías del marketplace de proveedores: limpieza, mantenimiento, arreglos, compras, servicios generales.'
+  );
+
+  _myapi_reservations_ensure_field('field_category_code', [
+    'field_name'  => 'field_category_code',
+    'type'        => 'text',
+    'cardinality' => 1,
+    'settings'    => ['max_length' => 32],
+  ]);
+  // The category icon is the one image of this feature that is PUBLIC, and the
+  // exception is deliberate: it is a catalogue asset shown in the app's
+  // category grid, identical for every user and revealing nothing about
+  // anybody. The photos of a request (field_images) stay private:// because
+  // they may show the inside of a home.
+  _myapi_reservations_ensure_field('field_category_icon', [
+    'field_name'  => 'field_category_icon',
+    'type'        => 'image',
+    'cardinality' => 1,
+    'settings'    => ['uri_scheme' => 'public'],
+  ]);
+
+  _myapi_reservations_ensure_instance('field_category_code', MYAPI_SERVICES_CATEGORY_VOCABULARY, [
+    'field_name'  => 'field_category_code',
+    'entity_type' => 'taxonomy_term',
+    'bundle'      => MYAPI_SERVICES_CATEGORY_VOCABULARY,
+    'label'       => 'Código',
+    'required'    => 1,
+    'description' => 'Identificador estable que viaja en la API (mayúsculas, sin espacios: CLEANING, MAINTENANCE...). El tid cambia si se reimporta el vocabulario; este código no.',
+    'widget'      => ['type' => 'text_textfield'],
+  ], 'taxonomy_term');
+  _myapi_reservations_ensure_instance('field_category_icon', MYAPI_SERVICES_CATEGORY_VOCABULARY, [
+    'field_name'  => 'field_category_icon',
+    'entity_type' => 'taxonomy_term',
+    'bundle'      => MYAPI_SERVICES_CATEGORY_VOCABULARY,
+    'label'       => 'Ícono',
+    'required'    => 0,
+    'settings'    => [
+      'file_extensions'    => 'png jpg jpeg',
+      'max_filesize'       => '1 MB',
+      'alt_field'          => 1,
+      'alt_field_required' => 0,
+    ],
+    'widget'      => ['type' => 'image_image'],
+  ], 'taxonomy_term');
+
+  // (b) The five node types.
+  _myapi_reservations_ensure_node_type(
+    $provider_type,
+    'Proveedor',
+    'Empresa o persona que ofrece servicios en el marketplace.',
+    'Nombre comercial'
+  );
+  _myapi_reservations_ensure_node_type(
+    $request_type,
+    'Solicitud de servicio',
+    'Pedido de servicio creado por un residente y difundido a los proveedores de la categoría.',
+    'Título'
+  );
+  _myapi_reservations_ensure_node_type(
+    $offer_type,
+    'Oferta',
+    'Propuesta de un proveedor sobre una solicitud de servicio.',
+    'Título'
+  );
+  _myapi_reservations_ensure_node_type(
+    $rating_type,
+    'Calificación de servicio',
+    'Valoración del residente sobre el proveedor adjudicado, al cerrar la solicitud.',
+    'Título'
+  );
+  _myapi_reservations_ensure_node_type(
+    $transaction_type,
+    'Transacción de solicitud',
+    'Entrada de la línea de tiempo de una solicitud: cambio de estado con comentario opcional.',
+    'Título'
+  );
+
+  // (c) Fields (storage level).
+  $reference_settings = _myapi_entityreference_field_settings();
+
+  // The taxonomy reference settings of both category fields. Two fields and
+  // not one shared: 'the categories a provider works in' is unlimited and 'the
+  // category of a request' is exactly one, and cardinality is a field
+  // property — a single shared field could not be both.
+  $category_settings = [
+    'allowed_values' => [
+      [
+        'vocabulary' => MYAPI_SERVICES_CATEGORY_VOCABULARY,
+        'parent'     => 0,
+      ],
+    ],
+  ];
+
+  // Every date field of this feature is 'datestamp' (a Unix timestamp), by
+  // explicit decision: the app sends and receives instants and converts to
+  // local time itself. It diverges from the 'datetime' of SPEC 55/32, and the
+  // one date field this feature does NOT create — field_status_date, reused on
+  // the timeline bundle — stays 'datetime' precisely because it already
+  // exists and is shared with claim_transaction.
+  //
+  // Granularity is down to the minute everywhere, licence expiry included.
+  // Day-only granularity would store 00:00 of the expiry day, so a licence
+  // "expiring on the 31st" would in fact die as the 30th ended — an off-by-one
+  // day nobody would suspect until a provider was locked out.
+  $timestamp_settings = [
+    'granularity' => [
+      'year'   => 'year',
+      'month'  => 'month',
+      'day'    => 'day',
+      'hour'   => 'hour',
+      'minute' => 'minute',
+      'second' => 0,
+    ],
+    'tz_handling' => 'none',
+    'timezone_db' => '',
+    'todate'      => '',
+  ];
+  $date_widget = [
+    'type'     => 'date_select',
+    'settings' => [
+      'input_format'   => 'Y-m-d H:i',
+      'year_range'     => '-1:+5',
+      'increment'      => 1,
+      'label_position' => 'above',
+      'text_parts'     => [],
+    ],
+  ];
+
+  // Own fields of 'provider'.
+  _myapi_reservations_ensure_field('field_provider_users', [
+    'field_name'  => 'field_provider_users',
+    'type'        => 'entityreference',
+    'cardinality' => FIELD_CARDINALITY_UNLIMITED,
+    'settings'    => $reference_settings['field_provider_users'],
+  ]);
+  _myapi_reservations_ensure_field('field_phone', [
+    'field_name'  => 'field_phone',
+    'type'        => 'text',
+    'cardinality' => 1,
+    'settings'    => ['max_length' => 20],
+  ]);
+  _myapi_reservations_ensure_field('field_address', [
+    'field_name'  => 'field_address',
+    'type'        => 'text_long',
+    'cardinality' => 1,
+  ]);
+  _myapi_reservations_ensure_field('field_services_desc', [
+    'field_name'  => 'field_services_desc',
+    'type'        => 'text_long',
+    'cardinality' => 1,
+  ]);
+  _myapi_reservations_ensure_field('field_photo', [
+    'field_name'  => 'field_photo',
+    'type'        => 'image',
+    'cardinality' => 1,
+    // Public for the same reason as the category icon: it is the provider's
+    // shop front, shown to every user of the marketplace.
+    'settings'    => ['uri_scheme' => 'public'],
+  ]);
+  _myapi_reservations_ensure_field('field_license_expiry', [
+    'field_name'  => 'field_license_expiry',
+    'type'        => 'datestamp',
+    'cardinality' => 1,
+    'settings'    => $timestamp_settings,
+  ]);
+  _myapi_reservations_ensure_field('field_categories', [
+    'field_name'  => 'field_categories',
+    'type'        => 'taxonomy_term_reference',
+    'cardinality' => FIELD_CARDINALITY_UNLIMITED,
+    'settings'    => $category_settings,
+  ]);
+  // The two denormalised rating counters. They exist so the category listing
+  // does not run an AVG() per provider row; nothing writes them in SPEC 77 —
+  // the hooks that recalculate them belong to the rating flow spec, and until
+  // then they are simply empty.
+  _myapi_reservations_ensure_field('field_rating_avg', [
+    'field_name'  => 'field_rating_avg',
+    'type'        => 'number_decimal',
+    'cardinality' => 1,
+    // 3,2 holds 0.00 to 9.99, which covers a 1-5 average exactly.
+    'settings'    => ['precision' => 3, 'scale' => 2],
+  ]);
+  _myapi_reservations_ensure_field('field_rating_count', [
+    'field_name'  => 'field_rating_count',
+    'type'        => 'number_integer',
+    'cardinality' => 1,
+  ]);
+
+  // Own fields of 'service_request'.
+  _myapi_reservations_ensure_field('field_category', [
+    'field_name'  => 'field_category',
+    'type'        => 'taxonomy_term_reference',
+    'cardinality' => 1,
+    'settings'    => $category_settings,
+  ]);
+  _myapi_reservations_ensure_field('field_desired_start', [
+    'field_name'  => 'field_desired_start',
+    'type'        => 'datestamp',
+    'cardinality' => 1,
+    'settings'    => $timestamp_settings,
+  ]);
+  _myapi_reservations_ensure_field('field_request_status', [
+    'field_name'  => 'field_request_status',
+    'type'        => 'list_text',
+    'cardinality' => 1,
+    // From the catalogue, not restated here: the same list configures this
+    // field and will decide the transitions, so the two cannot drift.
+    'settings'    => ['allowed_values' => myapi_services_request_statuses()],
+  ]);
+  _myapi_reservations_ensure_field('field_assigned_offer', [
+    'field_name'  => 'field_assigned_offer',
+    'type'        => 'entityreference',
+    'cardinality' => 1,
+    'settings'    => $reference_settings['field_assigned_offer'],
+  ]);
+  _myapi_reservations_ensure_field('field_assigned_provider', [
+    'field_name'  => 'field_assigned_provider',
+    'type'        => 'entityreference',
+    'cardinality' => 1,
+    'settings'    => $reference_settings['field_assigned_provider'],
+  ]);
+  _myapi_reservations_ensure_field('field_closed_at', [
+    'field_name'  => 'field_closed_at',
+    'type'        => 'datestamp',
+    'cardinality' => 1,
+    'settings'    => $timestamp_settings,
+  ]);
+
+  // Own fields of 'service_offer'. field_request is shared with
+  // 'service_transaction' and created once, here.
+  _myapi_reservations_ensure_field('field_request', [
+    'field_name'  => 'field_request',
+    'type'        => 'entityreference',
+    'cardinality' => 1,
+    'settings'    => $reference_settings['field_request'],
+  ]);
+  _myapi_reservations_ensure_field('field_provider', [
+    'field_name'  => 'field_provider',
+    'type'        => 'entityreference',
+    'cardinality' => 1,
+    'settings'    => $reference_settings['field_provider'],
+  ]);
+  _myapi_reservations_ensure_field('field_offer_message', [
+    'field_name'  => 'field_offer_message',
+    'type'        => 'text_long',
+    'cardinality' => 1,
+  ]);
+  _myapi_reservations_ensure_field('field_offer_amount', [
+    'field_name'  => 'field_offer_amount',
+    'type'        => 'number_decimal',
+    'cardinality' => 1,
+    'settings'    => ['precision' => 10, 'scale' => 2],
+  ]);
+  _myapi_reservations_ensure_field('field_offer_status', [
+    'field_name'  => 'field_offer_status',
+    'type'        => 'list_text',
+    'cardinality' => 1,
+    'settings'    => ['allowed_values' => myapi_services_offer_statuses()],
+  ]);
+  // The three chat fields. Created now, empty and unused: the chat transport
+  // is not built by SPEC 77 and may not end up being Firebase at all, but the
+  // shape of the data it needs is already decided — one thread per offer — and
+  // creating the columns now costs nothing while a second update hook later
+  // would cost a deploy.
+  _myapi_reservations_ensure_field('field_firebase_path', [
+    'field_name'  => 'field_firebase_path',
+    'type'        => 'text',
+    'cardinality' => 1,
+    'settings'    => ['max_length' => 255],
+  ]);
+  _myapi_reservations_ensure_field('field_chat_opened_at', [
+    'field_name'  => 'field_chat_opened_at',
+    'type'        => 'datestamp',
+    'cardinality' => 1,
+    'settings'    => $timestamp_settings,
+  ]);
+  _myapi_reservations_ensure_field('field_last_message_at', [
+    'field_name'  => 'field_last_message_at',
+    'type'        => 'datestamp',
+    'cardinality' => 1,
+    'settings'    => $timestamp_settings,
+  ]);
+
+  // Own fields of 'service_rating'.
+  _myapi_reservations_ensure_field('field_rating_offer', [
+    'field_name'  => 'field_rating_offer',
+    'type'        => 'entityreference',
+    'cardinality' => 1,
+    'settings'    => $reference_settings['field_rating_offer'],
+  ]);
+  _myapi_reservations_ensure_field('field_rating_provider', [
+    'field_name'  => 'field_rating_provider',
+    'type'        => 'entityreference',
+    'cardinality' => 1,
+    'settings'    => $reference_settings['field_rating_provider'],
+  ]);
+  _myapi_reservations_ensure_field('field_stars', [
+    'field_name'  => 'field_stars',
+    'type'        => 'list_integer',
+    'cardinality' => 1,
+    'settings'    => ['allowed_values' => myapi_services_star_values()],
+  ]);
+  _myapi_reservations_ensure_field('field_rating_comment', [
+    'field_name'  => 'field_rating_comment',
+    'type'        => 'text_long',
+    'cardinality' => 1,
+  ]);
+
+  // (d) Instances of 'provider'.
+  _myapi_reservations_ensure_instance('field_provider_users', $provider_type, [
+    'field_name'  => 'field_provider_users',
+    'entity_type' => 'node',
+    'bundle'      => $provider_type,
+    'label'       => 'Usuarios asociados',
+    'required'    => 1,
+    'description' => 'Cuentas que operan este proveedor desde la app.',
+    'widget'      => ['type' => 'entityreference_autocomplete'],
+  ]);
+  _myapi_reservations_ensure_instance('field_phone', $provider_type, [
+    'field_name'  => 'field_phone',
+    'entity_type' => 'node',
+    'bundle'      => $provider_type,
+    'label'       => 'Teléfono',
+    'required'    => 1,
+    'widget'      => ['type' => 'text_textfield'],
+  ]);
+  _myapi_reservations_ensure_instance('field_address', $provider_type, [
+    'field_name'    => 'field_address',
+    'entity_type'   => 'node',
+    'bundle'        => $provider_type,
+    'label'         => 'Dirección',
+    'required'      => 0,
+    'settings'      => ['text_processing' => 1],
+    // 'plain_text' pinned for the same reason as field_description in SPEC 55:
+    // a format nobody has permission for disables the textarea entirely.
+    'default_value' => [['value' => '', 'format' => 'plain_text']],
+    'widget'        => ['type' => 'text_textarea'],
+  ]);
+  _myapi_reservations_ensure_instance('field_services_desc', $provider_type, [
+    'field_name'    => 'field_services_desc',
+    'entity_type'   => 'node',
+    'bundle'        => $provider_type,
+    'label'         => 'Descripción de servicios',
+    'required'      => 1,
+    'settings'      => ['text_processing' => 1],
+    'default_value' => [['value' => '', 'format' => 'plain_text']],
+    'widget'        => ['type' => 'text_textarea'],
+  ]);
+  _myapi_reservations_ensure_instance('field_photo', $provider_type, [
+    'field_name'  => 'field_photo',
+    'entity_type' => 'node',
+    'bundle'      => $provider_type,
+    'label'       => 'Foto',
+    'required'    => 0,
+    'settings'    => [
+      'file_extensions'    => 'png jpg jpeg',
+      'max_filesize'       => '3 MB',
+      'alt_field'          => 1,
+      'alt_field_required' => 0,
+    ],
+    'widget'      => ['type' => 'image_image'],
+  ]);
+  _myapi_reservations_ensure_instance('field_license_expiry', $provider_type, [
+    'field_name'  => 'field_license_expiry',
+    'entity_type' => 'node',
+    'bundle'      => $provider_type,
+    'label'       => 'Caducidad de la habilitación',
+    'required'    => 1,
+    'description' => 'Pasada esta fecha y hora el proveedor deja de ser activo: no aparece en el marketplace y no puede ofertar.',
+    'widget'      => $date_widget,
+  ]);
+  _myapi_reservations_ensure_instance('field_categories', $provider_type, [
+    'field_name'  => 'field_categories',
+    'entity_type' => 'node',
+    'bundle'      => $provider_type,
+    'label'       => 'Categorías',
+    'required'    => 1,
+    'widget'      => ['type' => 'options_buttons'],
+  ]);
+  _myapi_reservations_ensure_instance('field_rating_avg', $provider_type, [
+    'field_name'  => 'field_rating_avg',
+    'entity_type' => 'node',
+    'bundle'      => $provider_type,
+    'label'       => 'Calificación promedio',
+    'required'    => 0,
+    'description' => 'Calculado a partir de las calificaciones. No editar a mano.',
+    'widget'      => ['type' => 'number'],
+  ]);
+  _myapi_reservations_ensure_instance('field_rating_count', $provider_type, [
+    'field_name'  => 'field_rating_count',
+    'entity_type' => 'node',
+    'bundle'      => $provider_type,
+    'label'       => 'Cantidad de calificaciones',
+    'required'    => 0,
+    'description' => 'Calculado a partir de las calificaciones. No editar a mano.',
+    'widget'      => ['type' => 'number'],
+  ]);
+
+  // (d) Instances of 'service_request'.
+  //
+  // field_requester and field_condominium are the two shared fields of SPEC
+  // 32, reused here exactly as SPEC 55 reused them on 'reclamo'.
+  // field_condominium is what will let the 'administrador edificio' role see
+  // the requests of its buildings once a later spec adds the map entry; the
+  // field is created now so that spec is one line and not a schema change.
+  _myapi_reservations_ensure_instance('field_requester', $request_type, [
+    'field_name'  => 'field_requester',
+    'entity_type' => 'node',
+    'bundle'      => $request_type,
+    'label'       => 'Solicitante',
+    'required'    => 1,
+    'description' => 'Residente que pide el servicio y destinatario de las notificaciones de la solicitud.',
+    'widget'      => ['type' => 'entityreference_autocomplete'],
+  ]);
+  _myapi_reservations_ensure_instance('field_condominium', $request_type, [
+    'field_name'  => 'field_condominium',
+    'entity_type' => 'node',
+    'bundle'      => $request_type,
+    'label'       => 'Condominio',
+    'required'    => 1,
+    'widget'      => ['type' => 'entityreference_autocomplete'],
+  ]);
+  _myapi_reservations_ensure_instance('field_category', $request_type, [
+    'field_name'  => 'field_category',
+    'entity_type' => 'node',
+    'bundle'      => $request_type,
+    'label'       => 'Categoría',
+    'required'    => 1,
+    'widget'      => ['type' => 'options_select'],
+  ]);
+  _myapi_reservations_ensure_instance('field_description', $request_type, [
+    'field_name'    => 'field_description',
+    'entity_type'   => 'node',
+    'bundle'        => $request_type,
+    'label'         => 'Descripción',
+    'required'      => 1,
+    'settings'      => ['text_processing' => 1],
+    'default_value' => [['value' => '', 'format' => 'plain_text']],
+    'widget'        => ['type' => 'text_textarea'],
+  ]);
+  _myapi_reservations_ensure_instance('field_desired_start', $request_type, [
+    'field_name'  => 'field_desired_start',
+    'entity_type' => 'node',
+    'bundle'      => $request_type,
+    'label'       => 'Fecha de inicio deseada',
+    'required'    => 1,
+    'widget'      => $date_widget,
+  ]);
+  _myapi_reservations_ensure_instance('field_request_status', $request_type, [
+    'field_name'    => 'field_request_status',
+    'entity_type'   => 'node',
+    'bundle'        => $request_type,
+    'label'         => 'Estado',
+    'required'      => 1,
+    'default_value' => [['value' => MYAPI_SERVICES_REQUEST_STATUS_OPEN]],
+    'widget'        => ['type' => 'options_select'],
+  ]);
+  _myapi_reservations_ensure_instance('field_assigned_offer', $request_type, [
+    'field_name'  => 'field_assigned_offer',
+    'entity_type' => 'node',
+    'bundle'      => $request_type,
+    'label'       => 'Oferta adjudicada',
+    'required'    => 0,
+    'widget'      => ['type' => 'entityreference_autocomplete'],
+  ]);
+  _myapi_reservations_ensure_instance('field_assigned_provider', $request_type, [
+    'field_name'  => 'field_assigned_provider',
+    'entity_type' => 'node',
+    'bundle'      => $request_type,
+    'label'       => 'Proveedor adjudicado',
+    'required'    => 0,
+    'description' => 'Se rellena a partir de la oferta adjudicada. No editar a mano.',
+    'widget'      => ['type' => 'entityreference_autocomplete'],
+  ]);
+  _myapi_reservations_ensure_instance('field_closed_at', $request_type, [
+    'field_name'  => 'field_closed_at',
+    'entity_type' => 'node',
+    'bundle'      => $request_type,
+    'label'       => 'Fecha de cierre',
+    'required'    => 0,
+    'widget'      => $date_widget,
+  ]);
+
+  // (d) Instances of 'service_offer'.
+  _myapi_reservations_ensure_instance('field_request', $offer_type, [
+    'field_name'  => 'field_request',
+    'entity_type' => 'node',
+    'bundle'      => $offer_type,
+    'label'       => 'Solicitud',
+    'required'    => 1,
+    'widget'      => ['type' => 'entityreference_autocomplete'],
+  ]);
+  _myapi_reservations_ensure_instance('field_provider', $offer_type, [
+    'field_name'  => 'field_provider',
+    'entity_type' => 'node',
+    'bundle'      => $offer_type,
+    'label'       => 'Proveedor',
+    'required'    => 1,
+    'widget'      => ['type' => 'entityreference_autocomplete'],
+  ]);
+  _myapi_reservations_ensure_instance('field_offer_message', $offer_type, [
+    'field_name'    => 'field_offer_message',
+    'entity_type'   => 'node',
+    'bundle'        => $offer_type,
+    'label'         => 'Mensaje',
+    'required'      => 1,
+    'settings'      => ['text_processing' => 1],
+    'default_value' => [['value' => '', 'format' => 'plain_text']],
+    'widget'        => ['type' => 'text_textarea'],
+  ]);
+  _myapi_reservations_ensure_instance('field_offer_amount', $offer_type, [
+    'field_name'  => 'field_offer_amount',
+    'entity_type' => 'node',
+    'bundle'      => $offer_type,
+    'label'       => 'Monto',
+    'required'    => 0,
+    'description' => 'Opcional, en dólares. Una oferta sin monto es válida: el precio puede cerrarse en el chat.',
+    'widget'      => ['type' => 'number'],
+  ]);
+  _myapi_reservations_ensure_instance('field_offer_status', $offer_type, [
+    'field_name'    => 'field_offer_status',
+    'entity_type'   => 'node',
+    'bundle'        => $offer_type,
+    'label'         => 'Estado',
+    'required'      => 1,
+    'default_value' => [['value' => 'sent']],
+    'widget'        => ['type' => 'options_select'],
+  ]);
+  _myapi_reservations_ensure_instance('field_firebase_path', $offer_type, [
+    'field_name'  => 'field_firebase_path',
+    'entity_type' => 'node',
+    'bundle'      => $offer_type,
+    'label'       => 'Ruta del hilo de chat',
+    'required'    => 0,
+    'description' => 'Generada por el servidor al abrir el chat. Vacío = chat no abierto. Editarla a mano rompe el chat sin dar ningún error.',
+    'widget'      => ['type' => 'text_textfield'],
+  ]);
+  _myapi_reservations_ensure_instance('field_chat_opened_at', $offer_type, [
+    'field_name'  => 'field_chat_opened_at',
+    'entity_type' => 'node',
+    'bundle'      => $offer_type,
+    'label'       => 'Chat abierto el',
+    'required'    => 0,
+    'widget'      => $date_widget,
+  ]);
+  _myapi_reservations_ensure_instance('field_last_message_at', $offer_type, [
+    'field_name'  => 'field_last_message_at',
+    'entity_type' => 'node',
+    'bundle'      => $offer_type,
+    'label'       => 'Último mensaje',
+    'required'    => 0,
+    'widget'      => $date_widget,
+  ]);
+
+  // (d) Instances of 'service_rating'.
+  _myapi_reservations_ensure_instance('field_rating_offer', $rating_type, [
+    'field_name'  => 'field_rating_offer',
+    'entity_type' => 'node',
+    'bundle'      => $rating_type,
+    'label'       => 'Oferta',
+    'required'    => 1,
+    'description' => 'La calificación cuelga de la oferta, no de la solicitud: la oferta es lo único que une solicitud y proveedor, así que calificar a un proveedor que no ofertó ahí es irrepresentable.',
+    'widget'      => ['type' => 'entityreference_autocomplete'],
+  ]);
+  _myapi_reservations_ensure_instance('field_rating_provider', $rating_type, [
+    'field_name'  => 'field_rating_provider',
+    'entity_type' => 'node',
+    'bundle'      => $rating_type,
+    'label'       => 'Proveedor',
+    'required'    => 1,
+    'description' => 'Se rellena a partir de la oferta calificada. No editar a mano.',
+    'widget'      => ['type' => 'entityreference_autocomplete'],
+  ]);
+  _myapi_reservations_ensure_instance('field_stars', $rating_type, [
+    'field_name'  => 'field_stars',
+    'entity_type' => 'node',
+    'bundle'      => $rating_type,
+    'label'       => 'Estrellas',
+    'required'    => 1,
+    'widget'      => ['type' => 'options_select'],
+  ]);
+  _myapi_reservations_ensure_instance('field_rating_comment', $rating_type, [
+    'field_name'    => 'field_rating_comment',
+    'entity_type'   => 'node',
+    'bundle'        => $rating_type,
+    'label'         => 'Comentario',
+    'required'      => 0,
+    'settings'      => ['text_processing' => 1],
+    'default_value' => [['value' => '', 'format' => 'plain_text']],
+    'widget'        => ['type' => 'text_textarea'],
+  ]);
+
+  // (d) Instances of 'service_transaction' — the timeline, built exactly like
+  // 'claim_transaction' (SPEC 55): the same status field as its parent with no
+  // default (a transaction always records a deliberately chosen new status),
+  // plus the two fields that bundle already owns, reused here.
+  _myapi_reservations_ensure_instance('field_request', $transaction_type, [
+    'field_name'  => 'field_request',
+    'entity_type' => 'node',
+    'bundle'      => $transaction_type,
+    'label'       => 'Solicitud',
+    'required'    => 1,
+    'widget'      => ['type' => 'entityreference_autocomplete'],
+  ]);
+  _myapi_reservations_ensure_instance('field_request_status', $transaction_type, [
+    'field_name'  => 'field_request_status',
+    'entity_type' => 'node',
+    'bundle'      => $transaction_type,
+    'label'       => 'Estado',
+    'required'    => 1,
+    'widget'      => ['type' => 'options_select'],
+  ]);
+  _myapi_reservations_ensure_instance('field_status_date', $transaction_type, [
+    'field_name'  => 'field_status_date',
+    'entity_type' => 'node',
+    'bundle'      => $transaction_type,
+    'label'       => 'Fecha del estado',
+    'required'    => 1,
+    // date_select with the same input format as claim_transaction. This is the
+    // one date of the feature that is 'datetime' and not 'datestamp', because
+    // the field is shared with claims and already existed.
+    'widget'      => [
+      'type'     => 'date_select',
+      'settings' => [
+        'input_format'   => 'Y-m-d H:i',
+        'year_range'     => '-1:+3',
+        'increment'      => 1,
+        'label_position' => 'above',
+        'text_parts'     => [],
+      ],
+    ],
+  ]);
+  _myapi_reservations_ensure_instance('field_comment', $transaction_type, [
+    'field_name'    => 'field_comment',
+    'entity_type'   => 'node',
+    'bundle'        => $transaction_type,
+    'label'         => 'Comentario',
+    'required'      => 0,
+    'settings'      => ['text_processing' => 1],
+    'default_value' => [['value' => '', 'format' => 'plain_text']],
+    'widget'        => ['type' => 'text_textarea'],
+  ]);
+
+  // (d) field_images and field_attachment on the request, reused from SPEC
+  // 55/65. Both are private:// AT FIELD LEVEL, which is what makes the photos
+  // of a request born private without this installer having to say so: the
+  // uri_scheme belongs to the field, and the field already exists. The
+  // extensions and size limits are the claims ones, unchanged.
+  _myapi_reservations_ensure_instance('field_images', $request_type, [
+    'field_name'  => 'field_images',
+    'entity_type' => 'node',
+    'bundle'      => $request_type,
+    'label'       => 'Imágenes',
+    'required'    => 0,
+    'settings'    => [
+      'file_extensions'    => 'png jpg jpeg',
+      'max_filesize'       => '3 MB',
+      'alt_field'          => 1,
+      'alt_field_required' => 0,
+    ],
+    'widget'      => ['type' => 'image_image'],
+  ]);
+  _myapi_reservations_ensure_instance('field_attachment', $request_type, [
+    'field_name'  => 'field_attachment',
+    'entity_type' => 'node',
+    'bundle'      => $request_type,
+    'label'       => 'Adjunto',
+    'required'    => 0,
+    'settings'    => [
+      'file_extensions' => 'pdf doc docx xls xlsx',
+      'max_filesize'    => '3 MB',
+    ],
+    'widget'      => ['type' => 'file_generic'],
+  ]);
+}
+
+/**
+ * Destroys the services marketplace schema and all its data (opt-in, never
+ * automatic).
+ *
+ * Only ever called from myapi_uninstall() when
+ * MYAPI_SERVICES_DESTRUCTIVE_UNINSTALL is TRUE.
+ *
+ * One difference from the two teardowns above, and it is the whole reason this
+ * function is not a copy of them: this feature REUSES seven fields owned by
+ * reservations and claims (field_requester, field_condominium,
+ * field_description, field_images, field_attachment, field_status_date,
+ * field_comment). Deleting those fields would take every area, reservation,
+ * reclamo and claim transaction down with them. So the shared ones lose only
+ * their INSTANCE on this feature's bundles, and the fields themselves are left
+ * standing — which is also what node_type_delete() would not do on its own.
+ */
+function _myapi_services_uninstall_destructive() {
+  module_load_include('inc', 'myapi', 'includes/myapi.services_common');
+
+  // Fields this feature owns: deleted outright, instances and data included.
+  $owned = [
+    'field_category_code',
+    'field_category_icon',
+    'field_provider_users',
+    'field_phone',
+    'field_address',
+    'field_services_desc',
+    'field_photo',
+    'field_license_expiry',
+    'field_categories',
+    'field_rating_avg',
+    'field_rating_count',
+    'field_category',
+    'field_desired_start',
+    'field_request_status',
+    'field_assigned_offer',
+    'field_assigned_provider',
+    'field_closed_at',
+    'field_request',
+    'field_provider',
+    'field_offer_message',
+    'field_offer_amount',
+    'field_offer_status',
+    'field_firebase_path',
+    'field_chat_opened_at',
+    'field_last_message_at',
+    'field_rating_offer',
+    'field_rating_provider',
+    'field_stars',
+    'field_rating_comment',
+  ];
+  foreach ($owned as $field_name) {
+    if (field_info_field($field_name)) {
+      field_delete_field($field_name);
+    }
+  }
+
+  // Fields owned by reservations (SPEC 32) and claims (SPEC 55): only the
+  // instances created by this feature go.
+  $shared = [
+    MYAPI_SERVICES_REQUEST_TYPE => [
+      'field_requester',
+      'field_condominium',
+      'field_description',
+      'field_images',
+      'field_attachment',
+    ],
+    MYAPI_SERVICES_TRANSACTION_TYPE => [
+      'field_status_date',
+      'field_comment',
+    ],
+  ];
+  foreach ($shared as $bundle => $field_names) {
+    foreach ($field_names as $field_name) {
+      $instance = field_info_instance('node', $field_name, $bundle);
+      if ($instance) {
+        field_delete_instance($instance);
+      }
+    }
+  }
+
+  foreach (myapi_services_node_types() as $type) {
+    if (node_type_load($type)) {
+      node_type_delete($type);
+    }
+  }
+
+  $vocabulary = taxonomy_vocabulary_machine_name_load(MYAPI_SERVICES_CATEGORY_VOCABULARY);
+  if ($vocabulary) {
+    taxonomy_vocabulary_delete($vocabulary->vid);
+  }
+
+  // Purge the deleted field data now instead of waiting for cron.
+  field_purge_batch(1000);
+}
+
+/**
  * Creates the my_api_tokens table on sites where the module is already enabled.
  */
 function myapi_update_7001() {
@@ -2510,4 +3455,29 @@ function myapi_update_7023() {
  */
 function myapi_update_7024() {
   myapi_mail_system_register();
+}
+
+/**
+ * SPEC 77: creates the services marketplace content types and fields.
+ *
+ * myapi_install() runs _myapi_services_install() on a fresh site, so this is
+ * the same call for a site where the module is already installed — the exact
+ * pattern of myapi_update_7006() (reservations) and myapi_update_7017()
+ * (claims).
+ *
+ * It is safe to re-run: every creation inside goes through the idempotent
+ * _ensure_* helpers, so a second pass finds everything in place and writes
+ * nothing.
+ *
+ * It creates STRUCTURE ONLY. No permission is granted, no role is touched, no
+ * route is registered and no node is created, so running it changes nothing
+ * that any user or the app can see until a later spec builds on it.
+ */
+function myapi_update_7025() {
+  _myapi_services_install();
+
+  return t('SPEC 77: creados el vocabulario @vocabulary y los tipos de contenido @types con sus campos.', [
+    '@vocabulary' => MYAPI_SERVICES_CATEGORY_VOCABULARY,
+    '@types'      => implode(', ', myapi_services_node_types()),
+  ]);
 }
