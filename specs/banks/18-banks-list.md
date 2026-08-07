@@ -6,6 +6,16 @@
   - `01-bootstrap-modulo` (Implemented) — esqueleto del módulo, `hook_menu()`, envelope de respuesta y helpers `myapi_respond()`/`myapi_error()`.
   - `05-middleware-access-token-logout` (Implemented) — helper `myapi_auth_require_access_token()` e includes `myapi.token`/`myapi.auth` que validan el Bearer access token y devuelven la fila del token (o cortan con `401`).
   - `resources/condominium.resource.inc` (referencia) — patrón del recurso autenticado de solo lectura: dispatcher que solo acepta `GET` y handler que exige el access token con `myapi_auth_require_access_token()` antes de responder.
+> **Errata (2026-08-07, ver `76-banks-unit-tests`).** Todo lo que este spec dice
+> sobre **ordenar por `id`** quedó desactualizado: el commit `342b9a5`
+> (*feat(bank): add sort param to banks list endpoint*) cambió el criterio a
+> **orden alfabético por `name`**, sin distinguir mayúsculas (`strcasecmp()`), y
+> actualizó `resources/bank.resource.inc` y `docs/bank.md` pero no este
+> documento. El parámetro `sort` (`asc`/`desc`, default `asc`, criterio laxo) y
+> todo lo demás siguen vigentes tal cual están descritos acá. La fuente de
+> verdad del orden es `docs/bank.md`, y está fijada por
+> `tests/unit/BankEndpointTest.php`.
+
 - **Objetivo:** Agregar `GET /api/v1/banks`, un endpoint **autenticado** de solo lectura que expone los términos del vocabulario de taxonomía `bancos` (machine name `bancos`) devolviendo por cada término su `id` (int), `name` y `description`, ambos saneados con `check_plain()`. El resultado viene **ordenado por `id`**, ascendente por defecto, con un parámetro opcional `sort` (`asc`/`desc`) para invertir el orden. Requiere un Bearer access token válido de cualquier usuario autenticado (no expone datos de sistema de forma pública).
 
 ---
