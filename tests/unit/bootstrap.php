@@ -233,6 +233,25 @@ if (!function_exists('form_set_error')) {
   }
 }
 
+/**
+ * form_error(), the element-level sibling of form_set_error() (SPEC 77).
+ *
+ * Drupal resolves the element's #parents into the same flat name
+ * form_set_error() takes; here the element's own '#name' (or its first
+ * #parents entry) is enough, because every caller in this module validates a
+ * single top-level field. A test reads the errors back from
+ * $GLOBALS['myapi_test_form_errors'], the same array form_set_error() writes.
+ */
+if (!function_exists('form_error')) {
+  function form_error(&$element, $message = '') {
+    $name = isset($element['#name'])
+      ? $element['#name']
+      : (isset($element['#parents'][0]) ? $element['#parents'][0] : 'element');
+
+    return form_set_error($name, $message);
+  }
+}
+
 if (!function_exists('element_children')) {
   /**
    * Every key that is not a '#property'. Drupal's own version also sorts by
@@ -278,15 +297,23 @@ if (!function_exists('url')) {
   /**
    * The root-relative half of Drupal's url() (SPEC 73).
    *
-   * Two declared divergences, neither reachable from the code under test: path
-   * aliases are not resolved (myapi passes system paths only), and 'absolute'
-   * is ignored (the reset form posts to itself, relatively). What IS faithful
-   * is the query string, which is the part the tests assert: Drupal builds it
-   * with drupal_http_build_query(), whose difference from http_build_query()
-   * is the encoding of the '/' character — no myapi query value contains one.
+   * One declared divergence: path aliases are not resolved (myapi passes
+   * system paths only). What IS faithful is the query string, which is the
+   * part the tests assert — Drupal builds it with drupal_http_build_query(),
+   * whose difference from http_build_query() is the encoding of the '/'
+   * character, and no myapi query value contains one.
+   *
+   * 'absolute' was ignored until SPEC 77, when it stopped being unreachable:
+   * every file URL the claims endpoint puts in a response is built with it,
+   * and an app that received a root-relative one would request it against its
+   * own host. It now prefixes $base_url, the same value Drupal would.
    */
   function url($path = NULL, array $options = []) {
     $url = '/' . ltrim((string) $path, '/');
+
+    if (!empty($options['absolute'])) {
+      $url = rtrim($GLOBALS['base_url'], '/') . $url;
+    }
 
     if (!empty($options['query'])) {
       $url .= '?' . http_build_query($options['query']);
@@ -506,6 +533,10 @@ class MyapiTestSelectQuery implements IteratorAggregate {
   private $order = [];
   private $range = NULL;
   private $count_mode = FALSE;
+  private $tags = [];
+  private $extenders = [];
+  private $pager_limit = NULL;
+  private $field_sources = [];
 
   public function __construct($table, $alias) {
     $this->table = $table;
@@ -518,18 +549,30 @@ class MyapiTestSelectQuery implements IteratorAggregate {
     }
     foreach ($fields as $field) {
       $this->fields[] = $field;
+      $this->field_sources[$field] = $table_alias . '.' . $field;
     }
 
     return $this;
   }
 
   public function addField($table_alias, $field, $alias = NULL) {
-    $this->fields[] = $alias !== NULL ? $alias : $field;
+    $alias = $alias !== NULL ? $alias : $field;
+    $this->fields[] = $alias;
+    $this->field_sources[$alias] = $table_alias . '.' . $field;
 
     return $this;
   }
 
   public function condition($field, $value = NULL, $operator = NULL) {
+    // A condition GROUP — db_or() / db_and() (SPEC 77). The claims endpoint
+    // builds its whole visibility rule as one: "public OR filed by the
+    // reader". Recorded as a single condition whose 'group' carries the
+    // sub-conditions, so a test can read the shape as well as the outcome.
+    if ($field instanceof MyapiTestConditionGroup) {
+      $this->conditions[] = ['field' => NULL, 'value' => NULL, 'operator' => 'GROUP', 'group' => $field];
+
+      return $this;
+    }
     if (!is_string($field)) {
       throw new RuntimeException('MyapiTestSelectQuery: only string conditions are supported.');
     }
@@ -540,6 +583,48 @@ class MyapiTestSelectQuery implements IteratorAggregate {
     ];
 
     return $this;
+  }
+
+  /**
+   * A query tag, recorded and never applied (SPEC 77).
+   *
+   * ->addTag('node_access') is how the back-office claims listing delegates
+   * its condominium scoping to hook_query_alter(); the alter itself is
+   * Drupal's dispatch and cannot run here. Recording the tag is what lets a
+   * test assert the delegation happened — losing that call is the difference
+   * between "an administrador edificio sees their buildings" and "sees every
+   * building of the site", and nothing else in the query would show it.
+   */
+  public function addTag($tag) {
+    $this->tags[] = $tag;
+
+    return $this;
+  }
+
+  public function hasTag($tag) {
+    return in_array($tag, $this->tags, TRUE);
+  }
+
+  /**
+   * PagerDefault, as far as this layer can go (SPEC 77).
+   *
+   * The real extender reads $_GET['page'], runs its own COUNT(*) and computes
+   * an offset. Here it records the extender and answers the same object, so
+   * ->limit() below can behave like the range it ultimately becomes. What is
+   * NOT simulated is the page offset: every fixture pager answers the FIRST
+   * page. A test about page 2 of the back-office listing belongs to
+   * tests/integration, and no case here pretends otherwise.
+   */
+  public function extend($class) {
+    $this->extenders[] = $class;
+
+    return $this;
+  }
+
+  public function limit($limit = 10) {
+    $this->pager_limit = $limit;
+
+    return $this->range(0, $limit);
   }
 
   public function isNull($field) {
@@ -672,6 +757,8 @@ class MyapiTestSelectQuery implements IteratorAggregate {
       'order'      => $this->order,
       'range'      => $this->range,
       'count'      => $this->count_mode,
+      'tags'       => $this->tags,
+      'extenders'  => $this->extenders,
     ];
 
     if ($this->count_mode) {
@@ -712,7 +799,13 @@ class MyapiTestSelectQuery implements IteratorAggregate {
 
   private function matches(array $row) {
     foreach ($this->conditions as $condition) {
-      $column = $this->column($condition['field']);
+      if ($condition['operator'] === 'GROUP') {
+        if (!$this->matchesGroup($row, $condition['group'])) {
+          return FALSE;
+        }
+        continue;
+      }
+      $column = $this->conditionKey($row, $condition['field']);
       if (!array_key_exists($column, $row)) {
         continue;
       }
@@ -722,7 +815,7 @@ class MyapiTestSelectQuery implements IteratorAggregate {
     }
 
     foreach ($this->where as $fragment) {
-      $column = $this->column($fragment['field']);
+      $column = $this->conditionKey($row, $fragment['field']);
       if (!array_key_exists($column, $row)) {
         continue;
       }
@@ -739,6 +832,38 @@ class MyapiTestSelectQuery implements IteratorAggregate {
     }
 
     return TRUE;
+  }
+
+  /**
+   * Evaluates a db_or() / db_and() group over one fixture row (SPEC 77).
+   *
+   * Same laxness as the top-level conditions, applied one level down: a
+   * sub-condition on a column the fixture does not carry is UNKNOWN and does
+   * not participate. A group whose sub-conditions are all unknown is
+   * satisfied, exactly as a single skipped condition is — which keeps a test
+   * free to seed only the columns its case is about. With at least one known
+   * sub-condition, OR needs one of them true and AND needs all of them.
+   */
+  private function matchesGroup(array $row, MyapiTestConditionGroup $group) {
+    $known = 0;
+    $true = 0;
+
+    foreach ($group->conditions() as $condition) {
+      $column = $this->conditionKey($row, $condition['field']);
+      if (!array_key_exists($column, $row)) {
+        continue;
+      }
+      $known++;
+      if ($this->compare($row[$column], $condition['value'], $condition['operator'])) {
+        $true++;
+      }
+    }
+
+    if ($known === 0) {
+      return TRUE;
+    }
+
+    return $group->conjunction() === 'OR' ? $true > 0 : $true === $known;
   }
 
   /**
@@ -784,7 +909,17 @@ class MyapiTestSelectQuery implements IteratorAggregate {
 
   private function sort(array $rows) {
     foreach (array_reverse($this->order) as $order) {
+      // Same qualified-then-bare resolution as the conditions (SPEC 77): the
+      // ORDER BY of the claims fetch names the very column whose alias
+      // collides with node.status, and a fixture that disambiguates it with
+      // the qualified key must still sort by it.
       $column = $this->column($order['field']);
+      foreach ($rows as $row) {
+        if (array_key_exists($order['field'], $row)) {
+          $column = $order['field'];
+          break;
+        }
+      }
       $direction = $order['direction'] === 'DESC' ? -1 : 1;
       // usort() is not stable in PHP 7.4, so the original position is carried
       // as the tie-breaker: two rows with the same delta keep the order the
@@ -815,10 +950,30 @@ class MyapiTestSelectQuery implements IteratorAggregate {
 
     $projected = [];
     foreach ($this->fields as $field) {
-      $projected[$field] = array_key_exists($field, $row) ? $row[$field] : NULL;
+      // The QUALIFIED source first ('fs.field_status_value'), then the alias.
+      // A fixture only needs the qualified form when an alias collides with a
+      // real column of the base table — 'status' is projected off
+      // field_data_field_status while n.status is the published flag, and a
+      // flat row cannot hold both (SPEC 77).
+      $source = isset($this->field_sources[$field]) ? $this->field_sources[$field] : NULL;
+
+      if ($source !== NULL && array_key_exists($source, $row)) {
+        $projected[$field] = $row[$source];
+      }
+      else {
+        $projected[$field] = array_key_exists($field, $row) ? $row[$field] : NULL;
+      }
     }
 
     return $projected;
+  }
+
+  /**
+   * The fixture key a condition reads: the qualified name when the row carries
+   * it, the bare column otherwise (SPEC 77 — same disambiguation as project()).
+   */
+  private function conditionKey(array $row, $field) {
+    return array_key_exists($field, $row) ? $field : $this->column($field);
   }
 
   private function column($field) {
@@ -899,6 +1054,70 @@ class MyapiTestStatement implements IteratorAggregate, Countable {
     return count($this->rows);
   }
 
+}
+
+/**
+ * A db_or() / db_and() condition group (SPEC 77).
+ *
+ * Drupal's DatabaseCondition, reduced to what myapi builds with it: a
+ * conjunction and a flat list of simple conditions. No nesting, because no
+ * query in this module nests one — a group inside a group throws rather than
+ * being silently flattened into the wrong boolean.
+ */
+class MyapiTestConditionGroup {
+
+  private $conjunction;
+  private $conditions = [];
+
+  public function __construct($conjunction) {
+    $this->conjunction = $conjunction;
+  }
+
+  public function condition($field, $value = NULL, $operator = NULL) {
+    if (!is_string($field)) {
+      throw new RuntimeException('MyapiTestConditionGroup: nested groups are not supported.');
+    }
+    $this->conditions[] = [
+      'field'    => $field,
+      'value'    => $value,
+      'operator' => $operator !== NULL ? strtoupper($operator) : (is_array($value) ? 'IN' : '='),
+    ];
+
+    return $this;
+  }
+
+  public function isNull($field) {
+    $this->conditions[] = ['field' => $field, 'value' => NULL, 'operator' => 'IS NULL'];
+
+    return $this;
+  }
+
+  public function isNotNull($field) {
+    $this->conditions[] = ['field' => $field, 'value' => NULL, 'operator' => 'IS NOT NULL'];
+
+    return $this;
+  }
+
+  public function conjunction() {
+    return $this->conjunction;
+  }
+
+  public function conditions() {
+    return $this->conditions;
+  }
+
+}
+
+if (!function_exists('db_or')) {
+  function db_or() {
+    return new MyapiTestConditionGroup('OR');
+  }
+}
+
+if (!function_exists('db_and')) {
+  function db_and() {
+    return new MyapiTestConditionGroup('AND');
+  }
 }
 
 if (!function_exists('db_select')) {
@@ -1095,6 +1314,278 @@ if (!function_exists('form_load_include')) {
     }
 
     return FALSE;
+  }
+}
+
+/**
+ * The Field API, as read by the code under test (SPEC 77).
+ *
+ * field_info_field() answers the same $GLOBALS['myapi_test_fields'] map
+ * field_read_field() already reads, so a fixture serves both; the difference
+ * that matters to production — the cached definition carries 'bundles', the
+ * stored one does not — is documented at field_read_field() above and no test
+ * depends on it. FALSE for an unknown field is the whole point: it is how a
+ * site missing 'field_status' or 'field_claim_type' answers, and the claims
+ * code has an explicit branch for it in four places.
+ */
+if (!function_exists('field_info_field')) {
+  function field_info_field($field_name) {
+    return isset($GLOBALS['myapi_test_fields'][$field_name])
+      ? $GLOBALS['myapi_test_fields'][$field_name]
+      : NULL;
+  }
+}
+
+if (!function_exists('field_info_instance')) {
+  function field_info_instance($entity_type, $field_name, $bundle) {
+    $key = $entity_type . ':' . $bundle . ':' . $field_name;
+
+    return isset($GLOBALS['myapi_test_field_instances'][$key])
+      ? $GLOBALS['myapi_test_field_instances'][$key]
+      : NULL;
+  }
+}
+
+/**
+ * Seeds the allowed_values of a list field (SPEC 77).
+ *
+ * The one shape of field definition the claims code reads: every catalogue
+ * check in the domain — the two back-office selects, the two write-path
+ * validators — is a lookup into this array.
+ *
+ * @param array $fields  Field name => [stored value => label].
+ */
+function myapi_test_field_seed_allowed_values(array $fields = []) {
+  $GLOBALS['myapi_test_fields'] = [];
+  foreach ($fields as $field_name => $allowed_values) {
+    $GLOBALS['myapi_test_fields'][$field_name] = [
+      'field_name' => $field_name,
+      'type'       => 'list_text',
+      'settings'   => ['allowed_values' => $allowed_values],
+    ];
+  }
+}
+
+/**
+ * Nodes and files, as fixtures (SPEC 77).
+ *
+ * node_load() and file_load() are the two loaders the claims code calls from
+ * inside a decision — whether a transaction's claim exists, whether a file
+ * still does, which condominium a claim belongs to — so they answer objects a
+ * test seeded and FALSE for anything else, exactly as Drupal answers for a
+ * deleted nid or fid. Nothing loads fields, revisions or access records: a
+ * test that needs those builds them into the fixture object.
+ */
+function myapi_test_node_seed(array $nodes = []) {
+  $GLOBALS['myapi_test_nodes'] = [];
+  foreach ($nodes as $nid => $node) {
+    $GLOBALS['myapi_test_nodes'][$nid] = is_object($node) ? $node : (object) $node;
+  }
+}
+
+function myapi_test_file_seed(array $files = []) {
+  $GLOBALS['myapi_test_files'] = [];
+  foreach ($files as $fid => $file) {
+    $GLOBALS['myapi_test_files'][$fid] = is_object($file) ? $file : (object) $file;
+  }
+}
+
+/**
+ * drupal_static(), as a resettable global (SPEC 77).
+ *
+ * The per-request memo Drupal gives a function that would otherwise repeat a
+ * query. myapi uses it for the building admin's condominiums and for the
+ * condominium of a node, both read several times per request. Faithful in the
+ * one way that matters — it is a REFERENCE, so the caller's `$cache = &...`
+ * writes back into it — and resettable between tests, which the real one is
+ * not: without myapi_test_static_reset() in setUp() the second test of a class
+ * would read the first one's fixture.
+ */
+if (!function_exists('drupal_static')) {
+  function &drupal_static($name, $default_value = NULL, $reset = FALSE) {
+    if (!isset($GLOBALS['myapi_test_statics'])) {
+      $GLOBALS['myapi_test_statics'] = [];
+    }
+    if ($reset || !array_key_exists($name, $GLOBALS['myapi_test_statics'])) {
+      $GLOBALS['myapi_test_statics'][$name] = $default_value;
+    }
+
+    return $GLOBALS['myapi_test_statics'][$name];
+  }
+}
+
+function myapi_test_static_reset() {
+  $GLOBALS['myapi_test_statics'] = [];
+}
+
+/**
+ * The langcode key every field of this module is stored under (SPEC 77).
+ */
+if (!defined('LANGUAGE_NONE')) {
+  define('LANGUAGE_NONE', 'und');
+}
+
+/**
+ * node_save() and its two companions, as RECORDERS (SPEC 77).
+ *
+ * The loudest disclaimer of this file after db_select(): nothing here writes a
+ * node. What they make testable is the ORCHESTRATION around the write — which
+ * object the resource hands to node_save() after validating a request, in what
+ * order the files are tied to it, and what the endpoint answers afterwards.
+ * That object is the whole contract of myapi_claim_build_node(): field_requester
+ * is the token's uid and never the request's, field_status is written
+ * explicitly as 'received', and node.uid is the resident. A test can read all
+ * three off $GLOBALS['myapi_test_node_saves'].
+ *
+ * What stays entirely with tests/integration: that node_save() persists, that
+ * hook_node_insert() fires and creates the initial transaction, that
+ * file_usage_add() protects a file from cron. A green test here says the
+ * resource asked for the right thing, never that Drupal did it.
+ *
+ * The saved node gets the nid the test pre-assigned on the object, or the next
+ * one from $GLOBALS['myapi_test_next_nid'] (900 by default), so the response
+ * block that re-fetches the claim can be seeded in advance.
+ */
+if (!function_exists('node_object_prepare')) {
+  function node_object_prepare(&$node) {
+    $node->language = isset($node->language) ? $node->language : LANGUAGE_NONE;
+    $node->status = isset($node->status) ? $node->status : 1;
+    $node->promote = isset($node->promote) ? $node->promote : 0;
+    $node->sticky = isset($node->sticky) ? $node->sticky : 0;
+    $node->comment = isset($node->comment) ? $node->comment : 0;
+    $node->is_new = empty($node->nid);
+  }
+}
+
+if (!function_exists('node_save')) {
+  function node_save($node) {
+    if (empty($node->nid)) {
+      $next = isset($GLOBALS['myapi_test_next_nid']) ? $GLOBALS['myapi_test_next_nid'] : 900;
+      $node->nid = $next;
+      $GLOBALS['myapi_test_next_nid'] = $next + 1;
+    }
+    $GLOBALS['myapi_test_node_saves'][] = $node;
+
+    return $node;
+  }
+}
+
+if (!function_exists('file_usage_add')) {
+  function file_usage_add($file, $module, $type, $id, $count = 1) {
+    $GLOBALS['myapi_test_file_usage'][] = ['op' => 'add', 'fid' => $file->fid, 'module' => $module, 'type' => $type, 'id' => $id];
+  }
+}
+
+if (!function_exists('file_usage_delete')) {
+  function file_usage_delete($file, $module, $type = NULL, $id = NULL, $count = 1) {
+    $GLOBALS['myapi_test_file_usage'][] = ['op' => 'delete', 'fid' => $file->fid, 'module' => $module, 'type' => $type, 'id' => $id];
+  }
+}
+
+if (!function_exists('file_delete')) {
+  function file_delete($file, $force = FALSE) {
+    $GLOBALS['myapi_test_file_deletes'][] = (int) $file->fid;
+
+    return TRUE;
+  }
+}
+
+/**
+ * Everything the write paths recorded since the last reset (SPEC 77).
+ */
+function myapi_test_write_reset() {
+  $GLOBALS['myapi_test_node_saves'] = [];
+  $GLOBALS['myapi_test_file_usage'] = [];
+  $GLOBALS['myapi_test_file_deletes'] = [];
+  $GLOBALS['myapi_test_file_transfers'] = [];
+  $GLOBALS['myapi_test_next_nid'] = 900;
+}
+
+function myapi_test_node_saves() {
+  return isset($GLOBALS['myapi_test_node_saves']) ? $GLOBALS['myapi_test_node_saves'] : [];
+}
+
+function myapi_test_file_usage() {
+  return isset($GLOBALS['myapi_test_file_usage']) ? $GLOBALS['myapi_test_file_usage'] : [];
+}
+
+function myapi_test_file_deletes() {
+  return isset($GLOBALS['myapi_test_file_deletes']) ? $GLOBALS['myapi_test_file_deletes'] : [];
+}
+
+function myapi_test_file_transfers() {
+  return isset($GLOBALS['myapi_test_file_transfers']) ? $GLOBALS['myapi_test_file_transfers'] : [];
+}
+
+if (!function_exists('node_load')) {
+  function node_load($nid, $vid = NULL, $reset = FALSE) {
+    return isset($GLOBALS['myapi_test_nodes'][(int) $nid])
+      ? $GLOBALS['myapi_test_nodes'][(int) $nid]
+      : FALSE;
+  }
+}
+
+if (!function_exists('file_load')) {
+  function file_load($fid) {
+    return isset($GLOBALS['myapi_test_files'][(int) $fid])
+      ? $GLOBALS['myapi_test_files'][(int) $fid]
+      : FALSE;
+  }
+}
+
+/**
+ * node_access(), answered from a fixture (SPEC 77).
+ *
+ * The one Drupal decision the timeline's edit link defers to. A test sets
+ * $GLOBALS['myapi_test_node_access'] as ['<op>:<nid>' => bool] for the
+ * specific answers it cares about, and
+ * $GLOBALS['myapi_test_node_access_default'] for the rest (TRUE when unset).
+ * What this canNOT prove is Drupal's own resolution — the grants table, the
+ * 'bypass node access' permission, the hook_node_access() of this module — so
+ * no case here reads its result as "the building admin scoping works".
+ */
+if (!function_exists('node_access')) {
+  function node_access($op, $node, $account = NULL) {
+    $nid = is_object($node) && isset($node->nid) ? (int) $node->nid : $node;
+    $key = $op . ':' . $nid;
+    $GLOBALS['myapi_test_node_access_calls'][] = $key;
+
+    if (isset($GLOBALS['myapi_test_node_access'][$key])) {
+      return $GLOBALS['myapi_test_node_access'][$key];
+    }
+
+    return isset($GLOBALS['myapi_test_node_access_default'])
+      ? $GLOBALS['myapi_test_node_access_default']
+      : TRUE;
+  }
+}
+
+/**
+ * l(), reduced to the two things a test can read off it (SPEC 77): that the
+ * text is escaped and that the path is the one the code built. The real
+ * function resolves aliases, languages and attributes; none of that changes
+ * which node a back-office cell points at.
+ */
+if (!function_exists('l')) {
+  function l($text, $path, array $options = []) {
+    return '<a href="/' . $path . '">' . check_plain($text) . '</a>';
+  }
+}
+
+/**
+ * file_transfer(), which ENDS the request (SPEC 77).
+ *
+ * The success path of GET /api/v1/claims/%/files/% — the one endpoint of the
+ * module that answers bytes instead of the JSON envelope. The stub records the
+ * uri and the headers and throws MyapiExit, the same way drupal_exit() does
+ * for every other responder, so myapi_test_capture() sees a request that ended
+ * and a test can assert the headers without streaming a file.
+ */
+if (!function_exists('file_transfer')) {
+  function file_transfer($uri, $headers) {
+    $GLOBALS['myapi_test_file_transfers'][] = ['uri' => $uri, 'headers' => $headers];
+
+    throw new MyapiExit('file_transfer');
   }
 }
 

@@ -201,6 +201,40 @@ classes:
   loaded), the two degraded paths that both answer `200 {"banks":[]}`, and the
   ordering.
 
+Since SPEC 77 the layer also covers **the claims domain** (SPECS 55–71), the
+largest one in the module: six classes, 255 cases.
+
+- `tests/unit/ClaimEndpointTest.php` — `GET /api/v1/claims` and
+  `GET /api/v1/claims/%` end to end. Its reason to exist is the visibility rule
+  of `myapi_claim_base_query()` — condominium of the reader AND (public OR filed
+  by them) — which is what stands between a resident and their neighbours'
+  private claims, and had no test in any layer.
+- `tests/unit/ClaimWriteGuardsTest.php` — the three write paths and the ORDER of
+  their guards: 403 before 409, both before the body.
+- `tests/unit/ClaimFileAccessTest.php` — `includes/myapi.claims_files.inc`
+  (which had zero tests) and the binary endpoint that serves the private files.
+- `tests/unit/ClaimNotificationRowTest.php` — the resolved row every text reads,
+  the three detectors that decide whether anything is sent, and the audience.
+- `tests/unit/ClaimsAdminPageTest.php` — the back-office listing, including the
+  `->addTag('node_access')` that is the only thing scoping it per condominium.
+- `tests/unit/ClaimTimelineTest.php` — the transactions timeline, the edit link
+  and the status-date validator.
+
+That spec is also where the layer's stub set grew the most: `db_or()`/`db_and()`
+condition groups, `addTag()`/`extend()`/`limit()`, `field_info_field()`,
+`node_load()`, `file_load()`, `node_access()`, `l()`, `drupal_static()`,
+`file_transfer()` and — the ones that need the loudest disclaimer — `node_save()`
+and the `file_usage_*` family **as recorders**. A test can assert the node the
+resource handed to `node_save()`, which is the whole contract of
+`myapi_claim_build_node()`; it can never assert that Drupal stored it, that
+`hook_node_insert()` created the initial transaction, or that the closing sync
+moved the claim's status. SPEC 77 verified all of it by mutation — 26 deliberate
+breakages, 26 caught, two of which survived the first pass and got the tests
+corrected — and lists three things it deliberately leaves out: the file-upload
+path, the happy path of `PUT /claims/%/close` (its JSON body cannot be injected,
+because `myapi_request_body()` reads `php://input` and memoises it), and the
+notification orchestrators.
+
 Its two stubs — `taxonomy_vocabulary_machine_name_load()` and
 `taxonomy_get_tree()` — are the same kind of fixture as `db_select()`: they
 answer what `myapi_test_taxonomy_seed()` seeded and record every call with its
