@@ -5,6 +5,9 @@ use PHPUnit\Framework\TestCase;
 // The constant MYAPI_BUILDING_ADMIN_CONDO_FIELD is defined here and is one of
 // the catalogue keys, so this include comes first.
 require_once __DIR__ . '/../../includes/myapi.building_admin.inc';
+// Same reason for the services catalogue (SPEC 77): the marketplace bundle
+// names are catalogue keys, and module_load_include() is a no-op stub here.
+require_once __DIR__ . '/../../includes/myapi.services_common.inc';
 require_once __DIR__ . '/../../myapi.install';
 
 /**
@@ -48,10 +51,17 @@ require_once __DIR__ . '/../../myapi.install';
 class EntityReferenceFieldSettingsTest extends TestCase {
 
   /**
-   * The six entityreference fields this module creates.
+   * The thirteen entityreference fields this module creates.
    *
    * Written out rather than derived from the catalogue: a test that reads its
    * expectations from the code under test proves nothing.
+   *
+   * The last seven are the marketplace of SPEC 77. Four of them point at only
+   * two bundles between them ('provider' three times, 'service_offer' twice),
+   * which is deliberate and not a candidate for sharing: 'the provider that
+   * offered' and 'the provider that was awarded' are different facts stored on
+   * different bundles, and one shared field would put them in a single table
+   * where no query could tell them apart.
    */
   private const FIELDS = [
     'field_condominium',
@@ -60,6 +70,13 @@ class EntityReferenceFieldSettingsTest extends TestCase {
     'field_area',
     'field_requester',
     'field_claim',
+    'field_provider_users',
+    'field_request',
+    'field_provider',
+    'field_assigned_offer',
+    'field_assigned_provider',
+    'field_rating_offer',
+    'field_rating_provider',
   ];
 
   /**
@@ -104,6 +121,12 @@ class EntityReferenceFieldSettingsTest extends TestCase {
       'reservation unit'               => ['field_unit', ['vivienda' => 'vivienda']],
       'reservation area'               => ['field_area', ['area' => 'area']],
       'transaction claim'              => ['field_claim', [MYAPI_BUILDING_ADMIN_CLAIM_TYPE => MYAPI_BUILDING_ADMIN_CLAIM_TYPE]],
+      'offer and timeline request'     => ['field_request', [MYAPI_SERVICES_REQUEST_TYPE => MYAPI_SERVICES_REQUEST_TYPE]],
+      'offer provider'                 => ['field_provider', [MYAPI_SERVICES_PROVIDER_TYPE => MYAPI_SERVICES_PROVIDER_TYPE]],
+      'request awarded offer'          => ['field_assigned_offer', [MYAPI_SERVICES_OFFER_TYPE => MYAPI_SERVICES_OFFER_TYPE]],
+      'request awarded provider'       => ['field_assigned_provider', [MYAPI_SERVICES_PROVIDER_TYPE => MYAPI_SERVICES_PROVIDER_TYPE]],
+      'rating offer'                   => ['field_rating_offer', [MYAPI_SERVICES_OFFER_TYPE => MYAPI_SERVICES_OFFER_TYPE]],
+      'rating provider'                => ['field_rating_provider', [MYAPI_SERVICES_PROVIDER_TYPE => MYAPI_SERVICES_PROVIDER_TYPE]],
     ];
   }
 
@@ -116,6 +139,17 @@ class EntityReferenceFieldSettingsTest extends TestCase {
    */
   public function testRequesterTargetsUsersAndRestrictsNoBundle() {
     $settings = _myapi_entityreference_field_settings()['field_requester'];
+
+    $this->assertSame('user', $settings['target_type']);
+    $this->assertArrayNotHasKey('target_bundles', $settings['handler_settings']);
+  }
+
+  /**
+   * field_provider_users (SPEC 77) is the second field targeting 'user' and
+   * carries no target_bundles for the same reason as field_requester.
+   */
+  public function testProviderUsersTargetsUsersAndRestrictsNoBundle() {
+    $settings = _myapi_entityreference_field_settings()['field_provider_users'];
 
     $this->assertSame('user', $settings['target_type']);
     $this->assertArrayNotHasKey('target_bundles', $settings['handler_settings']);
@@ -135,6 +169,12 @@ class EntityReferenceFieldSettingsTest extends TestCase {
       ['field_unit'],
       ['field_area'],
       ['field_claim'],
+      ['field_request'],
+      ['field_provider'],
+      ['field_assigned_offer'],
+      ['field_assigned_provider'],
+      ['field_rating_offer'],
+      ['field_rating_provider'],
     ];
   }
 
