@@ -37,10 +37,13 @@ require_once __DIR__ . '/../../myapi.install';
  *     fails if 'handler_settings' ever reappears on an instance. Both are the
  *     bug coming back, and neither is detectable from the return values.
  *
- * Deliberately NOT tested here: myapi_update_7016() itself. It needs
- * field_info_field()/field_update_field(), i.e. a booted site with a Field API
- * — what tests/unit avoids across this repo. Its verification is the manual
- * acceptance criteria of the spec.
+ * Not tested here: myapi_update_7016() itself. It lives in
+ * EntityReferenceUpdateTest (SPEC 75), which runs it against the fixture Field
+ * API in bootstrap.php — field_read_field() answers a seeded map and
+ * field_update_field() records and applies the write. That is where the spec's
+ * criteria 4, 5 and 6 (idempotence, no field_data_* writes, a site missing a
+ * field) are checked; what stays manual is only the last mile, the five
+ * autocompletes in the node forms.
  */
 class EntityReferenceFieldSettingsTest extends TestCase {
 

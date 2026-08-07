@@ -492,9 +492,11 @@ class MyapiTestSelectQuery implements IteratorAggregate {
   private $fields = [];
   private $select_all = FALSE;
   private $conditions = [];
+  private $where = [];
   private $joins = [];
   private $order = [];
   private $range = NULL;
+  private $count_mode = FALSE;
 
   public function __construct($table, $alias) {
     $this->table = $table;
@@ -541,6 +543,70 @@ class MyapiTestSelectQuery implements IteratorAggregate {
     $this->conditions[] = ['field' => $field, 'value' => NULL, 'operator' => 'IS NOT NULL'];
 
     return $this;
+  }
+
+  /**
+   * A raw SQL fragment, of the one shape myapi actually writes (SPEC 75).
+   *
+   * Every where() in this module is a date-range bound of the form
+   *
+   *   SUBSTR(alias.column, 1, 10) >= :date_from
+   *
+   * and that shape is parsed and APPLIED here rather than merely recorded,
+   * because the date filter is half of what SPEC 15 promises keeps working
+   * when pagination is switched off — a recorded-but-ignored bound would let
+   * limit=-1 "return everything" past a filter that never ran.
+   *
+   * The SUBSTR is honoured literally (the stored value is a datetime and the
+   * bound is a date, so the cut is what makes them comparable), and the
+   * comparison reuses compare(), the same operator table the conditions use.
+   *
+   * Anything that is not that shape throws instead of being skipped quietly:
+   * a resource that starts writing a different fragment must teach this parser
+   * about it, not discover that its test passed because the bound evaporated.
+   */
+  public function where($snippet, array $arguments = []) {
+    $pattern = '/^SUBSTR\(\s*([A-Za-z0-9_.]+)\s*,\s*1\s*,\s*(\d+)\s*\)\s*(>=|<=|<>|!=|=|<|>)\s*(:[A-Za-z0-9_]+)\s*$/';
+
+    if (!preg_match($pattern, trim($snippet), $m)) {
+      throw new RuntimeException('MyapiTestSelectQuery: unsupported where() fragment "' . $snippet . '".');
+    }
+    if (!array_key_exists($m[4], $arguments)) {
+      throw new RuntimeException('MyapiTestSelectQuery: where() placeholder ' . $m[4] . ' has no argument.');
+    }
+
+    $this->where[] = [
+      'snippet'   => $snippet,
+      'arguments' => $arguments,
+      'field'     => $m[1],
+      'length'    => (int) $m[2],
+      'operator'  => $m[3] === '!=' ? '<>' : $m[3],
+      'value'     => $arguments[$m[4]],
+    ];
+
+    return $this;
+  }
+
+  /**
+   * The row count of the same filtered set (SPEC 75).
+   *
+   * Drupal's countQuery() returns a NEW query that drops the field list, the
+   * ordering and the range and answers a single COUNT(*) column; the clone
+   * here does the same, which is what makes 'pagination.total' independent of
+   * the page being fetched. Dropping the range is the part that matters: a
+   * count that inherited it would answer the size of the page instead of the
+   * size of the set, and every total_pages assertion would agree with itself
+   * while being wrong.
+   */
+  public function countQuery() {
+    $count = clone $this;
+    $count->count_mode = TRUE;
+    $count->fields = [];
+    $count->select_all = FALSE;
+    $count->order = [];
+    $count->range = NULL;
+
+    return $count;
   }
 
   public function leftJoin($table, $alias = NULL, $condition = NULL) {
@@ -592,10 +658,18 @@ class MyapiTestSelectQuery implements IteratorAggregate {
       'fields'     => $this->fields,
       'select_all' => $this->select_all,
       'conditions' => $this->conditions,
+      'where'      => $this->where,
       'joins'      => $this->joins,
       'order'      => $this->order,
       'range'      => $this->range,
+      'count'      => $this->count_mode,
     ];
+
+    if ($this->count_mode) {
+      // One row, one column, exactly as COUNT(*) answers — fetchField() reads
+      // it positionally, so the column name is arbitrary.
+      return new MyapiTestStatement([['expression' => count($this->matchedRows())]]);
+    }
 
     return new MyapiTestStatement($this->rows());
   }
@@ -605,19 +679,26 @@ class MyapiTestSelectQuery implements IteratorAggregate {
    * applies them in.
    */
   private function rows() {
-    $rows = isset($GLOBALS['myapi_test_db'][$this->table]) ? $GLOBALS['myapi_test_db'][$this->table] : [];
-    $rows = array_map(function ($row) {
-      return (array) $row;
-    }, $rows);
-
-    $rows = array_values(array_filter($rows, [$this, 'matches']));
-    $rows = $this->sort($rows);
+    $rows = $this->sort($this->matchedRows());
 
     if ($this->range !== NULL) {
       $rows = array_slice($rows, $this->range['start'], $this->range['length']);
     }
 
     return array_map([$this, 'project'], $rows);
+  }
+
+  /**
+   * The fixture rows that survive the conditions and the where() fragments,
+   * before any ordering, range or projection.
+   */
+  private function matchedRows() {
+    $rows = isset($GLOBALS['myapi_test_db'][$this->table]) ? $GLOBALS['myapi_test_db'][$this->table] : [];
+    $rows = array_map(function ($row) {
+      return (array) $row;
+    }, $rows);
+
+    return array_values(array_filter($rows, [$this, 'matches']));
   }
 
   private function matches(array $row) {
@@ -627,6 +708,23 @@ class MyapiTestSelectQuery implements IteratorAggregate {
         continue;
       }
       if (!$this->compare($row[$column], $condition['value'], $condition['operator'])) {
+        return FALSE;
+      }
+    }
+
+    foreach ($this->where as $fragment) {
+      $column = $this->column($fragment['field']);
+      if (!array_key_exists($column, $row)) {
+        continue;
+      }
+      // NULL is what a LEFT JOIN answers for a node with no row in the joined
+      // field table, and SQL compares it to nothing: a bound always excludes
+      // it, which is the documented behaviour of the date filter.
+      if ($row[$column] === NULL) {
+        return FALSE;
+      }
+      $actual = substr((string) $row[$column], 0, $fragment['length']);
+      if (!$this->compare($actual, $fragment['value'], $fragment['operator'])) {
         return FALSE;
       }
     }
@@ -827,6 +925,124 @@ function myapi_test_db_queries($table = NULL) {
   return array_values(array_filter($queries, function ($query) use ($table) {
     return $query['table'] === $table;
   }));
+}
+
+/**
+ * The Field API, as a map of stored field definitions (SPEC 75).
+ *
+ * What makes myapi_update_7016() testable without a site. The update reads a
+ * field definition, decides whether to write it back, and writes it — and the
+ * three things SPEC 53 promises about it are all observable from that pair of
+ * calls: that a second run writes nothing (idempotence), that what it writes
+ * is a FIELD row and never a field_data_* one, and that a site missing one of
+ * the fields runs it without error.
+ *
+ * field_read_field() is deliberately the stubbed one and not
+ * field_info_field(): the update calls the former on purpose (see its own
+ * docblock — the cached, processed definition carries a 'bundles' key that
+ * must not be written back), and a stub of the other name would let that
+ * distinction rot unnoticed.
+ */
+if (!defined('WATCHDOG_ERROR')) {
+  define('WATCHDOG_ERROR', 3);
+}
+if (!defined('WATCHDOG_WARNING')) {
+  define('WATCHDOG_WARNING', 4);
+}
+if (!defined('WATCHDOG_NOTICE')) {
+  define('WATCHDOG_NOTICE', 5);
+}
+
+if (!function_exists('watchdog')) {
+  function watchdog($type, $message, $variables = [], $severity = WATCHDOG_NOTICE, $link = NULL) {
+    $GLOBALS['myapi_test_watchdog'][] = [
+      'type'      => $type,
+      'message'   => $message,
+      'variables' => $variables,
+      'severity'  => $severity,
+      // The interpolated text, which is what a reader of the log actually
+      // sees and therefore what a test asserting "it names the field" reads.
+      'text'      => $variables ? strtr($message, $variables) : $message,
+    ];
+  }
+}
+
+if (!function_exists('field_read_field')) {
+  /**
+   * The stored definition, or FALSE for a field this site does not have —
+   * which is exactly how Drupal answers for a field that was never created or
+   * was deleted by hand.
+   */
+  function field_read_field($field_name, $include_additional = []) {
+    return isset($GLOBALS['myapi_test_fields'][$field_name])
+      ? $GLOBALS['myapi_test_fields'][$field_name]
+      : FALSE;
+  }
+}
+
+if (!function_exists('field_update_field')) {
+  /**
+   * Records the write AND applies it, so a second pass over the same fixture
+   * reads what the first one left. Without applying it, an idempotence test
+   * would be asserting against a map that never changed and would pass for
+   * a function that writes unconditionally every time.
+   */
+  function field_update_field($field) {
+    $GLOBALS['myapi_test_field_writes'][] = $field;
+    $GLOBALS['myapi_test_fields'][$field['field_name']] = $field;
+
+    return $field;
+  }
+}
+
+if (!function_exists('field_info_cache_clear')) {
+  function field_info_cache_clear() {
+    $GLOBALS['myapi_test_field_cache_clears'] = ($GLOBALS['myapi_test_field_cache_clears'] ?? 0) + 1;
+  }
+}
+
+/**
+ * The write side of the database, recorded and never executed (SPEC 75).
+ *
+ * These exist to be asserted EMPTY. SPEC 53's fifth criterion is that the
+ * update touches no field_data_* or field_revision_* row — a promise about
+ * something that does NOT happen, which is unfalsifiable unless the forbidden
+ * calls are observable. Any of them firing is recorded with its table name.
+ */
+function myapi_test_record_write($call, $table) {
+  $GLOBALS['myapi_test_db_writes'][] = ['call' => $call, 'table' => $table];
+
+  throw new RuntimeException($call . '(' . $table . ') is not available in tests/unit.');
+}
+
+if (!function_exists('db_insert')) {
+  function db_insert($table, array $options = []) {
+    myapi_test_record_write('db_insert', $table);
+  }
+}
+
+if (!function_exists('db_update')) {
+  function db_update($table, array $options = []) {
+    myapi_test_record_write('db_update', $table);
+  }
+}
+
+if (!function_exists('db_delete')) {
+  function db_delete($table, array $options = []) {
+    myapi_test_record_write('db_delete', $table);
+  }
+}
+
+if (!function_exists('db_merge')) {
+  function db_merge($table, array $options = []) {
+    myapi_test_record_write('db_merge', $table);
+  }
+}
+
+if (!function_exists('db_query')) {
+  function db_query($query, array $args = [], array $options = []) {
+    myapi_test_record_write('db_query', $query);
+  }
 }
 
 if (!function_exists('user_load')) {
