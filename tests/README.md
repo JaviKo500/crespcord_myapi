@@ -186,6 +186,34 @@ SPEC 74 also pinned a fact about the response that is documented in
 with no fractional part as an integer literal, so `area_m2` travels as `92` for
 one unit and `15.5` for the next.
 
+Since SPEC 76 the layer also covers **the whole of `GET /api/v1/banks`**
+(SPEC 18), the one resource that reads the taxonomy API instead of a table. Two
+classes:
+
+- `tests/unit/BankBuildItemTest.php` — `myapi_bank_build_item()`, the pure
+  mapper: the three documented keys and their order, the `(int)` cast of the
+  `tid`, the `check_plain()` of both texts, and the empty description that must
+  travel as `""` and never as `null`.
+- `tests/unit/BankEndpointTest.php` — `myapi_bank_dispatch()` and
+  `myapi_bank_list()` end to end: the 405 that costs no query, the access-token
+  guard (SPEC 18 made this catalogue non-public because the descriptions carry
+  account numbers, and every rejection case asserts the vocabulary is never even
+  loaded), the two degraded paths that both answer `200 {"banks":[]}`, and the
+  ordering.
+
+Its two stubs — `taxonomy_vocabulary_machine_name_load()` and
+`taxonomy_get_tree()` — are the same kind of fixture as `db_select()`: they
+answer what `myapi_test_taxonomy_seed()` seeded and record every call with its
+arguments (read them back with `myapi_test_taxonomy_calls()`). What they do not
+do is build a tree: hierarchy, weight order and term access are Drupal's.
+SPEC 76 verified the harness by mutation as well — eighteen deliberate
+breakages of `resources/bank.resource.inc`, each one caught, plus one equivalent
+mutant that correctly does not fail — and recorded three findings: the shipped
+`sort` orders by `name` and not by `id` as `specs/banks/18-banks-list.md` still
+said (the spec now carries an erratum; `docs/bank.md` was always right),
+`strcasecmp()` sorts accented initials after every ASCII name, and the ordering
+is applied over the already-escaped text.
+
 **Run one class in isolation** when you touch this layer —
 `vendor/bin/phpunit --filter FloodTest`. Every class here passes alone as well
 as in the suite, which is what keeps the globals the stubs read

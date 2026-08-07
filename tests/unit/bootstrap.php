@@ -90,6 +90,15 @@
  * delta loop correct — stays tests/integration's job. Every query is recorded
  * in $GLOBALS['myapi_test_db_queries'] so a test can assert the SHAPE it built
  * (table, conditions, joins, order) where it cannot assert the SQL's outcome.
+ *
+ * taxonomy_vocabulary_machine_name_load() and taxonomy_get_tree() (SPEC 76) are
+ * the same idea one level up: the banks resource does not query a table, it asks
+ * the taxonomy API for a vocabulary and its tree. The stubs answer out of
+ * fixtures seeded with myapi_test_taxonomy_seed() and record every call in
+ * $GLOBALS['myapi_test_taxonomy_calls'], which is what lets a test assert both
+ * the degraded path (no vocabulary -> FALSE, exactly as Drupal answers) and that
+ * the tree was asked for the right vid — never that Drupal's own tree building
+ * (hierarchy, weight order, access) is correct, which stays out of this layer.
  */
 
 if (!function_exists('module_load_include')) {
@@ -1086,5 +1095,92 @@ if (!function_exists('form_load_include')) {
     }
 
     return FALSE;
+  }
+}
+
+/**
+ * The taxonomy vocabularies and their terms, as fixtures (SPEC 76).
+ *
+ * Replaces both tables the banks resource reads through the taxonomy API and
+ * clears the recorded calls. Called from setUp(), so no test inherits another's
+ * vocabulary.
+ *
+ * @param array $vocabularies
+ *   Machine name => list of term rows. Each row is an associative array that
+ *   ends up as a term object; only 'tid', 'name' and 'description' matter to
+ *   the resource, and a row may omit any of them to test the degraded shape.
+ *   The list order is the order taxonomy_get_tree() answers in, i.e. Drupal's
+ *   natural weight-then-name order, which is exactly what the resource then
+ *   overrides.
+ */
+function myapi_test_taxonomy_seed(array $vocabularies = []) {
+  $GLOBALS['myapi_test_vocabularies'] = [];
+  $GLOBALS['myapi_test_taxonomy_terms'] = [];
+  $GLOBALS['myapi_test_taxonomy_calls'] = [];
+
+  // vids are assigned in seeding order, starting at 1, the way a fresh site
+  // hands them out. No test should depend on a particular number: the point of
+  // the vid is that the resource carries the one it loaded into the tree call.
+  $vid = 1;
+  foreach ($vocabularies as $machine_name => $terms) {
+    $GLOBALS['myapi_test_vocabularies'][$machine_name] = (object) [
+      'vid'          => $vid,
+      'machine_name' => $machine_name,
+      'name'         => $machine_name,
+    ];
+    $GLOBALS['myapi_test_taxonomy_terms'][$vid] = array_map(function ($term) {
+      return is_object($term) ? $term : (object) $term;
+    }, $terms);
+    $vid++;
+  }
+}
+
+/**
+ * Every taxonomy API call since the last seed, in order (SPEC 76).
+ *
+ * Each entry is ['function' => ..., 'args' => [...]].
+ */
+function myapi_test_taxonomy_calls() {
+  return isset($GLOBALS['myapi_test_taxonomy_calls']) ? $GLOBALS['myapi_test_taxonomy_calls'] : [];
+}
+
+if (!function_exists('taxonomy_vocabulary_machine_name_load')) {
+  /**
+   * Answers a seeded vocabulary object, or FALSE (SPEC 76).
+   *
+   * FALSE for an unknown machine name is the whole reason this stub exists:
+   * that is what Drupal answers for a renamed or deleted vocabulary, and the
+   * `=== FALSE` branch of myapi_bank_list() is the endpoint's degraded path.
+   */
+  function taxonomy_vocabulary_machine_name_load($machine_name) {
+    $GLOBALS['myapi_test_taxonomy_calls'][] = [
+      'function' => 'taxonomy_vocabulary_machine_name_load',
+      'args'     => [$machine_name],
+    ];
+
+    return isset($GLOBALS['myapi_test_vocabularies'][$machine_name])
+      ? $GLOBALS['myapi_test_vocabularies'][$machine_name]
+      : FALSE;
+  }
+}
+
+if (!function_exists('taxonomy_get_tree')) {
+  /**
+   * Answers the seeded term list of a vid, in seeding order (SPEC 76).
+   *
+   * What it does NOT do is build a tree: hierarchy, depth, parents, the weight
+   * ordering and term access are Drupal's, and no unit test can prove them. A
+   * vid with no fixture answers an empty array, the same as an empty
+   * vocabulary in production.
+   */
+  function taxonomy_get_tree($vid, $parent = 0, $max_depth = NULL, $load_entities = FALSE) {
+    $GLOBALS['myapi_test_taxonomy_calls'][] = [
+      'function' => 'taxonomy_get_tree',
+      'args'     => [$vid, $parent, $max_depth, $load_entities],
+    ];
+
+    return isset($GLOBALS['myapi_test_taxonomy_terms'][$vid])
+      ? $GLOBALS['myapi_test_taxonomy_terms'][$vid]
+      : [];
   }
 }
