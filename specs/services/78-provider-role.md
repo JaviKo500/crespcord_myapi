@@ -1,6 +1,6 @@
 # 78 — Rol `proveedor` y alcance de lo que ve
 
-- **Estado:** **Draft (borrador — no implementado).** Ninguna línea de código escrita. Las decisiones marcadas como *pendientes* abajo hay que cerrarlas antes de empezar.
+- **Estado:** Approved.
 - **Fecha:** 2026-08-07
 - **Dependencias:**
   - `77-services-content-types-install` (Implemented) — crea los cinco bundles, el vocabulario y `includes/myapi.services_common.inc` con `MYAPI_SERVICES_*` y `myapi_services_provider_is_active()`. Este spec es su continuación directa y **no** modifica ninguno de sus campos.
