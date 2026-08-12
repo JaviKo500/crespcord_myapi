@@ -1608,6 +1608,9 @@ function myapi_test_taxonomy_seed(array $vocabularies = []) {
   $GLOBALS['myapi_test_vocabularies'] = [];
   $GLOBALS['myapi_test_taxonomy_terms'] = [];
   $GLOBALS['myapi_test_taxonomy_calls'] = [];
+  // The hydrated terms of the entity_load() stub (SPEC 79) are cleared here
+  // too, so a seed of any kind leaves no term of the previous test behind.
+  $GLOBALS['myapi_test_taxonomy_entities'] = [];
 
   // vids are assigned in seeding order, starting at 1, the way a fresh site
   // hands them out. No test should depend on a particular number: the point of
@@ -1673,5 +1676,114 @@ if (!function_exists('taxonomy_get_tree')) {
     return isset($GLOBALS['myapi_test_taxonomy_terms'][$vid])
       ? $GLOBALS['myapi_test_taxonomy_terms'][$vid]
       : [];
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * The hydrated taxonomy terms and the public file URLs (SPEC 79).
+ *
+ * /api/v1/service-categories reads two Field API values off each term, and
+ * taxonomy_get_tree() does not carry them: the resource loads the terms in a
+ * second, batched call. These two stubs are what let that whole path run with
+ * no site booted.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Registers the hydrated version of the seeded terms (SPEC 79).
+ *
+ * Call it AFTER myapi_test_taxonomy_seed(), which clears this store. The rows
+ * seeded into the tree are deliberately the light ones (no field values, as
+ * taxonomy_get_tree() answers them), and the rows registered here are the full
+ * ones: a resource that forgot to hydrate would therefore see no code and no
+ * icon, which is exactly the production failure.
+ *
+ * @param array $terms
+ *   List of term rows (or objects). Each one must carry a 'tid'.
+ */
+function myapi_test_taxonomy_entities_seed(array $terms) {
+  $GLOBALS['myapi_test_taxonomy_entities'] = [];
+  foreach ($terms as $term) {
+    $term = is_object($term) ? $term : (object) $term;
+    $GLOBALS['myapi_test_taxonomy_entities'][(string) $term->tid] = $term;
+  }
+}
+
+if (!function_exists('entity_load')) {
+  /**
+   * Answers the hydrated terms of a list of tids, tid-keyed (SPEC 79).
+   *
+   * Faithful to Drupal in the two things the resource depends on: the answer
+   * is an associative array KEYED BY id (which is why the resource has to
+   * array_values() it before printing a JSON list), and a tid with no entity
+   * is simply absent from the answer rather than present as NULL.
+   *
+   * A tid registered with myapi_test_taxonomy_entities_seed() answers that
+   * object; otherwise the seeded tree term is answered, so a fixture that does
+   * not care about field values can skip the second seed entirely.
+   *
+   * The call is recorded in myapi_test_taxonomy_calls(), which is what lets a
+   * test prove the terms are loaded ONCE, in a single batch, and not one query
+   * per term.
+   */
+  function entity_load($entity_type, $ids = FALSE, $conditions = [], $reset = FALSE) {
+    $GLOBALS['myapi_test_taxonomy_calls'][] = [
+      'function' => 'entity_load',
+      'args'     => [$entity_type, $ids],
+    ];
+
+    if ($entity_type !== 'taxonomy_term' || !is_array($ids)) {
+      return [];
+    }
+
+    // The tree store is the fallback, flattened by tid across vocabularies.
+    $fallback = [];
+    if (!empty($GLOBALS['myapi_test_taxonomy_terms'])) {
+      foreach ($GLOBALS['myapi_test_taxonomy_terms'] as $terms) {
+        foreach ($terms as $term) {
+          if (isset($term->tid)) {
+            $fallback[(string) $term->tid] = $term;
+          }
+        }
+      }
+    }
+
+    $hydrated = isset($GLOBALS['myapi_test_taxonomy_entities'])
+      ? $GLOBALS['myapi_test_taxonomy_entities']
+      : [];
+
+    $loaded = [];
+    foreach ($ids as $id) {
+      $key = (string) $id;
+      if (isset($hydrated[$key])) {
+        $loaded[(int) $id] = $hydrated[$key];
+      }
+      elseif (isset($fallback[$key])) {
+        $loaded[(int) $id] = $fallback[$key];
+      }
+    }
+
+    return $loaded;
+  }
+}
+
+if (!function_exists('file_create_url')) {
+  /**
+   * Builds the absolute URL of a stored file URI (SPEC 79).
+   *
+   * Only the public:// scheme matters here — SPEC 77 created the category icon
+   * field with uri_scheme = 'public', and the whole point of the icon being
+   * public is that its URL works with no Drupal session. The mapping mirrors
+   * the real one: public://x -> <base_url>/sites/default/files/x.
+   *
+   * The real function also handles private:// (a system/files route) and
+   * external URLs; neither reaches this endpoint, so neither is stubbed.
+   */
+  function file_create_url($uri) {
+    $public = 'public://';
+    if (strpos($uri, $public) === 0) {
+      return $GLOBALS['base_url'] . '/sites/default/files/' . substr($uri, strlen($public));
+    }
+
+    return $GLOBALS['base_url'] . '/' . ltrim($uri, '/');
   }
 }
