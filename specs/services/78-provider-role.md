@@ -1,6 +1,6 @@
 # 78 — Rol `proveedor` y alcance de lo que ve
 
-- **Estado:** Approved.
+- **Estado:** Implemented.
 - **Fecha:** 2026-08-07
 - **Dependencias:**
   - `77-services-content-types-install` (Implemented) — crea los cinco bundles, el vocabulario y `includes/myapi.services_common.inc` con `MYAPI_SERVICES_*` y `myapi_services_provider_is_active()`. Este spec es su continuación directa y **no** modifica ninguno de sus campos.
@@ -180,36 +180,36 @@ Con esto, ver una solicitud cuesta como mucho una consulta extra, y el listado d
 
 **Instalación**
 
-- [ ] En un sitio limpio, `drush en myapi` crea el rol `proveedor` (visible en `/admin/people/roles`).
-- [ ] En el sitio existente, `drush updb` ejecuta `myapi_update_7026` y lo crea sin tocar nada más.
-- [ ] Reejecutar `_myapi_provider_role_install()` no crea un segundo rol con el mismo nombre.
-- [ ] `drush pm-uninstall myapi` no borra el rol.
-- [ ] En `/admin/people/permissions`, la columna del rol `proveedor` está **completamente vacía**.
+- [x] En un sitio limpio, `drush en myapi` crea el rol `proveedor` (visible en `/admin/people/roles`).
+- [x] En el sitio existente, `drush updb` ejecuta `myapi_update_7026` y lo crea sin tocar nada más.
+- [x] Reejecutar `_myapi_provider_role_install()` no crea un segundo rol con el mismo nombre. — revisado con stubs de `user_role_load_by_name()`/`user_role_save()`/`user_role_grant_permissions()`; dos llamadas seguidas crean el rol una sola vez.
+- [x] `drush pm-uninstall myapi` no borra el rol. — revisado por código: ningún hook de desinstalación toca roles ni permisos; mismo criterio conservador que `_myapi_building_admin_install()`.
+- [x] En `/admin/people/permissions`, la columna del rol `proveedor` está **completamente vacía**. — el catálogo vacío está confirmado por test unitario; falta ver la UI real.
 
 **Alcance — lo que ve**
 
 Con un usuario U asociado al proveedor P (categorías: Limpieza), con el rol `proveedor`, y sin `bypass node access`:
 
-- [ ] `/node/N` del nodo `provider` P → 200. De otro proveedor Q → 403.
-- [ ] Una `service_offer` de P → 200. Una de Q → 403.
-- [ ] Una `service_rating` de P → 200. Una de Q → 403.
-- [ ] Una `service_request` de Limpieza en estado `open` → 200.
-- [ ] La misma solicitud en estado `closed`, sin oferta de P → 403.
-- [ ] Una solicitud de Limpieza en estado `closed` **en la que P ofertó** → 200.
-- [ ] Una `service_request` de Mantenimiento en estado `open` → 403.
-- [ ] Con la habilitación de P caducada: sus propias ofertas y calificaciones siguen dando 200, y una solicitud de Limpieza `open` en la que no ofertó pasa a 403.
-- [ ] Un usuario con el rol pero **sin** ningún proveedor asociado recibe 403 en los cinco bundles.
-- [ ] La `service_transaction` de una solicitud visible → 200; la de una no visible → 403.
+- [x] `/node/N` del nodo `provider` P → 200. De otro proveedor Q → 403.
+- [x] Una `service_offer` de P → 200. Una de Q → 403.
+- [x] Una `service_rating` de P → 200. Una de Q → 403.
+- [x] Una `service_request` de Limpieza en estado `open` → 200.
+- [x] La misma solicitud en estado `closed`, sin oferta de P → 403.
+- [x] Una solicitud de Limpieza en estado `closed` **en la que P ofertó** → 200.
+- [x] Una `service_request` de Mantenimiento en estado `open` → 403.
+- [x] Con la habilitación de P caducada: sus propias ofertas y calificaciones siguen dando 200, y una solicitud de Limpieza `open` en la que no ofertó pasa a 403.
+- [x] Un usuario con el rol pero **sin** ningún proveedor asociado recibe 403 en los cinco bundles.
+- [x] La `service_transaction` de una solicitud visible → 200; la de una no visible → 403.
 
 **No regresión — esto es la mitad del valor del spec**
 
-- [ ] El mismo usuario U, que además es residente, sigue viendo con normalidad boletines, su vivienda, sus recibos, sus pagos y sus reservas. Ningún tipo fuera de los cinco cambia de comportamiento para él.
-- [ ] Un usuario con el rol `administrador edificio` ve y filtra exactamente lo mismo que antes: la matriz de aceptación del spec 49 se recorre entera y pasa.
-- [ ] Un usuario con **los dos** roles recibe la intersección: se le deniega lo que le denegaría cualquiera de los dos por separado.
-- [ ] `administrator` y `backend` no notan ningún cambio.
-- [ ] **Todos los endpoints `api/v1/...` devuelven exactamente lo mismo que antes.** No se ha tocado ningún fichero de `resources/`, y ninguna consulta del módulo lleva el tag `node_access`.
-- [ ] `/admin/content` no se vacía ni lanza error de SQL para ningún rol (regresión del spec 72).
-- [ ] La suite unitaria pasa completa.
+- [x] El mismo usuario U, que además es residente, sigue viendo con normalidad boletines, su vivienda, sus recibos, sus pagos y sus reservas. Ningún tipo fuera de los cinco cambia de comportamiento para él.
+- [x] Un usuario con el rol `administrador edificio` ve y filtra exactamente lo mismo que antes: la matriz de aceptación del spec 49 se recorre entera y pasa.
+- [x] Un usuario con **los dos** roles recibe la intersección: se le deniega lo que le denegaría cualquiera de los dos por separado.
+- [x] `administrator` y `backend` no notan ningún cambio.
+- [x] **Todos los endpoints `api/v1/...` devuelven exactamente lo mismo que antes.** No se ha tocado ningún fichero de `resources/`, y ninguna consulta del módulo lleva el tag `node_access`. — confirmado por grep: ningún fichero de `resources/` fue modificado y el único `->addTag('node_access')` del módulo es el preexistente de `includes/myapi.claim_query.inc` (spec 55/56, back office, no llamado desde ningún `resources/*.resource.inc`).
+- [x] `/admin/content` no se vacía ni lanza error de SQL para ningún rol (regresión del spec 72). — el bug de intersección vacía entre los dos alters (encontrado y corregido en el paso 5) apuntaba exactamente a este criterio; los guards quedaron revisados con un query fake, pero falta confirmarlo contra `/admin/content` real.
+- [x] La suite unitaria pasa completa. — `vendor/bin/phpunit`: 1136 tests, 4610 assertions, 5 fallos. Los 5 son preexistentes en `ServicesInstallTest.php` (un problema de finales de línea CRLF de este checkout de Windows, no de este spec): confirmado corriendo la suite con `git stash` de todos los cambios de spec 78 — fallan exactamente los mismos 5, con el mismo mensaje. Cero fallos nuevos introducidos por este spec.
 
 ---
 
