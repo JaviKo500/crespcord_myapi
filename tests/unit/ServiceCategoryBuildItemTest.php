@@ -428,6 +428,79 @@ class ServiceCategoryBuildItemTest extends TestCase {
     }
   }
 
+  /* -------------------------------------------------------------------------
+   * `providers_count`: the optional seventh key.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * With no second argument — the request did not ask for counts — the item is
+   * the six-key one and `providers_count` is ABSENT, not null.
+   */
+  public function testWithoutACountTheKeyIsAbsent() {
+    $item = myapi_service_category_build_item($this->term());
+
+    $this->assertArrayNotHasKey('providers_count', $item);
+    $this->assertCount(6, $item);
+  }
+
+  /**
+   * Passing NULL explicitly is the same as not passing anything: NULL means
+   * "not asked for", it is never a value that travels.
+   */
+  public function testAnExplicitNullCountIsTheSameAsNoCount() {
+    $item = myapi_service_category_build_item($this->term(), NULL);
+
+    $this->assertArrayNotHasKey('providers_count', $item);
+    $this->assertStringNotContainsString('providers_count', json_encode($item));
+  }
+
+  /**
+   * With a count, the key is appended LAST: the six documented keys keep their
+   * order, so an app reading the JSON positionally is unaffected.
+   */
+  public function testWithACountTheKeyIsAppendedLast() {
+    $item = myapi_service_category_build_item($this->term(), 3);
+
+    $this->assertSame(
+      ['id', 'code', 'name', 'description', 'icon_id', 'icon_url', 'providers_count'],
+      array_keys($item)
+    );
+    $this->assertSame(3, $item['providers_count']);
+  }
+
+  /**
+   * A count of 0 IS a value and does travel: "this category has no provider
+   * yet" is information the app shows. The key must not be dropped by a
+   * falsy check.
+   */
+  public function testACountOfZeroTravels() {
+    $item = myapi_service_category_build_item($this->term(), 0);
+
+    $this->assertArrayHasKey('providers_count', $item);
+    $this->assertSame(0, $item['providers_count']);
+  }
+
+  /**
+   * The count is cast to int: COUNT() answers a string on most drivers, and
+   * the app compares it as a number.
+   */
+  public function testTheCountIsCastToAnInteger() {
+    $this->assertSame(7, myapi_service_category_build_item($this->term(), '7')['providers_count']);
+    $this->assertSame(0, myapi_service_category_build_item($this->term(), '0')['providers_count']);
+  }
+
+  /**
+   * The count does not disturb the rest of the item: the other six keys answer
+   * the same values with and without it.
+   */
+  public function testTheCountDoesNotChangeTheOtherKeys() {
+    $without = myapi_service_category_build_item($this->term());
+    $with = myapi_service_category_build_item($this->term(), 3);
+
+    unset($with['providers_count']);
+    $this->assertSame($without, $with);
+  }
+
   /**
    * Only the first delta is read: the field is single-valued (SPEC 77), and a
    * second value — left behind by a cardinality change — does not travel.

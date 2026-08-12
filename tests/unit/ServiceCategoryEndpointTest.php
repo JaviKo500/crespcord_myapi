@@ -47,11 +47,11 @@ class ServiceCategoryEndpointTest extends TestCase {
     myapi_test_taxonomy_seed();
     $GLOBALS['myapi_test_users'] = [];
     $_SERVER['REQUEST_METHOD'] = 'GET';
-    unset($_SERVER['HTTP_AUTHORIZATION'], $_GET['sort']);
+    unset($_SERVER['HTTP_AUTHORIZATION'], $_GET['sort'], $_GET['with_counts']);
   }
 
   protected function tearDown(): void {
-    unset($_SERVER['HTTP_AUTHORIZATION'], $_GET['sort']);
+    unset($_SERVER['HTTP_AUTHORIZATION'], $_GET['sort'], $_GET['with_counts']);
     $GLOBALS['myapi_test_users'] = [];
     myapi_test_db_seed();
     myapi_test_taxonomy_seed();
@@ -941,6 +941,551 @@ class ServiceCategoryEndpointTest extends TestCase {
       $this->assertSame(range(0, 7), array_keys($this->categories($result)), $sort);
       $this->assertStringContainsString('"service_categories":[{', $result['output'], $sort);
     }
+  }
+
+  /* -------------------------------------------------------------------------
+   * ?with_counts=1 and providers_count (SPEC 79, revision of 2026-08-12).
+   *
+   * The fixture rows of `node` are the rows the two INNER JOINs would produce:
+   * one row per (provider, category) pair, carrying the provider's own columns
+   * flat. Grouping them is the same arithmetic the database does over the same
+   * set.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * Re-seeds the database with the token row AND the provider rows.
+   *
+   * Needed because authenticateAs() seeds `my_api_tokens` alone and each seed
+   * replaces the whole fixture; call this AFTER authenticating.
+   */
+  private function seedProviders(array $rows, $uid = 3) {
+    myapi_test_db_seed([
+      'my_api_tokens' => [$this->tokenRow(['uid' => (string) $uid])],
+      'node'          => $rows,
+    ]);
+  }
+
+  /**
+   * One joined row: a provider node referencing one category.
+   *
+   * Active by default — published and with a licence expiring tomorrow — so
+   * every case that is not about the active rule reads without noise.
+   */
+  private function provider($nid, $tid, array $overrides = []) {
+    return $overrides + [
+      'nid'                        => (string) $nid,
+      'type'                       => MYAPI_SERVICES_PROVIDER_TYPE,
+      'status'                     => '1',
+      'field_categories_tid'       => (string) $tid,
+      'field_license_expiry_value' => (string) (REQUEST_TIME + 86400),
+    ];
+  }
+
+  /**
+   * The `providers_count` of every category, keyed by name.
+   */
+  private function countsByName(array $result) {
+    $counts = [];
+    foreach ($this->categories($result) as $category) {
+      $counts[$category['name']] = isset($category['providers_count'])
+        ? $category['providers_count']
+        : NULL;
+    }
+
+    return $counts;
+  }
+
+  /**
+   * The tables of every query the request ran, in order.
+   */
+  private function queriedTables() {
+    return array_column(myapi_test_db_queries(), 'table');
+  }
+
+  /**
+   * Without the parameter nothing changes: six keys, and the token lookup is
+   * still the only query. The count is opt-in precisely so the grid does not
+   * pay for it.
+   */
+  public function testWithoutTheParameterThereIsNoCountQueryAndNoSeventhKey() {
+    $this->authenticateAs();
+    $this->seedCategories([
+      $this->term(3, 'Plomería', 'plumbing'),
+      $this->term(5, 'Electricidad', 'electricity'),
+    ]);
+    $this->seedProviders([$this->provider(10, 3), $this->provider(11, 3)]);
+
+    $result = $this->request();
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame(['my_api_tokens'], $this->queriedTables());
+    foreach ($this->categories($result) as $category) {
+      $this->assertArrayNotHasKey('providers_count', $category);
+    }
+    $this->assertStringNotContainsString('providers_count', $result['output']);
+  }
+
+  /**
+   * With ?with_counts=1 every item grows a seventh key with the number of
+   * active providers of that category.
+   */
+  public function testWithCountsEveryItemCarriesItsProviderCount() {
+    $this->authenticateAs();
+    $this->seedCategories([
+      $this->term(3, 'Plomería', 'plumbing'),
+      $this->term(5, 'Electricidad', 'electricity'),
+    ]);
+    $this->seedProviders([
+      $this->provider(10, 3),
+      $this->provider(11, 3),
+      $this->provider(12, 5),
+    ]);
+    $_GET['with_counts'] = '1';
+
+    $result = $this->request();
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame(['Electricidad' => 1, 'Plomería' => 2], $this->countsByName($result));
+    $this->assertSame(
+      ['id', 'code', 'name', 'description', 'icon_id', 'icon_url', 'providers_count'],
+      array_keys($this->categories($result)[0])
+    );
+  }
+
+  /**
+   * The count is an int in the printed JSON, not a string: COUNT() answers a
+   * string on most drivers.
+   */
+  public function testTheCountIsPrintedAsAnInteger() {
+    $this->authenticateAs();
+    $this->seedCategories([$this->term(3, 'Plomería', 'plumbing')]);
+    $this->seedProviders([$this->provider(10, 3)]);
+    $_GET['with_counts'] = '1';
+
+    $result = $this->request();
+
+    $this->assertSame(1, $this->categories($result)[0]['providers_count']);
+    $this->assertStringContainsString('"providers_count":1', $result['output']);
+    $this->assertStringNotContainsString('"providers_count":"1"', $result['output']);
+  }
+
+  /**
+   * A category with no provider answers 0 and stays in the list — the GROUP BY
+   * does not return it, and the resource fills it in.
+   */
+  public function testCategoryWithoutProvidersAnswersZeroAndStaysInTheList() {
+    $this->authenticateAs();
+    $this->seedCategories([
+      $this->term(3, 'Plomería', 'plumbing'),
+      $this->term(5, 'Electricidad', 'electricity'),
+    ]);
+    $this->seedProviders([$this->provider(10, 3)]);
+    $_GET['with_counts'] = '1';
+
+    $result = $this->request();
+
+    $this->assertCount(2, $this->categories($result));
+    $this->assertSame(['Electricidad' => 0, 'Plomería' => 1], $this->countsByName($result));
+    $this->assertStringContainsString('"providers_count":0', $result['output']);
+  }
+
+  /**
+   * With no provider at all — a site where the marketplace has not been
+   * populated yet, or where the `provider` content type does not even exist —
+   * every category answers 0 and the request is still a 200.
+   */
+  public function testWithNoProvidersAtAllEveryCountIsZero() {
+    $this->authenticateAs();
+    $this->seedCategories([
+      $this->term(3, 'Plomería', 'plumbing'),
+      $this->term(5, 'Electricidad', 'electricity'),
+    ]);
+    $_GET['with_counts'] = '1';
+
+    $result = $this->request();
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame(['Electricidad' => 0, 'Plomería' => 0], $this->countsByName($result));
+  }
+
+  /* -------------------------------------------------------------------------
+   * What counts as an ACTIVE provider — the rule restated in SQL.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * An unpublished provider does not count: it is not in the marketplace, so
+   * promising it would send the resident to nobody.
+   */
+  public function testUnpublishedProviderIsNotCounted() {
+    $this->authenticateAs();
+    $this->seedCategories([$this->term(3, 'Plomería', 'plumbing')]);
+    $this->seedProviders([
+      $this->provider(10, 3),
+      $this->provider(11, 3, ['status' => '0']),
+    ]);
+    $_GET['with_counts'] = '1';
+
+    $result = $this->request();
+
+    $this->assertSame(1, $this->categories($result)[0]['providers_count']);
+  }
+
+  /**
+   * A provider whose licence expired does not count either — the second half
+   * of myapi_services_provider_is_active(), and the half a query written
+   * without the licence join would silently lose.
+   */
+  public function testProviderWithAnExpiredLicenceIsNotCounted() {
+    $this->authenticateAs();
+    $this->seedCategories([$this->term(3, 'Plomería', 'plumbing')]);
+    $this->seedProviders([
+      $this->provider(10, 3),
+      $this->provider(11, 3, ['field_license_expiry_value' => (string) (REQUEST_TIME - 1)]),
+    ]);
+    $_GET['with_counts'] = '1';
+
+    $result = $this->request();
+
+    $this->assertSame(1, $this->categories($result)[0]['providers_count']);
+  }
+
+  /**
+   * The boundary of that comparison: a licence expiring exactly now still
+   * counts, because the condition is >= and not >. Same boundary the PHP
+   * helper draws (`$license_expiry >= $now`).
+   */
+  public function testLicenceExpiringExactlyNowStillCounts() {
+    $this->authenticateAs();
+    $this->seedCategories([$this->term(3, 'Plomería', 'plumbing')]);
+    $this->seedProviders([
+      $this->provider(10, 3, ['field_license_expiry_value' => (string) REQUEST_TIME]),
+    ]);
+    $_GET['with_counts'] = '1';
+
+    $result = $this->request();
+
+    $this->assertSame(1, $this->categories($result)[0]['providers_count']);
+  }
+
+  /**
+   * Only nodes of the `provider` bundle are counted: a service_request that
+   * happens to reference a category does not inflate the number.
+   */
+  public function testOnlyProviderNodesAreCounted() {
+    $this->authenticateAs();
+    $this->seedCategories([$this->term(3, 'Plomería', 'plumbing')]);
+    $this->seedProviders([
+      $this->provider(10, 3),
+      $this->provider(11, 3, ['type' => MYAPI_SERVICES_REQUEST_TYPE]),
+    ]);
+    $_GET['with_counts'] = '1';
+
+    $result = $this->request();
+
+    $this->assertSame(1, $this->categories($result)[0]['providers_count']);
+  }
+
+  /**
+   * A provider working in two categories counts once in each: the join
+   * produces one row per pair and both groups see it.
+   */
+  public function testAProviderInTwoCategoriesCountsInBoth() {
+    $this->authenticateAs();
+    $this->seedCategories([
+      $this->term(3, 'Plomería', 'plumbing'),
+      $this->term(5, 'Electricidad', 'electricity'),
+    ]);
+    $this->seedProviders([
+      $this->provider(10, 3),
+      $this->provider(10, 5),
+    ]);
+    $_GET['with_counts'] = '1';
+
+    $result = $this->request();
+
+    $this->assertSame(['Electricidad' => 1, 'Plomería' => 1], $this->countsByName($result));
+  }
+
+  /**
+   * The same provider carrying the same category in two deltas counts ONCE:
+   * this is what COUNT(DISTINCT n.nid) is for, and a COUNT(*) would answer 2.
+   */
+  public function testTheSameCategoryTwiceOnOneProviderCountsOnce() {
+    $this->authenticateAs();
+    $this->seedCategories([$this->term(3, 'Plomería', 'plumbing')]);
+    $this->seedProviders([
+      $this->provider(10, 3),
+      $this->provider(10, 3),
+    ]);
+    $_GET['with_counts'] = '1';
+
+    $result = $this->request();
+
+    $this->assertSame(1, $this->categories($result)[0]['providers_count']);
+  }
+
+  /**
+   * Providers of a category that is NOT in the answered catalogue — a term of
+   * another vocabulary, a deleted category still referenced — do not leak into
+   * anybody's count.
+   */
+  public function testProvidersOfOtherCategoriesDoNotLeak() {
+    $this->authenticateAs();
+    $this->seedCategories([$this->term(3, 'Plomería', 'plumbing')]);
+    $this->seedProviders([
+      $this->provider(10, 3),
+      $this->provider(11, 777),
+    ]);
+    $_GET['with_counts'] = '1';
+
+    $result = $this->request();
+
+    $this->assertCount(1, $this->categories($result));
+    $this->assertSame(1, $this->categories($result)[0]['providers_count']);
+  }
+
+  /* -------------------------------------------------------------------------
+   * The shape of the count query.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * ONE grouped query for the whole catalogue, not one per category. The
+   * assertion reads the recorded query: base table, both inner joins, the
+   * four conditions, the COUNT(DISTINCT) expression and the GROUP BY.
+   */
+  public function testTheCountIsASingleGroupedQuery() {
+    $this->authenticateAs();
+    $this->seedCategories([
+      $this->term(3, 'Plomería', 'plumbing'),
+      $this->term(5, 'Electricidad', 'electricity'),
+      $this->term(7, 'Jardinería', 'gardening'),
+    ]);
+    $this->seedProviders([$this->provider(10, 3)]);
+    $_GET['with_counts'] = '1';
+
+    $this->request();
+
+    $this->assertSame(['my_api_tokens', 'node'], $this->queriedTables());
+
+    $queries = myapi_test_db_queries();
+    $count = $queries[1];
+    $this->assertSame(['field_data_field_categories', 'field_data_field_license_expiry'], array_column($count['joins'], 'table'));
+    $this->assertSame(['INNER', 'INNER'], array_column($count['joins'], 'type'));
+    $this->assertSame(['COUNT(DISTINCT n.nid)'], array_values($count['expressions']));
+    $this->assertSame(['c.field_categories_tid'], $count['group_by']);
+
+    $conditions = [];
+    foreach ($count['conditions'] as $condition) {
+      $conditions[$condition['field']] = [$condition['value'], $condition['operator']];
+    }
+    $this->assertSame([MYAPI_SERVICES_PROVIDER_TYPE, '='], $conditions['n.type']);
+    $this->assertSame([1, '='], $conditions['n.status']);
+    $this->assertSame([REQUEST_TIME, '>='], $conditions['l.field_license_expiry_value']);
+    // Every loaded category, and only those: the query counts, it does not
+    // discover.
+    $this->assertSame([[3, 5, 7], 'IN'], $conditions['c.field_categories_tid']);
+  }
+
+  /**
+   * Ten categories still cost one count query: the number of queries does not
+   * grow with the catalogue.
+   */
+  public function testTheNumberOfQueriesDoesNotGrowWithTheCatalogue() {
+    $terms = [];
+    foreach (range(1, 10) as $i) {
+      $terms[] = $this->term($i, 'Categoría ' . $i, 'code-' . $i);
+    }
+
+    $this->authenticateAs();
+    $this->seedCategories($terms);
+    $this->seedProviders([$this->provider(10, 1)]);
+    $_GET['with_counts'] = '1';
+
+    $this->request();
+
+    $this->assertSame(['my_api_tokens', 'node'], $this->queriedTables());
+  }
+
+  /* -------------------------------------------------------------------------
+   * The lax rule of the parameter, and how it combines.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * Only the exact string '1' turns the count on. Everything else — including
+   * the values a client is most likely to try — answers the six-key response
+   * with a 200 and no count query. Never a 422, same laxness as ?sort.
+   */
+  public function testAnyOtherWithCountsValueIsIgnored() {
+    $values = ['0', 'true', 'TRUE', 'yes', '', ' 1', '1 ', '01', 'si', 'null'];
+
+    foreach ($values as $value) {
+      $this->authenticateAs();
+      $this->seedCategories([$this->term(3, 'Plomería', 'plumbing')]);
+      $this->seedProviders([$this->provider(10, 3)]);
+      $_GET['with_counts'] = $value;
+
+      $result = $this->request();
+
+      $this->assertSame(200, $result['status'], var_export($value, TRUE));
+      $this->assertArrayNotHasKey('providers_count', $this->categories($result)[0], var_export($value, TRUE));
+      $this->assertSame(['my_api_tokens'], $this->queriedTables(), var_export($value, TRUE));
+    }
+  }
+
+  /**
+   * `?with_counts[]=1` — an array where a string is expected — does not fatal
+   * and does not turn the count on: the comparison is `=== '1'`.
+   */
+  public function testAnArrayWithCountsValueIsIgnored() {
+    $this->authenticateAs();
+    $this->seedCategories([$this->term(3, 'Plomería', 'plumbing')]);
+    $this->seedProviders([$this->provider(10, 3)]);
+    $_GET['with_counts'] = ['1'];
+
+    $result = $this->request();
+
+    $this->assertSame(200, $result['status']);
+    $this->assertArrayNotHasKey('providers_count', $this->categories($result)[0]);
+  }
+
+  /**
+   * The two parameters combine: counts AND descending order, each doing its
+   * own job.
+   */
+  public function testWithCountsCombinesWithSortDesc() {
+    $this->authenticateAs();
+    $this->seedCategories([
+      $this->term(3, 'Plomería', 'plumbing'),
+      $this->term(5, 'Cerrajería', 'locksmith'),
+    ]);
+    $this->seedProviders([$this->provider(10, 3), $this->provider(11, 3), $this->provider(12, 5)]);
+    $_GET['with_counts'] = '1';
+    $_GET['sort'] = 'desc';
+
+    $result = $this->request();
+
+    $this->assertSame(['Plomería', 'Cerrajería'], $this->names($result));
+    $this->assertSame([2, 1], array_column($this->categories($result), 'providers_count'));
+  }
+
+  /**
+   * The order does not depend on the counts: asking for them does not reorder
+   * anything, and the categories with more providers do not float to the top.
+   */
+  public function testTheOrderIsTheSameWithAndWithoutCounts() {
+    $terms = [
+      $this->term(3, 'Plomería', 'plumbing'),
+      $this->term(5, 'Cerrajería', 'locksmith'),
+      $this->term(7, 'Jardinería', 'gardening'),
+    ];
+    $providers = [$this->provider(10, 7), $this->provider(11, 7), $this->provider(12, 5)];
+
+    $this->authenticateAs();
+    $this->seedCategories($terms);
+    $this->seedProviders($providers);
+    $without = $this->names($this->request());
+
+    $this->authenticateAs();
+    $this->seedCategories($terms);
+    $this->seedProviders($providers);
+    $_GET['with_counts'] = '1';
+    $with = $this->names($this->request());
+
+    $this->assertSame(['Cerrajería', 'Jardinería', 'Plomería'], $without);
+    $this->assertSame($without, $with);
+  }
+
+  /**
+   * Each count travels with its own category after the sort: the failure this
+   * catches would show one category's number under another's name.
+   */
+  public function testEachCountStaysWithItsOwnCategoryAfterSorting() {
+    $this->authenticateAs();
+    $this->seedCategories([
+      $this->term(3, 'Plomería', 'plumbing'),
+      $this->term(5, 'Cerrajería', 'locksmith'),
+      $this->term(7, 'Jardinería', 'gardening'),
+    ]);
+    $this->seedProviders([
+      $this->provider(10, 3),
+      $this->provider(11, 3),
+      $this->provider(12, 3),
+      $this->provider(13, 7),
+    ]);
+    $_GET['with_counts'] = '1';
+
+    $result = $this->request();
+
+    $this->assertSame(['Cerrajería' => 0, 'Jardinería' => 1, 'Plomería' => 3], $this->countsByName($result));
+  }
+
+  /* -------------------------------------------------------------------------
+   * The degraded cases, with the parameter on.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * An empty vocabulary answers the empty list WITHOUT running the count
+   * query: there is no category to count for, and an unbounded aggregate over
+   * the whole node table is exactly what the early return avoids.
+   */
+  public function testEmptyVocabularyWithCountsRunsNoCountQuery() {
+    $this->authenticateAs();
+    $this->seedCategories([]);
+    $this->seedProviders([$this->provider(10, 3)]);
+    $_GET['with_counts'] = '1';
+
+    $result = $this->request();
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame('{"success":true,"data":{"service_categories":[]}}', $result['output']);
+    $this->assertSame(['my_api_tokens'], $this->queriedTables());
+  }
+
+  /**
+   * Same for a vocabulary that does not exist at all.
+   */
+  public function testMissingVocabularyWithCountsRunsNoCountQuery() {
+    $this->authenticateAs();
+    myapi_test_taxonomy_seed(['bancos' => [['tid' => '99', 'name' => 'Banco Pichincha', 'description' => '']]]);
+    $this->seedProviders([$this->provider(10, 3)]);
+    $_GET['with_counts'] = '1';
+
+    $result = $this->request();
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame('{"success":true,"data":{"service_categories":[]}}', $result['output']);
+    $this->assertSame(['my_api_tokens'], $this->queriedTables());
+  }
+
+  /**
+   * A rejected method with ?with_counts=1 is still a 405 that costs nothing:
+   * the count query lives behind both guards.
+   */
+  public function testRejectedMethodWithCountsRunsNoQueryAtAll() {
+    $this->authenticateAs();
+    $this->seedCategories([$this->term(3, 'Plomería', 'plumbing')]);
+    $this->seedProviders([$this->provider(10, 3)]);
+    $_GET['with_counts'] = '1';
+    $_SERVER['REQUEST_METHOD'] = 'POST';
+
+    $result = $this->request();
+
+    $this->assertSame(405, $result['status']);
+    $this->assertSame([], $this->queriedTables());
+  }
+
+  /**
+   * And an unauthenticated request with ?with_counts=1 never reaches the
+   * count either.
+   */
+  public function testUnauthenticatedRequestWithCountsRunsNoCountQuery() {
+    $this->seedCategories([$this->term(3, 'Plomería', 'plumbing')]);
+    $_GET['with_counts'] = '1';
+
+    $result = $this->request();
+
+    $this->assertSame(401, $result['status']);
+    $this->assertNotContains('node', $this->queriedTables());
   }
 
 }

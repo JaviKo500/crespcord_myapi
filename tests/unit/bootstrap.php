@@ -502,9 +502,12 @@ if (!defined('REQUEST_TIME')) {
  *
  * Implements the subset of Drupal 7's SelectQuery that myapi's read paths
  * actually use: fields(), addField(), condition(), the join family, orderBy(),
- * range() and execute(). Anything else throws instead of returning a wrong
- * answer quietly — a resource that starts using groupBy() must extend this
- * class knowingly, not discover that its test passed for the wrong reason.
+ * range(), and since SPEC 79 groupBy() and addExpression() as well, plus
+ * execute(). Anything else throws instead of returning a wrong answer quietly
+ * — a resource that starts using an unsupported clause must extend this class
+ * knowingly, not discover that its test passed for the wrong reason. That is
+ * how grouping got here: the category counter was written, the stub threw, and
+ * the aggregation was implemented rather than mocked around.
  *
  * The rules, in full:
  *  - The base table names the fixture: myapi_test_db_seed(['node' => [...]])
@@ -533,6 +536,8 @@ class MyapiTestSelectQuery implements IteratorAggregate {
   private $order = [];
   private $range = NULL;
   private $count_mode = FALSE;
+  private $group_by = [];
+  private $expressions = [];
   private $tags = [];
   private $extenders = [];
   private $pager_limit = NULL;
@@ -721,6 +726,41 @@ class MyapiTestSelectQuery implements IteratorAggregate {
     return $alias;
   }
 
+  /**
+   * GROUP BY, applied and not merely recorded (SPEC 79).
+   *
+   * The class docblock used to say a resource that started grouping had to
+   * extend this builder knowingly; /api/v1/service-categories?with_counts=1 is
+   * that resource, and this is that extension. It counts the active providers
+   * of every category in ONE grouped query, so a stub that ignored the GROUP
+   * BY would answer a single row and the whole point of the query — one count
+   * per category — would go untested.
+   *
+   * Only the shape myapi writes is supported: grouping by real columns, with
+   * the aggregate expressed through addExpression(). No HAVING.
+   */
+  public function groupBy($field) {
+    $this->group_by[] = $field;
+
+    return $this;
+  }
+
+  /**
+   * An aggregate column (SPEC 79).
+   *
+   * Drupal answers the alias it assigned; so does this. The expression itself
+   * is evaluated in aggregate() below, and only the two COUNT shapes this
+   * module writes are understood — anything else throws rather than answering
+   * a plausible wrong number.
+   */
+  public function addExpression($expression, $alias = NULL) {
+    $alias = $alias !== NULL ? $alias : 'expression';
+    $this->expressions[$alias] = $expression;
+    $this->fields[] = $alias;
+
+    return $alias;
+  }
+
   public function orderBy($field, $direction = 'ASC') {
     $this->order[] = ['field' => $field, 'direction' => strtoupper($direction)];
 
@@ -757,6 +797,8 @@ class MyapiTestSelectQuery implements IteratorAggregate {
       'order'      => $this->order,
       'range'      => $this->range,
       'count'      => $this->count_mode,
+      'group_by'   => $this->group_by,
+      'expressions' => $this->expressions,
       'tags'       => $this->tags,
       'extenders'  => $this->extenders,
     ];
@@ -775,6 +817,16 @@ class MyapiTestSelectQuery implements IteratorAggregate {
    * applies them in.
    */
   private function rows() {
+    // A grouped query collapses before it is ordered or ranged, the way SQL
+    // does it: aggregate first, then sort and slice the aggregated rows.
+    if ($this->group_by || $this->expressions) {
+      $rows = $this->sort($this->aggregate($this->matchedRows()));
+
+      return $this->range !== NULL
+        ? array_slice($rows, $this->range['start'], $this->range['length'])
+        : $rows;
+    }
+
     $rows = $this->sort($this->matchedRows());
 
     if ($this->range !== NULL) {
@@ -782,6 +834,94 @@ class MyapiTestSelectQuery implements IteratorAggregate {
     }
 
     return array_map([$this, 'project'], $rows);
+  }
+
+  /**
+   * Collapses the matched rows into one row per GROUP BY value (SPEC 79).
+   *
+   * The fixture rows are the rows the JOINs would produce — one per
+   * (provider, category) pair for the category counter — because joins are
+   * recorded and never resolved here. Grouping them is therefore the same
+   * arithmetic the database does over the same set.
+   *
+   * Groups come out in the order their first row appears in the fixture. Real
+   * SQL guarantees no order without an ORDER BY, so no test should depend on
+   * it; what it must not do is reorder rows behind a test's back, hence the
+   * insertion order.
+   */
+  private function aggregate(array $rows) {
+    $groups = [];
+    foreach ($rows as $row) {
+      $key = [];
+      foreach ($this->group_by as $field) {
+        $key[] = (string) $this->value($row, $field);
+      }
+      $groups[implode("\0", $key)][] = $row;
+    }
+
+    $aggregated = [];
+    foreach ($groups as $group) {
+      $projected = [];
+      foreach ($this->fields as $field) {
+        $projected[$field] = isset($this->expressions[$field])
+          ? $this->evaluate($this->expressions[$field], $group)
+          : $this->value($group[0], isset($this->field_sources[$field]) ? $this->field_sources[$field] : $field);
+      }
+      $aggregated[] = $projected;
+    }
+
+    return $aggregated;
+  }
+
+  /**
+   * Evaluates one aggregate expression over the rows of a group (SPEC 79).
+   *
+   * Understands COUNT(*), COUNT(alias.column) — which skips NULLs, as SQL
+   * does — and COUNT(DISTINCT alias.column). Anything else throws: a stub that
+   * guessed at SUM() or AVG() would answer a number that looks right and is
+   * not, which is worse than not supporting it.
+   */
+  private function evaluate($expression, array $rows) {
+    $normalized = preg_replace('/\s+/', ' ', trim($expression));
+
+    if (preg_match('/^COUNT\(\s*\*\s*\)$/i', $normalized)) {
+      return count($rows);
+    }
+
+    if (preg_match('/^COUNT\(\s*(DISTINCT\s+)?([A-Za-z0-9_.]+)\s*\)$/i', $normalized, $m)) {
+      $values = [];
+      foreach ($rows as $row) {
+        $value = $this->value($row, $m[2]);
+        if ($value !== NULL) {
+          $values[] = $value;
+        }
+      }
+
+      return $m[1] ? count(array_unique($values)) : count($values);
+    }
+
+    throw new RuntimeException('MyapiTestSelectQuery: unsupported expression "' . $expression . '".');
+  }
+
+  /**
+   * Reads a column off a fixture row by its qualified name, its alias or its
+   * bare column name (SPEC 79).
+   *
+   * The three-step fallback exists because a grouped query names the same
+   * column three ways at once: the condition writes 'c.field_categories_tid',
+   * the projection aliases it to 'tid', and the fixture row — which is the
+   * joined row, written flat — carries plain 'field_categories_tid'. Used only
+   * by the aggregation path, so the projection of every non-grouped query is
+   * untouched.
+   */
+  private function value(array $row, $field) {
+    if (array_key_exists($field, $row)) {
+      return $row[$field];
+    }
+
+    $bare = $this->column($field);
+
+    return array_key_exists($bare, $row) ? $row[$bare] : NULL;
   }
 
   /**
