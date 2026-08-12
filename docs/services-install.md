@@ -17,9 +17,11 @@ generates the `field_data_*` / `field_revision_*` tables automatically.
 **No `api/v1/...` endpoint, no permission and no business logic is created by
 this spec.** Listing categories, creating a request from the app, offering,
 opening a chat, closing and rating are all out of scope — SPEC 77 only creates
-the structure. The `proveedor` role is the next spec; today only
-`administrator` (and `backend`, through its site-wide permissions) reaches
-these content types, through Drupal's native screens.
+the structure. SPEC 78 (`docs/provider-role.md`) added the `proveedor` role
+and closed the Drupal back office to it, but that role still authorizes
+nothing on `api/v1/...` — today only `administrator` (and `backend`, through
+its site-wide permissions) reaches these content types, through Drupal's
+native screens.
 
 > **Dependencies.** No new dependency is declared in `myapi.info`.
 > `entityreference`, `date`, `taxonomy`, `image`, `file`, `list`, `text` and
@@ -334,7 +336,9 @@ one never drags another feature's data down with it.
 
 Written down so nobody spends time looking for them:
 
-- No endpoint, no permission, no role. The `proveedor` role is the next spec.
+- No endpoint, no permission. SPEC 78 created the `proveedor` role and closed
+  the back office to it (`docs/provider-role.md`), but the role authorizes no
+  `api/v1/...` endpoint by itself — that authorization is still a future spec.
 - No entry in `myapi_building_admin_condominium_map()` for `service_request`.
   `field_condominium` exists so that spec is one line — but adding the entry
   without granting the permissions would do nothing.
