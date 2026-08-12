@@ -284,6 +284,11 @@ function myapi_install() {
   // Before the role installer, for the same ordering reason as the two above,
   // even though SPEC 77 grants this role nothing yet.
   _myapi_services_install();
+  // SPEC 78. After services: its (currently empty) permission catalogue would
+  // otherwise be crossed against a module_invoke_all('permission') that does
+  // not yet know the five marketplace bundles, the same reasoning that keeps
+  // this before the building-admin role below.
+  _myapi_provider_role_install();
   // After the reservations and claims installs: 'area', 'reservation' and
   // 'reclamo' must exist before their 'create'/'edit any' permissions can be
   // found in module_invoke_all('permission') and granted to the
@@ -1372,6 +1377,82 @@ function _myapi_building_admin_install() {
   $available = array_keys(module_invoke_all('permission'));
   $granted = myapi_building_admin_filter_available_permissions(
     myapi_building_admin_permissions(),
+    $available
+  );
+
+  if ($granted) {
+    user_role_grant_permissions($role->rid, $granted);
+  }
+}
+
+/**
+ * Creates the 'proveedor' role and its permissions (idempotent, SPEC 78).
+ *
+ * Single source of truth for that role's installation: called both from
+ * hook_install() (fresh sites) and from myapi_update_7026() (already installed
+ * sites). Re-running it never duplicates the role nor a role_permission row.
+ *
+ * No field is created here, unlike _myapi_building_admin_install(): the role
+ * is scoped by belonging (field_provider_users, already created by SPEC 77 on
+ * the 'provider' bundle) and by category, neither of which needs a new field
+ * on the user entity.
+ *
+ * Two parts, in this order:
+ * (a) the role, looked up by name because the rid is per environment;
+ * (b) the permissions, crossed against the ones that actually exist on the
+ *     site. myapi_provider_role_permissions() is empty by design (see its
+ *     docblock), so the real effect today is "create the role and grant
+ *     nothing" — written in full anyway, so this is the one place something
+ *     gets added the day that decision changes.
+ *
+ * Deliberately CONSERVATIVE, same criterion as the role next to it: creates
+ * what is missing and never revokes nor deletes.
+ */
+function _myapi_provider_role_install() {
+  // Functions of a files[] .inc are not autoloaded by the D7 registry, and an
+  // .install runs early enough that the registry may not be warm anyway, so
+  // the include is explicit.
+  module_load_include('inc', 'myapi', 'includes/myapi.provider_role');
+  // myapi_building_admin_filter_available_permissions() is reused from here
+  // rather than duplicated (SPEC 78's own "Decisiones" table), so its file
+  // has to be loaded explicitly too — call order in myapi_install() puts this
+  // installer BEFORE _myapi_building_admin_install(), so nothing else is
+  // guaranteed to have loaded it yet.
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+
+  // (a) The role. user_role_save() would happily create a second role with the
+  // same name, so the lookup is what makes this idempotent. The rid it gets is
+  // never read: every check in the module compares role NAMES.
+  $role = user_role_load_by_name(MYAPI_PROVIDER_ROLE);
+  if (!$role) {
+    $role = new stdClass();
+    $role->name = MYAPI_PROVIDER_ROLE;
+    user_role_save($role);
+    // user_role_save() writes the new rid back onto the object, but a reload
+    // is cheaper to reason about than trusting that side effect.
+    $role = user_role_load_by_name(MYAPI_PROVIDER_ROLE);
+  }
+
+  if (!$role) {
+    // Nothing else can be done without a role to grant to. Loud rather than
+    // silent: the permissions below would otherwise fail one by one.
+    watchdog(
+      'myapi',
+      'SPEC 78: the role "@role" could not be created; its permissions were skipped.',
+      ['@role' => MYAPI_PROVIDER_ROLE],
+      WATCHDOG_ERROR
+    );
+    return;
+  }
+
+  // (b) The permissions. module_invoke_all('permission') returns
+  // permission name => definition, so its KEYS are the permissions that exist
+  // on this site right now. With an empty catalogue this crosses an empty list
+  // against it and grants nothing — the function still runs so the day the
+  // catalogue grows, nothing else has to change here.
+  $available = array_keys(module_invoke_all('permission'));
+  $granted = myapi_building_admin_filter_available_permissions(
+    myapi_provider_role_permissions(),
     $available
   );
 
@@ -3480,4 +3561,25 @@ function myapi_update_7025() {
     '@vocabulary' => MYAPI_SERVICES_CATEGORY_VOCABULARY,
     '@types'      => implode(', ', myapi_services_node_types()),
   ]);
+}
+
+/**
+ * SPEC 78: creates the 'proveedor' role.
+ *
+ * myapi_install() runs _myapi_provider_role_install() on a fresh site, so
+ * this is the same call for a site where the module is already installed —
+ * the exact pattern of myapi_update_7012() (building-admin role).
+ *
+ * It is safe to re-run: user_role_load_by_name() makes the role creation
+ * idempotent and user_role_grant_permissions() merges rather than duplicates.
+ *
+ * Nothing is assigned to anyone here: the role is created empty, with no
+ * permission (myapi_provider_role_permissions() is empty by design), and
+ * giving it to a person is a manual task at /user/N/edit, linking their
+ * account to a 'provider' node via field_provider_users.
+ */
+function myapi_update_7026() {
+  _myapi_provider_role_install();
+
+  return t('SPEC 78: creado el rol @role.', ['@role' => MYAPI_PROVIDER_ROLE]);
 }

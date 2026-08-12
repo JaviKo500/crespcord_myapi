@@ -811,33 +811,35 @@ function myapi_node_update($node) {
 /**
  * Implements hook_node_access().
  *
- * The per-node half of the condominium filter of SPEC 49: a user holding the
- * 'administrador edificio' role only reaches nodes of their assigned
- * condominiums. The other half is myapi_query_node_access_alter(), which
- * narrows the listings; this one closes the direct URL.
+ * The per-node half of TWO independent scope filters: SPEC 49's condominium
+ * filter for the 'administrador edificio' role, and SPEC 78's belonging/
+ * category filter for the 'proveedor' role. The other half of each is
+ * myapi_query_node_access_alter(), which narrows the listings; this one
+ * closes the direct URL.
  *
- * Returns NODE_ACCESS_DENY only when ALL of these hold, and NODE_ACCESS_IGNORE
- * otherwise:
- * - the account holds the role (nobody else's access changes, the API
- *   included);
- * - the node's type is in myapi_building_admin_condominium_map();
- * - its condominium could be resolved;
- * - and that condominium is not among the assigned ones — where "no
- *   condominium assigned at all" denies everything, by design.
+ * Each role's own decision function already returns only 'deny' or 'ignore',
+ * never 'allow' — see myapi_building_admin_access_decision() and
+ * myapi_provider_role_access_decision(). This hook consults BOTH and denies
+ * if EITHER does: the conservative reading SPEC 78 calls for when an account
+ * holds both roles at once — it gets exactly what either role alone would
+ * deny it.
  *
- * It NEVER returns NODE_ACCESS_ALLOW. Allowing here would short-circuit every
- * other check Drupal makes — unpublished nodes, other modules' hooks — turning
- * a condominium filter into a permission escalation. IGNORE means "I have
- * nothing to say", which is exactly the case for every node this role may see.
+ * It NEVER returns NODE_ACCESS_ALLOW, for the same reason neither role's own
+ * decision does: allowing here would short-circuit every other check Drupal
+ * makes — unpublished nodes, other modules' hooks — turning a scope filter
+ * into a permission escalation. IGNORE means "I have nothing to say", which
+ * is exactly the case for every node neither role denies.
  *
  * Two shapes of call are stepped around on the first lines:
  * - $op 'create' arrives with $node as a TYPE STRING, not an object. Creation
- *   is out of this hook's reach by design; the bulletin case is covered in
- *   myapi_node_validate() and the area/reservation one is an accepted risk
- *   written down in the spec.
+ *   is out of this hook's reach by design; the bulletin case (building-admin)
+ *   is covered in myapi_node_validate(), and neither role is granted a
+ *   'create' permission on the five marketplace bundles (SPEC 78), so the
+ *   provider role has nothing to reach here in the first place.
  * - A user with 'bypass node access' (administrator) never reaches this hook
  *   at all: node_access() returns before invoking it. That is why an account
- *   holding both roles keeps seeing everything.
+ *   holding any of these roles alongside 'administrator' keeps seeing
+ *   everything.
  *
  * @param object|string $node
  *   The node being checked, or the type string on 'create'.
@@ -855,39 +857,70 @@ function myapi_node_access($node, $op, $account) {
   }
 
   module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+  module_load_include('inc', 'myapi', 'includes/myapi.services_common');
+  module_load_include('inc', 'myapi', 'includes/myapi.provider_role');
 
-  if (!myapi_building_admin_is($account)) {
-    return NODE_ACCESS_IGNORE;
+  if (myapi_building_admin_is($account)) {
+    $decision = myapi_building_admin_access_decision(
+      myapi_building_admin_node_condominium($node),
+      myapi_building_admin_condominium_ids($account)
+    );
+
+    if ($decision === 'deny') {
+      return NODE_ACCESS_DENY;
+    }
   }
 
-  $decision = myapi_building_admin_access_decision(
-    myapi_building_admin_node_condominium($node),
-    myapi_building_admin_condominium_ids($account)
-  );
+  if (myapi_provider_role_is($account) && myapi_provider_role_node_decision($node, $account) === 'deny') {
+    return NODE_ACCESS_DENY;
+  }
 
-  return $decision === 'deny' ? NODE_ACCESS_DENY : NODE_ACCESS_IGNORE;
+  return NODE_ACCESS_IGNORE;
 }
 
 /**
  * Implements hook_query_TAG_alter() for the 'node_access' tag.
  *
- * The listing half of the SPEC 49 condominium filter; myapi_node_access() is
- * the per-node half. Glue only: everything it decides lives in
- * includes/myapi.building_admin.inc, next to the catalogues it reads.
+ * The listing half of both scope filters; myapi_node_access() is the
+ * per-node half of each. Glue only: everything either alter decides lives in
+ * includes/myapi.building_admin.inc and includes/myapi.provider_role.inc,
+ * next to the catalogues each reads.
+ *
+ * Each alter is a COMPLETE allowlist of its own domain of node types — a
+ * building admin sees only its 7 recognized types in any node_access-tagged
+ * listing, a provider only its 5 — so simply running both, unqualified, on
+ * the same query would AND two disjoint allowlists together and empty every
+ * such listing for an account holding both roles (SPEC 78's own
+ * "Decisiones" investigation). Each call below is given the OTHER alter's
+ * own domain as $exempt_types, which turns "complete allowlist" into "veto
+ * within my domain, no-op for the other role's domain" — the two then
+ * compose correctly under AND: an account with only one role gets exactly
+ * that role's filter (the other call is a no-op for it, per its own guard
+ * 1), and an account with both gets the union of what each would show alone,
+ * each still narrowed by its own rule. A type NEITHER role recognizes stays
+ * excluded from a building-admin or provider account's listings exactly as
+ * a solo alter would have left it.
  *
  * Scope worth stating out loud, because it is wider than /admin/content: this
  * runs on EVERY query tagged 'node_access', which includes the
- * entityreference autocompletes of the node forms. That is deliberate — it is
- * what keeps the condominium selectors offering the assigned condominiums and
- * only those — and it is written down in docs/building-admin-role.md so it is
- * not diagnosed later as a bug.
+ * entityreference autocompletes of the node forms. That is deliberate for the
+ * building-admin half — it is what keeps the condominium selectors offering
+ * the assigned condominiums and only those — and is written down in
+ * docs/building-admin-role.md. The provider role is granted no permission
+ * that opens such a selector (SPEC 78), so this half has almost no surface to
+ * exercise today; it is implemented anyway; see
+ * myapi_provider_role_alter_node_query()'s own docblock.
  *
  * No query of this module carries that tag (checked across resources/ and
  * includes/), so the api/v1/... endpoints are untouched.
  */
 function myapi_query_node_access_alter(QueryAlterableInterface $query) {
   module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
-  myapi_building_admin_alter_node_query($query);
+  module_load_include('inc', 'myapi', 'includes/myapi.provider_role');
+  module_load_include('inc', 'myapi', 'includes/myapi.services_common');
+
+  myapi_building_admin_alter_node_query($query, myapi_services_node_types());
+  myapi_provider_role_alter_node_query($query, myapi_building_admin_visible_types());
 }
 
 /**

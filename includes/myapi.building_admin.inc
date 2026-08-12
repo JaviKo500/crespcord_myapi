@@ -1134,10 +1134,29 @@ function myapi_building_admin_join_field($query, $field, $left_expression, array
  * the same thing myapi_node_access() does with it: out of the map means out of
  * the rule, in both halves of the filter.
  *
+ * $exempt_types (SPEC 78) is what lets this alter compose safely with a
+ * SECOND, independent role's own node_access alter on the SAME query —
+ * myapi_provider_role_alter_node_query(), called right after this one from
+ * myapi_query_node_access_alter(). Without it, this function's restriction
+ * would be a complete allowlist of its OWN 7 recognized types, and stacking
+ * two independent complete-allowlists on one query via plain AND collapses
+ * to their intersection — empty, since the two roles' domains are disjoint —
+ * emptying every node_access-tagged listing for an account holding both
+ * roles. Passing the other role's types here turns this alter into a pure
+ * VETO within its own domain (exactly the shape myapi_node_access() already
+ * has) and a no-op for types outside it AND outside $exempt_types, so a type
+ * neither role recognizes at all (truly unrelated site content, if any)
+ * stays excluded exactly as before — only the OTHER role's own types are
+ * deferred to its own alter instead of being excluded here.
+ *
  * @param SelectQueryInterface $query
  *   The query being altered.
+ * @param array $exempt_types
+ *   Node type machine names this alter must NOT restrict, because another
+ *   role's own alter on the same query already governs them. Empty by
+ *   default, which reproduces the pre-SPEC-78 behaviour exactly.
  */
-function myapi_building_admin_alter_node_query($query) {
+function myapi_building_admin_alter_node_query($query, array $exempt_types = []) {
   // method_exists() and not `instanceof SelectQueryInterface`: it says exactly
   // what is needed of the object without depending on the class being loaded.
   if (!is_object($query) || !method_exists($query, 'getTables')) {
@@ -1157,10 +1176,33 @@ function myapi_building_admin_alter_node_query($query) {
     return;
   }
 
-  // Guard 3 — no condominium assigned, nothing visible.
+  // The domain gate (SPEC 78): OR'd with this role's own restriction below,
+  // so a row of an exempt type always passes THIS alter regardless of
+  // condominium assignment or branches, deferring entirely to whichever
+  // other alter governs it.
+  $gate = db_or();
+  if ($exempt_types) {
+    $gate->condition($node_alias . '.type', $exempt_types, 'IN');
+  }
+
+  // Guard 3 — no condominium assigned, nothing visible WITHIN this role's own
+  // domain.
+  //
+  // A DatabaseCondition with ZERO sub-conditions compiles to an empty string
+  // in Drupal 7 — i.e. it restricts NOTHING, the opposite of what an empty
+  // `db_or()` might suggest. $gate is empty exactly when $exempt_types is
+  // empty (the common case: this role running alone), so closing with
+  // `$query->condition($gate)` there would silently stop filtering instead of
+  // denying everything. The hard `1 = 0` is kept for that case; $gate (which
+  // is never empty when $exempt_types is not) is used only when there is
+  // another role's domain to defer to.
   $assigned = myapi_building_admin_condominium_ids();
   if (!$assigned) {
-    $query->where('1 = 0');
+    if (!$exempt_types) {
+      $query->where('1 = 0');
+      return;
+    }
+    $query->condition($gate);
     return;
   }
 
@@ -1247,10 +1289,20 @@ function myapi_building_admin_alter_node_query($query) {
   }
 
   if (!$branch_count) {
-    $query->where('1 = 0');
+    // Same empty-group hazard as guard 3 above: fall back to the hard `1 = 0`
+    // when there is no other role's domain to defer to.
+    if (!$exempt_types) {
+      $query->where('1 = 0');
+      return;
+    }
+    $query->condition($gate);
     return;
   }
 
-  $query->condition($node_alias . '.type', $visible, 'IN');
-  $query->condition($branches);
+  // $branches already implies `type IN $visible` — every disjunct pins a
+  // specific visible type — so it is nested into $gate directly rather than
+  // ANDing a redundant `type IN $visible` alongside it (which is what would
+  // make a type-outside-domain row fail this alter even when it is exempt).
+  $gate->condition($branches);
+  $query->condition($gate);
 }
