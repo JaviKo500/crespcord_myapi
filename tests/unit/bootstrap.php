@@ -502,9 +502,12 @@ if (!defined('REQUEST_TIME')) {
  *
  * Implements the subset of Drupal 7's SelectQuery that myapi's read paths
  * actually use: fields(), addField(), condition(), the join family, orderBy(),
- * range() and execute(). Anything else throws instead of returning a wrong
- * answer quietly — a resource that starts using groupBy() must extend this
- * class knowingly, not discover that its test passed for the wrong reason.
+ * range(), and since SPEC 79 groupBy() and addExpression() as well, plus
+ * execute(). Anything else throws instead of returning a wrong answer quietly
+ * — a resource that starts using an unsupported clause must extend this class
+ * knowingly, not discover that its test passed for the wrong reason. That is
+ * how grouping got here: the category counter was written, the stub threw, and
+ * the aggregation was implemented rather than mocked around.
  *
  * The rules, in full:
  *  - The base table names the fixture: myapi_test_db_seed(['node' => [...]])
@@ -533,6 +536,8 @@ class MyapiTestSelectQuery implements IteratorAggregate {
   private $order = [];
   private $range = NULL;
   private $count_mode = FALSE;
+  private $group_by = [];
+  private $expressions = [];
   private $tags = [];
   private $extenders = [];
   private $pager_limit = NULL;
@@ -721,6 +726,41 @@ class MyapiTestSelectQuery implements IteratorAggregate {
     return $alias;
   }
 
+  /**
+   * GROUP BY, applied and not merely recorded (SPEC 79).
+   *
+   * The class docblock used to say a resource that started grouping had to
+   * extend this builder knowingly; /api/v1/service-categories?with_counts=1 is
+   * that resource, and this is that extension. It counts the active providers
+   * of every category in ONE grouped query, so a stub that ignored the GROUP
+   * BY would answer a single row and the whole point of the query — one count
+   * per category — would go untested.
+   *
+   * Only the shape myapi writes is supported: grouping by real columns, with
+   * the aggregate expressed through addExpression(). No HAVING.
+   */
+  public function groupBy($field) {
+    $this->group_by[] = $field;
+
+    return $this;
+  }
+
+  /**
+   * An aggregate column (SPEC 79).
+   *
+   * Drupal answers the alias it assigned; so does this. The expression itself
+   * is evaluated in aggregate() below, and only the two COUNT shapes this
+   * module writes are understood — anything else throws rather than answering
+   * a plausible wrong number.
+   */
+  public function addExpression($expression, $alias = NULL) {
+    $alias = $alias !== NULL ? $alias : 'expression';
+    $this->expressions[$alias] = $expression;
+    $this->fields[] = $alias;
+
+    return $alias;
+  }
+
   public function orderBy($field, $direction = 'ASC') {
     $this->order[] = ['field' => $field, 'direction' => strtoupper($direction)];
 
@@ -757,6 +797,8 @@ class MyapiTestSelectQuery implements IteratorAggregate {
       'order'      => $this->order,
       'range'      => $this->range,
       'count'      => $this->count_mode,
+      'group_by'   => $this->group_by,
+      'expressions' => $this->expressions,
       'tags'       => $this->tags,
       'extenders'  => $this->extenders,
     ];
@@ -775,6 +817,16 @@ class MyapiTestSelectQuery implements IteratorAggregate {
    * applies them in.
    */
   private function rows() {
+    // A grouped query collapses before it is ordered or ranged, the way SQL
+    // does it: aggregate first, then sort and slice the aggregated rows.
+    if ($this->group_by || $this->expressions) {
+      $rows = $this->sort($this->aggregate($this->matchedRows()));
+
+      return $this->range !== NULL
+        ? array_slice($rows, $this->range['start'], $this->range['length'])
+        : $rows;
+    }
+
     $rows = $this->sort($this->matchedRows());
 
     if ($this->range !== NULL) {
@@ -782,6 +834,94 @@ class MyapiTestSelectQuery implements IteratorAggregate {
     }
 
     return array_map([$this, 'project'], $rows);
+  }
+
+  /**
+   * Collapses the matched rows into one row per GROUP BY value (SPEC 79).
+   *
+   * The fixture rows are the rows the JOINs would produce — one per
+   * (provider, category) pair for the category counter — because joins are
+   * recorded and never resolved here. Grouping them is therefore the same
+   * arithmetic the database does over the same set.
+   *
+   * Groups come out in the order their first row appears in the fixture. Real
+   * SQL guarantees no order without an ORDER BY, so no test should depend on
+   * it; what it must not do is reorder rows behind a test's back, hence the
+   * insertion order.
+   */
+  private function aggregate(array $rows) {
+    $groups = [];
+    foreach ($rows as $row) {
+      $key = [];
+      foreach ($this->group_by as $field) {
+        $key[] = (string) $this->value($row, $field);
+      }
+      $groups[implode("\0", $key)][] = $row;
+    }
+
+    $aggregated = [];
+    foreach ($groups as $group) {
+      $projected = [];
+      foreach ($this->fields as $field) {
+        $projected[$field] = isset($this->expressions[$field])
+          ? $this->evaluate($this->expressions[$field], $group)
+          : $this->value($group[0], isset($this->field_sources[$field]) ? $this->field_sources[$field] : $field);
+      }
+      $aggregated[] = $projected;
+    }
+
+    return $aggregated;
+  }
+
+  /**
+   * Evaluates one aggregate expression over the rows of a group (SPEC 79).
+   *
+   * Understands COUNT(*), COUNT(alias.column) — which skips NULLs, as SQL
+   * does — and COUNT(DISTINCT alias.column). Anything else throws: a stub that
+   * guessed at SUM() or AVG() would answer a number that looks right and is
+   * not, which is worse than not supporting it.
+   */
+  private function evaluate($expression, array $rows) {
+    $normalized = preg_replace('/\s+/', ' ', trim($expression));
+
+    if (preg_match('/^COUNT\(\s*\*\s*\)$/i', $normalized)) {
+      return count($rows);
+    }
+
+    if (preg_match('/^COUNT\(\s*(DISTINCT\s+)?([A-Za-z0-9_.]+)\s*\)$/i', $normalized, $m)) {
+      $values = [];
+      foreach ($rows as $row) {
+        $value = $this->value($row, $m[2]);
+        if ($value !== NULL) {
+          $values[] = $value;
+        }
+      }
+
+      return $m[1] ? count(array_unique($values)) : count($values);
+    }
+
+    throw new RuntimeException('MyapiTestSelectQuery: unsupported expression "' . $expression . '".');
+  }
+
+  /**
+   * Reads a column off a fixture row by its qualified name, its alias or its
+   * bare column name (SPEC 79).
+   *
+   * The three-step fallback exists because a grouped query names the same
+   * column three ways at once: the condition writes 'c.field_categories_tid',
+   * the projection aliases it to 'tid', and the fixture row — which is the
+   * joined row, written flat — carries plain 'field_categories_tid'. Used only
+   * by the aggregation path, so the projection of every non-grouped query is
+   * untouched.
+   */
+  private function value(array $row, $field) {
+    if (array_key_exists($field, $row)) {
+      return $row[$field];
+    }
+
+    $bare = $this->column($field);
+
+    return array_key_exists($bare, $row) ? $row[$bare] : NULL;
   }
 
   /**
@@ -1608,6 +1748,9 @@ function myapi_test_taxonomy_seed(array $vocabularies = []) {
   $GLOBALS['myapi_test_vocabularies'] = [];
   $GLOBALS['myapi_test_taxonomy_terms'] = [];
   $GLOBALS['myapi_test_taxonomy_calls'] = [];
+  // The hydrated terms of the entity_load() stub (SPEC 79) are cleared here
+  // too, so a seed of any kind leaves no term of the previous test behind.
+  $GLOBALS['myapi_test_taxonomy_entities'] = [];
 
   // vids are assigned in seeding order, starting at 1, the way a fresh site
   // hands them out. No test should depend on a particular number: the point of
@@ -1673,5 +1816,114 @@ if (!function_exists('taxonomy_get_tree')) {
     return isset($GLOBALS['myapi_test_taxonomy_terms'][$vid])
       ? $GLOBALS['myapi_test_taxonomy_terms'][$vid]
       : [];
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * The hydrated taxonomy terms and the public file URLs (SPEC 79).
+ *
+ * /api/v1/service-categories reads two Field API values off each term, and
+ * taxonomy_get_tree() does not carry them: the resource loads the terms in a
+ * second, batched call. These two stubs are what let that whole path run with
+ * no site booted.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Registers the hydrated version of the seeded terms (SPEC 79).
+ *
+ * Call it AFTER myapi_test_taxonomy_seed(), which clears this store. The rows
+ * seeded into the tree are deliberately the light ones (no field values, as
+ * taxonomy_get_tree() answers them), and the rows registered here are the full
+ * ones: a resource that forgot to hydrate would therefore see no code and no
+ * icon, which is exactly the production failure.
+ *
+ * @param array $terms
+ *   List of term rows (or objects). Each one must carry a 'tid'.
+ */
+function myapi_test_taxonomy_entities_seed(array $terms) {
+  $GLOBALS['myapi_test_taxonomy_entities'] = [];
+  foreach ($terms as $term) {
+    $term = is_object($term) ? $term : (object) $term;
+    $GLOBALS['myapi_test_taxonomy_entities'][(string) $term->tid] = $term;
+  }
+}
+
+if (!function_exists('entity_load')) {
+  /**
+   * Answers the hydrated terms of a list of tids, tid-keyed (SPEC 79).
+   *
+   * Faithful to Drupal in the two things the resource depends on: the answer
+   * is an associative array KEYED BY id (which is why the resource has to
+   * array_values() it before printing a JSON list), and a tid with no entity
+   * is simply absent from the answer rather than present as NULL.
+   *
+   * A tid registered with myapi_test_taxonomy_entities_seed() answers that
+   * object; otherwise the seeded tree term is answered, so a fixture that does
+   * not care about field values can skip the second seed entirely.
+   *
+   * The call is recorded in myapi_test_taxonomy_calls(), which is what lets a
+   * test prove the terms are loaded ONCE, in a single batch, and not one query
+   * per term.
+   */
+  function entity_load($entity_type, $ids = FALSE, $conditions = [], $reset = FALSE) {
+    $GLOBALS['myapi_test_taxonomy_calls'][] = [
+      'function' => 'entity_load',
+      'args'     => [$entity_type, $ids],
+    ];
+
+    if ($entity_type !== 'taxonomy_term' || !is_array($ids)) {
+      return [];
+    }
+
+    // The tree store is the fallback, flattened by tid across vocabularies.
+    $fallback = [];
+    if (!empty($GLOBALS['myapi_test_taxonomy_terms'])) {
+      foreach ($GLOBALS['myapi_test_taxonomy_terms'] as $terms) {
+        foreach ($terms as $term) {
+          if (isset($term->tid)) {
+            $fallback[(string) $term->tid] = $term;
+          }
+        }
+      }
+    }
+
+    $hydrated = isset($GLOBALS['myapi_test_taxonomy_entities'])
+      ? $GLOBALS['myapi_test_taxonomy_entities']
+      : [];
+
+    $loaded = [];
+    foreach ($ids as $id) {
+      $key = (string) $id;
+      if (isset($hydrated[$key])) {
+        $loaded[(int) $id] = $hydrated[$key];
+      }
+      elseif (isset($fallback[$key])) {
+        $loaded[(int) $id] = $fallback[$key];
+      }
+    }
+
+    return $loaded;
+  }
+}
+
+if (!function_exists('file_create_url')) {
+  /**
+   * Builds the absolute URL of a stored file URI (SPEC 79).
+   *
+   * Only the public:// scheme matters here — SPEC 77 created the category icon
+   * field with uri_scheme = 'public', and the whole point of the icon being
+   * public is that its URL works with no Drupal session. The mapping mirrors
+   * the real one: public://x -> <base_url>/sites/default/files/x.
+   *
+   * The real function also handles private:// (a system/files route) and
+   * external URLs; neither reaches this endpoint, so neither is stubbed.
+   */
+  function file_create_url($uri) {
+    $public = 'public://';
+    if (strpos($uri, $public) === 0) {
+      return $GLOBALS['base_url'] . '/sites/default/files/' . substr($uri, strlen($public));
+    }
+
+    return $GLOBALS['base_url'] . '/' . ltrim($uri, '/');
   }
 }

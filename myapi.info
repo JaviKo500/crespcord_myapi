@@ -54,3 +54,5 @@ files[] = resources/claim.resource.inc
 files[] = includes/myapi.claim_notification.inc
 files[] = includes/myapi.services_common.inc
 files[] = includes/myapi.provider_role.inc
+files[] = includes/myapi.text.inc
+files[] = resources/service_category.resource.inc
