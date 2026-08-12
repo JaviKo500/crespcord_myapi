@@ -158,6 +158,54 @@ notification: it is built with whatever the node has (empty reference,
 Text is fixed in Spanish, not translated via `myapi_t()` — same criterion as
 the approval notification and the bulletin notification body.
 
+## Email to the back office on registration
+
+When a resident registers a payment through `POST /api/v1/payments`,
+`myapi_payment_notify_created($node, $unit, $bank_term, $file)` (in
+`includes/myapi.payment_workflow.inc`) enqueues the detail email of that
+payment for every **active user holding the `backend` role**, so they can
+verify it.
+
+| Aspect | Value |
+|--------|-------|
+| Trigger | `myapi_payment_create()` only, after `node_save()` and `file_usage_add()`, just before the `201`. A payment created from the node form, by drush or by an import emails nobody. |
+| Recipients | `myapi_notification_role_uids('backend')` — role matched by **name** (never by rid), blocked accounts excluded, no implicit membership for uid 1. Building admins are **not** included. |
+| Mail key | `payment_created_admin`, handled by `myapi_mail()` (`myapi.module`) and formatted by `myapi_mail_format_payment_admin()` (`includes/myapi.mail.inc`). |
+| Delivery | Deferred: one `myapi_mail_queue_enqueue()` item **per recipient**, sent by the `myapi_mail_send` queue worker on the next cron run. An invalid address is logged and skipped without dragging the rest of the batch down. |
+| Failure mode | Best-effort. Nobody holding the role means nothing is enqueued and the creation behaves exactly the same; the email is never a precondition of the `201`. |
+| HTML | The key is in `myapi_html_mail_keys()` (`myapi.install`), so it is mapped to `MyapiHtmlMailSystem` and its HTML body is not converted to plain text. `myapi_update_7027()` applies that mapping on already-installed sites. |
+
+**Subject:** `Nuevo pago #{nid} — Ref. {reference}, {amount}`.
+
+**Body** — the twelve lines, in display order, built by
+`myapi_payment_backend_mail_params()` and already escaped when they are
+enqueued (the queue runs on cron, so the message describes what was true at
+the instant of the trigger):
+
+| Line | Source |
+|------|--------|
+| Referencia | `field_referencia` (already `check_plain()`-ed at creation time, so it is **not** escaped twice). |
+| Monto | `field_valor`, 2 decimals (`number_format`). |
+| Forma de pago | Label of `field_forma_de_pago` from the field's `allowed_values`; the raw key when the label is gone. |
+| Banco | Name of the `bancos` term, or `—` (cash). |
+| Fecha del pago | `field_fecha_de_pago` reformatted as `d/m/Y` by string, never through `strtotime()`/`format_date()`, so a timezone can never shift it by a day. |
+| Vivienda / Condominio | Title of the `vivienda` node and of its `field_condominio`. |
+| Residente / Email | Full name from the profile fields (`field_nombre` + `field_apellidos`), falling back to the username; and the account's email so the operator can reply. |
+| Comprobante | Filename of the attachment, or `—`. Always drawn: "no receipt" is what decides whether the payment can be verified at all. |
+| Estado | `field_estado_pago`, i.e. `"Pendiente de verificar"`. |
+| Registrado el | `$node->created`, as `d/m/Y H:i`. |
+
+Any value that cannot be resolved renders as `—` (`MYAPI_PAYMENT_MAIL_EMPTY`)
+rather than as an empty cell.
+
+**Button:** `Revisar pago`, pointing at `node/{nid}/edit` (absolute URL) —
+the **edit form**, not the node view, because the operator's next action is
+changing `field_estado_pago`. Recipients therefore need permission to edit
+`pagos` nodes; without it the link lands on a 403.
+
+Text is fixed in Spanish, not translated via `myapi_t()` — same criterion as
+the notifications above.
+
 ## Out of scope
 
 - A REST verification endpoint (`PUT /api/v1/payments/%/verify`).
@@ -167,3 +215,6 @@ the approval notification and the bulletin notification body.
   to custom code.
 - Notifying the unit's owners/occupants (besides the payment's author) or
   other status transitions (rejected, cancelled) on approval.
+- Emailing the back office on anything other than registration (approval,
+  cancellation), or widening the registration email beyond the `backend` role
+  (e.g. to the building admins of the payment's condominium).
