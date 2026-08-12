@@ -505,6 +505,14 @@ function myapi_html_mail_keys() {
     'myapi_claim_transaction_requester',
     'myapi_claim_transaction_neighbour',
     'myapi_claim_created_admin',
+    // SPEC 70's key, which that spec added to myapi_mail() and to the
+    // formatters but never to this list: without the mapping its HTML body was
+    // reaching the back office converted to plain text. Fixed in passing by
+    // SPEC 80, whose update hook re-registers the whole catalogue anyway.
+    'myapi_claim_closed_admin',
+    // SPEC 80. The detail of a payment registered from the app, sent to the
+    // 'backend' role.
+    'myapi_payment_created_admin',
   ];
 }
 
@@ -3582,4 +3590,25 @@ function myapi_update_7026() {
   _myapi_provider_role_install();
 
   return t('SPEC 78: creado el rol @role.', ['@role' => MYAPI_PROVIDER_ROLE]);
+}
+
+/**
+ * SPEC 80: maps the payment mail key to MyapiHtmlMailSystem.
+ *
+ * myapi_mail_system_register() runs on install, so a fresh site already gets
+ * the mapping; this update applies it where the module is already installed.
+ * Without it 'payment_created_admin' would fall back to DefaultMailSystem and
+ * its HTML body would arrive converted to plain text — the same reason SPEC 48
+ * needed myapi_update_7010() and SPEC 68 needed myapi_update_7024().
+ *
+ * It walks myapi_html_mail_keys(), so it re-registers the previous keys too.
+ * That is a no-op for the ones already mapped, and it is what finally maps
+ * 'myapi_claim_closed_admin', which SPEC 70 left out of that list.
+ */
+function myapi_update_7027() {
+  myapi_mail_system_register();
+
+  return t('SPEC 80: registradas las claves de correo HTML (@count en total).', [
+    '@count' => count(myapi_html_mail_keys()),
+  ]);
 }

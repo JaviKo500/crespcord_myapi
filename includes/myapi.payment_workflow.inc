@@ -13,6 +13,11 @@
  *
  * The hook that drives this workflow lives in myapi.module (glue only); all the
  * business logic is here.
+ *
+ * The file also holds the payment notifications, which are triggered by that
+ * same workflow and by POST /api/v1/payments: the resident's inbox/push rows
+ * on approval and cancellation, and the detail email to the 'backend' role
+ * when a resident registers a payment from the app (SPEC 80).
  */
 
 /**
@@ -37,6 +42,39 @@ define('MYAPI_PAYMENT_STATUS_COMPLETED', 'Completado');
  * occupant (PUT /api/v1/payments/%/cancel).
  */
 define('MYAPI_PAYMENT_STATUS_CANCELLED', 'Anulado');
+
+/**
+ * Drupal role whose active users get the detail email of a payment registered
+ * from the app (SPEC 80).
+ *
+ * Matched by NAME and never by rid — the rid differs between environments, the
+ * same reasoning already documented for MYAPI_RESERVATION_NOTIFY_ROLE.
+ */
+define('MYAPI_PAYMENT_NOTIFY_ROLE', 'backend');
+
+/**
+ * Mail key of that detail email. Handled by myapi_mail() in myapi.module and
+ * mapped to MyapiHtmlMailSystem by myapi_html_mail_keys() in myapi.install.
+ */
+define('MYAPI_PAYMENT_CREATED_ADMIN_MAIL_KEY', 'payment_created_admin');
+
+/**
+ * Placeholder rendered where a value could not be resolved, so every row of
+ * the email keeps its shape instead of showing an empty cell.
+ */
+define('MYAPI_PAYMENT_MAIL_EMPTY', '—');
+
+/**
+ * The 'field_forma_de_pago' field, whose allowed_values map a stored key to the
+ * label the email prints.
+ *
+ * Defined in resources/payment.resource.inc, which validates the input against
+ * that very catalogue; both definitions are guarded so either file can be the
+ * first one loaded in a request, the same pattern as MYAPI_MAIL_QUEUE.
+ */
+if (!defined('MYAPI_PAYMENT_METHOD_FIELD')) {
+  define('MYAPI_PAYMENT_METHOD_FIELD', 'field_forma_de_pago');
+}
 
 /**
  * Reads the first value of a single-value Field API field on a node.
@@ -362,4 +400,193 @@ function myapi_payment_notify_recipients($node, $unit_id) {
   }
 
   return [(int) $node->uid];
+}
+
+/**
+ * Enqueues the detail email of a payment registered from the app (SPEC 80).
+ *
+ * Called from myapi_payment_create() only — this is the ONLY trigger, the same
+ * criterion as myapi_reservation_notify_created(): a payment created from the
+ * node form, by drush or by an import emails nobody, because an operator who
+ * types a payment into the back office does not need to be told it exists.
+ *
+ * One queue item per recipient, so an invalid address never drags the rest of
+ * the batch down. With nobody holding the role nothing is enqueued and the
+ * creation behaves exactly the same — the email is best-effort and never a
+ * precondition of the 201.
+ *
+ * The audience is exactly the 'backend' role. Building admins are deliberately
+ * out: the resident's balance and its verification are handled centrally, so
+ * widening it is a decision for whoever writes that spec.
+ *
+ * @param object      $node       The saved 'pagos' node.
+ * @param object|null $unit       The 'vivienda' node already loaded by the
+ *                                caller, or NULL to resolve it here.
+ * @param object|null $bank_term  The 'bancos' term, or NULL when no bank.
+ * @param object|null $file       The saved managed file, or NULL when none.
+ */
+function myapi_payment_notify_created($node, $unit = NULL, $bank_term = NULL, $file = NULL) {
+  module_load_include('inc', 'myapi', 'includes/myapi.notification');
+
+  $uids = myapi_notification_role_uids(MYAPI_PAYMENT_NOTIFY_ROLE);
+  if (empty($uids)) {
+    return;
+  }
+
+  module_load_include('inc', 'myapi', 'includes/myapi.mail_queue');
+
+  $params = myapi_payment_backend_mail_params($node, $unit, $bank_term, $file);
+
+  foreach (user_load_multiple($uids) as $account) {
+    myapi_mail_queue_enqueue(MYAPI_PAYMENT_CREATED_ADMIN_MAIL_KEY, (string) $account->mail, $params);
+  }
+}
+
+/**
+ * Builds the already-resolved, already-escaped params of that email.
+ *
+ * Everything travels as a string because the mail queue runs on cron, long
+ * after the payment was saved: a unit renamed or a bank term deleted in between
+ * must not change the message, which describes what was true when the resident
+ * pressed send (see the header of includes/myapi.mail_queue.inc).
+ *
+ * Two values are NOT escaped here, on purpose:
+ * - 'reference', because myapi_payment_create() already ran check_plain() on it
+ *   before storing it; escaping it twice would render '&amp;' in the email.
+ * - 'amount', 'date' and 'created', which this function produces itself from
+ *   numbers and never from user input.
+ *
+ * @param object      $node       The saved 'pagos' node.
+ * @param object|null $unit       The 'vivienda' node, or NULL to resolve it.
+ * @param object|null $bank_term  The 'bancos' term, or NULL when no bank.
+ * @param object|null $file       The saved managed file, or NULL when none.
+ *
+ * @return array  Params consumed by myapi_mail_format_payment_admin().
+ */
+function myapi_payment_backend_mail_params($node, $unit = NULL, $bank_term = NULL, $file = NULL) {
+  $reference = myapi_payment_field_value($node, 'field_referencia');
+  $reference = ($reference !== NULL && $reference !== '') ? $reference : MYAPI_PAYMENT_MAIL_EMPTY;
+
+  if ($unit === NULL && isset($node->field_vivienda[LANGUAGE_NONE][0]['target_id'])) {
+    $unit = node_load((int) $node->field_vivienda[LANGUAGE_NONE][0]['target_id']);
+  }
+
+  $condominium = MYAPI_PAYMENT_MAIL_EMPTY;
+  if ($unit && isset($unit->field_condominio[LANGUAGE_NONE][0]['target_id'])) {
+    $condominium_node = node_load((int) $unit->field_condominio[LANGUAGE_NONE][0]['target_id']);
+    if ($condominium_node) {
+      $condominium = check_plain($condominium_node->title);
+    }
+  }
+
+  $status = myapi_payment_field_value($node, 'field_estado_pago');
+
+  return [
+    'nid'         => (int) $node->nid,
+    'reference'   => $reference,
+    'amount'      => number_format((float) myapi_payment_field_value($node, 'field_valor'), 2),
+    'method'      => myapi_payment_method_label(myapi_payment_field_value($node, 'field_forma_de_pago')),
+    'bank'        => $bank_term ? check_plain($bank_term->name) : MYAPI_PAYMENT_MAIL_EMPTY,
+    'date'        => myapi_payment_date_label(myapi_payment_field_value($node, 'field_fecha_de_pago')),
+    'unit'        => $unit ? check_plain($unit->title) : MYAPI_PAYMENT_MAIL_EMPTY,
+    'condominium' => $condominium,
+    'resident'    => myapi_payment_resident_label($node->uid),
+    'email'       => myapi_payment_resident_mail_label($node->uid),
+    'file'        => $file ? check_plain(drupal_basename($file->uri)) : MYAPI_PAYMENT_MAIL_EMPTY,
+    'status'      => $status !== NULL ? check_plain($status) : MYAPI_PAYMENT_MAIL_EMPTY,
+    'created'     => check_plain(format_date($node->created, 'custom', 'd/m/Y H:i')),
+    // The edit form, not the node view: the operator's next action is changing
+    // field_estado_pago, and this saves them the extra click. Absolute so the
+    // link works from any mail client; check_plain() because url() does not
+    // encode the '&' between query arguments for HTML output.
+    'edit_url'    => check_plain(url('node/' . $node->nid . '/edit', array('absolute' => TRUE))),
+  ];
+}
+
+/**
+ * Human label of a 'field_forma_de_pago' key.
+ *
+ * The field's allowed_values are the same catalogue myapi_payment_create()
+ * validates the input against, so a stored key always has a label here; an
+ * unknown one (a payment typed straight into the database, or a value dropped
+ * from the field settings afterwards) falls back to the raw key rather than to
+ * an empty cell.
+ *
+ * @param string|null $key  The stored key, or NULL when the field is empty.
+ *
+ * @return string  Already escaped.
+ */
+function myapi_payment_method_label($key) {
+  if ($key === NULL || $key === '') {
+    return MYAPI_PAYMENT_MAIL_EMPTY;
+  }
+
+  $field_info = field_info_field(MYAPI_PAYMENT_METHOD_FIELD);
+  $allowed = ($field_info && isset($field_info['settings']['allowed_values']))
+    ? $field_info['settings']['allowed_values']
+    : array();
+
+  return check_plain(isset($allowed[$key]) ? $allowed[$key] : $key);
+}
+
+/**
+ * Human label of a stored 'field_fecha_de_pago' value.
+ *
+ * Reformats the 'Y-m-d\TH:i:s' string myapi_payment_normalize_date() produced
+ * straight into 'd/m/Y', without going through strtotime()/format_date(): the
+ * stored value is the calendar date the resident picked, not an instant, and
+ * converting it through timezones could shift it by a day.
+ *
+ * @param string|null $value  The stored value, or NULL when the field is empty.
+ *
+ * @return string  'd/m/Y', or the placeholder when unparseable.
+ */
+function myapi_payment_date_label($value) {
+  if ($value !== NULL && preg_match('/^(\d{4})-(\d{2})-(\d{2})/', $value, $m)) {
+    return $m[3] . '/' . $m[2] . '/' . $m[1];
+  }
+
+  return MYAPI_PAYMENT_MAIL_EMPTY;
+}
+
+/**
+ * Human label of the resident who registered the payment.
+ *
+ * Full name when the profile has one, username otherwise — the same fallback
+ * chain as myapi_calendar_user_name_label(), reached through the profile-field
+ * helper of includes/myapi.user.inc instead of a query of its own.
+ *
+ * @param int $uid  The payment author's uid.
+ *
+ * @return string  Already escaped.
+ */
+function myapi_payment_resident_label($uid) {
+  module_load_include('inc', 'myapi', 'includes/myapi.user');
+
+  $profile = myapi_user_fetch_profile_fields((int) $uid);
+  $parts = array_filter(array($profile['first_name'], $profile['last_name']));
+  if (!empty($parts)) {
+    return check_plain(implode(' ', $parts));
+  }
+
+  $account = user_load((int) $uid);
+
+  return ($account && $account->name !== '')
+    ? check_plain($account->name)
+    : MYAPI_PAYMENT_MAIL_EMPTY;
+}
+
+/**
+ * The resident's email address, so the operator can reply without looking it up.
+ *
+ * @param int $uid  The payment author's uid.
+ *
+ * @return string  Already escaped.
+ */
+function myapi_payment_resident_mail_label($uid) {
+  $account = user_load((int) $uid);
+
+  return ($account && !empty($account->mail))
+    ? check_plain($account->mail)
+    : MYAPI_PAYMENT_MAIL_EMPTY;
 }

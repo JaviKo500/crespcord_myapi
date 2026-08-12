@@ -252,8 +252,14 @@ function myapi_payment_detail($payment_id) {
 
 /**
  * The 'field_forma_de_pago' machine field whose allowed_values gate the input.
+ *
+ * Guarded because includes/myapi.payment_workflow.inc defines it too (SPEC 80,
+ * where the same catalogue turns a stored key into the label of the backend
+ * email) and either file can be the first one loaded in a request.
  */
-define('MYAPI_PAYMENT_METHOD_FIELD', 'field_forma_de_pago');
+if (!defined('MYAPI_PAYMENT_METHOD_FIELD')) {
+  define('MYAPI_PAYMENT_METHOD_FIELD', 'field_forma_de_pago');
+}
 
 /**
  * Payment method (compared case-insensitively) for which the bank is optional.
@@ -392,7 +398,16 @@ function myapi_payment_create() {
     file_usage_add($file, 'myapi', 'node', $node->nid);
   }
 
-  // 14. Respond 201 with the full payment (including the bank name).
+  // 14. Email the detail to the 'backend' role (SPEC 80). Best-effort and the
+  // last thing before the response: the payment is already committed, so a
+  // failure to enqueue must neither undo it nor keep the 201 from going out.
+  // This is the ONLY trigger — a payment typed into the back office notifies
+  // nobody, same criterion as the reservation email. No module_load_include()
+  // here: includes/myapi.payment_workflow.inc is already pulled in at the top
+  // of this file.
+  myapi_payment_notify_created($node, $unit, $term, $file);
+
+  // 15. Respond 201 with the full payment (including the bank name).
   myapi_respond(
     ['payment' => myapi_payment_build_created_item($node, $file, $term)],
     201,

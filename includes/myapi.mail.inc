@@ -609,6 +609,86 @@ function myapi_mail_claim_closed_admin_html($params) {
   );
 }
 
+/* ---------------------------------------------------------------------------
+ * Payment email (SPEC 80).
+ *
+ * One key, 'payment_created_admin': the detail of a payment a resident just
+ * registered from the app, sent to every active user holding the 'backend'
+ * role so they can verify it. Same shell as the reservation and claim emails,
+ * for the same reason (rule 3 of CLAUDE.md).
+ *
+ * Every value in $params arrives ALREADY RESOLVED AND ESCAPED from
+ * myapi_payment_backend_mail_params(), because the mail queue runs on cron long
+ * after the payment was saved and the message must describe what was true at
+ * the instant of the trigger. Nothing here escapes anything.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Formats the payment detail email sent to the 'backend' role.
+ *
+ * Called from myapi_mail() (in myapi.module) for the 'payment_created_admin'
+ * key, enqueued by myapi_payment_notify_created() from POST /api/v1/payments.
+ *
+ * The subject carries the reference and the amount, the two values an operator
+ * triages payments by, plus the nid so two payments with the same reference
+ * never collapse into one thread.
+ *
+ * @param array $message  Mail message array, altered by reference.
+ * @param array $params   'nid', 'reference', 'amount', 'method', 'bank',
+ *                        'date', 'unit', 'condominium', 'resident', 'email',
+ *                        'file', 'status', 'created' and 'edit_url', already
+ *                        escaped.
+ */
+function myapi_mail_format_payment_admin(&$message, $params) {
+  $message['subject'] = 'Nuevo pago #' . $params['nid'] . ' — Ref. '
+    . decode_entities($params['reference']) . ', ' . $params['amount'];
+  $message['body'][] = myapi_mail_payment_admin_html($params);
+
+  $message['headers']['Content-Type'] = 'text/html; charset=UTF-8';
+}
+
+/**
+ * Builds the HTML body of that email.
+ *
+ * The lines are the ones of the payment detail an operator needs before opening
+ * the node: who paid, for which unit, how much, by which method and whether
+ * there is a receipt attached. 'Comprobante' is always drawn, with the
+ * placeholder when there is none, because "no attachment" is itself the piece
+ * of information that decides whether the payment can be verified at all.
+ *
+ * The button points at the EDIT form, not the node view: the operator's next
+ * action is changing field_estado_pago, so landing on the form saves a click.
+ *
+ * @param array $params  Already-escaped values (see the formatter).
+ *
+ * @return string  Full HTML document.
+ */
+function myapi_mail_payment_admin_html($params) {
+  $lines = array(
+    'Referencia'     => $params['reference'],
+    'Monto'          => $params['amount'],
+    'Forma de pago'  => $params['method'],
+    'Banco'          => $params['bank'],
+    'Fecha del pago' => $params['date'],
+    'Vivienda'       => $params['unit'],
+    'Condominio'     => $params['condominium'],
+    'Residente'      => $params['resident'],
+    'Email'          => $params['email'],
+    'Comprobante'    => $params['file'],
+    'Estado'         => $params['status'],
+    'Registrado el'  => $params['created'],
+  );
+
+  return myapi_mail_reservation_html(
+    'Pago #' . $params['nid'],
+    'Nuevo pago',
+    'Un residente registró un pago desde la aplicación y está pendiente de verificación.',
+    $lines,
+    'Pago #' . $params['nid'] . '<br>Al verificarlo se actualizarán los saldos de la vivienda y del condominio.',
+    array('label' => 'Revisar pago', 'url' => $params['edit_url'])
+  );
+}
+
 /**
  * Shared HTML shell of the reservation emails — and, since SPEC 68, of the five
  * claim ones.
