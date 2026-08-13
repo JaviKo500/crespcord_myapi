@@ -1894,6 +1894,17 @@ function _myapi_services_install() {
     'Categorías del marketplace de proveedores: limpieza, mantenimiento, arreglos, compras, servicios generales.'
   );
 
+  // The provider tag vocabulary (SPEC 81). No fields and no instances of its
+  // own, unlike the category one above: a tag is painted and nothing else, so
+  // there is no stable code for the app to hang logic on. It is born empty —
+  // the terms appear as the operator types them into the provider form, which
+  // the taxonomy_autocomplete widget of field_tags creates natively.
+  _myapi_services_ensure_vocabulary(
+    MYAPI_SERVICES_TAG_VOCABULARY,
+    'Etiqueta de proveedor',
+    'Etiquetas libres de proveedores: urgencias, 24h, soldadura, garantía... Se crean solas al escribirlas en la ficha del proveedor.'
+  );
+
   _myapi_reservations_ensure_field('field_category_code', [
     'field_name'  => 'field_category_code',
     'type'        => 'text',
@@ -1979,6 +1990,19 @@ function _myapi_services_install() {
     'allowed_values' => [
       [
         'vocabulary' => MYAPI_SERVICES_CATEGORY_VOCABULARY,
+        'parent'     => 0,
+      ],
+    ],
+  ];
+
+  // The taxonomy reference settings of field_tags (SPEC 81). Written right here
+  // and not next to its field so the two allowed_values can be read side by
+  // side: they differ in exactly one word — the vocabulary — and confusing them
+  // would point the free tags at the closed category catalogue.
+  $tag_settings = [
+    'allowed_values' => [
+      [
+        'vocabulary' => MYAPI_SERVICES_TAG_VOCABULARY,
         'parent'     => 0,
       ],
     ],
@@ -2077,6 +2101,40 @@ function _myapi_services_install() {
     'field_name'  => 'field_rating_count',
     'type'        => 'number_integer',
     'cardinality' => 1,
+  ]);
+  // The three fields of SPEC 81. All optional at instance level, which is what
+  // keeps the providers already loaded on the site valid.
+  //
+  // 10,2 is the size of field_offer_amount, the other monetary field of this
+  // feature: up to 99999999.99. It deliberately does NOT copy the 3,2 of
+  // field_rating_avg, which is dimensioned for a 1-5 average. Decimal and not
+  // float because this is money: 0.1 + 0.2 is not 0.3 in binary floating point.
+  _myapi_reservations_ensure_field('field_hourly_rate', [
+    'field_name'  => 'field_hourly_rate',
+    'type'        => 'number_decimal',
+    'cardinality' => 1,
+    'settings'    => ['precision' => 10, 'scale' => 2],
+  ]);
+  // Free tags over the provider_tag vocabulary. Unlimited by decision: a cap in
+  // the field becomes a hook_update_N the day someone needs one more, so if a
+  // maximum is ever needed it goes where the experience is decided — the form
+  // or the endpoint — and not in the storage.
+  _myapi_reservations_ensure_field('field_tags', [
+    'field_name'  => 'field_tags',
+    'type'        => 'taxonomy_term_reference',
+    'cardinality' => FIELD_CARDINALITY_UNLIMITED,
+    'settings'    => $tag_settings,
+  ]);
+  // One line for the marketplace listing. 255 and 'text' (not 'text_long') is
+  // the restriction that makes the field do its job: field_services_desc is
+  // already the long one, and two long fields would leave nobody knowing which
+  // goes on the card. No text_processing: there is no markup to filter on a
+  // single line, same as field_phone and field_category_code.
+  _myapi_reservations_ensure_field('field_short_description', [
+    'field_name'  => 'field_short_description',
+    'type'        => 'text',
+    'cardinality' => 1,
+    'settings'    => ['max_length' => 255],
   ]);
 
   // Own fields of 'service_request'.
@@ -2287,6 +2345,54 @@ function _myapi_services_install() {
     'required'    => 0,
     'description' => 'Calculado a partir de las calificaciones. No editar a mano.',
     'widget'      => ['type' => 'number'],
+  ]);
+  // The three instances of SPEC 81. 'required' => 0 is spelled out on all
+  // three even though it is the default: it is the decision that keeps every
+  // provider already loaded on the site valid, and it has to be visible when
+  // reading the code.
+  //
+  // min = 0 is applied by number_field_widget_form() as an #element_validate of
+  // the widget, so saving -15 from the back-office form fails validation. It is
+  // NOT an SQL constraint: a programmatic node_save() can still write a
+  // negative, and the business validation will have to repeat it when it
+  // exists. prefix only paints in the form and in the node view — it never
+  // travels to the API nor to the database, where the value is the bare number.
+  _myapi_reservations_ensure_instance('field_hourly_rate', $provider_type, [
+    'field_name'  => 'field_hourly_rate',
+    'entity_type' => 'node',
+    'bundle'      => $provider_type,
+    'label'       => 'Valor hora',
+    'required'    => 0,
+    'description' => 'Tarifa por hora que cobra el proveedor. Es informativa: se muestra al residente como precio de referencia y no condiciona el monto de ninguna oferta.',
+    'settings'    => ['min' => 0, 'prefix' => '$ '],
+    'widget'      => ['type' => 'number'],
+  ]);
+  // The taxonomy_autocomplete widget of D7 creates the terms that do not exist
+  // natively, with no setting at all: an unknown name enters validation as
+  // ['tid' => 'autocreate', ...] and taxonomy_field_presave() saves it as a
+  // real term. 'auto_create' => TRUE belongs to entityreference, not taxonomy,
+  // and writing it here would be dead configuration someone would later "fix".
+  _myapi_reservations_ensure_instance('field_tags', $provider_type, [
+    'field_name'  => 'field_tags',
+    'entity_type' => 'node',
+    'bundle'      => $provider_type,
+    'label'       => 'Etiquetas',
+    'required'    => 0,
+    'description' => 'Separadas por coma. Si la etiqueta no existe, se crea al guardar.',
+    'widget'      => ['type' => 'taxonomy_autocomplete'],
+  ]);
+  // No 'text_processing' and no default_value with a format, unlike
+  // field_services_desc above: this is a single line with no rich editor, so
+  // there is no markup to filter and the format column would always hold the
+  // same value. Same pattern as field_phone.
+  _myapi_reservations_ensure_instance('field_short_description', $provider_type, [
+    'field_name'  => 'field_short_description',
+    'entity_type' => 'node',
+    'bundle'      => $provider_type,
+    'label'       => 'Descripción corta',
+    'required'    => 0,
+    'description' => 'Una línea para el listado del marketplace. Máximo 255 caracteres. La descripción completa va en Descripción de servicios.',
+    'widget'      => ['type' => 'text_textfield'],
   ]);
 
   // (d) Instances of 'service_request'.
@@ -2617,6 +2723,12 @@ function _myapi_services_uninstall_destructive() {
     'field_rating_provider',
     'field_stars',
     'field_rating_comment',
+    // SPEC 81. The three names are new in the whole module — no other bundle
+    // uses them — so deleting them cannot take anybody else's data down. The
+    // caution the seven shared fields below demand does not apply here.
+    'field_hourly_rate',
+    'field_tags',
+    'field_short_description',
   ];
   foreach ($owned as $field_name) {
     if (field_info_field($field_name)) {
@@ -2657,6 +2769,13 @@ function _myapi_services_uninstall_destructive() {
   $vocabulary = taxonomy_vocabulary_machine_name_load(MYAPI_SERVICES_CATEGORY_VOCABULARY);
   if ($vocabulary) {
     taxonomy_vocabulary_delete($vocabulary->vid);
+  }
+
+  // The provider tag vocabulary (SPEC 81), created by this feature like the
+  // category one and deleted with it, terms included.
+  $tag_vocabulary = taxonomy_vocabulary_machine_name_load(MYAPI_SERVICES_TAG_VOCABULARY);
+  if ($tag_vocabulary) {
+    taxonomy_vocabulary_delete($tag_vocabulary->vid);
   }
 
   // Purge the deleted field data now instead of waiting for cron.
@@ -3610,5 +3729,34 @@ function myapi_update_7027() {
 
   return t('SPEC 80: registradas las claves de correo HTML (@count en total).', [
     '@count' => count(myapi_html_mail_keys()),
+  ]);
+}
+
+/**
+ * SPEC 81: adds the hourly rate, the tags and the short description to
+ * 'provider'.
+ *
+ * It re-runs the WHOLE services installer instead of just creating the three
+ * new fields, exactly like myapi_update_7025(). That works because every
+ * creation inside goes through the idempotent _ensure_* sub-helpers, which
+ * return early when the thing is already there: the vocabulary, the five node
+ * types and the twenty-nine fields of SPEC 77 are found in place and nothing is
+ * written over them — a field adjusted by hand on the site survives this
+ * update. The surgical alternative would restate the three field definitions in
+ * a second place of this same file, with the certainty that one day they
+ * diverge.
+ *
+ * Which also makes it safe to call twice.
+ *
+ * The three fields are OPTIONAL, so no provider already loaded on the site
+ * becomes invalid, and nothing else changes: no permission, no route, no
+ * response of any api/v1 endpoint.
+ */
+function myapi_update_7028() {
+  _myapi_services_install();
+
+  return t('SPEC 81: creado el vocabulario @vocabulary y añadidos a @type los campos field_hourly_rate, field_tags y field_short_description.', [
+    '@vocabulary' => MYAPI_SERVICES_TAG_VOCABULARY,
+    '@type'       => MYAPI_SERVICES_PROVIDER_TYPE,
   ]);
 }

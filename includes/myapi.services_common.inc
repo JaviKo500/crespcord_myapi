@@ -60,6 +60,14 @@ if (!defined('MYAPI_SERVICES_CATEGORY_VOCABULARY')) {
   define('MYAPI_SERVICES_CATEGORY_VOCABULARY', 'service_category');
 }
 
+// Machine name of the provider tag vocabulary (SPEC 81). Unlike the category
+// vocabulary above — closed, curated and carrying a stable field_category_code
+// the app hangs logic on — this one is free: terms are born as the operator
+// types them into the provider form, and nothing but their name is stored.
+if (!defined('MYAPI_SERVICES_TAG_VOCABULARY')) {
+  define('MYAPI_SERVICES_TAG_VOCABULARY', 'provider_tag');
+}
+
 // The status a request is born in.
 if (!defined('MYAPI_SERVICES_REQUEST_STATUS_OPEN')) {
   define('MYAPI_SERVICES_REQUEST_STATUS_OPEN', 'open');
