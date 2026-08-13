@@ -320,14 +320,28 @@ function myapi_menu() {
     'file'             => 'resources/claim.resource.inc',
   ];
 
+  // The marketplace listing (SPEC 83): the active providers of the site, with
+  // their categories, rating, short description and hourly rate. Read-only and
+  // authenticated like every other api/v1 route; a provider is loaded and
+  // suspended from the back office.
+  //
+  // The collection root of the namespace SPEC 82 reserved below. There is still
+  // no 'api/v1/providers/%': the detail is its own spec, and adding it here is
+  // that spec's job, not an improvisation of this one.
+  $items['api/v1/providers'] = [
+    'page callback'    => 'myapi_provider_dispatch',
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/provider.resource.inc',
+  ];
+
   // The private gallery of a provider (SPEC 82), the same pair of routes the
   // claim files got in SPEC 65: one lists the images, the other serves the
   // bytes of one of them, and both need a Bearer token.
   //
-  // These are the FIRST api/v1/providers/... routes of the marketplace. The
-  // namespace is reserved for the provider listing spec, which will hang
-  // 'api/v1/providers' and 'api/v1/providers/%' off the same root and add them
-  // here — this file is the only place that decides what a route is.
+  // Sibling routes of the collection above and NOT displaced by it: Drupal
+  // matches by the number of path components first, so 'api/v1/providers' and
+  // 'api/v1/providers/%/gallery' never compete for the same request.
   $items['api/v1/providers/%/gallery'] = [
     'page callback'    => 'myapi_provider_gallery_dispatch',
     'page arguments'   => [3],

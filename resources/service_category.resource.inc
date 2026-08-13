@@ -32,6 +32,9 @@ module_load_include('inc', 'myapi', 'includes/myapi.auth');
 module_load_include('inc', 'myapi', 'includes/myapi.services_common');
 // For myapi_text_to_plain(), which builds `description`.
 module_load_include('inc', 'myapi', 'includes/myapi.text');
+// For myapi_provider_apply_active_conditions(): the SQL half of "an active
+// provider", shared with the marketplace listing (SPEC 83).
+module_load_include('inc', 'myapi', 'includes/myapi.provider_query');
 
 /**
  * Dispatcher for /api/v1/service-categories.
@@ -150,15 +153,20 @@ function myapi_service_category_list() {
  * makes `?with_counts=1` affordable enough to be an option rather than a spec
  * of its own.
  *
- * WHAT COUNTS AS ACTIVE — and the duplication that comes with it. The rule is
- * the one myapi_services_provider_is_active() states in PHP (SPEC 77): the
- * node is published AND its licence has not expired. It cannot be reused here,
- * because it is a pure PHP function and this is a WHERE clause; loading every
- * provider node just to filter it in PHP is exactly what the COUNT() avoids.
- * So the rule lives in two places, and THE TWO MUST MOVE TOGETHER: a spec that
- * changes what "active" means has to change this query as well. Both halves
- * (unpublished, expired) are pinned by tests so a one-sided change breaks the
- * suite instead of silently inflating the counts.
+ * WHAT COUNTS AS ACTIVE is not decided here. The rule — published AND licence
+ * not expired — is the one myapi_services_provider_is_active() states in PHP
+ * (SPEC 77), and it cannot be called from a WHERE clause: it is a pure
+ * function over loaded values, and loading every provider node just to filter
+ * it in PHP is exactly what the COUNT() avoids. So the rule has a second half
+ * written in SQL, and since SPEC 83 that half lives in ONE place —
+ * myapi_provider_apply_active_conditions(), in
+ * includes/myapi.provider_query.inc — which this query calls and the
+ * marketplace listing calls too. Neither restates it.
+ *
+ * THE TWO HALVES STILL MOVE TOGETHER: a spec that changes what "active" means
+ * has to change the PHP function and that include, and no third copy may be
+ * written. Both halves (unpublished, expired) are pinned by tests here so a
+ * one-sided change breaks the suite instead of silently inflating the counts.
  *
  * A provider that is not active is not counted anywhere; a category with no
  * active provider answers 0 and is never dropped from the catalogue.
@@ -190,19 +198,15 @@ function myapi_service_category_provider_counts(array $tids) {
     'c',
     "c.entity_type = 'node' AND c.entity_id = n.nid AND c.deleted = 0"
   );
-  $query->innerJoin(
-    'field_data_field_license_expiry',
-    'l',
-    "l.entity_type = 'node' AND l.entity_id = n.nid AND l.deleted = 0"
-  );
+  // The licence join and the two active conditions, in one call: same SQL as
+  // before, written once and shared with GET /api/v1/providers (SPEC 83).
+  myapi_provider_apply_active_conditions($query, 'n');
   $query->addField('c', 'field_categories_tid', 'tid');
   // COUNT(DISTINCT n.nid) and not COUNT(*): field_categories has unlimited
   // cardinality, so a provider carrying the same category in two deltas would
   // otherwise be counted twice.
   $query->addExpression('COUNT(DISTINCT n.nid)', 'total');
   $query->condition('n.type', MYAPI_SERVICES_PROVIDER_TYPE);
-  $query->condition('n.status', 1);
-  $query->condition('l.field_license_expiry_value', REQUEST_TIME, '>=');
   // Only the categories being answered: the query counts, it does not discover.
   $query->condition('c.field_categories_tid', array_keys($counts), 'IN');
   $query->groupBy('c.field_categories_tid');
