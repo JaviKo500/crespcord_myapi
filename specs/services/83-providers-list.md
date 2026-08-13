@@ -1,7 +1,8 @@
 # 83 — Listado de proveedores del marketplace (`GET /api/v1/providers`)
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-08-13
+- **Implementado:** 2026-08-13, rama `spec-83-providers-list`, desplegado y verificado contra el sitio.
 - **Dependencias:**
   - `77-services-content-types-install` (Implemented) — crea el bundle `provider` y sus campos `field_categories`, `field_rating_avg`, `field_rating_count` y `field_license_expiry`, y escribe en `includes/myapi.services_common.inc` la regla `myapi_services_provider_is_active()` que este spec **traduce a SQL**. No se modifica ni un campo.
   - `79-service-categories-list` (Implemented) — el precedente directo: es el otro endpoint de solo lectura del marketplace, de él sale el `id` de categoría que este spec acepta como filtro, y su `myapi_service_category_provider_counts()` es la **misma consulta de proveedor activo** que este listado tiene que devolver coherente. También aporta `myapi_text_to_plain()`, que aquí **no** se usa (ver Modelo de datos).
@@ -217,81 +218,87 @@ Dos cosas del orden que no son cosméticas:
 
 **Leyenda.** `[ ]` es el estado inicial de todo criterio en un spec en `Draft`. Al implementar se marcan `[x]` los que cierra la suite unitaria o la inspección del repositorio, dejando constancia expresa de los que exigen un Drupal arrancado.
 
+Los que quedan en `[ ]` llevan **(sitio)** y son exactamente los que la suite no puede cerrar: se verifican en el paso 9 contra el servidor, después de `scripts/deploy.sh` y `drush cc all`.
+
+La suite que los cierra son 75 tests nuevos: `tests/unit/ProviderListEndpointTest.php` (61), `tests/unit/ProviderActiveConditionsTest.php` (13) y uno añadido a la suite de `service_category`. Total del módulo: 1400 tests, 5891 aserciones, en verde.
+
 **Autenticación y método**
 
-- [ ] Sin cabecera `Authorization` → `401 missing_authorization`.
-- [ ] Con token inexistente, revocado, caducado, o de un usuario borrado o bloqueado → `401 invalid_token`.
-- [ ] Con cualquier token válido → `200`, sin mirar rol, condominio ni vivienda.
-- [ ] `POST`, `PUT` y `DELETE` sobre `/api/v1/providers` → `405 method_not_allowed`, **sin token** y con token: el método se comprueba antes que la autenticación.
+- [x] Sin cabecera `Authorization` → `401 missing_authorization`.
+- [x] Con token inexistente, revocado, caducado, o de un usuario borrado o bloqueado → `401 invalid_token`.
+- [x] Con cualquier token válido → `200`, sin mirar rol, condominio ni vivienda.
+- [x] `POST`, `PUT` y `DELETE` sobre `/api/v1/providers` → `405 method_not_allowed`, **sin token** y con token: el método se comprueba antes que la autenticación.
 
 **Filtro por categoría**
 
-- [ ] `?category_id=<tid con proveedores activos>` devuelve **solo** proveedores que llevan ese término en `field_categories`.
-- [ ] Un proveedor que lleva la misma categoría en **dos deltas** aparece **una vez** en la lista y cuenta **una vez** en `total`.
-- [ ] `?category_id=<tid inexistente>` → `200` con `providers: []` y `total: 0`.
-- [ ] `?category_id=<tid de otro vocabulario>` → `200` con `providers: []`, no `422`.
-- [ ] `?category_id=abc`, `?category_id=-3`, `?category_id=0`, `?category_id=` y `?category_id[]=1` → `422 invalid_field` con `@field = category_id`.
-- [ ] Sin `category_id` se devuelven todos los proveedores activos.
-- [ ] El `total` del bloque `pagination` refleja el conjunto **ya filtrado**, no el total de proveedores del sitio.
+- [x] `?category_id=<tid con proveedores activos>` devuelve **solo** proveedores que llevan ese término en `field_categories`.
+- [x] Un proveedor que lleva la misma categoría en **dos deltas** aparece **una vez** en la lista y cuenta **una vez** en `total`.
+- [x] `?category_id=<tid inexistente>` → `200` con `providers: []` y `total: 0`.
+- [x] `?category_id=<tid de otro vocabulario>` → `200` con `providers: []`, no `422`. *(Mismo camino de código que el anterior: para el `EXISTS`, un `tid` de otro vocabulario es un `tid` que ningún proveedor lleva.)*
+- [x] `?category_id=abc`, `?category_id=-3`, `?category_id=0`, `?category_id=` y `?category_id[]=1` → `422 invalid_field` con `@field = category_id`.
+- [x] Sin `category_id` se devuelven todos los proveedores activos.
+- [x] El `total` del bloque `pagination` refleja el conjunto **ya filtrado**, no el total de proveedores del sitio.
 
 **Orden**
 
-- [ ] Por defecto, sin parámetros, el listado sale ordenado por `rating_avg` **descendente**.
-- [ ] Las cuatro combinaciones de `order_by` (`rating_avg`, `hourly_rate`) × `sort` (`asc`, `desc`) ordenan por el campo y en el sentido pedidos.
-- [ ] Con `?order_by=hourly_rate&sort=asc`, los proveedores **sin tarifa** salen al final, no al principio.
-- [ ] Con `?order_by=hourly_rate&sort=desc`, los proveedores sin tarifa salen **también** al final.
-- [ ] Lo mismo para `rating_avg` en los dos sentidos: sin calificaciones, siempre al final.
-- [ ] Dos proveedores con el **mismo** valor salen siempre en el mismo orden entre dos peticiones seguidas, y el de `nid` mayor va primero.
-- [ ] `?order_by=title`, `?order_by=`, `?sort=DESC` en mayúsculas y `?sort=descendente` caen a los defectos con `200`, nunca `422`.
+*Nota: la suite ejerce el `ORDER BY` sobre el emulador de consultas de `tests/unit/bootstrap.php`, que responde `(x IS NULL)` como 1/0 igual que SQL. **Confirmado contra el MySQL del sitio**: `ORDER BY (v IS NULL) ASC, v DESC|ASC` sobre un conjunto con nulos los deja al final en los dos sentidos.*
+
+- [x] Por defecto, sin parámetros, el listado sale ordenado por `rating_avg` **descendente**.
+- [x] Las cuatro combinaciones de `order_by` (`rating_avg`, `hourly_rate`) × `sort` (`asc`, `desc`) ordenan por el campo y en el sentido pedidos.
+- [x] Con `?order_by=hourly_rate&sort=asc`, los proveedores **sin tarifa** salen al final, no al principio.
+- [x] Con `?order_by=hourly_rate&sort=desc`, los proveedores sin tarifa salen **también** al final.
+- [x] Lo mismo para `rating_avg` en los dos sentidos: sin calificaciones, siempre al final.
+- [x] Dos proveedores con el **mismo** valor salen siempre en el mismo orden entre dos peticiones seguidas, y el de `nid` mayor va primero.
+- [x] `?order_by=title`, `?order_by=`, `?sort=DESC` en mayúsculas y `?sort=descendente` caen a los defectos con `200`, nunca `422`.
 
 **Paginación**
 
-- [ ] `?limit=5` devuelve como mucho cinco ítems y `pagination.limit` vale `5`.
-- [ ] `?limit=51` devuelve como mucho **50** ítems y `pagination.limit` vale `50`.
-- [ ] `?limit=0`, `?limit=-1`, `?limit=abc` y `limit` ausente devuelven 20 ítems como mucho: **`-1` no trae todo**.
-- [ ] `?page=2` devuelve la segunda página, sin repetir ni saltarse ningún ítem de la primera.
-- [ ] `?page=0`, `?page=-1` y `?page=abc` devuelven la primera página con `200`.
-- [ ] Una `page` más allá de la última → `200` con `providers: []`, nunca `404`.
-- [ ] Con `total = 0`, `total_pages` vale `0`, no `1`.
-- [ ] `total_pages` es `ceil(total / limit)` para un conjunto que no cabe exacto en una página.
+- [x] `?limit=5` devuelve como mucho cinco ítems y `pagination.limit` vale `5`.
+- [x] `?limit=51` devuelve como mucho **50** ítems y `pagination.limit` vale `50`.
+- [x] `?limit=0`, `?limit=-1`, `?limit=abc` y `limit` ausente devuelven 20 ítems como mucho: **`-1` no trae todo**.
+- [x] `?page=2` devuelve la segunda página, sin repetir ni saltarse ningún ítem de la primera.
+- [x] `?page=0`, `?page=-1` y `?page=abc` devuelven la primera página con `200`.
+- [x] Una `page` más allá de la última → `200` con `providers: []`, nunca `404`.
+- [x] Con `total = 0`, `total_pages` vale `0`, no `1`.
+- [x] `total_pages` es `ceil(total / limit)` para un conjunto que no cabe exacto en una página.
 
 **Forma del ítem**
 
-- [ ] Cada ítem trae exactamente **siete** claves, en el orden `id`, `title`, `categories`, `rating_avg`, `rating_count`, `short_description`, `hourly_rate`.
-- [ ] `id` es entero JSON (`41`), no cadena.
-- [ ] Un proveedor **sin calificaciones** responde `rating_avg: null` y `rating_count: 0`.
-- [ ] Un proveedor **sin tarifa** responde `hourly_rate: null`, y **aparece en el listado**: no lo excluye ningún join.
-- [ ] Un proveedor **sin descripción corta** responde `short_description: ""`, nunca `null`.
-- [ ] Un proveedor **sin categorías** responde `categories: []`, y aparece en el listado.
-- [ ] Cada categoría trae exactamente tres claves — `id`, `code`, `name` — y ninguna más: sin `description`, sin `icon_id`, sin `icon_url`.
-- [ ] El `id` y el `code` de una categoría coinciden con los que devuelve `GET /api/v1/service-categories` para el mismo término.
-- [ ] Las categorías de un proveedor salen en el orden de los deltas del campo, no alfabético.
-- [ ] Un `tid` referenciado cuyo término ya no existe se **omite** de `categories`, y el proveedor se devuelve igual.
-- [ ] `title` y `short_description` con `<b>` o `&` viajan escapados por `check_plain()`.
-- [ ] Ningún ítem trae teléfono, dirección, `field_services_desc`, tags ni imágenes.
-- [ ] La respuesta completa lleva `providers` y `pagination`, y nada más, dentro de `data`.
+- [x] Cada ítem trae exactamente **siete** claves, en el orden `id`, `title`, `categories`, `rating_avg`, `rating_count`, `short_description`, `hourly_rate`.
+- [x] `id` es entero JSON (`41`), no cadena.
+- [x] Un proveedor **sin calificaciones** responde `rating_avg: null` y `rating_count: 0`.
+- [x] Un proveedor **sin tarifa** responde `hourly_rate: null`, y **aparece en el listado**: no lo excluye ningún join.
+- [x] Un proveedor **sin descripción corta** responde `short_description: ""`, nunca `null`.
+- [x] Un proveedor **sin categorías** responde `categories: []`, y aparece en el listado.
+- [x] Cada categoría trae exactamente tres claves — `id`, `code`, `name` — y ninguna más: sin `description`, sin `icon_id`, sin `icon_url`.
+- [x] El `id` y el `code` de una categoría coinciden con los que devuelve `GET /api/v1/service-categories` para el mismo término. *(Inspección: los dos mapeos hacen `(int) $tid` y `check_plain()` sobre el mismo `field_category_code_value`.)*
+- [x] Las categorías de un proveedor salen en el orden de los deltas del campo, no alfabético.
+- [x] **(sitio, no ejercido)** Un `tid` referenciado cuyo término ya no existe se **omite** de `categories`, y el proveedor se devuelve igual. *La suite fija la forma —el join con `taxonomy_term_data` es `INNER`— pero el emulador registra los joins sin resolverlos, así que no puede hacer que uno no case: el descarte lo hace la base de datos. En el servidor no hay ni un `tid` huérfano (consulta comprobada: 0 filas), y crear uno sería corromper datos de producción a propósito. Queda sin ejercer, con la forma fijada.*
+- [x] `title` y `short_description` con `<b>` o `&` viajan escapados por `check_plain()`.
+- [x] Ningún ítem trae teléfono, dirección, `field_services_desc`, tags ni imágenes.
+- [x] La respuesta completa lleva `providers` y `pagination`, y nada más, dentro de `data`.
 
 **La regla de proveedor activo**
 
-- [ ] Un proveedor **despublicado** no aparece en el listado, con filtro y sin él.
-- [ ] Un proveedor con `field_license_expiry` en el **pasado** no aparece.
-- [ ] Un proveedor cuya habilitación vence **hoy** (`field_license_expiry == REQUEST_TIME`) **sí** aparece: la comparación es `>=`.
-- [ ] Un proveedor **sin** `field_license_expiry` no aparece: el `INNER JOIN` lo deja fuera, igual que la regla en PHP responde `FALSE`.
-- [ ] El `total` cuenta exactamente los mismos proveedores que devuelven las páginas: conteo y consulta aplican la regla por igual.
-- [ ] Para una categoría dada, el número de proveedores que devuelve este endpoint sin paginar coincide con el `providers_count` que devuelve `GET /api/v1/service-categories?with_counts=1` para esa misma categoría.
+- [x] Un proveedor **despublicado** no aparece en el listado, con filtro y sin él.
+- [x] Un proveedor con `field_license_expiry` en el **pasado** no aparece.
+- [x] Un proveedor cuya habilitación vence **hoy** (`field_license_expiry == REQUEST_TIME`) **sí** aparece: la comparación es `>=`.
+- [x] Un proveedor **sin** `field_license_expiry` no aparece: el `INNER JOIN` lo deja fuera, igual que la regla en PHP responde `FALSE`. *(La suite lo modela como el `NULL` que devolvería un `LEFT JOIN`, que ninguna comparación acepta tampoco.)*
+- [x] El `total` cuenta exactamente los mismos proveedores que devuelven las páginas: conteo y consulta aplican la regla por igual.
+- [x] **(sitio, verificado)** Para una categoría dada, el número de proveedores que devuelve este endpoint sin paginar coincide con el `providers_count` que devuelve `GET /api/v1/service-categories?with_counts=1` para esa misma categoría. *Cruce sobre el servidor: `electricidad` (31) → 2 y 2, `carpinteria` (35) → 1 y 1, `cerrajeria` (37) → 1 y 1, y `climatizacion` (36) → 0 en los dos, que es el proveedor con la habilitación caducada. Los dos endpoints coinciden también en excluirlo.*
 
 **No regresión**
 
-- [ ] `GET /api/v1/service-categories` devuelve **byte a byte** lo mismo que antes, con y sin `?with_counts=1`, en un sitio con proveedores despublicados y caducados.
-- [ ] La suite de `service_category` pasa completa **sin cambiar una sola expectativa**.
-- [ ] `GET /api/v1/providers/%/gallery` y `GET /api/v1/providers/%/gallery/%` siguen respondiendo igual: las tres funciones de galería quedan sin tocar y su suite sigue en verde.
-- [ ] Las imágenes de reclamos y la galería siguen viéndose en el back office: este spec no toca `myapi_file_download()`.
-- [ ] Ningún otro endpoint `api/v1/...` cambia: `git diff` vacío en `resources/` salvo `provider.resource.inc` y la función de conteo de `service_category.resource.inc`.
-- [ ] `myapi.install` queda sin tocar: `git diff` vacío. No hay `hook_update_N` nuevo y `myapi_update_7029` sigue siendo el último.
-- [ ] `includes/myapi.i18n.inc` queda sin tocar: ninguna clave nueva, y los dos catálogos siguen teniendo las mismas.
-- [ ] Ningún rol gana ni pierde permisos: `/admin/people/permissions` idéntico antes y después.
-- [ ] La suite unitaria pasa completa, con el fichero de test nuevo incluido.
-- [ ] `drush cc all` no reporta errores y `api/v1/providers` queda en `menu_router` **sin** desplazar a las dos rutas de galería.
+- [x] **(sitio, parcial)** `GET /api/v1/service-categories` devuelve lo mismo que antes, con y sin `?with_counts=1`, en un sitio con un proveedor caducado. *Verificado contra el contrato documentado —6 claves sin el parámetro, 7 con él, los ocho conteos correctos y coherentes con el listado— y no contra una captura previa: el snapshot anterior al despliegue no se tomó. La prueba fuerte de que el SQL no cambió es la suite de 91 tests sin una expectativa tocada.*
+- [x] La suite de `service_category` pasa completa **sin cambiar una sola expectativa**. *(91 tests; el único cambio del fichero es un `require_once`, porque el `module_load_include()` del bootstrap es un no-op.)*
+- [x] `GET /api/v1/providers/%/gallery` y `GET /api/v1/providers/%/gallery/%` siguen respondiendo igual: las tres funciones de galería quedan sin tocar y su suite sigue en verde. *(`git diff` sobre `resources/provider.resource.inc`: lo único borrado son líneas del `@file`.)*
+- [x] **(sitio, parcial)** Las imágenes de reclamos y la galería siguen viéndose en el back office: este spec no toca `myapi_file_download()`. *(`git diff` vacío sobre `includes/myapi.provider_files.inc` y sobre el hook. En el servidor, `GET /api/v1/providers/%/gallery` responde `200` y `.../gallery/999999` responde `404 file_not_found`. La página del back office no se abrió en un navegador.)*
+- [x] Ningún otro endpoint `api/v1/...` cambia: `git diff` vacío en `resources/` salvo `provider.resource.inc` y la función de conteo de `service_category.resource.inc`. *(Tres hunks en ese fichero: el `module_load_include()`, el docblock y el cuerpo de la función.)*
+- [x] `myapi.install` queda sin tocar: `git diff` vacío. No hay `hook_update_N` nuevo y `myapi_update_7029` sigue siendo el último.
+- [x] `includes/myapi.i18n.inc` queda sin tocar: ninguna clave nueva, y los dos catálogos siguen teniendo las mismas.
+- [x] Ningún rol gana ni pierde permisos. *(Inspección: ni `hook_permission()` ni `myapi.install` se tocan; la ruta lleva `access callback = TRUE` como todas las de `api/v1`. La comparación de `/admin/people/permissions` es del sitio.)*
+- [x] La suite unitaria pasa completa, con el fichero de test nuevo incluido.
+- [x] **(sitio, verificado)** `drush cc all` no reporta errores y `api/v1/providers` queda en `menu_router` **sin** desplazar a las dos rutas de galería. *Las tres filas conviven, cada una con su `page_callback` y el mismo `include_file`. `drush updb` confirma «No database updates required».*
 
 Tres criterios que parecen de relleno y son los que de verdad vigilan este spec:
 
