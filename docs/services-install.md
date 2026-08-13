@@ -87,7 +87,6 @@ Native title = «Nombre comercial».
 | `field_phone` | text (20) | 1 | Yes | |
 | `field_address` | text_long | 1 | No | `plain_text` pinned. |
 | `field_services_desc` | text_long | 1 | Yes | `plain_text` pinned. |
-| `field_photo` | image | 1 | No | `png jpg jpeg`, 3 MB, **public**. |
 | `field_license_expiry` | datestamp | 1 | Yes | Down to the minute — see [Why the licence expiry has minutes](#why-the-licence-expiry-has-minutes). |
 | `field_categories` | taxonomy_term_reference → `service_category` | ∞ | Yes | Checkboxes (`options_buttons`). |
 | `field_rating_avg` | number_decimal (3,2) | 1 | No | Denormalised. **Nothing writes it in SPEC 77.** |
@@ -95,6 +94,7 @@ Native title = «Nombre comercial».
 | `field_hourly_rate` | number_decimal (10,2) | 1 | No | SPEC 81. «Valor hora». Informative reference price, in the module's implicit currency. `min = 0`, `prefix = '$ '` — see [The hourly rate](#the-hourly-rate). |
 | `field_tags` | taxonomy_term_reference → `provider_tag` | ∞ | No | SPEC 81. «Etiquetas». Autocomplete (`taxonomy_autocomplete`) that **creates the terms it does not find** — see [How the tags are born](#how-the-tags-are-born). |
 | `field_short_description` | text (255) | 1 | No | SPEC 81. «Descripción corta». One line for the marketplace card. No text format selector. |
+| `field_gallery` | image | **10** | No | SPEC 82. «Galería». `png jpg jpeg`, 3 MB, **`private://`** — see [Which files are private](#which-files-are-private) and [provider-gallery.md](provider-gallery.md). Replaces the deleted `field_photo`. |
 
 The two counters exist so the "providers of a category" listing does not run an
 `AVG()` per row. The hooks that recalculate them ship with the rating flow;
@@ -107,6 +107,30 @@ bundle, and it only counts rows. `field_short_description` **does not replace**
 the detail screen and one for the listing card. Existing providers are born with
 the short one empty; no update copies text into it, because an automatic 255-
 character cut publishes half-sentences nobody wrote.
+
+#### The gallery, and the photo that is gone
+
+SPEC 82 gave `provider` a carousel of up to **ten private images** and **deleted
+`field_photo` outright**, field, instance and data. There is no cover image any
+more: if one is needed, it is the first image of the gallery.
+
+Three properties of `field_gallery` belong to the **field**, not to the
+instance, which is what makes them expensive to change later:
+
+- **`uri_scheme = 'private'`.** Changing it afterwards needs
+  `field_update_field()` **and** a `file_move()` of every uploaded image — the
+  work `myapi_update_7023()` had to do for the claim fields in SPEC 65. Born
+  private, there was nothing to migrate.
+- **Cardinality 10.** Raising or lowering the cap is a `hook_update_N`, and
+  lowering it on providers that are over it silently discards the extra deltas.
+- **The order is the order of the deltas**, i.e. what the operator drags in the
+  form. There is no weight field and no date ordering.
+
+`myapi_update_7029()` deletes `field_photo` **unconditionally**: it does not
+count the rows of `field_data_field_photo` and it does not abort if it finds
+any. Confirm `SELECT COUNT(*) FROM field_data_field_photo` and have a database
+and files backup **before** running `drush updb` on any environment where
+photos might have been loaded — they are lost with no way back.
 
 #### The hourly rate
 
@@ -290,11 +314,44 @@ the whole day.
 | Field | Scheme | Why |
 |---|---|---|
 | `field_images`, `field_attachment` (request) | `private://` | They may show the inside of a home. Inherited from the field, which SPEC 65 made private for claims — this feature adds an instance and changes nothing. |
-| `field_photo` (provider) | `public://` | The provider's shop front, identical for every user of the marketplace. |
+| `field_gallery` (provider) | `private://` | SPEC 82. An express decision: the gallery of a provider is not reachable by a guessable URL for anybody without a session. The price is that every image goes through PHP and needs a token — see [provider-gallery.md](provider-gallery.md). |
 | `field_category_icon` (category) | `public://` | A catalogue asset shown in the app's category grid. |
 
-Making the two public ones private would mean an authenticated download
-endpoint per thumbnail of the grid, for images that reveal nothing.
+The category icon stays public because making it private would mean an
+authenticated download endpoint per thumbnail of the grid, for an image that
+reveals nothing. **The two criteria coexist on purpose**, and the rule for
+future specs is: a catalogue asset of the site is public; content uploaded for
+one ficha or one case is private.
+
+### Maintenance rule — `hook_file_download()` now has TWO owners
+
+`myapi_file_download()` in `myapi.module` asks **claims first and providers
+second**, and returns `NULL` only when neither owner recognises the URI:
+
+```php
+$headers = myapi_claims_file_download_headers($uri, $user);
+
+// NULL means "not mine". Anything else — headers or -1 — is already a decision
+// taken about a claim file, and asking the second owner would turn it into a
+// permission granted through the back door.
+if ($headers !== NULL) {
+  return $headers;
+}
+
+return myapi_provider_file_download_headers($uri, $user);
+```
+
+The cut is `$headers !== NULL` and **never** a loose `if (!$headers)`: that one
+happens to work today because `-1` is truthy, and stops working the day anyone
+changes that value.
+
+Any new file field on `provider` must be created with
+`'settings' => ['uri_scheme' => 'private']` **and** added to the ownership
+resolution in `includes/myapi.provider_files.inc`. A field created without both
+is born public, or private and unreachable by both readers — the same rule
+`includes/myapi.claims_files.inc` states for `reclamo` and `claim_transaction`,
+and payment receipts (`private://comprobantes_pago`, SPEC 20) are still
+recognised by nobody.
 
 ---
 
@@ -370,16 +427,22 @@ hand on the site survives the update untouched.
 | Site | What runs |
 |---|---|
 | Fresh install | `myapi_install()` → `_myapi_services_install()`, after `_myapi_claims_install()` (which creates the borrowed fields and makes them private) and before `_myapi_building_admin_install()`. |
-| Already installed | `drush updb` → `myapi_update_7025()` (SPEC 77) and `myapi_update_7028()` (SPEC 81) → the same `_myapi_services_install()` in both. |
+| Already installed | `drush updb` → `myapi_update_7025()` (SPEC 77), `myapi_update_7028()` (SPEC 81) and `myapi_update_7029()` (SPEC 82) → the same `_myapi_services_install()` in all three. |
 
-`drush cc all` afterwards. The updates create **structure only**: no
-permission, no role, no route and no node, so running them changes nothing any
-user or the app can see. Update history of this feature:
+`drush cc all` afterwards. Update history of this feature:
 
 | Update | Spec | What it adds |
 |---|---|---|
 | `myapi_update_7025` | 77 | The `service_category` vocabulary, the five bundles and their fields. |
 | `myapi_update_7028` | 81 | The `provider_tag` vocabulary and the three new fields of `provider`. |
+| `myapi_update_7029` | 82 | `field_gallery` on `provider`, and the **deletion** of `field_photo` with its data. |
+
+The first two create **structure only**: no permission, no role, no route and no
+node, so running them changes nothing any user or the app can see. **`7029` is
+different in two ways**: it deletes a field and its data irreversibly (see
+[The gallery, and the photo that is gone](#the-gallery-and-the-photo-that-is-gone)),
+and SPEC 82 does add two routes — the ones documented in
+[provider-gallery.md](provider-gallery.md).
 
 ---
 
