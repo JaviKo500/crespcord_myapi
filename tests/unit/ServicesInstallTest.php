@@ -625,12 +625,13 @@ class ServicesInstallTest extends TestCase {
    * The non-regression net of this spec. The installer is a long file of
    * definitions in a row, so an ensure_field() pasted three lines off its right
    * place would read fine in review and silently change a field of SPEC 77.
-   * This walks the nine provider fields that already existed and pins their
-   * type, cardinality, settings, requiredness and widget.
+   * This walks the eight provider fields of SPEC 77 that are still there —
+   * field_photo is the ninth and SPEC 82 deleted it — and pins their type,
+   * cardinality, settings, requiredness and widget.
    *
    * @dataProvider spec77ProviderFields
    */
-  public function testTheNineProviderFieldsOfSpec77AreUnchanged($field_name, array $field_expectations, array $instance_expectations) {
+  public function testTheEightRemainingProviderFieldsOfSpec77AreUnchanged($field_name, array $field_expectations, array $instance_expectations) {
     $field = $this->fieldDefinition($field_name);
     foreach ($field_expectations as $expectation) {
       $this->assertStringContainsString($expectation, $field, $field_name . ' changed at field level');
@@ -666,11 +667,6 @@ class ServicesInstallTest extends TestCase {
         ["'type' => 'text_long'", "'cardinality' => 1"],
         ["'required' => 1", "'widget' => ['type' => 'text_textarea']"],
       ],
-      'photo'             => [
-        'field_photo',
-        ["'type' => 'image'", "'cardinality' => 1", "'settings' => ['uri_scheme' => 'public']"],
-        ["'required' => 0", "'widget' => ['type' => 'image_image']"],
-      ],
       'licence expiry'    => [
         'field_license_expiry',
         ["'type' => 'datestamp'", "'cardinality' => 1", "'settings' => \$timestamp_settings"],
@@ -695,5 +691,138 @@ class ServicesInstallTest extends TestCase {
         ["'required' => 0", "'widget' => ['type' => 'number']"],
       ],
     ];
+  }
+
+  /* -------------------------------------------------------------------------
+   * SPEC 82 — the private gallery, and the death of field_photo.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * The decision the whole spec rests on, and the one that cannot be corrected
+   * later without moving files: uri_scheme = 'private' is a FIELD setting, so
+   * it is decided the moment the field is created. A field born public would
+   * need field_update_field() AND a file_move() of every image, which is
+   * exactly the work myapi_update_7023() had to do in SPEC 65.
+   *
+   * The cardinality is pinned here for the same reason: it belongs to the
+   * field, and lowering it later silently discards the extra deltas.
+   */
+  public function testTheGalleryIsAPrivateImageFieldCappedAtTen() {
+    $field = $this->fieldDefinition('field_gallery');
+
+    $this->assertStringContainsString("'type' => 'image'", $field);
+    $this->assertStringContainsString("'cardinality' => 10", $field);
+    $this->assertStringContainsString("'settings' => ['uri_scheme' => 'private']", $field);
+    $this->assertStringNotContainsString("'uri_scheme' => 'public'", $field);
+  }
+
+  /**
+   * The instance: optional, on the provider bundle, with the image widget and
+   * the same extensions and size cap the deleted field_photo had.
+   */
+  public function testTheGalleryInstanceIsOptionalAndCapsTheFileSize() {
+    $instance = $this->providerInstanceDefinition('field_gallery');
+
+    $this->assertStringContainsString("'bundle' => \$provider_type", $instance);
+    $this->assertStringContainsString("'required' => 0", $instance);
+    $this->assertStringContainsString("'widget' => ['type' => 'image_image']", $instance);
+    $this->assertStringContainsString("'file_extensions' => 'png jpg jpeg'", $instance);
+    $this->assertStringContainsString("'max_filesize' => '3 MB'", $instance);
+  }
+
+  /**
+   * field_photo is gone from the INSTALLER, both as a field and as an
+   * instance. A fresh site must never create it: the update below deletes it
+   * on the existing ones, and an installer that still created it would put it
+   * back on every new environment.
+   */
+  public function testTheInstallerNoLongerCreatesTheOldPhotoField() {
+    $installer = $this->functionSource('_myapi_services_install');
+
+    $this->assertStringNotContainsString("_myapi_reservations_ensure_field('field_photo'", $installer);
+    $this->assertStringNotContainsString("_myapi_reservations_ensure_instance('field_photo'", $installer);
+  }
+
+  /**
+   * And it is gone from the destructive teardown's $owned list too — deleting
+   * a field that no longer exists is not an error, but leaving the name there
+   * would say this feature still owns something it does not.
+   */
+  public function testTheTeardownNoLongerNamesTheOldPhotoField() {
+    $teardown = $this->functionSource('_myapi_services_uninstall_destructive');
+    $owned_start = strpos($teardown, '$owned = [');
+    $owned = substr($teardown, $owned_start, strpos($teardown, '];', $owned_start) - $owned_start);
+
+    $this->assertStringNotContainsString("'field_photo'", $owned);
+    $this->assertStringContainsString(
+      "'field_gallery'",
+      $owned,
+      'the gallery is created by this feature and must be deleted by its teardown'
+    );
+  }
+
+  /**
+   * The update creates before it destroys, and it destroys behind a guard.
+   *
+   * The order is not cosmetic: running the installer FIRST means the site is
+   * never left with the old field already gone and the new one not yet there.
+   * And field_delete_field() alone only marks the field as deleted —
+   * field_purge_batch() is what actually drops field_data_field_photo, which
+   * is what the acceptance criteria check on the site.
+   */
+  public function testTheUpdateCreatesTheGalleryAndThenDeletesThePhoto() {
+    $update = $this->functionSource('myapi_update_7029');
+
+    $this->assertStringContainsString('_myapi_services_install();', $update);
+    $this->assertStringContainsString("field_info_field('field_photo')", $update);
+    $this->assertStringContainsString("field_delete_field('field_photo');", $update);
+    $this->assertStringContainsString('field_purge_batch(', $update);
+
+    $this->assertLessThan(
+      strpos($update, "field_delete_field('field_photo')"),
+      strpos($update, '_myapi_services_install();'),
+      'the installer must run before the deletion, never after'
+    );
+    $this->assertLessThan(
+      strpos($update, 'field_purge_batch('),
+      strpos($update, "field_delete_field('field_photo')"),
+      'the purge must follow the deletion'
+    );
+  }
+
+  /**
+   * The deletion is UNCONDITIONAL by express decision of the user: it does not
+   * count the rows of field_data_field_photo and it does not abort when it
+   * finds any. This pins that the guard is an existence check and nothing more
+   * — if somebody ever adds a count, this test is where they will have to come
+   * and say so out loud.
+   */
+  public function testTheDeletionOfThePhotoFieldIsUnconditional() {
+    $update = $this->functionSource('myapi_update_7029');
+
+    $this->assertStringNotContainsString('field_data_field_photo', $update);
+    $this->assertStringNotContainsString('countQuery', $update);
+  }
+
+  /**
+   * myapi_update_7028 and everything before it stay untouched: a spec that
+   * renumbers an existing update leaves every already-updated site skipping it
+   * or running it twice.
+   */
+  public function testTheUpdateNumberingOfPreviousSpecsIsUntouched() {
+    $source = $this->installSource();
+
+    $this->assertStringContainsString('function myapi_update_7028()', $source);
+    $this->assertStringContainsString('function myapi_update_7029()', $source);
+    $this->assertStringNotContainsString('function myapi_update_7030()', $source);
+    // 7028 is still SPEC 81's, not this spec's.
+    $this->assertStringContainsString(
+      '_myapi_services_install();',
+      $this->functionSource('myapi_update_7028')
+    );
+    $this->assertStringNotContainsString(
+      'field_delete_field(',
+      $this->functionSource('myapi_update_7028')
+    );
   }
 }
