@@ -299,6 +299,16 @@ offer, and listing a category. The two halves cover different cases on purpose
 and both must hold. An empty expiry reads as "no licence on record" and answers
 inactive.
 
+**The rule has exactly two homes, and they move together.** The pure function
+above is the PHP one, for a caller holding a node; `includes/myapi.provider_query.inc`
+is the SQL one, for a caller counting or listing rows it never loads. Both
+consumers of the SQL half — the `providers_count` of
+`/api/v1/service-categories` and the `/api/v1/providers` listing — call that
+include, and neither writes the `WHERE` itself. A spec that changes what
+"active" means has to change both files, and must not write a third copy: the
+first symptom of a divergence is a category card promising "3 providers" over a
+listing that returns 4.
+
 ### Why the licence expiry has minutes
 
 With day-only granularity the stored timestamp would be 00:00 of the expiry
