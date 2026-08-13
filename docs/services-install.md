@@ -1,7 +1,7 @@
 # Services marketplace — content types installation
 
-This module creates, on install and on update, the taxonomy vocabulary and the
-five content types the services marketplace (SPEC 77) is built on —
+This module creates, on install and on update, the taxonomy vocabularies and
+the five content types the services marketplace (SPEC 77) is built on —
 **Categoría de servicio** (`service_category`), **Proveedor** (`provider`),
 **Solicitud de servicio** (`service_request`), **Oferta** (`service_offer`),
 **Calificación de servicio** (`service_rating`) and **Transacción de
@@ -10,7 +10,13 @@ instance they need. Everything is created programmatically
 (`taxonomy_vocabulary_save()`, `node_type_save()`, `field_create_field()`,
 `field_create_instance()`); nothing is built by hand in the admin UI.
 
-There are **no custom SQL tables** for this feature. The vocabulary, the
+SPEC 81 extends the `provider` bundle with three more fields — an hourly rate,
+free tags and a short description — and creates a second vocabulary,
+**Etiqueta de proveedor** (`provider_tag`), for the tags. All three are
+**optional**, so no provider already loaded on the site becomes invalid, and
+none of them is read by any endpoint yet.
+
+There are **no custom SQL tables** for this feature. The vocabularies, the
 bundles, the fields and the instances are configuration entities; Drupal
 generates the `field_data_*` / `field_revision_*` tables automatically.
 
@@ -29,7 +35,7 @@ native screens.
 
 ---
 
-## The vocabulary
+## The vocabularies
 
 ### Categoría de servicio (`service_category`)
 
@@ -45,6 +51,22 @@ Servicios Generales) are loaded by the operator, not by the installer.
 Uniqueness of `field_category_code` is **not** enforced yet: it needs a
 `hook_form_alter()` validation, which is module code and belongs to the spec
 that first reads the code from an endpoint.
+
+### Etiqueta de proveedor (`provider_tag`) — SPEC 81
+
+Flat, born empty and with **no fields of its own** — deliberately, not by
+oversight. The category code exists because the app hangs logic on it (icons,
+screens); a tag is painted and nothing else, and demanding a code for each one
+would cancel the whole point of the autocomplete.
+
+Its terms are **created by the operator while typing**, in the «Etiquetas»
+field of a provider — see [How the tags are born](#how-the-tags-are-born).
+
+> **Keeping it clean is operational work, not code.** With free creation the
+> vocabulary drifts on its own: «urgencias», «Urgencias 24h» and «emergencias»
+> can end up meaning the same thing. Merging or renaming terms at
+> `admin/structure/taxonomy/provider_tag` keeps every reference intact, and
+> nothing in this module normalizes them.
 
 ---
 
@@ -70,10 +92,60 @@ Native title = «Nombre comercial».
 | `field_categories` | taxonomy_term_reference → `service_category` | ∞ | Yes | Checkboxes (`options_buttons`). |
 | `field_rating_avg` | number_decimal (3,2) | 1 | No | Denormalised. **Nothing writes it in SPEC 77.** |
 | `field_rating_count` | number_integer | 1 | No | Denormalised. Idem. |
+| `field_hourly_rate` | number_decimal (10,2) | 1 | No | SPEC 81. «Valor hora». Informative reference price, in the module's implicit currency. `min = 0`, `prefix = '$ '` — see [The hourly rate](#the-hourly-rate). |
+| `field_tags` | taxonomy_term_reference → `provider_tag` | ∞ | No | SPEC 81. «Etiquetas». Autocomplete (`taxonomy_autocomplete`) that **creates the terms it does not find** — see [How the tags are born](#how-the-tags-are-born). |
+| `field_short_description` | text (255) | 1 | No | SPEC 81. «Descripción corta». One line for the marketplace card. No text format selector. |
 
 The two counters exist so the "providers of a category" listing does not run an
 `AVG()` per row. The hooks that recalculate them ship with the rating flow;
 until then both are simply empty.
+
+The three fields of SPEC 81 are all **optional** and **nothing reads them
+yet** — `/api/v1/service-categories` is the only endpoint that touches this
+bundle, and it only counts rows. `field_short_description` **does not replace**
+`field_services_desc`: the long one stays required and stays a textarea, one for
+the detail screen and one for the listing card. Existing providers are born with
+the short one empty; no update copies text into it, because an automatic 255-
+character cut publishes half-sentences nobody wrote.
+
+#### The hourly rate
+
+Two things about it that are easy to get wrong:
+
+- **`min = 0` is not an SQL constraint.** It is an `#element_validate` the
+  `number` widget adds, so saving `-15` from the back-office form fails
+  validation — but a programmatic `node_save()` can still write a negative. The
+  spec that first exposes a write endpoint for providers has to repeat the
+  check.
+- **`prefix = '$ '` never leaves the back office.** It paints in the form and in
+  the node view; the column `field_hourly_rate_value` and any future API
+  response hold the bare number (`25.50`). Whoever consumes it adds the symbol.
+
+The size is `10,2` — the same as `field_offer_amount`, up to `99999999.99` —
+and not the `3,2` of `field_rating_avg`, which is dimensioned for a 1-5
+average. Decimal and not float because this is money.
+
+#### How the tags are born
+
+The D7 `taxonomy_autocomplete` widget creates unknown terms **natively**, with
+no setting at all: a name it does not find enters validation as
+`['tid' => 'autocreate', ...]` and `taxonomy_field_presave()` saves it as a real
+term before writing the field row. (`'auto_create' => TRUE` belongs to
+`entityreference`, not to taxonomy — it is not written anywhere here on
+purpose.)
+
+Two consequences for whoever fills the form:
+
+- **Matching is exact and case-insensitive.** Typing «Urgencias» when
+  «urgencias» exists reuses the existing term; typing «urgencias 24h» creates a
+  new one even though «urgencias» exists.
+- **A comma inside a name splits it in two tags.** The comma is the widget's
+  separator, so «lunes, martes y feriados» becomes three tags. A tag that really
+  contains a comma has to be typed in double quotes: `"lunes, martes"`.
+
+There is no cap on how many tags a provider can carry: a maximum in the field
+becomes a `hook_update_N` the day somebody needs one more, so if one is ever
+needed it goes in the form or the endpoint that decides it.
 
 ### Solicitud de servicio (`service_request`)
 
@@ -276,13 +348,20 @@ helper:
 - `_myapi_services_ensure_vocabulary()` — the only new sub-helper of SPEC 77
   (vocabularies had no equivalent). It creates the vocabulary only when
   `taxonomy_vocabulary_machine_name_load()` answers FALSE, and never overwrites
-  a name, description or hierarchy adjusted on the site.
+  a name, description or hierarchy adjusted on the site. SPEC 81 calls it a
+  second time, for `provider_tag`, and adds nothing else to it.
 - `_myapi_reservations_ensure_node_type()`, `_ensure_field()` and
   `_ensure_instance()` — reused unchanged from SPEC 32/49.
 
-Order matters: the vocabulary first (the category fields name it), then the
-five bundles (an entityreference field names a target bundle, which has to
-exist), then the fields, then the instances.
+Order matters: the vocabularies first (the category and tag fields name them),
+then the five bundles (an entityreference field names a target bundle, which
+has to exist), then the fields, then the instances.
+
+This is also why the update hooks call the **whole** installer instead of just
+their own new pieces: a surgical update would restate the field definitions in a
+second place of `myapi.install`, with the certainty that one day they diverge.
+Re-running it finds everything in place and writes nothing — a field adjusted by
+hand on the site survives the update untouched.
 
 ---
 
@@ -291,11 +370,16 @@ exist), then the fields, then the instances.
 | Site | What runs |
 |---|---|
 | Fresh install | `myapi_install()` → `_myapi_services_install()`, after `_myapi_claims_install()` (which creates the borrowed fields and makes them private) and before `_myapi_building_admin_install()`. |
-| Already installed | `drush updb` → `myapi_update_7025()` → the same `_myapi_services_install()`. |
+| Already installed | `drush updb` → `myapi_update_7025()` (SPEC 77) and `myapi_update_7028()` (SPEC 81) → the same `_myapi_services_install()` in both. |
 
-`drush cc all` afterwards. The update creates **structure only**: no
-permission, no role, no route and no node, so running it changes nothing any
-user or the app can see.
+`drush cc all` afterwards. The updates create **structure only**: no
+permission, no role, no route and no node, so running them changes nothing any
+user or the app can see. Update history of this feature:
+
+| Update | Spec | What it adds |
+|---|---|---|
+| `myapi_update_7025` | 77 | The `service_category` vocabulary, the five bundles and their fields. |
+| `myapi_update_7028` | 81 | The `provider_tag` vocabulary and the three new fields of `provider`. |
 
 ---
 
@@ -320,14 +404,15 @@ because there it really is the same fact.
 ## Uninstall policy (conservative)
 
 `MYAPI_SERVICES_DESTRUCTIVE_UNINSTALL` is `FALSE` and must stay `FALSE`.
-`drush pm-uninstall myapi` therefore leaves the vocabulary, the five content
+`drush pm-uninstall myapi` therefore leaves both vocabularies, the five content
 types, their fields and all their nodes exactly where they are — providers,
 requests, offers and ratings are real client data.
 
 Flipping it to TRUE runs `_myapi_services_uninstall_destructive()`, which
-deletes this feature's own fields, removes the **instances** of the seven
-borrowed ones, deletes the five node types and the vocabulary, and purges the
-field data. Independent from the reservations and claims constants: flipping
+deletes this feature's own fields — the three of SPEC 81 included, since their
+names are new in the whole module and no other bundle uses them — removes the
+**instances** of the seven borrowed ones, deletes the five node types and both
+vocabularies, and purges the field data. Independent from the reservations and claims constants: flipping
 one never drags another feature's data down with it.
 
 ---
@@ -358,3 +443,9 @@ Written down so nobody spends time looking for them:
 - No auto-generated titles.
 - No chat: the three fields are reserved and empty; the transport is not
   decided.
+- Nothing consumes the hourly rate, the tags or the short description (SPEC 81).
+  There is no `/api/v1/providers` yet, and the spec that writes it decides then
+  how the rate is formatted in JSON, whether the tags travel as strings or as
+  `{id, name}`, and whether the short description goes through
+  `myapi_text_to_plain()` or `check_plain()`. Nothing relates the rate to
+  `field_offer_amount` either: it is a shop-window figure, not a business rule.
