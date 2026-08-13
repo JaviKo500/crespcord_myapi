@@ -1,6 +1,6 @@
 # 81 — Tarifa por hora, etiquetas y descripción corta del proveedor
 
-- **Estado:** Draft
+- **Estado:** Approved
 - **Fecha:** 2026-08-13
 - **Dependencias:**
   - `77-services-content-types-install` (Implemented) — crea el bundle `provider` y `includes/myapi.services_common.inc` con `MYAPI_SERVICES_PROVIDER_TYPE`. Este spec **añade** tres campos a ese bundle y **no modifica** ninguno de los nueve que ya existen. Reutiliza sus sub-helpers idempotentes `_myapi_reservations_ensure_field()` / `_myapi_reservations_ensure_instance()` / `_myapi_services_ensure_vocabulary()` y su patrón de uninstall conservador (campos propios vs. prestados).
