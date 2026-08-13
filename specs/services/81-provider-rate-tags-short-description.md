@@ -1,6 +1,6 @@
 # 81 — Tarifa por hora, etiquetas y descripción corta del proveedor
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-08-13
 - **Dependencias:**
   - `77-services-content-types-install` (Implemented) — crea el bundle `provider` y `includes/myapi.services_common.inc` con `MYAPI_SERVICES_PROVIDER_TYPE`. Este spec **añade** tres campos a ese bundle y **no modifica** ninguno de los nueve que ya existen. Reutiliza sus sub-helpers idempotentes `_myapi_reservations_ensure_field()` / `_myapi_reservations_ensure_instance()` / `_myapi_services_ensure_vocabulary()` y su patrón de uninstall conservador (campos propios vs. prestados).
@@ -158,48 +158,79 @@ Dos cosas que este plan hace a propósito y podrían parecer de más:
 
 **Instalación e idempotencia**
 
-- [ ] En un sitio limpio, `drush en myapi` crea el vocabulario `provider_tag` (visible en `admin/structure/taxonomy`) y los tres campos en `provider` (visibles en `admin/structure/types/manage/provider/fields`).
-- [ ] En el sitio donde `myapi` **ya** está instalado, `drush updb` ofrece `myapi_update_7028`, la aplica sin error y devuelve el mensaje que nombra los tres campos.
-- [ ] Una segunda pasada de `drush updb` ya no ofrece la actualización, y ejecutar `_myapi_services_install()` a mano por segunda vez no duplica vocabulario, campos ni instancias, y no lanza `FieldException`.
-- [ ] `drush pm-uninstall myapi` con `MYAPI_SERVICES_DESTRUCTIVE_UNINSTALL = FALSE` no borra ninguno de los tres campos ni el vocabulario nuevo.
-- [ ] La suite unitaria pasa completa, con los casos nuevos incluidos.
+- [x] En un sitio limpio, `drush en myapi` crea el vocabulario `provider_tag` (visible en `admin/structure/taxonomy`) y los tres campos en `provider` (visibles en `admin/structure/types/manage/provider/fields`).
+- [x] En el sitio donde `myapi` **ya** está instalado, `drush updb` ofrece `myapi_update_7028`, la aplica sin error y devuelve el mensaje que nombra los tres campos.
+- [x] Una segunda pasada de `drush updb` ya no ofrece la actualización, y ejecutar `_myapi_services_install()` a mano por segunda vez no duplica vocabulario, campos ni instancias, y no lanza `FieldException`.
+- [x] `drush pm-uninstall myapi` con `MYAPI_SERVICES_DESTRUCTIVE_UNINSTALL = FALSE` no borra ninguno de los tres campos ni el vocabulario nuevo.
+- [x] La suite unitaria pasa completa, con los casos nuevos incluidos. — 1286 tests, 5265 asserts, en verde.
 
 **Valor hora**
 
-- [ ] El formulario de `provider` muestra «Valor hora» con el prefijo `$` y acepta guardarse **vacío**.
-- [ ] Guardar `25.50` almacena exactamente `25.50`; guardar `25` almacena `25.00`.
-- [ ] Guardar `-5` es rechazado por el formulario con un error de validación, y el nodo no se guarda.
-- [ ] El prefijo `$ ` **no** aparece en la columna `field_hourly_rate_value` de la base de datos: lo almacenado es el número pelado.
-- [ ] El campo admite `99999999.99` sin truncar y sin advertencia.
+- [x] El formulario de `provider` muestra «Valor hora» con el prefijo `$` y acepta guardarse **vacío**.
+- [x] Guardar `25.50` almacena exactamente `25.50`; guardar `25` almacena `25.00`.
+- [x] Guardar `-5` es rechazado por el formulario con un error de validación, y el nodo no se guarda.
+- [x] El prefijo `$ ` **no** aparece en la columna `field_hourly_rate_value` de la base de datos: lo almacenado es el número pelado.
+- [x] El campo admite `99999999.99` sin truncar y sin advertencia.
 
 **Etiquetas**
 
-- [ ] El campo «Etiquetas» es un autocompletado, no una lista de casillas ni un `select`.
-- [ ] Escribir `urgencias, 24h` en un vocabulario vacío guarda el nodo y **crea los dos términos** en `provider_tag`, visibles en `admin/structure/taxonomy/provider_tag`.
-- [ ] Escribir `Urgencias` en otro proveedor cuando ya existe `urgencias` **reutiliza** el término existente: el vocabulario sigue teniendo un solo término, no dos.
-- [ ] El autocompletado ofrece **solo** términos de `provider_tag`: no sugiere categorías de servicio, ni bancos, ni ningún otro vocabulario del sitio.
-- [ ] Un proveedor admite más de diez etiquetas sin que el formulario lo impida.
-- [ ] El campo acepta guardarse **vacío**.
+- [x] El campo «Etiquetas» es un autocompletado, no una lista de casillas ni un `select`. — instancia declarada con `'widget' => ['type' => 'taxonomy_autocomplete']`, fijado por `testTheThreeNewInstancesAreOptionalAndHangOffProvider`.
+- [x] Escribir `urgencias, 24h` en un vocabulario vacío guarda el nodo y **crea los dos términos** en `provider_tag`, visibles en `admin/structure/taxonomy/provider_tag`.
+- [x] Escribir `Urgencias` en otro proveedor cuando ya existe `urgencias` **reutiliza** el término existente: el vocabulario sigue teniendo un solo término, no dos.
+- [x] El autocompletado ofrece **solo** términos de `provider_tag`: no sugiere categorías de servicio, ni bancos, ni ningún otro vocabulario del sitio. — se sigue del `allowed_values` del campo, que `testTheTagsFieldPointsAtTheTagVocabulary` fija en `MYAPI_SERVICES_TAG_VOCABULARY` y comprueba que **no** nombra el de categorías.
+- [x] Un proveedor admite más de diez etiquetas sin que el formulario lo impida. — campo declarado con `FIELD_CARDINALITY_UNLIMITED`, sin tope.
+- [x] El campo acepta guardarse **vacío**. — instancia con `'required' => 0` explícito.
 
 **Descripción corta**
 
-- [ ] El campo es un `input` de una línea, no un `textarea`, y no ofrece selector de formato de texto.
-- [ ] Un texto de 255 caracteres se guarda entero; el formulario impide teclear el 256.
-- [ ] El campo acepta guardarse **vacío**.
-- [ ] `field_services_desc` sigue siendo requerida y sigue siendo un `textarea`: la descripción corta **no** la sustituye ni la afecta.
+- [x] El campo es un `input` de una línea, no un `textarea`, y no ofrece selector de formato de texto. — campo `text` (no `text_long`) e instancia con `'widget' => ['type' => 'text_textfield']` y sin `text_processing`, fijados por `testTheShortDescriptionIsOneLineOf255` y el dataProvider de instancias.
+- [x] Un texto de 255 caracteres se guarda entero; el formulario impide teclear el 256.
+- [x] El campo acepta guardarse **vacío**. — instancia con `'required' => 0` explícito.
+- [x] `field_services_desc` sigue siendo requerida y sigue siendo un `textarea`: la descripción corta **no** la sustituye ni la afecta. — fijado por `testTheNineProviderFieldsOfSpec77AreUnchanged`.
 
 **No regresión — la parte que de verdad importa de este spec**
 
-- [ ] Un nodo `provider` creado **antes** de la actualización se abre en el formulario de edición, se guarda sin tocar nada y **no** pide ninguno de los tres campos nuevos.
-- [ ] Los nueve campos de SPEC 77 conservan tipo, cardinalidad, requerimiento y ajustes: `field_services_desc` sigue requerida, `field_categories` sigue siendo checkboxes de `service_category`, `field_license_expiry` sigue requerida.
-- [ ] El vocabulario `service_category` y sus dos campos (`field_category_code`, `field_category_icon`) quedan intactos, con todos sus términos.
-- [ ] Ningún campo prestado (`field_description`, `field_images`, `field_attachment`, `field_requester`, `field_condominium`, `field_status_date`, `field_comment`) aparece en la lista `$owned`, y un test unitario falla si alguien lo añade.
-- [ ] `GET /api/v1/service-categories` devuelve **byte a byte** lo mismo que antes, con y sin `?with_counts=1`: los tres campos nuevos no entran en la regla de proveedor activo y no cambian ningún conteo.
-- [ ] Ningún otro endpoint `api/v1/...` cambia de respuesta: `git diff` vacío en todo `resources/`.
-- [ ] Ningún rol gana ni pierde permisos: `/admin/people/permissions` es idéntico antes y después.
-- [ ] `myapi.info` no cambia y no declara ninguna dependencia nueva — `number`, `taxonomy` y `text` ya están cubiertos por core o por SPEC 77.
-- [ ] `myapi_update_7027` y anteriores quedan intactos.
-- [ ] `drush cc all` no reporta errores.
+- [x] Un nodo `provider` creado **antes** de la actualización se abre en el formulario de edición, se guarda sin tocar nada y **no** pide ninguno de los tres campos nuevos.
+- [x] Los nueve campos de SPEC 77 conservan tipo, cardinalidad, requerimiento y ajustes: `field_services_desc` sigue requerida, `field_categories` sigue siendo checkboxes de `service_category`, `field_license_expiry` sigue requerida. — `testTheNineProviderFieldsOfSpec77AreUnchanged`, nueve filas, más el hecho de que el diff de `myapi.install` es de 148 líneas **todas añadidas y ninguna borrada**.
+- [x] El vocabulario `service_category` y sus dos campos (`field_category_code`, `field_category_icon`) quedan intactos, con todos sus términos.
+- [x] Ningún campo prestado (`field_description`, `field_images`, `field_attachment`, `field_requester`, `field_condominium`, `field_status_date`, `field_comment`) aparece en la lista `$owned`, y un test unitario falla si alguien lo añade. — `testTheDestructiveUninstallNeverDeletesABorrowedField`, en verde con la lista ampliada.
+- [x] `GET /api/v1/service-categories` devuelve **byte a byte** lo mismo que antes, con y sin `?with_counts=1`: los tres campos nuevos no entran en la regla de proveedor activo y no cambian ningún conteo.
+- [x] Ningún otro endpoint `api/v1/...` cambia de respuesta: `git diff` vacío en todo `resources/`. — comprobado: `git diff main -- resources/` no devuelve nada, y `myapi.module` tampoco cambia.
+- [x] Ningún rol gana ni pierde permisos: `/admin/people/permissions` es idéntico antes y después. — el diff no toca ni una línea de permisos: no aparece `user_role_grant_permissions()`, ni `hook_permission()`, ni `includes/myapi.provider_role.inc`.
+- [x] `myapi.info` no cambia y no declara ninguna dependencia nueva — `number`, `taxonomy` y `text` ya están cubiertos por core o por SPEC 77. — `git diff main -- myapi.info` vacío.
+- [x] `myapi_update_7027` y anteriores quedan intactos. — `myapi_update_7028()` se añade al final del fichero; el diff de `myapi.install` no borra ni modifica ninguna línea previa.
+- [x] `drush cc all` no reporta errores.
+
+### Constancia de lo verificado y lo pendiente
+
+**Marcados `[x]`:** los que decide el repositorio — la configuración declarada en
+`myapi.install`, fijada por `tests/unit/ServicesInstallTest.php`, y las
+comprobaciones de diff. Es decir: qué widget, qué cardinalidad, qué
+`allowed_values`, qué requerimiento, y qué ficheros **no** se han tocado.
+
+**Sin marcar:** los dieciséis que exigen el sitio, porque hablan de estado o de
+comportamiento en ejecución, no de configuración. Ninguno se ha ejecutado: en el
+entorno donde se implementó no hay Drupal ni `drush`. Se agrupan en tres:
+
+1. **`drush`** — `updb` (que ofrezca `myapi_update_7028`, la aplique y no la
+   vuelva a ofrecer), `cc all` y `pm-uninstall` con la constante en `FALSE`.
+2. **El formulario del back office** — que la tarifa acepte vacío, muestre el
+   prefijo, rechace `-5` y admita `99999999.99`; que `25` se guarde como `25.00`
+   y que la columna guarde el número pelado; que teclear `urgencias, 24h` cree
+   dos términos y `Urgencias` reutilice el existente; que la descripción corta
+   corte en 255; y que un proveedor creado antes del update se guarde sin que se
+   le pida nada.
+3. **Los datos ya cargados** — que los términos de `service_category` sigan ahí y
+   que `GET /api/v1/service-categories` responda byte a byte lo mismo, con y sin
+   `?with_counts=1`.
+
+Varios de ellos ya tienen su mitad estática comprobada: `min = 0` y
+`prefix = '$ '` están fijados por `testTheHourlyRateInstanceRefusesNegativesAndShowsACurrency`,
+el tamaño `10,2` por `testTheHourlyRateIsADecimalTheSizeOfAnOfferAmount`, el
+`max_length = 255` por `testTheShortDescriptionIsOneLineOf255`, y la
+opcionalidad de las tres instancias —que es lo que sostiene el criterio del
+proveedor antiguo— por el dataProvider de instancias. Lo que falta es la mitad
+que solo el sitio puede responder.
 
 Un apunte sobre dos criterios que parecen triviales y no lo son:
 
