@@ -136,6 +136,13 @@ impossible value travelling as if it were real.
 **The key that decides is `rating_count`.** When it is `0`, paint "no ratings
 yet" and no stars. That is also why both keys always travel and not just one.
 
+And it is `rating_count` and not `rating_avg` for a second reason: a provider
+may answer **`rating_avg: 0`** rather than `null`, because `field_rating_avg` is
+not empty but holds a stored `0.00`. The endpoint reports what is stored — the
+`null` is for a field with no value at all. Either way the reading is the same:
+**`rating_count: 0` means not rated yet**, whatever `rating_avg` says. Nothing
+writes these two counters yet; the flow that recalculates them is its own spec.
+
 ### The two decimals are JSON numbers
 
 `rating_avg` and `hourly_rate` travel as numbers, never as strings: `25.5`, not
