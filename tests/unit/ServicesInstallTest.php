@@ -5,7 +5,9 @@ use PHPUnit\Framework\TestCase;
 require_once __DIR__ . '/../../includes/myapi.services_common.inc';
 
 /**
- * Unit tests for the services marketplace catalogues and installer (SPEC 77).
+ * Unit tests for the services marketplace catalogues and installer (SPEC 77,
+ * extended by SPEC 81 with the hourly rate, the tags and the short
+ * description).
  *
  * Two groups, and the second is the one that earns its keep:
  *
@@ -47,10 +49,62 @@ class ServicesInstallTest extends TestCase {
   ];
 
   /**
+   * The three fields SPEC 81 adds to 'provider'. All new names in the whole
+   * module, which is why they are owned and not borrowed.
+   */
+  private const NEW_PROVIDER_FIELDS = [
+    'field_hourly_rate',
+    'field_tags',
+    'field_short_description',
+  ];
+
+  /**
    * The install file as text, for the guards at the bottom.
    */
   private function installSource() {
     return file_get_contents(__DIR__ . '/../../myapi.install');
+  }
+
+  /**
+   * One _myapi_reservations_ensure_field() call of the installer, as text with
+   * its whitespace collapsed.
+   *
+   * Collapsing is what makes the expectations readable: the installer aligns
+   * its '=>' by column, so a literal assertion would have to reproduce the
+   * padding and would break the day a longer key widens the block.
+   */
+  private function fieldDefinition($field_name) {
+    return $this->definitionAt(
+      $this->functionSource('_myapi_services_install'),
+      "_myapi_reservations_ensure_field('" . $field_name . "', [",
+      $field_name . ' must be created by the installer'
+    );
+  }
+
+  /**
+   * One _myapi_reservations_ensure_instance() call on the 'provider' bundle.
+   */
+  private function providerInstanceDefinition($field_name) {
+    return $this->definitionAt(
+      $this->functionSource('_myapi_services_install'),
+      "_myapi_reservations_ensure_instance('" . $field_name . "', \$provider_type, [",
+      $field_name . ' must have an instance on the provider bundle'
+    );
+  }
+
+  /**
+   * From an opening call to its closing '];' — the array literal of one
+   * definition and nothing of the next one.
+   */
+  private function definitionAt($source, $opening, $message) {
+    $start = strpos($source, $opening);
+    $this->assertNotFalse($start, $message);
+
+    // ']);' closes the call itself; the nested settings arrays close with '],'.
+    $end = strpos($source, ']);', $start);
+    $this->assertNotFalse($end, $message . ' and must close');
+
+    return preg_replace('/\s+/', ' ', substr($source, $start, $end - $start));
   }
 
   /**
@@ -391,5 +445,255 @@ class ServicesInstallTest extends TestCase {
     // And the teardown hangs off hook_uninstall behind its constant.
     $this->assertStringContainsString('_myapi_services_uninstall_destructive();', $this->functionSource('myapi_uninstall'));
     $this->assertStringContainsString('MYAPI_SERVICES_DESTRUCTIVE_UNINSTALL', $source);
+  }
+
+  /* -------------------------------------------------------------------------
+   * SPEC 81 — the hourly rate, the tags and the short description.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * The tag vocabulary has a constant of its own and it is NOT the category
+   * one. The two are opposites — free and codeless against closed and carrying
+   * field_category_code — and pointing a field at the wrong one would fill the
+   * app's category grid with '24h' and 'garantía'.
+   */
+  public function testTheTagVocabularyIsCatalogued() {
+    $this->assertTrue(defined('MYAPI_SERVICES_TAG_VOCABULARY'));
+    $this->assertSame('provider_tag', MYAPI_SERVICES_TAG_VOCABULARY);
+    $this->assertNotSame(MYAPI_SERVICES_CATEGORY_VOCABULARY, MYAPI_SERVICES_TAG_VOCABULARY);
+  }
+
+  /**
+   * The installer creates the tag vocabulary through the same idempotent
+   * helper as the category one — which is what lets myapi_update_7028() re-run
+   * the whole installer without duplicating anything.
+   */
+  public function testTheInstallerCreatesTheTagVocabulary() {
+    $installer = preg_replace('/\s+/', ' ', $this->functionSource('_myapi_services_install'));
+
+    $this->assertStringContainsString(
+      '_myapi_services_ensure_vocabulary( MYAPI_SERVICES_TAG_VOCABULARY,',
+      $installer,
+      'the tag vocabulary must be created through the idempotent helper, by constant'
+    );
+    $this->assertSame(
+      2,
+      substr_count($installer, '_myapi_services_ensure_vocabulary('),
+      'this feature creates exactly two vocabularies: the categories and the tags'
+    );
+  }
+
+  /**
+   * The rate is money: decimal, and the same 10,2 as field_offer_amount. A
+   * float would store 25.10 as something that is not 25.10, and the 3,2 of
+   * field_rating_avg — dimensioned for a 1-5 average — would cap the rate at
+   * 9.99.
+   */
+  public function testTheHourlyRateIsADecimalTheSizeOfAnOfferAmount() {
+    $field = $this->fieldDefinition('field_hourly_rate');
+
+    $this->assertStringContainsString("'type' => 'number_decimal'", $field);
+    $this->assertStringContainsString("'cardinality' => 1", $field);
+    $this->assertStringContainsString("'settings' => ['precision' => 10, 'scale' => 2]", $field);
+  }
+
+  /**
+   * The tags field must point at provider_tag and never at service_category:
+   * the two allowed_values differ in exactly one word, and getting it wrong
+   * would turn the free autocomplete into a second way of writing categories.
+   */
+  public function testTheTagsFieldPointsAtTheTagVocabulary() {
+    $field = $this->fieldDefinition('field_tags');
+
+    $this->assertStringContainsString("'type' => 'taxonomy_term_reference'", $field);
+    $this->assertStringContainsString("'cardinality' => FIELD_CARDINALITY_UNLIMITED", $field);
+    $this->assertStringContainsString("'settings' => \$tag_settings", $field);
+
+    $installer = preg_replace('/\s+/', ' ', $this->functionSource('_myapi_services_install'));
+    $start = strpos($installer, '$tag_settings = [');
+    $this->assertNotFalse($start, 'the installer must define $tag_settings');
+    $settings = substr($installer, $start, strpos($installer, '];', $start) - $start);
+
+    $this->assertStringContainsString("'vocabulary' => MYAPI_SERVICES_TAG_VOCABULARY", $settings);
+    $this->assertStringNotContainsString('MYAPI_SERVICES_CATEGORY_VOCABULARY', $settings);
+  }
+
+  /**
+   * One line of 255, not a text_long. The limit is what keeps this field from
+   * becoming a second field_services_desc with nobody knowing which one goes
+   * on the marketplace card.
+   */
+  public function testTheShortDescriptionIsOneLineOf255() {
+    $field = $this->fieldDefinition('field_short_description');
+
+    $this->assertStringContainsString("'type' => 'text'", $field);
+    $this->assertStringNotContainsString("'type' => 'text_long'", $field);
+    $this->assertStringContainsString("'cardinality' => 1", $field);
+    $this->assertStringContainsString("'settings' => ['max_length' => 255]", $field);
+  }
+
+  /**
+   * The decision the whole spec rests on: the three instances are OPTIONAL. A
+   * required field added to a bundle with data leaves every provider already
+   * loaded on the site invalid the moment somebody opens it to edit it.
+   *
+   * @dataProvider newProviderInstances
+   */
+  public function testTheThreeNewInstancesAreOptionalAndHangOffProvider($field_name, $widget) {
+    $instance = $this->providerInstanceDefinition($field_name);
+
+    $this->assertStringContainsString("'bundle' => \$provider_type", $instance);
+    $this->assertStringContainsString("'required' => 0", $instance, $field_name . ' must stay optional');
+    $this->assertStringContainsString("'widget' => ['type' => '" . $widget . "']", $instance);
+  }
+
+  public function newProviderInstances() {
+    return [
+      // A number widget, so min/prefix are honoured by the form.
+      'hourly rate'       => ['field_hourly_rate', 'number'],
+      // An autocomplete, not options_buttons: the operator must be able to
+      // create a term by typing it, without loading the vocabulary first.
+      'tags'              => ['field_tags', 'taxonomy_autocomplete'],
+      // A textfield, not a textarea and with no format selector.
+      'short description' => ['field_short_description', 'text_textfield'],
+    ];
+  }
+
+  /**
+   * min = 0 rejects a typo'd negative rate in the back-office form, and the
+   * prefix paints the currency without touching the stored value. Both are
+   * instance settings by decision: a hook_node_validate() would be module code
+   * for what configuration already does.
+   */
+  public function testTheHourlyRateInstanceRefusesNegativesAndShowsACurrency() {
+    $instance = $this->providerInstanceDefinition('field_hourly_rate');
+
+    $this->assertStringContainsString("'min' => 0", $instance);
+    $this->assertStringContainsString("'prefix' => '$ '", $instance);
+  }
+
+  /**
+   * The three names are new in the whole module, so the destructive teardown
+   * deletes the fields outright — the caution the seven borrowed ones demand
+   * does not apply, and leaving them out would strand three fields on a bundle
+   * that no longer exists.
+   */
+  public function testTheThreeNewFieldsAreOwnedByThisFeature() {
+    $teardown = $this->functionSource('_myapi_services_uninstall_destructive');
+    $owned_start = strpos($teardown, '$owned = [');
+    $owned = substr($teardown, $owned_start, strpos($teardown, '];', $owned_start) - $owned_start);
+
+    foreach (self::NEW_PROVIDER_FIELDS as $field_name) {
+      $this->assertStringContainsString(
+        "'" . $field_name . "'",
+        $owned,
+        $field_name . ' is created by this feature and must be deleted by its teardown'
+      );
+    }
+  }
+
+  /**
+   * Both vocabularies are created by this feature, so both go in the
+   * destructive teardown. Deleting only the categories would leave provider_tag
+   * behind with its terms and no field pointing at it.
+   */
+  public function testTheDestructiveUninstallDeletesBothVocabularies() {
+    $teardown = $this->functionSource('_myapi_services_uninstall_destructive');
+
+    $this->assertStringContainsString('MYAPI_SERVICES_CATEGORY_VOCABULARY', $teardown);
+    $this->assertStringContainsString('MYAPI_SERVICES_TAG_VOCABULARY', $teardown);
+    $this->assertSame(
+      2,
+      substr_count($teardown, 'taxonomy_vocabulary_delete('),
+      'the teardown must delete the two vocabularies this feature creates'
+    );
+  }
+
+  /**
+   * The update hook re-runs the whole installer, like myapi_update_7025(). It
+   * is the one place where a surgical alternative would restate the three field
+   * definitions in a second spot of the same file.
+   */
+  public function testTheUpdateHookReRunsTheInstaller() {
+    $this->assertStringContainsString(
+      '_myapi_services_install();',
+      $this->functionSource('myapi_update_7028')
+    );
+  }
+
+  /**
+   * The non-regression net of this spec. The installer is a long file of
+   * definitions in a row, so an ensure_field() pasted three lines off its right
+   * place would read fine in review and silently change a field of SPEC 77.
+   * This walks the nine provider fields that already existed and pins their
+   * type, cardinality, settings, requiredness and widget.
+   *
+   * @dataProvider spec77ProviderFields
+   */
+  public function testTheNineProviderFieldsOfSpec77AreUnchanged($field_name, array $field_expectations, array $instance_expectations) {
+    $field = $this->fieldDefinition($field_name);
+    foreach ($field_expectations as $expectation) {
+      $this->assertStringContainsString($expectation, $field, $field_name . ' changed at field level');
+    }
+
+    $instance = $this->providerInstanceDefinition($field_name);
+    foreach ($instance_expectations as $expectation) {
+      $this->assertStringContainsString($expectation, $instance, $field_name . ' changed at instance level');
+    }
+  }
+
+  public function spec77ProviderFields() {
+    return [
+      'associated users'  => [
+        'field_provider_users',
+        ["'type' => 'entityreference'", "'cardinality' => FIELD_CARDINALITY_UNLIMITED"],
+        ["'required' => 1", "'widget' => ['type' => 'entityreference_autocomplete']"],
+      ],
+      'phone'             => [
+        'field_phone',
+        ["'type' => 'text'", "'cardinality' => 1", "'settings' => ['max_length' => 20]"],
+        ["'required' => 1", "'widget' => ['type' => 'text_textfield']"],
+      ],
+      'address'           => [
+        'field_address',
+        ["'type' => 'text_long'", "'cardinality' => 1"],
+        ["'required' => 0", "'widget' => ['type' => 'text_textarea']"],
+      ],
+      // The long description stays REQUIRED and stays a textarea: the short one
+      // is a companion, not a replacement.
+      'services desc'     => [
+        'field_services_desc',
+        ["'type' => 'text_long'", "'cardinality' => 1"],
+        ["'required' => 1", "'widget' => ['type' => 'text_textarea']"],
+      ],
+      'photo'             => [
+        'field_photo',
+        ["'type' => 'image'", "'cardinality' => 1", "'settings' => ['uri_scheme' => 'public']"],
+        ["'required' => 0", "'widget' => ['type' => 'image_image']"],
+      ],
+      'licence expiry'    => [
+        'field_license_expiry',
+        ["'type' => 'datestamp'", "'cardinality' => 1", "'settings' => \$timestamp_settings"],
+        ["'required' => 1", "'widget' => \$date_widget"],
+      ],
+      // Still checkboxes over the CATEGORY vocabulary — the tags field must not
+      // have taken its settings by accident.
+      'categories'        => [
+        'field_categories',
+        ["'type' => 'taxonomy_term_reference'", "'cardinality' => FIELD_CARDINALITY_UNLIMITED", "'settings' => \$category_settings"],
+        ["'required' => 1", "'widget' => ['type' => 'options_buttons']"],
+      ],
+      // 3,2 and not the 10,2 of the new rate: this one holds a 1-5 average.
+      'rating average'    => [
+        'field_rating_avg',
+        ["'type' => 'number_decimal'", "'cardinality' => 1", "'settings' => ['precision' => 3, 'scale' => 2]"],
+        ["'required' => 0", "'widget' => ['type' => 'number']"],
+      ],
+      'rating count'      => [
+        'field_rating_count',
+        ["'type' => 'number_integer'", "'cardinality' => 1"],
+        ["'required' => 0", "'widget' => ['type' => 'number']"],
+      ],
+    ];
   }
 }
