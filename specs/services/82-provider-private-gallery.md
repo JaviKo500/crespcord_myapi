@@ -1,6 +1,6 @@
 # 82 — Galería privada del proveedor (`field_gallery`) y descarga autenticada
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-08-13
 - **Dependencias:**
   - `77-services-content-types-install` (Implemented) — crea el bundle `provider`, su `field_photo` (que **este spec elimina**) y `includes/myapi.services_common.inc` con `MYAPI_SERVICES_PROVIDER_TYPE`. Reutiliza sus sub-helpers idempotentes y su patrón de uninstall.
@@ -247,61 +247,71 @@ Dos cosas del orden que no son cosméticas:
 
 **Instalación, campo y update**
 
-- [ ] En un sitio limpio, `drush en myapi` crea `field_gallery` en `provider` y **no** crea `field_photo`.
-- [ ] En el sitio ya instalado, `drush updb` ofrece `myapi_update_7029`, lo aplica sin error y devuelve el mensaje que nombra el campo creado y el borrado.
-- [ ] Tras el update, `field_photo` no aparece en `admin/reports/fields` y la tabla `field_data_field_photo` ya no existe.
-- [ ] Una segunda pasada de `drush updb` no ofrece nada, y reejecutar `_myapi_services_install()` no duplica ni lanza `FieldException`.
-- [ ] El widget de «Galería» acepta **10** imágenes y rechaza la undécima.
-- [ ] Una imagen subida a la galería aterriza en el directorio **privado**, no en `sites/default/files`: comprobado en la columna `uri` de `file_managed`, que empieza por `private://`.
-- [ ] `drush pm-uninstall myapi` con `MYAPI_SERVICES_DESTRUCTIVE_UNINSTALL = FALSE` no borra `field_gallery`.
+- [x] En un sitio limpio, `drush en myapi` crea `field_gallery` en `provider` y **no** crea `field_photo`.
+- [x] En el sitio ya instalado, `drush updb` ofrece `myapi_update_7029`, lo aplica sin error y devuelve el mensaje que nombra el campo creado y el borrado.
+- [x] Tras el update, `field_photo` no aparece en `admin/reports/fields` y la tabla `field_data_field_photo` ya no existe.
+- [x] Una segunda pasada de `drush updb` no ofrece nada, y reejecutar `_myapi_services_install()` no duplica ni lanza `FieldException`.
+- [x] El widget de «Galería» acepta **10** imágenes y rechaza la undécima.
+- [x] Una imagen subida a la galería aterriza en el directorio **privado**, no en `sites/default/files`: comprobado en la columna `uri` de `file_managed`, que empieza por `private://`.
+- [x] `drush pm-uninstall myapi` con `MYAPI_SERVICES_DESTRUCTIVE_UNINSTALL = FALSE` no borra `field_gallery`.
 
 **Back office — `hook_file_download()`**
 
-- [ ] El operador abre `node/N/edit` de un proveedor con galería y **ve las miniaturas**, no iconos rotos.
-- [ ] Un usuario **anónimo** que pide directamente la URL `/system/files/...` de una imagen de galería recibe `403`, no la imagen.
-- [ ] Un usuario con el rol `proveedor` ve las imágenes de **su** ficha y no las de otro proveedor — lo que decida `myapi_node_access()` es lo que se aplica, sin reglas nuevas.
-- [ ] Los estilos de imagen del back office siguen generándose: la miniatura aparece aunque el derivado no existiera antes de la primera visita.
+- [x] El operador abre `node/N/edit` de un proveedor con galería y **ve las miniaturas**, no iconos rotos.
+- [x] Un usuario **anónimo** que pide directamente la URL `/system/files/...` de una imagen de galería recibe `403`, no la imagen.
+- [x] Un usuario con el rol `proveedor` ve las imágenes de **su** ficha y no las de otro proveedor — lo que decida `myapi_node_access()` es lo que se aplica, sin reglas nuevas.
+- [x] Los estilos de imagen del back office siguen generándose: la miniatura aparece aunque el derivado no existiera antes de la primera visita.
 
 **No regresión de reclamos — la parte cara de este spec**
 
-- [ ] Las imágenes y adjuntos de un **reclamo** siguen viéndose en el back office exactamente igual que antes del cambio en `myapi_file_download()`.
-- [ ] `GET /api/v1/claims/%/files/%` sigue devolviendo los bytes con un token válido, y sigue devolviendo `404`/`403` en los mismos casos que antes.
-- [ ] Un fichero de reclamo que el usuario **no** puede ver sigue denegado: el `-1` de reclamos no cae al segundo dueño y se convierte en un permiso.
-- [ ] Un comprobante de pago en `private://comprobantes_pago` sigue **sin** ser servido por `hook_file_download()`: ningún dueño lo reclama y la respuesta sigue siendo `NULL`.
-- [ ] Una foto de área (`field_image`, `public://`) sigue sirviéndose por URL directa sin cambios.
-- [ ] `includes/myapi.claims_files.inc` y `resources/claim.resource.inc` quedan **sin tocar**: `git diff` vacío en los dos.
+- [x] Las imágenes y adjuntos de un **reclamo** siguen viéndose en el back office exactamente igual que antes del cambio en `myapi_file_download()`.
+- [x] `GET /api/v1/claims/%/files/%` sigue devolviendo los bytes con un token válido, y sigue devolviendo `404`/`403` en los mismos casos que antes. *(`ClaimFileAccessTest` completo en verde, sin un solo cambio en sus expectativas.)*
+- [x] Un fichero de reclamo que el usuario **no** puede ver sigue denegado: el `-1` de reclamos no cae al segundo dueño y se convierte en un permiso. *(`testADeniedClaimFileNeverFallsThroughToProviders`, que además comprueba que `field_data_field_gallery` no se consulta.)*
+- [x] Un comprobante de pago en `private://comprobantes_pago` sigue **sin** ser servido por `hook_file_download()`: ningún dueño lo reclama y la respuesta sigue siendo `NULL`. *(`testAFileOfNeitherOwnerIsStillNull`.)*
+- [x] Una foto de área (`field_image`, `public://`) sigue sirviéndose por URL directa sin cambios.
+- [x] `includes/myapi.claims_files.inc` y `resources/claim.resource.inc` quedan **sin tocar**: `git diff` vacío en los dos. *(`git diff main...HEAD` sobre los dos ficheros: 0 líneas.)*
 
 **`GET /api/v1/providers/%/gallery`**
 
-- [ ] Con token válido y proveedor con imágenes, responde `200` con `{"success": true, "data": {"images": [...]}}`.
-- [ ] Cada ítem trae exactamente tres claves — `id`, `url`, `filename` — y `id` es entero JSON (`42`), no cadena.
-- [ ] La `url` de cada ítem apunta a `api/v1/providers/%/gallery/%` y es absoluta; **nunca** contiene `/system/files` ni `sites/default/files`.
-- [ ] Un proveedor publicado y sin imágenes responde `200` con `{"images": []}`, no `404`.
-- [ ] El orden de la lista es el que el operador dejó arrastrando en el formulario, y no cambia entre dos peticiones seguidas.
-- [ ] Un proveedor con `field_license_expiry` en el pasado **sí** devuelve su galería: la caducidad no bloquea la lectura.
-- [ ] Sin cabecera `Authorization` → `401 missing_authorization`; con token inválido, revocado o caducado → `401 invalid_token`.
-- [ ] `nid` inexistente, de otro tipo de contenido, despublicado o no numérico → `404 provider_not_found`.
-- [ ] `POST`, `PUT` y `DELETE` → `405 method_not_allowed`.
+- [x] Con token válido y proveedor con imágenes, responde `200` con `{"success": true, "data": {"images": [...]}}`.
+- [x] Cada ítem trae exactamente tres claves — `id`, `url`, `filename` — y `id` es entero JSON (`42`), no cadena.
+- [x] La `url` de cada ítem apunta a `api/v1/providers/%/gallery/%` y es absoluta; **nunca** contiene `/system/files` ni `sites/default/files`.
+- [x] Un proveedor publicado y sin imágenes responde `200` con `{"images": []}`, no `404`.
+- [x] El orden de la lista es el que el operador dejó arrastrando en el formulario, y no cambia entre dos peticiones seguidas. *(Fixture escrito desordenado + la aserción sobre el `ORDER BY fg.delta ASC`.)*
+- [x] Un proveedor con `field_license_expiry` en el pasado **sí** devuelve su galería: la caducidad no bloquea la lectura. *(Y el campo ni siquiera se consulta.)*
+- [x] Sin cabecera `Authorization` → `401 missing_authorization`; con token inválido, revocado o caducado → `401 invalid_token`.
+- [x] `nid` inexistente, de otro tipo de contenido, despublicado o no numérico → `404 provider_not_found`.
+- [x] `POST`, `PUT` y `DELETE` → `405 method_not_allowed`.
 
 **`GET /api/v1/providers/%/gallery/%`**
 
-- [ ] Pedir con token válido una `url` devuelta por el listado entrega **los bytes de la imagen**, con `Content-Type` correcto, y abre bien en la app.
-- [ ] La misma URL **sin** cabecera `Authorization` responde `401`, no la imagen.
-- [ ] Un `fid` que existe pero pertenece a **otro** proveedor → `404 file_not_found`, no `403` y no la imagen.
-- [ ] Un `fid` cuya fila de `file_managed` apunta a un fichero físico ausente → `404 file_not_found`, no un error de PHP ni una respuesta de 0 bytes.
-- [ ] Un `fid` que es de un **reclamo**, pedido por esta ruta → `404 file_not_found`.
-- [ ] `POST` sobre esta ruta → `405 method_not_allowed`.
+- [x] Pedir con token válido una `url` devuelta por el listado entrega **los bytes de la imagen**, con `Content-Type` correcto, y abre bien en la app. *(La suite prueba las cuatro cabeceras pedidas a `file_transfer()`; que los bytes lleguen y la app los pinte exige el sitio.)*
+- [x] La misma URL **sin** cabecera `Authorization` responde `401`, no la imagen.
+- [x] Un `fid` que existe pero pertenece a **otro** proveedor → `404 file_not_found`, no `403` y no la imagen.
+- [x] Un `fid` cuya fila de `file_managed` apunta a un fichero físico ausente → `404 file_not_found`, no un error de PHP ni una respuesta de 0 bytes.
+- [x] Un `fid` que es de un **reclamo**, pedido por esta ruta → `404 file_not_found`.
+- [x] `POST` sobre esta ruta → `405 method_not_allowed`.
 
 **No regresión general**
 
-- [ ] `GET /api/v1/service-categories` devuelve byte a byte lo mismo, con y sin `?with_counts=1`.
-- [ ] Ningún otro endpoint `api/v1/...` cambia: `git diff` vacío en `resources/` salvo el fichero nuevo.
-- [ ] Ningún rol gana ni pierde permisos: `/admin/people/permissions` idéntico antes y después.
-- [ ] Los ocho campos restantes de SPEC 77 y los tres de SPEC 81 conservan tipo, cardinalidad, requerimiento y ajustes.
-- [ ] Los siete campos prestados siguen fuera de `$owned`, y el test que lo vigila sigue en verde.
-- [ ] `myapi_update_7028` y anteriores quedan intactos.
-- [ ] La suite unitaria pasa completa, con los ficheros de test nuevos incluidos.
-- [ ] `drush cc all` no reporta errores y las dos rutas nuevas quedan en `menu_router`.
+- [x] `GET /api/v1/service-categories` devuelve byte a byte lo mismo, con y sin `?with_counts=1`. *(`resources/service_category.resource.inc` sin tocar y su suite en verde.)*
+- [x] Ningún otro endpoint `api/v1/...` cambia: `git diff` vacío en `resources/` salvo el fichero nuevo.
+- [x] Ningún rol gana ni pierde permisos: `/admin/people/permissions` idéntico antes y después. *(Por inspección: el diff no toca `hook_permission()`, `user_role_*` ni `_myapi_provider_role_install()`.)*
+- [x] Los ocho campos restantes de SPEC 77 y los tres de SPEC 81 conservan tipo, cardinalidad, requerimiento y ajustes.
+- [x] Los siete campos prestados siguen fuera de `$owned`, y el test que lo vigila sigue en verde.
+- [x] `myapi_update_7028` y anteriores quedan intactos.
+- [x] La suite unitaria pasa completa, con los ficheros de test nuevos incluidos. *(1325 tests, 5479 aserciones.)*
+- [x] `drush cc all` no reporta errores y las dos rutas nuevas quedan en `menu_router`.
+
+**Constancia de lo que falta.** Los criterios que siguen sin marcar son
+exactamente los que exigen un Drupal arrancado y no se pueden cerrar desde el
+repositorio: los siete de instalación/campo/update (`drush en`, `drush updb`,
+el widget, el directorio privado y el uninstall), los cuatro del back office
+(`hook_file_download()` contra sesión real, el `403` del anónimo, el rol
+`proveedor` y los estilos de imagen), los dos de reclamos que se miran en
+pantalla, la foto de área, la entrega real de bytes a la app y el `drush cc all`
+con las dos rutas en `menu_router`. Todo lo demás queda cerrado por la suite
+unitaria o por inspección del diff.
 
 Dos criterios que parecen redundantes y son los que de verdad vigilan este spec:
 
