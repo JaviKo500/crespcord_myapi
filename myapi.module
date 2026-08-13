@@ -320,6 +320,30 @@ function myapi_menu() {
     'file'             => 'resources/claim.resource.inc',
   ];
 
+  // The private gallery of a provider (SPEC 82), the same pair of routes the
+  // claim files got in SPEC 65: one lists the images, the other serves the
+  // bytes of one of them, and both need a Bearer token.
+  //
+  // These are the FIRST api/v1/providers/... routes of the marketplace. The
+  // namespace is reserved for the provider listing spec, which will hang
+  // 'api/v1/providers' and 'api/v1/providers/%' off the same root and add them
+  // here — this file is the only place that decides what a route is.
+  $items['api/v1/providers/%/gallery'] = [
+    'page callback'    => 'myapi_provider_gallery_dispatch',
+    'page arguments'   => [3],
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/provider.resource.inc',
+  ];
+
+  $items['api/v1/providers/%/gallery/%'] = [
+    'page callback'    => 'myapi_provider_gallery_file_dispatch',
+    'page arguments'   => [3, 5],
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/provider.resource.inc',
+  ];
+
   // Back-office reservation calendar (SPEC 47). The only route of this module
   // that is not an api/v1 endpoint: it renders HTML for an operator, not the
   // JSON envelope for the app, which is why its callback lives in includes/
@@ -970,14 +994,28 @@ function myapi_query_user_access_alter(QueryAlterableInterface $query) {
  * different question (a Bearer token and the visibility rule of SPEC 64) of
  * the same shared include.
  *
+ * Since SPEC 82 this module owns TWO families of private files, so the hook
+ * asks TWO owners: claims first, and providers — the field_gallery of a
+ * 'provider', decided in includes/myapi.provider_files.inc — only when claims
+ * did not recognise the URI.
+ *
+ * The cut is `$headers !== NULL` and NOT a loose `if (!$headers)`, and that is
+ * the whole delicacy of the chain: NULL means "not mine", but -1 means "mine,
+ * and denied" — a decision already taken on a claim file. Falling through with
+ * a -1 would hand that file to the second owner, who would answer NULL for it,
+ * and a denial would quietly turn into somebody else's permission. A loose
+ * comparison happens to work today because -1 is truthy, and stops working the
+ * day anyone changes that value.
+ *
  * Glue only, like the two hooks above: the three return values Drupal expects
- * — headers, -1, NULL — are decided in includes/myapi.claims_files.inc, next
- * to the ownership resolution the endpoint also calls.
+ * — headers, -1, NULL — are decided in the two includes, next to the ownership
+ * resolution the endpoints also call.
  *
  * NULL for anything this module does not recognise is deliberate: -1 is a hard
  * deny that cuts other modules off, so answering NULL keeps this module
- * opining about its own files only, and every other private file of the site
- * behaves exactly as it did before.
+ * opining about its own files only, and every other private file of the site —
+ * payment receipts in private://comprobantes_pago included — behaves exactly as
+ * it did before.
  *
  * @param string $uri
  *   The URI of the file being requested.
@@ -990,7 +1028,18 @@ function myapi_file_download($uri) {
 
   module_load_include('inc', 'myapi', 'includes/myapi.claims_files');
 
-  return myapi_claims_file_download_headers($uri, $user);
+  $headers = myapi_claims_file_download_headers($uri, $user);
+
+  // NULL means "not a claim file". Anything else — headers or -1 — is already
+  // a decision taken about a claim file, and asking the second owner would turn
+  // it into a permission granted through the back door.
+  if ($headers !== NULL) {
+    return $headers;
+  }
+
+  module_load_include('inc', 'myapi', 'includes/myapi.provider_files');
+
+  return myapi_provider_file_download_headers($uri, $user);
 }
 
 /**

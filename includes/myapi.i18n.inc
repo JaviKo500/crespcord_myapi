@@ -146,6 +146,11 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'claim_invalid_image'                => 'Invalid image. Allowed: JPG, JPEG or PNG up to 3 MB.',
       'claim_invalid_attachment'           => 'Invalid attachment. Allowed: PDF, DOC, DOCX, XLS or XLSX up to 3 MB.',
       'file_not_found'                     => 'File not found.',
+      // SPEC 82. A key of its own and not a reuse of claim_not_found: they are
+      // different messages for the end user, and the catalogue does not share
+      // keys between resources. file_not_found IS reused, because "the file is
+      // not there" reads the same for a claim and for a gallery.
+      'provider_not_found'                 => 'Provider not found.',
     ],
     'es' => [
       'invalid_credentials'    => 'Usuario o contraseña incorrectos.',
@@ -224,6 +229,7 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'claim_invalid_image'                => 'Imagen inválida. Permitidos: JPG, JPEG o PNG hasta 3 MB.',
       'claim_invalid_attachment'           => 'Adjunto inválido. Permitidos: PDF, DOC, DOCX, XLS o XLSX hasta 3 MB.',
       'file_not_found'                     => 'Archivo no encontrado.',
+      'provider_not_found'                 => 'Proveedor no encontrado.',
     ],
   ];
 

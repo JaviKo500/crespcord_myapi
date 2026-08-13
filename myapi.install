@@ -2066,14 +2066,6 @@ function _myapi_services_install() {
     'type'        => 'text_long',
     'cardinality' => 1,
   ]);
-  _myapi_reservations_ensure_field('field_photo', [
-    'field_name'  => 'field_photo',
-    'type'        => 'image',
-    'cardinality' => 1,
-    // Public for the same reason as the category icon: it is the provider's
-    // shop front, shown to every user of the marketplace.
-    'settings'    => ['uri_scheme' => 'public'],
-  ]);
   _myapi_reservations_ensure_field('field_license_expiry', [
     'field_name'  => 'field_license_expiry',
     'type'        => 'datestamp',
@@ -2135,6 +2127,26 @@ function _myapi_services_install() {
     'type'        => 'text',
     'cardinality' => 1,
     'settings'    => ['max_length' => 255],
+  ]);
+  // The gallery of SPEC 82, which replaces the public field_photo deleted by
+  // myapi_update_7029(). It is born PRIVATE: every image goes through PHP and
+  // through an access decision, which is the explicit choice of this feature
+  // and a deliberate divergence from the public assets of SPEC 77/79.
+  //
+  // uri_scheme belongs to the FIELD (storage), not to the instance, so it is
+  // decided here and once: changing it later needs field_update_field() AND
+  // moving every file with file_move(), which is exactly the work
+  // myapi_update_7023() had to do for the claim fields in SPEC 65. Born
+  // private, there is nothing to migrate.
+  //
+  // Cardinality 10 also belongs to the field: raising or lowering the cap is a
+  // hook_update_N, and lowering it with providers over the cap silently
+  // discards the extra deltas.
+  _myapi_reservations_ensure_field('field_gallery', [
+    'field_name'  => 'field_gallery',
+    'type'        => 'image',
+    'cardinality' => 10,
+    'settings'    => ['uri_scheme' => 'private'],
   ]);
 
   // Own fields of 'service_request'.
@@ -2297,20 +2309,6 @@ function _myapi_services_install() {
     'default_value' => [['value' => '', 'format' => 'plain_text']],
     'widget'        => ['type' => 'text_textarea'],
   ]);
-  _myapi_reservations_ensure_instance('field_photo', $provider_type, [
-    'field_name'  => 'field_photo',
-    'entity_type' => 'node',
-    'bundle'      => $provider_type,
-    'label'       => 'Foto',
-    'required'    => 0,
-    'settings'    => [
-      'file_extensions'    => 'png jpg jpeg',
-      'max_filesize'       => '3 MB',
-      'alt_field'          => 1,
-      'alt_field_required' => 0,
-    ],
-    'widget'      => ['type' => 'image_image'],
-  ]);
   _myapi_reservations_ensure_instance('field_license_expiry', $provider_type, [
     'field_name'  => 'field_license_expiry',
     'entity_type' => 'node',
@@ -2393,6 +2391,24 @@ function _myapi_services_install() {
     'required'    => 0,
     'description' => 'Una línea para el listado del marketplace. Máximo 255 caracteres. La descripción completa va en Descripción de servicios.',
     'widget'      => ['type' => 'text_textfield'],
+  ]);
+  // The gallery instance of SPEC 82. Same extensions, size and alt settings the
+  // deleted field_photo had; what changes is the storage, which is private, and
+  // the cardinality, which is the field's and not the instance's.
+  _myapi_reservations_ensure_instance('field_gallery', $provider_type, [
+    'field_name'  => 'field_gallery',
+    'entity_type' => 'node',
+    'bundle'      => $provider_type,
+    'label'       => 'Galería',
+    'required'    => 0,
+    'description' => 'Hasta 10 imágenes para el carrusel de la ficha del proveedor. Se arrastran para ordenarlas: el orden del formulario es el que ve la app. Son privadas: solo se sirven a usuarios autenticados.',
+    'settings'    => [
+      'file_extensions'    => 'png jpg jpeg',
+      'max_filesize'       => '3 MB',
+      'alt_field'          => 1,
+      'alt_field_required' => 0,
+    ],
+    'widget'      => ['type' => 'image_image'],
   ]);
 
   // (d) Instances of 'service_request'.
@@ -2700,7 +2716,6 @@ function _myapi_services_uninstall_destructive() {
     'field_phone',
     'field_address',
     'field_services_desc',
-    'field_photo',
     'field_license_expiry',
     'field_categories',
     'field_rating_avg',
@@ -2729,6 +2744,10 @@ function _myapi_services_uninstall_destructive() {
     'field_hourly_rate',
     'field_tags',
     'field_short_description',
+    // SPEC 82. Replaces field_photo, which no longer exists after
+    // myapi_update_7029(). Same reasoning as the three names above: the name is
+    // new in the whole module, so deleting it takes nobody else's data down.
+    'field_gallery',
   ];
   foreach ($owned as $field_name) {
     if (field_info_field($field_name)) {
@@ -3758,5 +3777,47 @@ function myapi_update_7028() {
   return t('SPEC 81: creado el vocabulario @vocabulary y añadidos a @type los campos field_hourly_rate, field_tags y field_short_description.', [
     '@vocabulary' => MYAPI_SERVICES_TAG_VOCABULARY,
     '@type'       => MYAPI_SERVICES_PROVIDER_TYPE,
+  ]);
+}
+
+/**
+ * SPEC 82: adds the private gallery to 'provider' and DELETES field_photo.
+ *
+ * THE DELETION IS UNCONDITIONAL AND IRREVERSIBLE, by express decision of the
+ * user. It does NOT count the rows of field_data_field_photo and it does NOT
+ * abort when it finds any: if some environment had photos loaded, they are lost
+ * with this update, without warning and with no way back. The field_info_field()
+ * guard below only avoids the error of deleting something that is not there — it
+ * does not protect data. Confirm SELECT COUNT(*) FROM field_data_field_photo and
+ * have a database and files backup BEFORE running drush updb.
+ *
+ * The creation half re-runs the WHOLE services installer instead of creating
+ * field_gallery on its own, exactly like myapi_update_7028() and 7025: every
+ * creation inside goes through the idempotent _ensure_* sub-helpers, so
+ * everything already in place is found and left alone. Which also makes the
+ * creation safe to call twice.
+ *
+ * Order matters: the installer runs FIRST, so the site never sits in a state
+ * where the old field is already gone and the new one does not exist yet.
+ *
+ * field_delete_field() only marks the field and its instances as deleted;
+ * field_purge_batch() is what actually drops field_data_field_photo and
+ * field_revision_field_photo. 1000 is the same batch size Drupal's own field
+ * uninstall uses, and it is enough because the field has no data worth paging
+ * through.
+ *
+ * The gallery is born EMPTY and born PRIVATE, so there is no file_move() here:
+ * nothing is migrated from field_photo, whose data is discarded, not moved.
+ */
+function myapi_update_7029() {
+  _myapi_services_install();
+
+  if (field_info_field('field_photo')) {
+    field_delete_field('field_photo');
+    field_purge_batch(1000);
+  }
+
+  return t('SPEC 82: creado field_gallery (privado, hasta 10 imágenes) en @type y eliminado field_photo con sus datos.', [
+    '@type' => MYAPI_SERVICES_PROVIDER_TYPE,
   ]);
 }

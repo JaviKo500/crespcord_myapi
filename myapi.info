@@ -56,3 +56,5 @@ files[] = includes/myapi.services_common.inc
 files[] = includes/myapi.provider_role.inc
 files[] = includes/myapi.text.inc
 files[] = resources/service_category.resource.inc
+files[] = includes/myapi.provider_files.inc
+files[] = resources/provider.resource.inc
