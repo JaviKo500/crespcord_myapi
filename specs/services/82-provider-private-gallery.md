@@ -1,6 +1,6 @@
 # 82 — Galería privada del proveedor (`field_gallery`) y descarga autenticada
 
-- **Estado:** Draft
+- **Estado:** Approved
 - **Fecha:** 2026-08-13
 - **Dependencias:**
   - `77-services-content-types-install` (Implemented) — crea el bundle `provider`, su `field_photo` (que **este spec elimina**) y `includes/myapi.services_common.inc` con `MYAPI_SERVICES_PROVIDER_TYPE`. Reutiliza sus sub-helpers idempotentes y su patrón de uninstall.
