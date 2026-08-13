@@ -9,6 +9,7 @@ require_once __DIR__ . '/../../includes/myapi.token.inc';
 require_once __DIR__ . '/../../includes/myapi.auth.inc';
 require_once __DIR__ . '/../../includes/myapi.services_common.inc';
 require_once __DIR__ . '/../../includes/myapi.text.inc';
+require_once __DIR__ . '/../../includes/myapi.provider_query.inc';
 require_once __DIR__ . '/../../resources/service_category.resource.inc';
 
 /**
@@ -1284,6 +1285,60 @@ class ServiceCategoryEndpointTest extends TestCase {
     // Every loaded category, and only those: the query counts, it does not
     // discover.
     $this->assertSame([[3, 5, 7], 'IN'], $conditions['c.field_categories_tid']);
+  }
+
+  /**
+   * THE ACTIVE HALF OF THE COUNT COMES FROM THE SHARED HELPER (SPEC 83).
+   *
+   * Since SPEC 83 this query no longer writes the licence join and the two
+   * conditions itself: it calls myapi_provider_apply_active_conditions(), the
+   * same function GET /api/v1/providers calls, so the card of a category and
+   * the listing of that category can never disagree about who is active.
+   *
+   * What is asserted is that the two are the SAME SQL, and not merely that both
+   * work: the join and the two conditions the count carries are compared,
+   * one by one, against what the helper adds to a bare query on its own. A
+   * future edit that changed one without the other — a LEFT join, a > instead
+   * of a >= — breaks here.
+   */
+  public function testTheActiveHalfOfTheCountIsTheSharedHelper() {
+    $this->authenticateAs();
+    $this->seedCategories([$this->term(3, 'Plomería', 'plumbing')]);
+    $this->seedProviders([$this->provider(10, 3)]);
+    $_GET['with_counts'] = '1';
+
+    $this->request();
+
+    $queries = myapi_test_db_queries();
+    $count = $queries[1];
+
+    // A bare query put through the helper alone. The seed also clears the
+    // recorded queries, so what comes back is this one and nothing else.
+    myapi_test_db_seed();
+    $probe = db_select('node', 'n');
+    myapi_provider_apply_active_conditions($probe, 'n');
+    $probe->execute();
+    $recorded = myapi_test_db_queries();
+    $helper = end($recorded);
+
+    // The licence join: same table, same type, same alias, same condition.
+    $this->assertSame($helper['joins'], array_slice($count['joins'], 1));
+    $this->assertSame('field_data_field_license_expiry', $helper['joins'][0]['table']);
+    $this->assertSame('INNER', $helper['joins'][0]['type']);
+
+    // And the two conditions, taken out of the count by the field they name.
+    $from_count = [];
+    foreach ($count['conditions'] as $condition) {
+      $from_count[$condition['field']] = $condition;
+    }
+    foreach ($helper['conditions'] as $condition) {
+      $this->assertArrayHasKey($condition['field'], $from_count);
+      $this->assertSame($condition, $from_count[$condition['field']], $condition['field']);
+    }
+    $this->assertSame(
+      ['n.status', 'l.field_license_expiry_value'],
+      array_column($helper['conditions'], 'field')
+    );
   }
 
   /**

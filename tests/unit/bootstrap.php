@@ -502,8 +502,10 @@ if (!defined('REQUEST_TIME')) {
  *
  * Implements the subset of Drupal 7's SelectQuery that myapi's read paths
  * actually use: fields(), addField(), condition(), the join family, orderBy(),
- * range(), and since SPEC 79 groupBy() and addExpression() as well, plus
- * execute(). Anything else throws instead of returning a wrong answer quietly
+ * range(), since SPEC 79 groupBy() and addExpression() as well, and since SPEC
+ * 83 exists() with its correlated sub-select and the non-aggregate expressions
+ * an ORDER BY reads, plus execute(). Anything else throws instead of returning
+ * a wrong answer quietly
  * — a resource that starts using an unsupported clause must extend this class
  * knowingly, not discover that its test passed for the wrong reason. That is
  * how grouping got here: the category counter was written, the stub threw, and
@@ -532,6 +534,7 @@ class MyapiTestSelectQuery implements IteratorAggregate {
   private $select_all = FALSE;
   private $conditions = [];
   private $where = [];
+  private $correlations = [];
   private $joins = [];
   private $order = [];
   private $range = NULL;
@@ -665,6 +668,17 @@ class MyapiTestSelectQuery implements IteratorAggregate {
    * about it, not discover that its test passed because the bound evaporated.
    */
   public function where($snippet, array $arguments = []) {
+    // The CORRELATION of an EXISTS sub-select — 'fc.entity_id = n.nid' (SPEC
+    // 83, and the same shape SPEC 29 writes in the 'Personalizado' branch of
+    // the bulletin visibility rule). Two column names and no placeholder: it
+    // ties an inner row to the OUTER row being tested, so it is recorded apart
+    // and applied by existsFor() below, never by matches().
+    if (preg_match('/^([A-Za-z0-9_]+\.[A-Za-z0-9_]+)\s*=\s*([A-Za-z0-9_]+\.[A-Za-z0-9_]+)$/', trim($snippet), $c)) {
+      $this->correlations[] = ['inner' => $c[1], 'outer' => $c[2]];
+
+      return $this;
+    }
+
     $pattern = '/^SUBSTR\(\s*([A-Za-z0-9_.]+)\s*,\s*1\s*,\s*(\d+)\s*\)\s*(>=|<=|<>|!=|=|<|>)\s*(:[A-Za-z0-9_]+)\s*$/';
 
     if (!preg_match($pattern, trim($snippet), $m)) {
@@ -706,6 +720,53 @@ class MyapiTestSelectQuery implements IteratorAggregate {
     $count->range = NULL;
 
     return $count;
+  }
+
+  /**
+   * A correlated EXISTS sub-select, APPLIED and not merely recorded (SPEC 83).
+   *
+   * The marketplace listing filters by category with one of these, because
+   * field_categories has unlimited cardinality and a JOIN would multiply rows.
+   * A stub that recorded the sub-select and ignored it would answer the whole
+   * marketplace to every ?category_id, and the filter tests would pass over a
+   * filter that never ran — the exact failure the class docblock warns about.
+   *
+   * @param MyapiTestSelectQuery $select
+   *   The sub-select, carrying its own conditions and its correlation to the
+   *   outer row (see where() above).
+   */
+  public function exists($select) {
+    if (!$select instanceof MyapiTestSelectQuery) {
+      throw new RuntimeException('MyapiTestSelectQuery: exists() takes a fixture sub-select.');
+    }
+    $this->conditions[] = ['field' => NULL, 'value' => $select, 'operator' => 'EXISTS'];
+
+    return $this;
+  }
+
+  /**
+   * Whether this sub-select matches at least one row for the given outer row.
+   *
+   * Its own conditions first — over its own fixture table — and then every
+   * correlation: the inner column must equal the outer one. Loose comparison,
+   * like every other comparison here, because a fixture writes 41 where a
+   * result set answers '41'.
+   */
+  public function existsFor(array $outer_row) {
+    foreach ($this->matchedRows() as $inner_row) {
+      $correlated = TRUE;
+      foreach ($this->correlations as $correlation) {
+        if ($this->value($inner_row, $correlation['inner']) != $this->value($outer_row, $correlation['outer'])) {
+          $correlated = FALSE;
+          break;
+        }
+      }
+      if ($correlated) {
+        return TRUE;
+      }
+    }
+
+    return FALSE;
   }
 
   public function leftJoin($table, $alias = NULL, $condition = NULL) {
@@ -819,7 +880,7 @@ class MyapiTestSelectQuery implements IteratorAggregate {
   private function rows() {
     // A grouped query collapses before it is ordered or ranged, the way SQL
     // does it: aggregate first, then sort and slice the aggregated rows.
-    if ($this->group_by || $this->expressions) {
+    if ($this->group_by || $this->hasAggregate()) {
       $rows = $this->sort($this->aggregate($this->matchedRows()));
 
       return $this->range !== NULL
@@ -827,7 +888,19 @@ class MyapiTestSelectQuery implements IteratorAggregate {
         : $rows;
     }
 
-    $rows = $this->sort($this->matchedRows());
+    $rows = $this->matchedRows();
+
+    // A NON-aggregate expression is a computed column of each row, and it is
+    // computed BEFORE the sort because that is what the ORDER BY names: the
+    // marketplace listing orders by '(column IS NULL)' to push the providers
+    // with no rating or no rate to the end (SPEC 83). Computing it after
+    // sorting would leave the ORDER BY reading a column that does not exist
+    // yet, and the nulls would land wherever the fixture happened to sit.
+    if ($this->expressions) {
+      $rows = array_map([$this, 'computeExpressions'], $rows);
+    }
+
+    $rows = $this->sort($rows);
 
     if ($this->range !== NULL) {
       $rows = array_slice($rows, $this->range['start'], $this->range['length']);
@@ -871,6 +944,67 @@ class MyapiTestSelectQuery implements IteratorAggregate {
     }
 
     return $aggregated;
+  }
+
+  /**
+   * Whether any expression of this query is an aggregate (SPEC 83).
+   *
+   * The split that tells the two kinds of addExpression() apart: COUNT(...)
+   * collapses rows and is answered by aggregate(), while '(x IS NULL)' is a
+   * computed column of each row and is answered by computeExpressions(). Before
+   * SPEC 83 every expression was an aggregate, so the presence of one was
+   * enough to take the grouped path.
+   */
+  private function hasAggregate() {
+    foreach ($this->expressions as $expression) {
+      if (preg_match('/^\s*(COUNT|SUM|AVG|MIN|MAX)\s*\(/i', $expression)) {
+        return TRUE;
+      }
+    }
+
+    return FALSE;
+  }
+
+  /**
+   * Adds the computed columns of one row, keyed by their alias (SPEC 83).
+   */
+  private function computeExpressions(array $row) {
+    foreach ($this->expressions as $alias => $expression) {
+      $row[$alias] = $this->evaluateRow($expression, $row);
+    }
+
+    return $row;
+  }
+
+  /**
+   * Evaluates one non-aggregate expression over a single row (SPEC 83).
+   *
+   * Two shapes, which are the two this module writes:
+   *
+   *  - '(alias.column IS NULL)' — answers 1 or 0, the way SQL answers a
+   *    boolean, so ORDER BY over it puts the rows WITH a value first.
+   *  - a bare integer, which is the '1' of an EXISTS sub-select's select list.
+   *
+   * The column is resolved through the query's own alias map first: a fixture
+   * row carries a joined column under the ALIAS the query gave it
+   * ('rating_avg'), not under its qualified name — the rule stated in the class
+   * docblock. Anything else throws rather than answering a plausible 0.
+   */
+  private function evaluateRow($expression, array $row) {
+    $normalized = preg_replace('/\s+/', ' ', trim($expression));
+
+    if (preg_match('/^\(?\s*([A-Za-z0-9_.]+)\s+IS NULL\s*\)?$/i', $normalized, $m)) {
+      $alias = array_search($m[1], $this->field_sources, TRUE);
+      $key = $alias !== FALSE ? $alias : $m[1];
+
+      return $this->value($row, $key) === NULL ? 1 : 0;
+    }
+
+    if (preg_match('/^\d+$/', $normalized)) {
+      return (int) $normalized;
+    }
+
+    throw new RuntimeException('MyapiTestSelectQuery: unsupported row expression "' . $expression . '".');
   }
 
   /**
@@ -939,6 +1073,12 @@ class MyapiTestSelectQuery implements IteratorAggregate {
 
   private function matches(array $row) {
     foreach ($this->conditions as $condition) {
+      if ($condition['operator'] === 'EXISTS') {
+        if (!$condition['value']->existsFor($row)) {
+          return FALSE;
+        }
+        continue;
+      }
       if ($condition['operator'] === 'GROUP') {
         if (!$this->matchesGroup($row, $condition['group'])) {
           return FALSE;
@@ -1054,6 +1194,17 @@ class MyapiTestSelectQuery implements IteratorAggregate {
       // collides with node.status, and a fixture that disambiguates it with
       // the qualified key must still sort by it.
       $column = $this->column($order['field']);
+      // And, when no row carries the bare column, the ALIAS the query gave it
+      // (SPEC 83): the listing orders by 'ra.field_rating_avg_value' while the
+      // fixture row carries 'rating_avg', the alias of that very column. Only
+      // as a fallback, so every query written before this stays sorted by
+      // exactly the key it was sorted by.
+      if (!$this->anyRowHas($rows, $column)) {
+        $alias = array_search($order['field'], $this->field_sources, TRUE);
+        if ($alias !== FALSE) {
+          $column = $alias;
+        }
+      }
       foreach ($rows as $row) {
         if (array_key_exists($order['field'], $row)) {
           $column = $order['field'];
@@ -1112,6 +1263,19 @@ class MyapiTestSelectQuery implements IteratorAggregate {
    * The fixture key a condition reads: the qualified name when the row carries
    * it, the bare column otherwise (SPEC 77 — same disambiguation as project()).
    */
+  /**
+   * Whether at least one of the rows carries this exact key (SPEC 83).
+   */
+  private function anyRowHas(array $rows, $key) {
+    foreach ($rows as $row) {
+      if (array_key_exists($key, $row)) {
+        return TRUE;
+      }
+    }
+
+    return FALSE;
+  }
+
   private function conditionKey(array $row, $field) {
     return array_key_exists($field, $row) ? $field : $this->column($field);
   }
