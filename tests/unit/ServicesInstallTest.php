@@ -814,7 +814,8 @@ class ServicesInstallTest extends TestCase {
 
     $this->assertStringContainsString('function myapi_update_7028()', $source);
     $this->assertStringContainsString('function myapi_update_7029()', $source);
-    $this->assertStringNotContainsString('function myapi_update_7030()', $source);
+    $this->assertStringContainsString('function myapi_update_7030()', $source);
+    $this->assertStringNotContainsString('function myapi_update_7031()', $source);
     // 7028 is still SPEC 81's, not this spec's.
     $this->assertStringContainsString(
       '_myapi_services_install();',
@@ -823,6 +824,64 @@ class ServicesInstallTest extends TestCase {
     $this->assertStringNotContainsString(
       'field_delete_field(',
       $this->functionSource('myapi_update_7028')
+    );
+  }
+
+  /* -------------------------------------------------------------------------
+   * SPEC 84 — the borrowed field_unit instance on 'service_rating'.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * field_unit is NOT created here — it already exists, owned by reservations
+   * (SPEC 32) — only a new, OPTIONAL instance is added on 'service_rating'.
+   * No 'settings' on the instance: target_bundles is a FIELD setting, already
+   * fixed by the field itself and shared with the 'reservation' instance.
+   */
+  public function testFieldUnitGetsAnOptionalInstanceOnServiceRating() {
+    $instance = $this->definitionAt(
+      $this->functionSource('_myapi_services_install'),
+      "_myapi_reservations_ensure_instance('field_unit', \$rating_type, [",
+      'field_unit must have an instance on the service_rating bundle'
+    );
+
+    $this->assertStringContainsString("'required' => 0", $instance);
+    $this->assertStringContainsString("'widget' => ['type' => 'entityreference_autocomplete']", $instance);
+    $this->assertStringNotContainsString("'settings'", $instance);
+  }
+
+  /**
+   * The field itself is not re-created: _myapi_services_install() must call
+   * _myapi_reservations_ensure_field('field_unit', ...) exactly zero times —
+   * the ensure_field() calls of this function are for fields IT owns, and
+   * field_unit belongs to reservations.
+   */
+  public function testFieldUnitIsNeverReCreatedByTheServicesInstaller() {
+    $installer = $this->functionSource('_myapi_services_install');
+
+    $this->assertStringNotContainsString("_myapi_reservations_ensure_field('field_unit'", $installer);
+  }
+
+  /**
+   * Same criterion as field_condominium/field_requester on service_request:
+   * a borrowed field never enters $owned, and the teardown is not touched at
+   * all by this spec — the instance is lost with the bundle when
+   * node_type_delete() runs, the field survives because it was never listed.
+   */
+  public function testFieldUnitStaysOutOfDestructiveUninstall() {
+    $teardown = $this->functionSource('_myapi_services_uninstall_destructive');
+
+    $this->assertStringNotContainsString('field_unit', $teardown);
+  }
+
+  /**
+   * myapi_update_7030() re-runs the whole installer, exactly like
+   * myapi_update_7028(): every creation goes through the idempotent
+   * _ensure_* sub-helpers, so it is safe to call twice.
+   */
+  public function testTheUpdate7030ReRunsTheInstaller() {
+    $this->assertStringContainsString(
+      '_myapi_services_install();',
+      $this->functionSource('myapi_update_7030')
     );
   }
 }
