@@ -201,17 +201,28 @@ class ProviderDetailEndpointTest extends TestCase {
 
   /**
    * The detail is read-only: the method is checked BEFORE the token, so a
-   * POST answers 405 with no credentials at all.
+   * POST answers 405 with no credentials at all — and with a perfectly
+   * valid one too, which is what proves the check really runs first and is
+   * not just "no token happens to also be wrong".
    */
   public function testEveryMethodOtherThanGetIs405BeforeAuthentication() {
     foreach (['POST', 'PUT', 'DELETE', 'PATCH'] as $method) {
       $_SERVER['REQUEST_METHOD'] = $method;
 
-      $result = $this->detail((string) self::PROVIDER);
+      unset($_SERVER['HTTP_AUTHORIZATION']);
+      myapi_test_db_seed(['node' => [$this->providerNode()]]);
+      $anonymous = $this->detail((string) self::PROVIDER);
 
-      $this->assertSame(405, $result['status'], $method);
-      $this->assertSame('method_not_allowed', $result['json']['error_code'], $method);
-      $this->assertSame([], myapi_test_db_queries(), $method . ' must not reach the database');
+      $this->assertSame(405, $anonymous['status'], $method . ' (anonymous)');
+      $this->assertSame('method_not_allowed', $anonymous['json']['error_code'], $method . ' (anonymous)');
+      $this->assertSame([], myapi_test_db_queries(), $method . ' (anonymous) must not reach the database');
+
+      $this->seedRequest();
+      $authenticated = $this->detail((string) self::PROVIDER);
+
+      $this->assertSame(405, $authenticated['status'], $method . ' (authenticated)');
+      $this->assertSame('method_not_allowed', $authenticated['json']['error_code'], $method . ' (authenticated)');
+      $this->assertSame([], myapi_test_db_queries(), $method . ' (authenticated) must not reach the database');
     }
   }
 
@@ -260,6 +271,25 @@ class ProviderDetailEndpointTest extends TestCase {
     $this->assertSame('invalid_token', $result['json']['error_code']);
   }
 
+  /**
+   * A token row that is still valid but whose account no longer exists
+   * (user_load() answers FALSE) is refused too, with no PHP notice on a NULL
+   * account.
+   */
+  public function testADeletedUsersTokenAnswers401() {
+    $_SERVER['HTTP_AUTHORIZATION'] = 'Bearer ' . self::TOKEN;
+    $GLOBALS['myapi_test_users'] = [];
+    myapi_test_db_seed([
+      'my_api_tokens' => [$this->tokenRow()],
+      'node'          => [$this->providerNode()],
+    ]);
+
+    $result = $this->detail((string) self::PROVIDER);
+
+    $this->assertSame(401, $result['status']);
+    $this->assertSame('invalid_token', $result['json']['error_code']);
+  }
+
   /* -------------------------------------------------------------------------
    * Existence and the "published" rule.
    * ---------------------------------------------------------------------- */
@@ -285,7 +315,7 @@ class ProviderDetailEndpointTest extends TestCase {
   }
 
   public function testAMalformedProviderIdAnswersProviderNotFoundWithoutQueryingNode() {
-    foreach (['abc', '0', '-1', '7a', NULL] as $id) {
+    foreach (['abc', '', '0', '-1', '7a', NULL] as $id) {
       $this->seedRequest();
 
       $result = $this->detail($id);
@@ -313,6 +343,19 @@ class ProviderDetailEndpointTest extends TestCase {
     $this->assertSame([], myapi_test_db_queries('field_data_field_license_expiry'));
   }
 
+  /**
+   * A provider with NO field_license_expiry row at all — never seeded by any
+   * other case in this suite — answers 200 all the same, for the same reason
+   * as a lapsed one: the field is never even part of the query.
+   */
+  public function testAProviderWithNoLicenceFieldAtAllStillAnswers200() {
+    $this->seedRequest();
+
+    $result = $this->detail((string) self::PROVIDER);
+
+    $this->assertSame(200, $result['status']);
+  }
+
   /* -------------------------------------------------------------------------
    * The shape of the item.
    * ---------------------------------------------------------------------- */
@@ -338,6 +381,57 @@ class ProviderDetailEndpointTest extends TestCase {
     $this->assertSame(self::PROVIDER, $result['json']['data']['id']);
     $this->assertArrayNotHasKey('provider', $result['json']['data']);
     $this->assertArrayNotHasKey('pagination', $result['json']['data']);
+  }
+
+  /**
+   * The seven keys the detail shares with the listing (SPEC 83) are
+   * IDENTICAL for the same provider, because both routes shape them through
+   * the very same myapi_provider_build_item() — proven here by running both
+   * dispatchers over the same fixture and diffing the output, not merely by
+   * inspecting the source.
+   */
+  public function testTheSevenSharedKeysMatchTheListingForTheSameProvider() {
+    $this->seedRequest(
+      ['rating_avg' => '4.75', 'rating_count' => '12', 'short_description' => 'Destapes.', 'hourly_rate' => '25.50'],
+      [],
+      [
+        'field_data_field_categories'      => [$this->categoryRow(self::PROVIDER, 7, 'Plomería')],
+        'field_data_field_license_expiry'  => [
+          ['entity_id' => (string) self::PROVIDER, 'field_license_expiry_value' => (string) (REQUEST_TIME + 86400)],
+        ],
+      ]
+    );
+
+    $listed = myapi_test_capture('myapi_provider_dispatch')['json']['data']['providers'][0];
+    $item = $this->data($this->detail((string) self::PROVIDER));
+
+    foreach (['id', 'title', 'categories', 'rating_avg', 'rating_count', 'short_description', 'hourly_rate'] as $key) {
+      $this->assertSame($listed[$key], $item[$key], $key);
+    }
+  }
+
+  /**
+   * A provider with nothing optional answers the same documented empties on
+   * BOTH routes — the criterion "un proveedor sin categoría, sin tarifa o sin
+   * calificaciones responde los mismos vacíos que en el listado".
+   */
+  public function testEmptyOptionalValuesMatchTheListingToo() {
+    $this->seedRequest(
+      ['rating_avg' => NULL, 'rating_count' => NULL, 'hourly_rate' => NULL],
+      [],
+      ['field_data_field_license_expiry' => [
+        ['entity_id' => (string) self::PROVIDER, 'field_license_expiry_value' => (string) (REQUEST_TIME + 86400)],
+      ]]
+    );
+
+    $listed = myapi_test_capture('myapi_provider_dispatch')['json']['data']['providers'][0];
+    $item = $this->data($this->detail((string) self::PROVIDER));
+
+    foreach (['categories', 'rating_avg', 'rating_count', 'hourly_rate'] as $key) {
+      $this->assertSame($listed[$key], $item[$key], $key);
+    }
+    $this->assertSame([], $listed['categories']);
+    $this->assertNull($listed['rating_avg']);
   }
 
   /**
@@ -485,6 +579,27 @@ class ProviderDetailEndpointTest extends TestCase {
     $query = myapi_test_db_queries('field_data_field_gallery')[0];
     $this->assertSame(['file_managed'], array_column($query['joins'], 'table'));
     $this->assertSame(['INNER'], array_column($query['joins'], 'type'));
+  }
+
+  /**
+   * "gallery trae exactamente las mismas imágenes, en el mismo orden, que
+   * GET /api/v1/providers/{id}/gallery para el mismo proveedor" — proven by
+   * running both dispatchers over the same fixture and diffing the arrays,
+   * not merely by inspecting that they share a query function.
+   */
+  public function testGalleryMatchesTheGalleryEndpointExactly() {
+    $this->seedRequest([], [], [
+      'field_data_field_gallery' => [
+        $this->galleryRow(44, 2, 'tercera.jpg'),
+        $this->galleryRow(42, 0, 'primera.jpg'),
+        $this->galleryRow(43, 1, 'segunda.jpg'),
+      ],
+    ]);
+
+    $listed = myapi_test_capture(function () { myapi_provider_gallery_dispatch((string) self::PROVIDER); })['json']['data']['images'];
+    $detailGallery = $this->data($this->detail((string) self::PROVIDER))['gallery'];
+
+    $this->assertSame($listed, $detailGallery);
   }
 
   /* -------------------------------------------------------------------------
