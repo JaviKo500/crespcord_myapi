@@ -325,11 +325,27 @@ function myapi_menu() {
   // authenticated like every other api/v1 route; a provider is loaded and
   // suspended from the back office.
   //
-  // The collection root of the namespace SPEC 82 reserved below. There is still
-  // no 'api/v1/providers/%': the detail is its own spec, and adding it here is
-  // that spec's job, not an improvisation of this one.
+  // The collection root of the namespace SPEC 82 reserved below.
   $items['api/v1/providers'] = [
     'page callback'    => 'myapi_provider_dispatch',
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/provider.resource.inc',
+  ];
+
+  // One provider's detail (SPEC 84): the phone, the address, the long
+  // description, the tags, the full gallery and the last three ratings, on
+  // top of the seven fields the listing above already answers. Read-only and
+  // authenticated, and existing but unpublished is the same 404 the gallery
+  // below already gives.
+  //
+  // Sibling route of the collection above and NOT displaced by it, same as
+  // the gallery routes below: Drupal matches by the number of path components
+  // first, so 'api/v1/providers' and 'api/v1/providers/%' never compete for
+  // the same request.
+  $items['api/v1/providers/%'] = [
+    'page callback'    => 'myapi_provider_detail_dispatch',
+    'page arguments'   => [3],
     'access callback'  => TRUE,
     'type'             => MENU_CALLBACK,
     'file'             => 'resources/provider.resource.inc',

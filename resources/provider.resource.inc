@@ -2,25 +2,21 @@
 
 /**
  * @file
- * Provider resource for the myapi module (SPEC 82, SPEC 83).
+ * Provider resource for the myapi module (SPEC 82, SPEC 83, SPEC 84).
  *
- * Three routes, all read-only and all authenticated:
+ * Four routes, all read-only and all authenticated:
  *
  *   - GET /api/v1/providers               — the marketplace listing (SPEC 83).
+ *   - GET /api/v1/providers/%             — one provider's detail (SPEC 84).
  *   - GET /api/v1/providers/%/gallery     — the list of gallery images (82).
  *   - GET /api/v1/providers/%/gallery/%   — the BYTES of one of them (82).
  *
  * SPEC 82 created this file with the gallery alone and announced the listing
  * here; SPEC 83 is that listing, and it lands in this file rather than a
  * provider_list one because Regla 2 de CLAUDE.md is one resource, one file, and
- * the resource is the provider.
- *
- * THERE IS STILL NO GET /api/v1/providers/%. The detail — the phone, the
- * address, field_services_desc, the tags of SPEC 81 and the users behind a
- * provider — is its own spec, and none of it travels through the listing. That
- * is a deliberate scope decision and not an unfinished file: whoever arrives
- * next should add the detail when its spec says so, not improvise one here to
- * make this look complete. Same warning SPEC 77 left on the chat fields.
+ * the resource is the provider. SPEC 83 in turn announced the detail — the
+ * phone, the address, field_services_desc, the tags of SPEC 81, the full
+ * gallery and the ratings — which is what SPEC 84 is.
  *
  * Nothing writes: a provider is created, edited and suspended by the operator
  * from the back office (SPEC 77/78).
@@ -55,6 +51,13 @@ module_load_include('inc', 'myapi', 'includes/myapi.provider_files');
 // For myapi_provider_apply_active_conditions(): the SQL half of "an active
 // provider", shared with the category counts of SPEC 79 (SPEC 83).
 module_load_include('inc', 'myapi', 'includes/myapi.provider_query');
+// For myapi_text_to_plain(): flattens field_address and field_services_desc
+// (SPEC 84), both text_long with a rich editor behind them.
+module_load_include('inc', 'myapi', 'includes/myapi.text');
+// For myapi_user_fetch_profile_fields(): resolves the abbreviated author name
+// of a rating (SPEC 84), same helper myapi.claim_notification.inc uses for
+// requester_name.
+module_load_include('inc', 'myapi', 'includes/myapi.user');
 
 /**
  * Dispatcher for /api/v1/providers/%/gallery (SPEC 82).
@@ -146,10 +149,37 @@ function myapi_provider_gallery_list($id) {
     myapi_error('provider_not_found', 404);
   }
 
-  // 3. The images, filenames included, in one query. INNER and not LEFT on
-  // file_managed: a field row pointing at a file that no longer exists has no
-  // filename to offer, and an item with a null one would be worse for the
-  // client than no item at all.
+  // 3. The images, filenames included.
+  $items = [];
+  foreach (myapi_provider_gallery_images($id) as $row) {
+    $items[] = myapi_provider_build_image($row->fid, $row->filename, $id);
+  }
+
+  myapi_respond(['images' => $items], 200);
+}
+
+/**
+ * The gallery rows of one provider (SPEC 82, extracted by SPEC 84).
+ *
+ * Extracted out of myapi_provider_gallery_list() so the gallery listing and
+ * the provider detail (SPEC 84) share the exact same query and can never
+ * disagree about which images a provider has — the same criterion SPEC 83
+ * used when the "active" rule gained a second consumer.
+ *
+ * INNER and not LEFT on file_managed: a field row pointing at a file that no
+ * longer exists has no filename to offer, and an item with a null one would
+ * be worse for the client than no item at all. The delta order is the
+ * carousel order the operator left in the form.
+ *
+ * Does not check whether the provider exists or is published — callers do
+ * that themselves before reaching here, same as before this extraction.
+ *
+ * @param int $id  The provider nid.
+ *
+ * @return \Traversable  Rows with 'fid' and 'filename', ready for
+ *                        myapi_provider_build_image().
+ */
+function myapi_provider_gallery_images($id) {
   $query = db_select('field_data_field_gallery', 'fg');
   $query->condition('fg.entity_type', 'node');
   $query->condition('fg.deleted', 0);
@@ -157,15 +187,9 @@ function myapi_provider_gallery_list($id) {
   $query->innerJoin('file_managed', 'fm', 'fm.fid = fg.field_gallery_fid');
   $query->addField('fm', 'fid', 'fid');
   $query->addField('fm', 'filename', 'filename');
-  // The delta order is the carousel order the operator left in the form.
   $query->orderBy('fg.delta', 'ASC');
 
-  $items = [];
-  foreach ($query->execute() as $row) {
-    $items[] = myapi_provider_build_image($row->fid, $row->filename, $id);
-  }
-
-  myapi_respond(['images' => $items], 200);
+  return $query->execute();
 }
 
 /**
@@ -728,4 +752,378 @@ function myapi_provider_build_item($row, array $categories = []) {
     'short_description' => check_plain($short_description),
     'hourly_rate'       => $hourly_rate,
   ];
+}
+
+/* ---------------------------------------------------------------------------
+ * The provider detail — GET /api/v1/providers/% (SPEC 84).
+ *
+ * Announced by the @file above since SPEC 82/83: the phone, the address, the
+ * long description, the tags, the full gallery and the ratings of one
+ * provider. Nothing below touches the gallery or listing functions above it,
+ * except myapi_provider_gallery_images() (SPEC 82, extracted in step 3), which
+ * this half reuses so the gallery listing and the detail can never disagree
+ * about which images a provider has.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * The provider row of the detail (SPEC 84).
+ *
+ * Same base and same six aliases as myapi_provider_fetch() — nid, title,
+ * rating_avg, rating_count, short_description, hourly_rate — plus two new
+ * LEFT JOINs for address and description. UNLIKE the listing, this does NOT
+ * call myapi_provider_apply_active_conditions(): the detail only requires the
+ * node to be PUBLISHED, not "active" (published AND licensed). A provider
+ * with an expired licence keeps answering 200 here, exactly like its gallery
+ * (SPEC 82) already does — the licence rule lives where it means something,
+ * the listing.
+ *
+ * All six field joins are LEFT, for the same reason as the listing: every one
+ * of these fields is optional, and an INNER JOIN would make the detail
+ * disappear (404) for a provider who simply has not filled in a rate or a
+ * description, instead of answering the documented empty value.
+ *
+ * @param int $id  The provider nid, already validated as a positive integer.
+ *
+ * @return object|FALSE  One row, or FALSE when no published 'provider' node
+ *                        with this nid exists.
+ */
+function myapi_provider_detail_fetch($id) {
+  $query = db_select('node', 'n');
+  $query->fields('n', ['nid', 'title']);
+  $query->condition('n.nid', $id);
+  $query->condition('n.type', MYAPI_SERVICES_PROVIDER_TYPE);
+  $query->condition('n.status', 1);
+
+  $query->leftJoin('field_data_field_rating_avg', 'ra', "ra.entity_id = n.nid AND ra.entity_type = 'node' AND ra.deleted = 0");
+  $query->addField('ra', 'field_rating_avg_value', 'rating_avg');
+
+  $query->leftJoin('field_data_field_rating_count', 'rc', "rc.entity_id = n.nid AND rc.entity_type = 'node' AND rc.deleted = 0");
+  $query->addField('rc', 'field_rating_count_value', 'rating_count');
+
+  $query->leftJoin('field_data_field_short_description', 'sd', "sd.entity_id = n.nid AND sd.entity_type = 'node' AND sd.deleted = 0");
+  $query->addField('sd', 'field_short_description_value', 'short_description');
+
+  $query->leftJoin('field_data_field_hourly_rate', 'hr', "hr.entity_id = n.nid AND hr.entity_type = 'node' AND hr.deleted = 0");
+  $query->addField('hr', 'field_hourly_rate_value', 'hourly_rate');
+
+  $query->leftJoin('field_data_field_address', 'ad', "ad.entity_id = n.nid AND ad.entity_type = 'node' AND ad.deleted = 0");
+  $query->addField('ad', 'field_address_value', 'address');
+
+  $query->leftJoin('field_data_field_services_desc', 'de', "de.entity_id = n.nid AND de.entity_type = 'node' AND de.deleted = 0");
+  $query->addField('de', 'field_services_desc_value', 'description');
+
+  $query->range(0, 1);
+
+  return $query->execute()->fetchObject();
+}
+
+/**
+ * The tags of one provider, already resolved to strings (SPEC 84).
+ *
+ * A single INNER JOIN with taxonomy_term_data: a tid left behind by a term
+ * deleted in the back office is dropped in silence, the same criterion an
+ * orphan category follows in myapi_provider_categories_by_nid().
+ *
+ * @param int $id  The provider nid.
+ *
+ * @return array  The tag names, check_plain()'d, in Field API delta order.
+ *                Empty when the provider has none.
+ */
+function myapi_provider_tags_by_id($id) {
+  $query = db_select('field_data_field_tags', 'ft');
+  $query->condition('ft.entity_type', 'node');
+  $query->condition('ft.deleted', 0);
+  $query->condition('ft.entity_id', $id);
+  // INNER: an orphan tid is dropped here, quietly and on purpose — same
+  // criterion as myapi_provider_categories_by_nid().
+  $query->innerJoin('taxonomy_term_data', 't', 't.tid = ft.field_tags_tid');
+  $query->addField('t', 'name', 'name');
+  $query->orderBy('ft.delta', 'ASC');
+
+  $tags = [];
+  foreach ($query->execute() as $row) {
+    $tags[] = check_plain($row->name);
+  }
+
+  return $tags;
+}
+
+/**
+ * The last $limit ratings of one provider, newest first (SPEC 84).
+ *
+ * Raw rows, not yet shaped: myapi_provider_build_rating_item() resolves the
+ * author name and the unit title per row. No status filter on the node: SPEC
+ * 77 decided that moderating a rating means DELETING the node, not
+ * unpublishing it, so filtering by status here would be a condition that
+ * never excludes anything today while contradicting that decision the day
+ * someone unpublishes instead of deleting.
+ *
+ * field_data_field_unit is LEFT and not INNER — a rating with no unit
+ * recorded (every one of them today, until the flow that creates a rating
+ * fills it in) still shows, only with a NULL unit_nid.
+ *
+ * @param int $id      The provider nid.
+ * @param int $limit   How many rows to return, most recent first.
+ *
+ * @return array  Rows carrying `uid`, `created`, `stars`, `comment` and
+ *                `unit_nid` (NULL when the rating has no field_unit).
+ */
+function myapi_provider_ratings_recent($id, $limit = 3) {
+  $query = db_select('node', 'n');
+  $query->fields('n', ['uid', 'created']);
+  $query->condition('n.type', MYAPI_SERVICES_RATING_TYPE);
+
+  $query->innerJoin('field_data_field_rating_provider', 'rp', "rp.entity_id = n.nid AND rp.entity_type = 'node' AND rp.deleted = 0");
+  $query->condition('rp.field_rating_provider_target_id', $id);
+
+  $query->leftJoin('field_data_field_stars', 'st', "st.entity_id = n.nid AND st.entity_type = 'node' AND st.deleted = 0");
+  $query->addField('st', 'field_stars_value', 'stars');
+
+  $query->leftJoin('field_data_field_rating_comment', 'rc', "rc.entity_id = n.nid AND rc.entity_type = 'node' AND rc.deleted = 0");
+  $query->addField('rc', 'field_rating_comment_value', 'comment');
+
+  $query->leftJoin('field_data_field_unit', 'fu', "fu.entity_id = n.nid AND fu.entity_type = 'node' AND fu.deleted = 0");
+  $query->addField('fu', 'field_unit_target_id', 'unit_nid');
+
+  $query->orderBy('n.created', 'DESC');
+  $query->range(0, $limit);
+
+  return $query->execute()->fetchAll();
+}
+
+/**
+ * The full rating history of one provider, grouped by stars (SPEC 84).
+ *
+ * Counts the WHOLE history, not just the $limit rows myapi_provider_ratings_
+ * recent() returns: the sum of the five values this returns always equals
+ * `rating_count`. The five keys ('1'..'5') are always present, zero-filled,
+ * so the app never has to fill a gap myapi_services_star_values() would
+ * otherwise leave.
+ *
+ * field_data_field_stars is INNER here, same as field_data_field_rating_
+ * provider: field_stars is required at the instance level, so a rating with
+ * no stars value is not an expected row to count.
+ *
+ * @param int $id  The provider nid.
+ *
+ * @return array  ['1' => int, '2' => int, '3' => int, '4' => int, '5' => int].
+ */
+function myapi_provider_rating_summary($id) {
+  $summary = ['1' => 0, '2' => 0, '3' => 0, '4' => 0, '5' => 0];
+
+  $query = db_select('node', 'n');
+  $query->condition('n.type', MYAPI_SERVICES_RATING_TYPE);
+
+  $query->innerJoin('field_data_field_rating_provider', 'rp', "rp.entity_id = n.nid AND rp.entity_type = 'node' AND rp.deleted = 0");
+  $query->condition('rp.field_rating_provider_target_id', $id);
+
+  $query->innerJoin('field_data_field_stars', 'st', "st.entity_id = n.nid AND st.entity_type = 'node' AND st.deleted = 0");
+  $query->addField('st', 'field_stars_value', 'stars');
+  $query->addExpression('COUNT(*)', 'total');
+  $query->groupBy('st.field_stars_value');
+
+  foreach ($query->execute() as $row) {
+    $summary[(string) (int) $row->stars] = (int) $row->total;
+  }
+
+  return $summary;
+}
+
+/**
+ * Shapes one row of myapi_provider_ratings_recent() into a rating item
+ * (SPEC 84).
+ *
+ * `author_name` is ABBREVIATED ("Andrés M."), never the full name
+ * myapi_claim_notification.inc builds for `requester_name` — a deliberate
+ * divergence: the marketplace is site-wide, so a rating travels outside the
+ * author's own condominium to any user with a valid token, unlike a claim,
+ * which is only ever read inside the same one.
+ *
+ * Same three fallback levels as requester_name: profile (first name + the
+ * first initial of the last name) → account->name → "Usuario eliminado", the
+ * last one for a uid whose account no longer exists.
+ *
+ * `unit` resolves the title of the 'vivienda' node of field_unit, or NULL
+ * when the rating carries none — every rating today, until the flow that
+ * fills it in when a rating is created exists.
+ *
+ * @param object $row
+ *   One row of myapi_provider_ratings_recent(), carrying `uid`, `created`,
+ *   `stars`, `comment` and `unit_nid`.
+ *
+ * @return array
+ *   ['stars' => int, 'comment' => string, 'author_name' => string,
+ *   'unit' => string|NULL, 'created' => string].
+ */
+function myapi_provider_build_rating_item($row) {
+  $author_name = 'Usuario eliminado';
+  $uid = isset($row->uid) ? (int) $row->uid : 0;
+  if ($uid > 0) {
+    $account = user_load($uid);
+    if ($account) {
+      $profile = myapi_user_fetch_profile_fields($uid);
+      if ($profile['first_name'] !== NULL || $profile['last_name'] !== NULL) {
+        $first_name = $profile['first_name'] !== NULL ? $profile['first_name'] : '';
+        $last_initial = $profile['last_name'] !== NULL ? drupal_substr($profile['last_name'], 0, 1) . '.' : '';
+        $author_name = trim($first_name . ' ' . $last_initial);
+      }
+      else {
+        $author_name = $account->name;
+      }
+    }
+  }
+
+  $unit = NULL;
+  if (!empty($row->unit_nid)) {
+    $unit_node = node_load((int) $row->unit_nid);
+    if ($unit_node) {
+      $unit = $unit_node->title;
+    }
+  }
+
+  return [
+    'stars'       => (int) (isset($row->stars) ? $row->stars : 0),
+    'comment'     => myapi_text_to_plain(isset($row->comment) ? $row->comment : NULL),
+    'author_name' => check_plain($author_name),
+    'unit'        => $unit !== NULL ? check_plain($unit) : NULL,
+    'created'     => format_date((int) $row->created, 'custom', 'Y-m-d\TH:i:s'),
+  ];
+}
+
+/**
+ * Shapes the whole provider detail item (SPEC 84).
+ *
+ * Starts from myapi_provider_build_item() — the same seven keys the listing
+ * (SPEC 83) answers for this provider, byte for byte — and adds the six new
+ * ones of the detail, in the exact order docs/provider-detail.md documents:
+ * id, title, categories, rating_avg, rating_count, short_description,
+ * hourly_rate, address, description, tags, gallery, ratings, rating_summary.
+ *
+ * `address` and `description` go through myapi_text_to_plain() and not
+ * check_plain(), unlike `short_description`: both are text_long fields with
+ * text_processing on (a rich editor behind them), so there is markup to
+ * flatten — the same criterion that separates the two helpers everywhere else
+ * in this module.
+ *
+ * `gallery` and `ratings` are mapped here, with the exact same builders the
+ * gallery listing and this file's own myapi_provider_build_rating_item() use,
+ * so the detail can never draw a different picture of the same rows.
+ *
+ * @param object $row
+ *   One row of myapi_provider_detail_fetch().
+ * @param array $categories
+ *   This provider's categories, already built as {id, code, name} items —
+ *   the same shape myapi_provider_categories_by_nid() returns.
+ * @param array $tags
+ *   This provider's tags, already resolved by myapi_provider_tags_by_id().
+ * @param \Traversable|array $gallery_rows
+ *   Rows of myapi_provider_gallery_images(), carrying `fid` and `filename`.
+ * @param array $ratings_rows
+ *   Rows of myapi_provider_ratings_recent(), most recent first.
+ * @param array $rating_summary
+ *   The five-key map myapi_provider_rating_summary() returns.
+ *
+ * @return array
+ *   The thirteen keys of the detail, in order.
+ */
+function myapi_provider_detail_build_item($row, array $categories, array $tags, $gallery_rows, array $ratings_rows, array $rating_summary) {
+  $item = myapi_provider_build_item($row, $categories);
+
+  $gallery = [];
+  foreach ($gallery_rows as $image_row) {
+    $gallery[] = myapi_provider_build_image($image_row->fid, $image_row->filename, (int) $row->nid);
+  }
+
+  $ratings = [];
+  foreach ($ratings_rows as $rating_row) {
+    $ratings[] = myapi_provider_build_rating_item($rating_row);
+  }
+
+  return array_merge($item, [
+    'address'        => myapi_text_to_plain(isset($row->address) ? $row->address : NULL),
+    'description'    => myapi_text_to_plain(isset($row->description) ? $row->description : NULL),
+    'tags'           => $tags,
+    'gallery'        => $gallery,
+    'ratings'        => $ratings,
+    'rating_summary' => $rating_summary,
+  ]);
+}
+
+/**
+ * Dispatcher for /api/v1/providers/% (SPEC 84).
+ *
+ * Only GET is allowed; the detail is read-only over the API, same as the
+ * listing and the gallery.
+ *
+ * The method is checked BEFORE any authentication, the same criterion every
+ * other dispatcher of this module follows: a POST answers 405 without a
+ * token, because the method is wrong whoever is asking.
+ *
+ * @param mixed $id  The provider nid from the route.
+ */
+function myapi_provider_detail_dispatch($id = NULL) {
+  if (myapi_request_method() === 'GET') {
+    myapi_provider_detail_show($id);
+  }
+  else {
+    myapi_error('method_not_allowed', 405);
+  }
+}
+
+/**
+ * GET /api/v1/providers/% — one provider's detail (SPEC 84).
+ *
+ * Requires a valid Bearer token and NOTHING else, same as the listing and the
+ * gallery: no role, no condominium, no unit — every authenticated user sees
+ * the same marketplace.
+ *
+ * Existence is the SAME rule as the gallery (SPEC 82) and NOT the "active"
+ * rule of the listing (SPEC 83): the node must exist, be of type 'provider'
+ * and be PUBLISHED. A lapsed licence does not hide the detail — the same
+ * asymmetry the gallery already has, extended here to the rest of the ficha.
+ *
+ * Six queries: the provider row, the categories, the tags, the gallery, the
+ * last three ratings and the rating summary — the last five run only once the
+ * nid is known to exist, resolved from myapi_provider_detail_fetch() and
+ * never trusted from the route argument again.
+ */
+function myapi_provider_detail_show($id) {
+  // 1. Token. Answers 401 on its own and never returns on failure.
+  myapi_auth_require_access_token();
+
+  // 2. The id: a non-numeric, empty, negative or zero argument never reaches
+  // the database, same criterion as the gallery.
+  if (!is_scalar($id) || !ctype_digit((string) $id) || (int) $id <= 0) {
+    myapi_error('provider_not_found', 404);
+  }
+  $id = (int) $id;
+
+  // 3. The provider row: published, of the right type. An empty result means
+  // the nid does not exist, is not a 'provider' or is unpublished — the three
+  // collapse into the same 404, same as every other endpoint of this module.
+  $row = myapi_provider_detail_fetch($id);
+  if (!$row) {
+    myapi_error('provider_not_found', 404);
+  }
+
+  // 4. The rest of the ficha, with the nid already confirmed to exist.
+  $categories = myapi_provider_categories_by_nid([$id]);
+  $tags = myapi_provider_tags_by_id($id);
+  $gallery_rows = myapi_provider_gallery_images($id);
+  $ratings_rows = myapi_provider_ratings_recent($id);
+  $rating_summary = myapi_provider_rating_summary($id);
+
+  $item = myapi_provider_detail_build_item(
+    $row,
+    isset($categories[$id]) ? $categories[$id] : [],
+    $tags,
+    $gallery_rows,
+    $ratings_rows,
+    $rating_summary
+  );
+
+  // 5. Respond 200 (read-only endpoint, no message). `data` IS the provider —
+  // no 'provider' wrapper, unlike the listing, which wraps because it also
+  // carries 'pagination'.
+  myapi_respond($item, 200);
 }
