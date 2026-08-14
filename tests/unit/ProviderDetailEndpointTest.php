@@ -170,6 +170,20 @@ class ProviderDetailEndpointTest extends TestCase {
   }
 
   /**
+   * A 'vivienda' node as node_load() answers it: its NAME lives in
+   * field_nombre_vivienda and its title is a separate, deliberately different
+   * string — myapi_provider_build_rating_item() must read the first one.
+   */
+  private function unitNode($nid, $name, $title = 'vivienda interna') {
+    return [
+      'nid'                    => $nid,
+      'type'                   => 'vivienda',
+      'title'                  => $title,
+      'field_nombre_vivienda'  => [LANGUAGE_NONE => [0 => ['value' => $name]]],
+    ];
+  }
+
+  /**
    * The reader's token and every table one request may need, with the
    * provider always present in 'node' and any extra rows (ratings) merged
    * alongside it — 'node' holds every content type, exactly like the real
@@ -681,12 +695,17 @@ class ProviderDetailEndpointTest extends TestCase {
     $this->assertSame('Usuario eliminado', $rating['author_name']);
   }
 
-  public function testUnitIsNullWithoutFieldUnitAndTheUnitTitleWithIt() {
+  /**
+   * `unit` is field_nombre_vivienda, NOT the node title — the fixture gives
+   * the 'vivienda' a title that differs from its name precisely so a read of
+   * the wrong one cannot pass.
+   */
+  public function testUnitIsNullWithoutFieldUnitAndTheUnitNameWithIt() {
     $this->seedRequest([], [
       $this->ratingNode(101, 5, ['unit_nid' => NULL, 'comment' => 'sin unidad']),
       $this->ratingNode(102, 4, ['unit_nid' => '55', 'created' => (string) (REQUEST_TIME - 10), 'comment' => 'con unidad']),
     ]);
-    myapi_test_node_seed([55 => ['nid' => 55, 'type' => 'vivienda', 'title' => '4B']]);
+    myapi_test_node_seed([55 => $this->unitNode(55, '4B', 'vivienda-55-torre-a')]);
 
     $ratings = $this->data($this->detail((string) self::PROVIDER))['ratings'];
 
@@ -695,6 +714,37 @@ class ProviderDetailEndpointTest extends TestCase {
 
     $this->assertSame('4B', $withUnit['unit']);
     $this->assertNull($withoutUnit['unit']);
+  }
+
+  /**
+   * A 'vivienda' with no field_nombre_vivienda answers NULL, never its title:
+   * the title of a unit is an internal label and showing it would be exactly
+   * the bug this resolution avoids.
+   */
+  public function testUnitIsNullWhenTheUnitHasNoNameRecorded() {
+    $this->seedRequest([], [
+      $this->ratingNode(101, 5, ['unit_nid' => '55']),
+    ]);
+    myapi_test_node_seed([55 => ['nid' => 55, 'type' => 'vivienda', 'title' => 'vivienda-55-torre-a']]);
+
+    $rating = $this->data($this->detail((string) self::PROVIDER))['ratings'][0];
+
+    $this->assertNull($rating['unit']);
+  }
+
+  /**
+   * A field_unit pointing at a node that no longer exists answers NULL
+   * instead of breaking the response.
+   */
+  public function testUnitIsNullWhenTheUnitNodeCannotBeLoaded() {
+    $this->seedRequest([], [
+      $this->ratingNode(101, 5, ['unit_nid' => '55']),
+    ]);
+    myapi_test_node_seed();
+
+    $rating = $this->data($this->detail((string) self::PROVIDER))['ratings'][0];
+
+    $this->assertNull($rating['unit']);
   }
 
   /* -------------------------------------------------------------------------

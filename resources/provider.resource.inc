@@ -864,7 +864,7 @@ function myapi_provider_tags_by_id($id) {
  * The last $limit ratings of one provider, newest first (SPEC 84).
  *
  * Raw rows, not yet shaped: myapi_provider_build_rating_item() resolves the
- * author name and the unit title per row. No status filter on the node: SPEC
+ * author name and the unit name per row. No status filter on the node: SPEC
  * 77 decided that moderating a rating means DELETING the node, not
  * unpublishing it, so filtering by status here would be a condition that
  * never excludes anything today while contradicting that decision the day
@@ -955,9 +955,12 @@ function myapi_provider_rating_summary($id) {
  * first initial of the last name) → account->name → "Usuario eliminado", the
  * last one for a uid whose account no longer exists.
  *
- * `unit` resolves the title of the 'vivienda' node of field_unit, or NULL
- * when the rating carries none — every rating today, until the flow that
- * fills it in when a rating is created exists.
+ * `unit` resolves field_nombre_vivienda of the 'vivienda' node of field_unit —
+ * its NAME, not its title, the same value GET /api/v1/units answers as `name`.
+ * NULL when the rating carries no field_unit (every rating today, until the
+ * flow that fills it in when a rating is created exists) and also NULL when
+ * the unit node cannot be loaded or has no name recorded: the title is never
+ * used as a fallback.
  *
  * @param object $row
  *   One row of myapi_provider_ratings_recent(), carrying `uid`, `created`,
@@ -988,8 +991,13 @@ function myapi_provider_build_rating_item($row) {
   $unit = NULL;
   if (!empty($row->unit_nid)) {
     $unit_node = node_load((int) $row->unit_nid);
-    if ($unit_node) {
-      $unit = $unit_node->title;
+    // field_nombre_vivienda, NOT the node title: the title of a 'vivienda' is
+    // an internal label, and the name the resident knows their unit by is the
+    // field — the same one myapi_unit_fetch_units() projects as `name` for
+    // GET /api/v1/units. No fallback to the title when the field is empty, for
+    // the same reason: the title would be exactly the wrong string to show.
+    if ($unit_node && isset($unit_node->field_nombre_vivienda[LANGUAGE_NONE][0]['value'])) {
+      $unit = $unit_node->field_nombre_vivienda[LANGUAGE_NONE][0]['value'];
     }
   }
 

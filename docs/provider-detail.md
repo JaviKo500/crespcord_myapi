@@ -100,7 +100,7 @@ in provider.md for the why and for the one endpoint that still differs.
 | `stars` | int | `1`–`5`. |
 | `comment` | string | `myapi_text_to_plain()`. `""` when the rating carries none — the field is optional. |
 | `author_name` | string | **Abbreviated** — `"Andrés M."`, first name plus the initial of the last name — resolved from the same profile pair `myapi_claim_notification.inc` uses for `requester_name`, with three fallback levels: the profile → the account's username → `"Usuario eliminado"` for a deleted account. |
-| `unit` | string \| **null** | The title of the `vivienda` node of `field_unit`, or `null` when the rating carries none — every rating today, until the flow that creates a rating fills the field in. |
+| `unit` | string \| **null** | The **name** (`field_nombre_vivienda`) of the `vivienda` node of `field_unit` — the same value `GET /api/v1/units` answers as `name`, **not** the node title. `null` when the rating carries no `field_unit` (every rating today, until the flow that creates a rating fills the field in), and also `null` when that unit has no name recorded or no longer exists: the title is never used as a fallback. |
 | `created` | string | `Y-m-d\TH:i:s`, same format as `claim.resource.inc` and `reservation.resource.inc`. |
 
 `author_name` is deliberately **abbreviated** and not the full name reclamos
