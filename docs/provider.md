@@ -11,10 +11,10 @@ provider is loaded, edited and suspended by the operator from the back office.
 The listing is filterable by **one** category and orderable by rating or by
 hourly rate in both directions. Ordered by rating, descending, by default.
 
-**There is no `GET /api/v1/providers/%`.** The phone, the address, the long
-description (`field_services_desc`), the tags and the users behind a provider do
-not travel through this endpoint and have no endpoint of their own yet. Images
-are a route apart: see [Images](#images).
+The address, the long description (`field_services_desc`), the tags, the full
+gallery and the ratings of a provider do not travel through this listing — see
+[GET /api/v1/providers/%](provider-detail.md) for the detail. Images are a
+route apart: see [Images](#images).
 
 **Authentication:** required (Bearer access token)
 
