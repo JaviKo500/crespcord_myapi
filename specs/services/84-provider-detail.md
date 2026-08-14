@@ -2,6 +2,7 @@
 
 - **Estado:** Implemented
 - **Fecha:** 2026-08-13
+- **Revisado:** 2026-08-14 — **todas las cadenas de la respuesta dejan de escaparse con `check_plain()` y pasan por `myapi_text_to_plain()`**: `title`, `short_description`, `categories[].code`, `categories[].name`, `tags[]`, `ratings[].author_name` y `ratings[].unit`. `address`, `description` y `ratings[].comment` ya iban así y no cambian. El razonamiento completo está en [SPEC 83 → Corrección posterior](83-providers-list.md#corrección-posterior-2026-08-14-las-cadenas-viajan-sin-escapar); aquí se aplica a las tablas y a los criterios de abajo.
 - **Dependencias:**
   - `77-services-content-types-install` (Implemented) — crea el bundle `provider` con `field_address`, `field_services_desc`, `field_tags` (SPEC 81) y el bundle `service_rating` con `field_stars`, `field_rating_comment`, `field_rating_provider`. Este spec **lee** esos campos y no modifica ninguno.
   - `82-provider-private-gallery` (Implemented) — crea `resources/provider.resource.inc`, `field_gallery` y `myapi_provider_build_image()`, que este spec reutiliza dentro del mismo fichero para construir la galería del detalle.
@@ -121,22 +122,22 @@ Sin `settings` en la instancia: el `target_bundles` (`vivienda`) es de campo y y
 | Clave | Tipo | Origen | Vacío |
 |---|---|---|---|
 | `id` | int | `node.nid` | Nunca |
-| `title` | string | `node.title`, `check_plain()` | Nunca |
+| `title` | string | `node.title`, `myapi_text_to_plain()` *(era `check_plain()` hasta 2026-08-14)* | Nunca |
 | `categories` | array | `field_categories` → término, `{id, code, name}` | `[]` |
 | `rating_avg` | float \| **null** | `field_rating_avg` | `null` |
 | `rating_count` | int | `field_rating_count` | `0`, nunca `null` |
-| `short_description` | string | `field_short_description`, `check_plain()` | `""`, nunca `null` |
+| `short_description` | string | `field_short_description`, `myapi_text_to_plain()` *(era `check_plain()` hasta 2026-08-14)* | `""`, nunca `null` |
 | `hourly_rate` | float \| **null** | `field_hourly_rate` | `null` |
 | `address` | string | `field_address`, `myapi_text_to_plain()` | `""`, nunca `null` |
 | `description` | string | `field_services_desc`, `myapi_text_to_plain()` | `""` (aunque el campo es requerido en el formulario, la API no lo asume) |
-| `tags` | array de string | `field_tags` → término, `name` por `check_plain()` | `[]` |
+| `tags` | array de string | `field_tags` → término, `name` por `myapi_text_to_plain()` *(era `check_plain()` hasta 2026-08-14)* | `[]` |
 | `gallery` | array | `field_gallery`, `{id, url, filename}` — exactamente `myapi_provider_build_image()` | `[]` |
 | `ratings` | array | `service_rating` de este proveedor, últimas 3 por `created` desc | `[]` |
 | `rating_summary` | object | conteo agrupado por `field_stars` sobre **todo** el histórico | `{"1":0,"2":0,"3":0,"4":0,"5":0}` |
 
 Las once primeras son las mismas que el listado (SPEC 83) con dos añadidas (`address`, `description`); las dos últimas son las nuevas de este spec. `categories`, `rating_avg`, `rating_count`, `short_description` y `hourly_rate` conservan **exactamente** el mismo tipo, la misma regla de vacío y el mismo comentario sobre `rating_avg: null` ≠ `0` que ya documenta `docs/provider.md` — no se repiten aquí en detalle para no tener dos fuentes de la misma verdad.
 
-`address` y `description` van por `myapi_text_to_plain()` y no por `check_plain()`, a diferencia de `short_description`: los dos son `text_long` con `text_processing = 1` (editor con formato), así que hay marcado que aplanar — el mismo criterio que separa `short_description` (SPEC 81, `check_plain()`) de la descripción de categoría (SPEC 79, este helper).
+~~`address` y `description` van por `myapi_text_to_plain()` y no por `check_plain()`, a diferencia de `short_description`~~ — **desde el 2026-08-14 esa diferencia no existe: TODAS las cadenas de esta respuesta van por `myapi_text_to_plain()` y ninguna se escapa.** `address` y `description` son `text_long` con `text_processing = 1`, así que además tienen marcado que aplanar; el resto no lo tiene y toma la misma ruta igualmente, porque la pregunta no es «¿hay marcado?» sino «¿el destino es HTML?», y no lo es. El porqué, en [SPEC 83 → Corrección posterior](83-providers-list.md#corrección-posterior-2026-08-14-las-cadenas-viajan-sin-escapar).
 
 ### Cada calificación de `ratings`
 
@@ -245,18 +246,18 @@ Dos cosas del orden que no son cosméticas:
 
 **Coherencia con el listado (SPEC 83)**
 
-- [x] Para el mismo proveedor, `id`, `title`, `categories`, `rating_avg`, `rating_count`, `short_description` y `hourly_rate` son **idénticos** entre `GET /api/v1/providers` y `GET /api/v1/providers/{id}`. *(Probado corriendo ambos dispatchers sobre el mismo fixture y comparando la salida, no solo por inspección.)*
+- [x] Para el mismo proveedor, `id`, `title`, `categories`, `rating_avg`, `rating_count`, `short_description` y `hourly_rate` son **idénticos** entre `GET /api/v1/providers` y `GET /api/v1/providers/{id}`. *(Probado corriendo ambos dispatchers sobre el mismo fixture y comparando la salida, no solo por inspección.)* **Revalidado el 2026-08-14** tras el cambio de escapado: sigue en verde sin tocar una sola expectativa, que es exactamente lo que tenía que pasar — el detalle construye esas siete claves llamando a `myapi_provider_build_item()`, así que las dos rutas no pueden divergir aunque el helper de texto cambie.
 - [x] Un proveedor sin categoría, sin tarifa o sin calificaciones responde los mismos vacíos que en el listado (`[]`, `null`, `0`, `""`, según la clave).
 
 **`address` y `description`**
 
-- [x] Un `field_address`/`field_services_desc` con `<p>`, `<b>` o `&nbsp;` llega **sin** marcado y **sin** escapar (texto real, no `&lt;p&gt;`).
+- [x] Un `field_address`/`field_services_desc` con `<p>`, `<b>` o `&nbsp;` llega **sin** marcado y **sin** escapar (texto real, no `&lt;p&gt;`). *(Intacto por el cambio del 2026-08-14: estas dos claves ya iban por `myapi_text_to_plain()` desde el primer día. Lo que cambió es que ahora **el resto de la respuesta hace lo mismo**, y este criterio deja de ser la excepción del endpoint para ser la regla.)*
 - [x] `field_address` vacío → `address: ""`, nunca `null`.
 - [x] `field_services_desc` vacío → `description: ""`, nunca `null` (aunque el campo sea requerido en el formulario, el detalle no lo asume).
 
 **`tags`**
 
-- [x] Un proveedor con tags responde `tags` como array de strings, con el nombre exacto del término.
+- [x] Un proveedor con tags responde `tags` como array de strings, con el nombre exacto del término. **Desde el 2026-08-14 «exacto» es literal:** un tag llamado `Gas & Plomería` responde `Gas & Plomería` y ya no `Gas &amp; Plomería`. *(`ProviderDetailEndpointTest::testTagNamesArePlainText`, renombrado desde `testTagNamesAreEscaped` y con la expectativa invertida.)*
 - [x] Un proveedor sin tags responde `tags: []`.
 - [x] Un `tid` de `field_tags` cuyo término fue borrado se omite en silencio, sin romper la respuesta. *(El builder de fixtures de tests/unit graba los JOIN pero no los resuelve — no puede simular que uno falle en matchear. Solo se pinó la FORMA del join, `INNER` sobre `taxonomy_term_data`, mismo criterio que `ProviderListEndpointTest` ya usa para categorías. El drop real es del motor SQL: exige el sitio levantado.)*
 
@@ -277,6 +278,7 @@ Dos cosas del orden que no son cosméticas:
 - [x] `author_name` cae a `account->name` cuando el perfil no tiene nombre/apellido, y a "Usuario eliminado" cuando la cuenta ya no existe.
 - [x] Una calificación **sin** `field_unit` responde `unit: null`.
 - [x] Una calificación **con** `field_unit` responde el título del nodo `vivienda` referenciado.
+- [ ] **(nuevo, 2026-08-14, no cubierto por test)** `author_name` y `unit` viajan como texto plano sin escapar, igual que el resto de la respuesta. *Cerrado solo por inspección: `myapi_provider_build_rating_item()` llama a `myapi_text_to_plain()` en las dos claves y conserva el ternario de `unit` para que una calificación sin vivienda siga respondiendo `null` y no `""`. Ningún test de `ProviderDetailEndpointTest` siembra un `&` ni un `<b>` en un nombre de perfil ni en un título de vivienda, así que la suite pasaría igual si alguien devolviera el `check_plain()`. Falta un test con esos literales.*
 - [x] `created` sale en el mismo formato (`Y-m-d\TH:i:s`) que `claim.resource.inc` y `reservation.resource.inc`.
 
 **`rating_summary`**
@@ -295,13 +297,13 @@ Dos cosas del orden que no son cosméticas:
 **No regresión**
 
 - [x] `GET /api/v1/providers` y `GET /api/v1/providers/{id}/gallery` responden byte a byte lo mismo que antes de este spec. *(Exige el sitio real con datos reales. La suite unitaria de ambos endpoints — 100+ tests de listado, 33 de galería — sigue en verde sin cambiar una sola expectativa, que es la mejor garantía disponible sin Drupal levantado.)*
-- [x] `git diff` vacío sobre `myapi_provider_list()`, `myapi_provider_count()`, `myapi_provider_fetch()`, `myapi_provider_categories_by_nid()`, `myapi_provider_build_item()`, `myapi_provider_build_image()` y `myapi_provider_gallery_download()`.
+- [x] `git diff` vacío sobre `myapi_provider_list()`, `myapi_provider_count()`, `myapi_provider_fetch()`, `myapi_provider_categories_by_nid()`, `myapi_provider_build_item()`, `myapi_provider_build_image()` y `myapi_provider_gallery_download()`. *(Cierto **para este spec**, que es lo que el criterio afirma. Fuera de él: el cambio del 2026-08-14 sí tocó `myapi_provider_categories_by_nid()` y `myapi_provider_build_item()` — dos líneas de escapado en cada una, ninguna de consulta ni de forma.)*
 - [x] `myapi_provider_gallery_list()` sigue devolviendo la misma forma y el mismo orden tras la extracción del paso 3; su suite pasa sin cambiar una sola expectativa.
 - [x] Ningún otro endpoint `api/v1/...` cambia: `git diff` vacío en `resources/` salvo `provider.resource.inc`.
 - [x] Ningún rol gana ni pierde permisos. *(Ningún archivo de roles/permisos (`myapi.provider_role.inc` y similares) aparece en el diff de esta rama.)*
 - [x] `myapi_update_7029` y anteriores quedan intactos.
 - [x] `includes/myapi.i18n.inc` queda sin tocar: `provider_not_found` ya existe desde SPEC 82.
-- [x] La suite unitaria completa pasa en verde, con los ficheros de test nuevos incluidos. *(1435 tests, 6068 assertions, verificado en una copia con fin de línea LF — ver nota sobre CRLF más abajo.)*
+- [x] La suite unitaria completa pasa en verde, con los ficheros de test nuevos incluidos. *(1435 tests, 6068 assertions, verificado en una copia con fin de línea LF — ver nota sobre CRLF más abajo. **Al 2026-08-14: 1435 tests, 6069 assertions**, la de más viene del `assertStringNotContainsString('&amp;', ...)` añadido en `ProviderListEndpointTest`; el checkout actual es macOS y no reproduce el problema de CRLF, así que la suite corre entera sin copia intermedia.)*
 - [x] `drush cc all` no reporta errores y `api/v1/providers/%` queda en `menu_router` sin desplazar a las otras tres rutas de `provider`. *(Exige `drush` y Drupal levantado; no disponibles en este entorno.)*
 
 **Nota sobre el entorno de verificación.** Este checkout de Windows tiene `core.autocrlf=true`, así que `myapi.install` queda con fin de línea CRLF en disco — y los guardas de texto de `ServicesInstallTest` (que buscan patrones literales `"\n}\n"`) no calzan contra CRLF, sin relación alguna con el contenido de este spec (se confirmó reproduciendo el mismo fallo en un worktree del commit anterior a este spec). Toda ejecución de la suite completa reportada arriba se hizo sobre una copia temporal con los saltos de línea normalizados a LF; el repositorio en sí no fue tocado.

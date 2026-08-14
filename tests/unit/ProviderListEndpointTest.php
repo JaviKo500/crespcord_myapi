@@ -1030,10 +1030,12 @@ class ProviderListEndpointTest extends TestCase {
   }
 
   /**
-   * Markup and ampersands in the title and the short description travel
-   * escaped by check_plain() — never as raw HTML.
+   * The title and the short description travel as PLAIN TEXT: the markup is
+   * stripped and the ampersand is an ampersand, not `&amp;`. The consumer is a
+   * Flutter Text widget, which decodes no entity and would paint the escaped
+   * form verbatim. No tag survives either, so nothing is lost by not escaping.
    */
-  public function testTitleAndShortDescriptionAreEscaped() {
+  public function testTitleAndShortDescriptionArePlainText() {
     $result = $this->listing([
       $this->provider(41, 'Plomería <b>Torres</b> & Hijos', [
         'short_description' => 'Destapes & reparaciones <script>alert(1)</script>',
@@ -1041,9 +1043,11 @@ class ProviderListEndpointTest extends TestCase {
     ]);
 
     $item = $this->providers($result)[0];
-    $this->assertSame('Plomería &lt;b&gt;Torres&lt;/b&gt; &amp; Hijos', $item['title']);
-    $this->assertStringContainsString('&lt;script&gt;', $item['short_description']);
+    $this->assertSame('Plomería Torres & Hijos', $item['title']);
+    // The body of the tag is text and text is kept; the TAG is what is gone.
+    $this->assertSame('Destapes & reparaciones alert(1)', $item['short_description']);
     $this->assertStringNotContainsString('<script>', $result['output']);
+    $this->assertStringNotContainsString('&amp;', $result['output']);
   }
 
   /**
@@ -1168,18 +1172,18 @@ class ProviderListEndpointTest extends TestCase {
   }
 
   /**
-   * The name and the code of a category travel escaped, like every catalogue of
-   * the module.
+   * The name and the code of a category travel as plain text, the same rule
+   * every string of this resource follows.
    */
-  public function testCategoryNameAndCodeAreEscaped() {
+  public function testCategoryNameAndCodeArePlainText() {
     $result = $this->listing(
       [$this->provider(41, 'Plomería Torres')],
       [$this->categoryRow(41, 7, 'Plomería & Gas', 'plomeria&gas')]
     );
 
     $category = $this->providers($result)[0]['categories'][0];
-    $this->assertSame('Plomería &amp; Gas', $category['name']);
-    $this->assertSame('plomeria&amp;gas', $category['code']);
+    $this->assertSame('Plomería & Gas', $category['name']);
+    $this->assertSame('plomeria&gas', $category['code']);
   }
 
   /**

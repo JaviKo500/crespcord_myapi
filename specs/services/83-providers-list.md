@@ -3,6 +3,7 @@
 - **Estado:** Implemented
 - **Fecha:** 2026-08-13
 - **Implementado:** 2026-08-13, rama `spec-83-providers-list`, desplegado y verificado contra el sitio.
+- **Revisado:** 2026-08-14 — **`title`, `short_description` y los dos strings de `categories` dejan de escaparse con `check_plain()` y pasan por `myapi_text_to_plain()`.** El contrato de esas cuatro claves cambia: ver [Corrección posterior](#corrección-posterior-2026-08-14-las-cadenas-viajan-sin-escapar) al final. Las tablas, los criterios y la tabla de decisiones de abajo llevan la corrección aplicada, con el texto original citado en cada punto tocado.
 - **Dependencias:**
   - `77-services-content-types-install` (Implemented) — crea el bundle `provider` y sus campos `field_categories`, `field_rating_avg`, `field_rating_count` y `field_license_expiry`, y escribe en `includes/myapi.services_common.inc` la regla `myapi_services_provider_is_active()` que este spec **traduce a SQL**. No se modifica ni un campo.
   - `79-service-categories-list` (Implemented) — el precedente directo: es el otro endpoint de solo lectura del marketplace, de él sale el `id` de categoría que este spec acepta como filtro, y su `myapi_service_category_provider_counts()` es la **misma consulta de proveedor activo** que este listado tiene que devolver coherente. También aporta `myapi_text_to_plain()`, que aquí **no** se usa (ver Modelo de datos).
@@ -111,17 +112,17 @@ Las siete claves del ítem, siempre las siete y siempre en ese orden:
 | Clave | Tipo | Origen | Vacío |
 |---|---|---|---|
 | `id` | int | `node.nid` | Nunca |
-| `title` | string | `node.title`, por `check_plain()` | Nunca (requerido por Drupal) |
+| `title` | string | `node.title`, por `myapi_text_to_plain()` *(era `check_plain()` hasta 2026-08-14)* | Nunca (requerido por Drupal) |
 | `categories` | array | `field_categories` → término | `[]` |
 | `rating_avg` | float \| **null** | `field_rating_avg` | `null` |
 | `rating_count` | int | `field_rating_count` | **`0`**, nunca `null` |
-| `short_description` | string | `field_short_description`, por `check_plain()` | `""`, nunca `null` |
+| `short_description` | string | `field_short_description`, por `myapi_text_to_plain()` *(era `check_plain()` hasta 2026-08-14)* | `""`, nunca `null` |
 | `hourly_rate` | float \| **null** | `field_hourly_rate` | `null` |
 
 Cuatro precisiones sobre esa tabla, que son las que evitan discusiones después:
 
 - **`rating_avg` es `null` y `rating_count` es `0`.** No es una incoherencia: son dos preguntas distintas. «Cuántas calificaciones tiene» siempre tiene respuesta numérica, y cero es esa respuesta. «Cuánto puntúa» no la tiene mientras nadie lo haya calificado, y un `0.0` sería además un valor **fuera de la escala** 1–5 de `myapi_services_star_values()`.
-- **`short_description` va por `check_plain()`, no por `myapi_text_to_plain()`.** El campo es `text` sin `text_processing` (SPEC 81): no hay editor rico detrás ni marcado que aplanar, así que escapar es lo correcto. `myapi_text_to_plain()` existe para las descripciones de taxonomía, que sí llevan formato — la distinción está escrita en `includes/myapi.text.inc`.
+- ~~**`short_description` va por `check_plain()`, no por `myapi_text_to_plain()`.** El campo es `text` sin `text_processing` (SPEC 81): no hay editor rico detrás ni marcado que aplanar, así que escapar es lo correcto.~~ **Corregido el 2026-08-14:** `title`, `short_description` y los dos strings de `categories` van **todos** por `myapi_text_to_plain()`, sin escapar. El razonamiento original confundía «no hay marcado que aplanar» con «hay que escapar»: escapar pertenece a un contexto de render HTML y una respuesta JSON leída por un `Text` de Flutter no lo es. Ver [Corrección posterior](#corrección-posterior-2026-08-14-las-cadenas-viajan-sin-escapar).
 - **La categoría viaja con las tres claves que la identifican**, no con las seis de `/api/v1/service-categories`: sin `description`, sin `icon_id` y sin `icon_url`. El ícono lo tiene ya la app del grid de categorías, y repetirlo en cada proveedor de cada página es peso muerto.
 - **El orden de las categorías dentro de un ítem es el de los deltas** de Field API, el mismo criterio que la galería de SPEC 82. No se reordena alfabéticamente.
 
@@ -186,7 +187,7 @@ No hay `404`: la colección siempre existe. No hay `403`: cualquier token válid
 
    Va **antes** que todo lo nuevo, por la misma razón que SPEC 82 puso el `hook_file_download()` antes del endpoint: es el único paso que puede romper algo que ya está en producción, y conviene verificarlo aislado, sin código nuevo encima que enturbie el diagnóstico.
 
-3. **`resources/provider.resource.inc` — `myapi_provider_build_item()`.** El mapeo de una fila a las siete claves, en su orden, con `check_plain()` sobre `title` y `short_description`, los dos `float|null`, el `int` de `rating_count` y el array de categorías que recibe ya construido. Recibe la lista de categorías como argumento en vez de consultarla: es lo que mantiene la promesa de dos consultas por petición y no una por proveedor. *Verificación: `php -l`; la función aún no la llama nadie.*
+3. **`resources/provider.resource.inc` — `myapi_provider_build_item()`.** El mapeo de una fila a las siete claves, en su orden, con `check_plain()` sobre `title` y `short_description` *(el plan tal como se ejecutó el 2026-08-13; hoy es `myapi_text_to_plain()`, ver la corrección del final)*, los dos `float|null`, el `int` de `rating_count` y el array de categorías que recibe ya construido. Recibe la lista de categorías como argumento en vez de consultarla: es lo que mantiene la promesa de dos consultas por petición y no una por proveedor. *Verificación: `php -l`; la función aún no la llama nadie.*
 
 4. **`resources/provider.resource.inc` — las dos consultas.** `myapi_provider_count($category_id)` y `myapi_provider_fetch($category_id, $page, $limit, $order_by, $sort)`, las dos apoyadas en el helper del paso 1 y en el mismo `EXISTS` para el filtro. La de `fetch` lleva los cuatro `LEFT JOIN` y el `ORDER BY` de tres criterios. Un comentario junto a los `LEFT JOIN` que diga por qué **no** son `INNER`, y otro junto al primer criterio del `ORDER BY` que diga que no depende de `sort` a propósito. Más `myapi_provider_categories_by_nid(array $nids)`, la segunda consulta, que devuelve el mapa `nid => [categorías]` con los `nid` sin categorías presentes y vacíos. *Verificación: `php -l`.*
 
@@ -271,10 +272,11 @@ La suite que los cierra son 75 tests nuevos: `tests/unit/ProviderListEndpointTes
 - [x] Un proveedor **sin descripción corta** responde `short_description: ""`, nunca `null`.
 - [x] Un proveedor **sin categorías** responde `categories: []`, y aparece en el listado.
 - [x] Cada categoría trae exactamente tres claves — `id`, `code`, `name` — y ninguna más: sin `description`, sin `icon_id`, sin `icon_url`.
-- [x] El `id` y el `code` de una categoría coinciden con los que devuelve `GET /api/v1/service-categories` para el mismo término. *(Inspección: los dos mapeos hacen `(int) $tid` y `check_plain()` sobre el mismo `field_category_code_value`.)*
+- [ ] **(roto el 2026-08-14, decisión pendiente)** El `id` y el `code` de una categoría coinciden con los que devuelve `GET /api/v1/service-categories` para el mismo término. ~~*(Inspección: los dos mapeos hacen `(int) $tid` y `check_plain()` sobre el mismo `field_category_code_value`.)*~~ **El `id` sigue coincidiendo** — los dos mapeos hacen `(int) $tid` —, pero el `code` y el `name` **ya no**: este endpoint pasó a `myapi_text_to_plain()` y `myapi_service_category_build_item()` sigue en `check_plain()`. Para un término llamado `Plomería & Gas`, providers responde `Plomería & Gas` y service-categories `Plomería &amp; Gas`. Verificado por inspección de `resources/service_category.resource.inc:289-290`, que no se tocó. Cerrarlo exige decidir si SPEC 79 se alinea; ver [Corrección posterior](#corrección-posterior-2026-08-14-las-cadenas-viajan-sin-escapar).
 - [x] Las categorías de un proveedor salen en el orden de los deltas del campo, no alfabético.
 - [x] **(sitio, no ejercido)** Un `tid` referenciado cuyo término ya no existe se **omite** de `categories`, y el proveedor se devuelve igual. *La suite fija la forma —el join con `taxonomy_term_data` es `INNER`— pero el emulador registra los joins sin resolverlos, así que no puede hacer que uno no case: el descarte lo hace la base de datos. En el servidor no hay ni un `tid` huérfano (consulta comprobada: 0 filas), y crear uno sería corromper datos de producción a propósito. Queda sin ejercer, con la forma fijada.*
-- [x] `title` y `short_description` con `<b>` o `&` viajan escapados por `check_plain()`.
+- [x] ~~`title` y `short_description` con `<b>` o `&` viajan escapados por `check_plain()`.~~ **Sustituido el 2026-08-14 por:** `title` y `short_description` con `<b>` o `&` viajan como **texto plano sin escapar** — la etiqueta se quita y el `&` sigue siendo `&`, no `&amp;`. *(`ProviderListEndpointTest::testTitleAndShortDescriptionArePlainText`, con los literales exactos `Plomería <b>Torres</b> & Hijos` → `Plomería Torres & Hijos` y `Destapes & reparaciones <script>alert(1)</script>` → `Destapes & reparaciones alert(1)`; el test comprueba además que ni `<script>` ni `&amp;` aparecen en la respuesta serializada completa.)*
+- [x] **(nuevo, 2026-08-14)** El `code` y el `name` de una categoría viajan también como texto plano sin escapar. *(`ProviderListEndpointTest::testCategoryNameAndCodeArePlainText`: `Plomería & Gas` / `plomeria&gas` salen tal cual.)*
 - [x] Ningún ítem trae teléfono, dirección, `field_services_desc`, tags ni imágenes.
 - [x] La respuesta completa lleva `providers` y `pagination`, y nada más, dentro de `data`.
 
@@ -335,7 +337,7 @@ Tres criterios que parecen de relleno y son los que de verdad vigilan este spec:
 | Un `tid` huérfano | **Se omite** la categoría; el proveedor se devuelve | Devolver la categoría con `name` vacío; o excluir el proveedor | Falla cerrado y en silencio, igual que `myapi_service_category_build_item()` trata un ícono a medias. Excluir el proveedor haría que un borrado de término en el back office lo hiciera desaparecer del marketplace sin que nadie relacione una cosa con la otra. |
 | `rating_avg` sin calificaciones | **`null`** | `0.0` | Recomendación aceptada. `0` está **fuera** de la escala 1–5 de `myapi_services_star_values()`, así que sería un valor imposible viajando como si fuera real, y la app lo pintaría como cinco estrellas vacías en vez de como «sin calificar». |
 | `rating_count` sin calificaciones | **`0`** | `null`, por simetría con `rating_avg` | No son la misma pregunta. «Cuántas calificaciones tiene» siempre tiene respuesta y es cero; «cuánto puntúa» no la tiene. La simetría aparente costaría que la app tuviera que tratar `null` como cero en cada tarjeta. |
-| `short_description` | **`check_plain()`** | `myapi_text_to_plain()`, como la descripción de categoría | El campo es `text` sin `text_processing` (SPEC 81): no hay editor rico detrás ni marcado que aplanar. `myapi_text_to_plain()` existe para la descripción de taxonomía, que sí lo lleva, y su propio `@file` explica cuándo aplica. |
+| `short_description` | ~~**`check_plain()`**~~ → **`myapi_text_to_plain()` desde el 2026-08-14** | ~~`myapi_text_to_plain()`, como la descripción de categoría~~ → la opción descartada resultó ser la correcta | El argumento original —«el campo es `text` sin `text_processing` (SPEC 81), no hay marcado que aplanar»— era cierto y aun así llevaba a la conclusión equivocada: de «no hay nada que aplanar» no se sigue «hay que escapar». Ver [Corrección posterior](#corrección-posterior-2026-08-14-las-cadenas-viajan-sin-escapar). |
 | `hourly_rate` en JSON | **`float`, `null` cuando está vacío** | Cadena `"25.50"` | Elección explícita del usuario. Es lo que ya hacen `amount` en gastos, recibos y pagos, y `area_m2` en viviendas. El símbolo de moneda lo pone la app: el `prefix = '$ '` de SPEC 81 nunca viaja. |
 | Portada en la tarjeta | **Ninguna imagen** en el ítem | La primera imagen de `field_gallery` | La galería es privada (SPEC 82): cada imagen es una petición autenticada por PHP. Una página de veinte proveedores serían veinte arranques de Drupal solo para las miniaturas del listado. La app pide la galería cuando abre una ficha. |
 | Endpoint de detalle | **Fuera de alcance** | Estrenar aquí `GET /api/v1/providers/%` | El listado y el detalle tienen contratos distintos: el detalle trae teléfono, dirección, descripción larga y tags, y con ellos llega la pregunta de qué ve quién. Cabe en su propio spec y este objetivo ya cabe en una frase. |
@@ -374,3 +376,50 @@ Tres criterios que parecen de relleno y son los que de verdad vigilan este spec:
 - Recalcular `field_rating_avg` y `field_rating_count`: este spec los lee, no los escribe.
 
 Cada una de esas, si llega, va en su propio spec.
+
+---
+
+## Corrección posterior (2026-08-14): las cadenas viajan sin escapar
+
+**Síntoma que la disparó.** Un proveedor llamado `Luz & Cía` llegaba a la app
+como `"title": "Luz &amp; Cía"` y se pintaba con la entidad a la vista. El
+consumidor es un `Text` de Flutter, que no decodifica nada.
+
+**Causa.** `myapi_provider_build_item()` escapaba con `check_plain()`, que es
+`htmlspecialchars($text, ENT_QUOTES, 'UTF-8')`. Escapar es correcto **en un
+contexto de render HTML**; un cuerpo JSON no lo es. El spec original razonó
+sobre el helper equivocado (`check_plain()` vs `myapi_text_to_plain()`) sin
+preguntarse antes si tocaba escapar. Es el mismo error que SPEC 79 ya había
+visto y resuelto bien para `description`, y la regla que dejó escrita —«campo
+de una línea → `check_plain()`»— es justamente la que lo perpetuó aquí.
+
+**Qué cambia en este endpoint.** Cuatro claves: `title`, `short_description`,
+`categories[].code` y `categories[].name`. Las cuatro pasan por
+`myapi_text_to_plain()`. Ninguna clave se añade, se quita ni cambia de tipo, y
+la forma de la respuesta es la misma: es un cambio de **bytes**, no de
+contrato estructural.
+
+**Por qué no es una regresión de seguridad.** `myapi_text_to_plain()` hace
+`strip_tags()` **antes** de `decode_entities()`, así que del valor devuelto no
+sale ninguna etiqueta. Un `<script>alert(1)</script>` almacenado responde
+`alert(1)`: el cuerpo es texto y el texto se conserva, pero no queda etiqueta
+que nada pueda ejecutar. El orden de las dos operaciones es la parte delicada y
+está razonado en SPEC 79 y fijado por `tests/unit/TextToPlainTest.php`.
+
+**Efecto colateral aceptado.** El helper también colapsa espacios repetidos y
+hace `trim()`. En estos cuatro campos eso es indistinguible de lo correcto.
+
+**Lo que queda abierto.** `GET /api/v1/service-categories` sigue escapando
+`code` y `name` con `check_plain()` (`resources/service_category.resource.inc:289-290`),
+así que **el criterio de «mismos bytes para el mismo término» está roto** y
+figura arriba como `[ ]`. Alinear SPEC 79 cambiaría la respuesta de un endpoint
+en producción y necesita decisión explícita, igual que la necesitaría auditar
+`banks`, `payment-methods`, `unit` y `area`, que escapan por el mismo motivo
+heredado. Mientras tanto la divergencia está avisada en `docs/provider.md`.
+
+**Verificación.** Suite completa en verde: **1435 tests, 6069 aserciones**.
+Tres tests renombrados y reescritos con las expectativas nuevas
+(`testTitleAndShortDescriptionArePlainText` y
+`testCategoryNameAndCodeArePlainText` en `ProviderListEndpointTest`,
+`testTagNamesArePlainText` en `ProviderDetailEndpointTest`); ninguno añadido y
+ninguno borrado. Falta `drush cc all` en el servidor.

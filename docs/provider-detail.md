@@ -68,15 +68,15 @@ collection, and there is nothing else to wrap it with.
 | Field | Type | Notes |
 |-------|------|-------|
 | `id` | int | The provider's `nid`. Never `null`. |
-| `title` | string | `check_plain()`. Never empty. |
+| `title` | string | Plain text, unescaped. Never empty. |
 | `categories` | array | Same shape and rule as the listing. `[]` when it has none. |
 | `rating_avg` | float \| **null** | See [rating_avg: null is not zero stars](provider.md#rating_avg-null-is-not-zero-stars) in provider.md — the same value, the same rule, not repeated here. |
 | `rating_count` | int | `0` when there are none, never `null`. |
-| `short_description` | string | `check_plain()`. `""` when empty, never `null`. |
+| `short_description` | string | Plain text, unescaped. `""` when empty, never `null`. |
 | `hourly_rate` | float \| **null** | `null` when the provider publishes no rate. |
 | `address` | string | `field_address`, flattened with `myapi_text_to_plain()` — markup stripped, entities decoded, no escaping. `""` when empty, never `null`. |
 | `description` | string | `field_services_desc`, same helper as `address`. `""` when empty, never `null` — even though the field is required in the back-office form, the endpoint does not assume it is filled. |
-| `tags` | array of string | `field_tags`, `check_plain()`'d, in delta order. `[]` when the provider has none. |
+| `tags` | array of string | `field_tags`, plain text, in delta order. `[]` when the provider has none. |
 | `gallery` | array | Exactly the same items, same order, as [GET /api/v1/providers/%/gallery](provider-gallery.md) for this provider — the two routes share the query. |
 | `ratings` | array | The last **3** ratings, most recent `created` first. `[]` when the provider has none. |
 | `rating_summary` | object | Count of the **whole** rating history grouped by star, five keys always present. See below. |
@@ -85,11 +85,13 @@ The first seven are the same keys the listing answers, with the same types
 and the same empty-value rules — not repeated here in detail to avoid two
 sources of the same truth. See [provider.md](provider.md).
 
-`address` and `description` go through `myapi_text_to_plain()` and **not**
-`check_plain()`, unlike `short_description`: both are `text_long` fields with
-a rich editor behind them (`text_processing = 1`), so there is markup to
-flatten. `short_description` is a plain `text` field with nothing to strip,
-so it is only escaped.
+**Every string of this response is plain text and travels unescaped** —
+`title`, `short_description`, `address`, `description`, the `tags`, both
+strings of each `categories` item and `comment` / `author_name` / `unit` of
+each rating. All of them go through `myapi_text_to_plain()`: markup stripped,
+entities decoded, whitespace collapsed. `&` arrives as `&`, never as `&amp;`.
+See [Every string travels unescaped](provider.md#every-string-travels-unescaped)
+in provider.md for the why and for the one endpoint that still differs.
 
 ### Each item of `ratings`
 

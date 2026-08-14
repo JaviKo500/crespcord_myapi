@@ -100,11 +100,11 @@ this order**:
 | Field | Type | Notes |
 |-------|------|-------|
 | `id` | int | The provider's `nid`. Never `null`. It is the id to use on `/api/v1/providers/%/gallery`. |
-| `title` | string | The node title, sanitized with `check_plain()`. Never empty (required by Drupal). |
+| `title` | string | The node title as **plain text** (`myapi_text_to_plain()`): markup stripped, entities decoded, **not** HTML-escaped. A provider named `Luz & Cía` travels as `Luz & Cía`. Never empty (required by Drupal). |
 | `categories` | array | The categories of the provider, in the operator's own order. `[]` when it has none — the provider is **still listed**. See below. |
 | `rating_avg` | float \| **null** | Average rating, 1–5. **`null`** — never `0` — while nobody has rated the provider. |
 | `rating_count` | int | Number of ratings. **`0`** when there are none, never `null`. |
-| `short_description` | string | `field_short_description`, sanitized with `check_plain()`. `""` when empty, never `null`. |
+| `short_description` | string | `field_short_description`, plain text like `title`. `""` when empty, never `null`. |
 | `hourly_rate` | float \| **null** | `field_hourly_rate`. `null` when the provider publishes no rate — and it is **still listed**. No currency symbol: the app puts it. |
 
 Each element of `categories` contains exactly **3 keys** — and none more: no
@@ -115,8 +115,24 @@ weight.
 | Field | Type | Notes |
 |-------|------|-------|
 | `id` | int | The term's `tid`, the same `id` `/api/v1/service-categories` answers. |
-| `code` | string | `field_category_code`, `check_plain()`. A term with no code answers `""` and the category is **still listed** — same as in the categories endpoint. |
-| `name` | string | The term's `name`, `check_plain()`. |
+| `code` | string | `field_category_code`, plain text. A term with no code answers `""` and the category is **still listed** — same as in the categories endpoint. |
+| `name` | string | The term's `name`, plain text. |
+
+### Every string travels unescaped
+
+Every string key of this endpoint — `title`, `short_description` and both
+strings of `categories` — goes through `myapi_text_to_plain()`: tags are
+stripped, HTML entities are **decoded**, whitespace is collapsed. The app can
+paint the value verbatim in a `Text` widget.
+
+What the app must **not** expect is HTML escaping. `&` arrives as `&`, not as
+`&amp;`; that was the previous behaviour and it was wrong — Flutter decodes no
+entity, so an escaped title was painted with the entity visible. No markup
+survives the helper either, so nothing is unsafe about it.
+
+> ⚠️ Note for `/api/v1/service-categories`: that endpoint still escapes `code`
+> and `name` with `check_plain()`. For a term carrying `&` in its name, the two
+> endpoints answer different bytes for the same term.
 
 ### `rating_avg: null` is not zero stars
 

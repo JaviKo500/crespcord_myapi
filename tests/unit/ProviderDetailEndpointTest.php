@@ -509,14 +509,14 @@ class ProviderDetailEndpointTest extends TestCase {
     $this->assertSame(['urgencias', '24h', 'certificado'], $item['tags']);
   }
 
-  public function testTagNamesAreEscaped() {
+  public function testTagNamesArePlainText() {
     $this->seedRequest([], [], [
       'field_data_field_tags' => [$this->tagRow(self::PROVIDER, 7, 'Gas & Plomería')],
     ]);
 
     $item = $this->data($this->detail((string) self::PROVIDER));
 
-    $this->assertSame(['Gas &amp; Plomería'], $item['tags']);
+    $this->assertSame(['Gas & Plomería'], $item['tags']);
   }
 
   /**

@@ -668,12 +668,13 @@ function myapi_provider_categories_by_nid(array $nids) {
   $query->orderBy('fc.delta', 'ASC');
 
   foreach ($query->execute() as $row) {
-    // check_plain() on both, so the id and the code of a category are byte for
-    // byte the ones GET /api/v1/service-categories answers for the same term.
+    // myapi_text_to_plain() on both, the single criterion every string of this
+    // resource follows: the consumer is a Flutter Text widget and there is no
+    // HTML context to escape for. See myapi_provider_build_item().
     $map[(int) $row->nid][] = [
       'id'   => (int) $row->tid,
-      'code' => check_plain(isset($row->code) && $row->code !== NULL ? $row->code : ''),
-      'name' => check_plain($row->name),
+      'code' => myapi_text_to_plain(isset($row->code) ? $row->code : ''),
+      'name' => myapi_text_to_plain($row->name),
     ];
   }
 
@@ -709,12 +710,23 @@ function myapi_provider_categories_by_nid(array $nids) {
  *   unpublished rate is not a free service. Same treatment `amount` gets in
  *   expenses, receipts and payments. The prefix '$ ' of SPEC 81 belongs to the
  *   back-office form and never travels.
- * - `title` and `short_description` go through check_plain() and NOT through
- *   myapi_text_to_plain(): field_short_description is a `text` field with no
- *   text_processing (SPEC 81), so there is no rich editor behind it and no
- *   markup to flatten — escaping is the right answer. The other helper exists
- *   for the taxonomy descriptions, which do carry format; the distinction is
- *   written in includes/myapi.text.inc.
+ * - `title` and `short_description` go through myapi_text_to_plain(), like
+ *   EVERY string this resource answers — the categories, the tags, the address,
+ *   the long description and the author of a rating included. They used to be
+ *   check_plain()'d, and that was the wrong helper in the wrong place: escaping
+ *   belongs to a rendering context, and a JSON body read by a Flutter Text
+ *   widget is not one. The symptom was a provider named `Luz & Cía` travelling
+ *   as `Luz &amp; Cía` and being painted with the entity visible, since Flutter
+ *   decodes nothing. One criterion for the whole resource also removes the
+ *   older split where `address` and `description` arrived as plain text and
+ *   `title` did not, in the same payload.
+ *
+ *   Nothing is lost on the safety side: myapi_text_to_plain() strips tags
+ *   before decoding entities, so no markup survives it either — see the
+ *   reasoning written in includes/myapi.text.inc. It costs a strip_tags() on
+ *   fields that carry no markup (field_short_description is a `text` field with
+ *   no text_processing, SPEC 81) and normalises their whitespace as a side
+ *   effect; both are worth one rule instead of two.
  *
  * @param object $row
  *   One row of myapi_provider_fetch(), carrying the aliases `nid`, `title`,
@@ -743,13 +755,13 @@ function myapi_provider_build_item($row, array $categories = []) {
 
   return [
     'id'                => (int) $row->nid,
-    'title'             => check_plain($row->title),
+    'title'             => myapi_text_to_plain($row->title),
     'categories'        => $categories,
     'rating_avg'        => $rating_avg,
     // (int) of NULL is 0, which is exactly the answer wanted: the cast is the
     // rule, not a coincidence to be tidied away later.
     'rating_count'      => (int) (isset($row->rating_count) ? $row->rating_count : 0),
-    'short_description' => check_plain($short_description),
+    'short_description' => myapi_text_to_plain($short_description),
     'hourly_rate'       => $hourly_rate,
   ];
 }
@@ -826,8 +838,8 @@ function myapi_provider_detail_fetch($id) {
  *
  * @param int $id  The provider nid.
  *
- * @return array  The tag names, check_plain()'d, in Field API delta order.
- *                Empty when the provider has none.
+ * @return array  The tag names as plain text, in Field API delta order. Empty
+ *                when the provider has none.
  */
 function myapi_provider_tags_by_id($id) {
   $query = db_select('field_data_field_tags', 'ft');
@@ -842,7 +854,7 @@ function myapi_provider_tags_by_id($id) {
 
   $tags = [];
   foreach ($query->execute() as $row) {
-    $tags[] = check_plain($row->name);
+    $tags[] = myapi_text_to_plain($row->name);
   }
 
   return $tags;
@@ -984,8 +996,10 @@ function myapi_provider_build_rating_item($row) {
   return [
     'stars'       => (int) (isset($row->stars) ? $row->stars : 0),
     'comment'     => myapi_text_to_plain(isset($row->comment) ? $row->comment : NULL),
-    'author_name' => check_plain($author_name),
-    'unit'        => $unit !== NULL ? check_plain($unit) : NULL,
+    'author_name' => myapi_text_to_plain($author_name),
+    // The ternary stays: myapi_text_to_plain() answers "" for a NULL, and ""
+    // is not the answer here — a rating with no unit says so with NULL.
+    'unit'        => $unit !== NULL ? myapi_text_to_plain($unit) : NULL,
     'created'     => format_date((int) $row->created, 'custom', 'Y-m-d\TH:i:s'),
   ];
 }
@@ -999,11 +1013,12 @@ function myapi_provider_build_rating_item($row) {
  * id, title, categories, rating_avg, rating_count, short_description,
  * hourly_rate, address, description, tags, gallery, ratings, rating_summary.
  *
- * `address` and `description` go through myapi_text_to_plain() and not
- * check_plain(), unlike `short_description`: both are text_long fields with
+ * `address` and `description` go through myapi_text_to_plain(), which is by now
+ * the only string helper this resource uses: they are text_long fields with
  * text_processing on (a rich editor behind them), so there is markup to
- * flatten — the same criterion that separates the two helpers everywhere else
- * in this module.
+ * flatten, and the fields with no markup behind them take the same route
+ * anyway. The reason that rule is one and not two is in
+ * myapi_provider_build_item().
  *
  * `gallery` and `ratings` are mapped here, with the exact same builders the
  * gallery listing and this file's own myapi_provider_build_rating_item() use,
