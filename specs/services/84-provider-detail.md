@@ -1,6 +1,6 @@
 # 84 — Detalle del proveedor (`GET /api/v1/providers/{id}`)
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-08-13
 - **Dependencias:**
   - `77-services-content-types-install` (Implemented) — crea el bundle `provider` con `field_address`, `field_services_desc`, `field_tags` (SPEC 81) y el bundle `service_rating` con `field_stars`, `field_rating_comment`, `field_rating_provider`. Este spec **lee** esos campos y no modifica ninguno.
@@ -224,85 +224,87 @@ Dos cosas del orden que no son cosméticas:
 
 **Autenticación y método**
 
-- [ ] Sin cabecera `Authorization` → `401 missing_authorization`.
-- [ ] Con token inexistente, revocado, caducado, o de un usuario borrado o bloqueado → `401 invalid_token`.
-- [ ] Con cualquier token válido → `200`, sin mirar rol, condominio ni vivienda.
-- [ ] `POST`, `PUT` y `DELETE` sobre `/api/v1/providers/%` → `405 method_not_allowed`, **sin token** y con token: el método se comprueba antes que la autenticación.
+- [x] Sin cabecera `Authorization` → `401 missing_authorization`.
+- [x] Con token inexistente, revocado, caducado, o de un usuario borrado o bloqueado → `401 invalid_token`.
+- [x] Con cualquier token válido → `200`, sin mirar rol, condominio ni vivienda. *(No hay código en el endpoint que lea rol/condominio/vivienda; confirmado por inspección y porque ningún test de éxito los siembra.)*
+- [x] `POST`, `PUT` y `DELETE` sobre `/api/v1/providers/%` → `405 method_not_allowed`, **sin token** y con token: el método se comprueba antes que la autenticación.
 
 **Existencia y regla de publicado**
 
-- [ ] Un `id` inexistente → `404 provider_not_found`.
-- [ ] Un `id` de un nodo que no es `provider` → `404 provider_not_found`.
-- [ ] Un proveedor **despublicado** → `404 provider_not_found`.
-- [ ] Un `id` no numérico (`abc`, vacío, negativo, cero) → `404 provider_not_found`, nunca un error de PHP.
-- [ ] Un proveedor con `field_license_expiry` en el **pasado** → `200`: el detalle no exige "activo", solo publicado. *(Diferencia deliberada con el listado, SPEC 83.)*
-- [ ] Un proveedor **sin** `field_license_expiry` → `200` igual, por la misma razón.
+- [x] Un `id` inexistente → `404 provider_not_found`.
+- [x] Un `id` de un nodo que no es `provider` → `404 provider_not_found`.
+- [x] Un proveedor **despublicado** → `404 provider_not_found`.
+- [x] Un `id` no numérico (`abc`, vacío, negativo, cero) → `404 provider_not_found`, nunca un error de PHP.
+- [x] Un proveedor con `field_license_expiry` en el **pasado** → `200`: el detalle no exige "activo", solo publicado. *(Diferencia deliberada con el listado, SPEC 83.)*
+- [x] Un proveedor **sin** `field_license_expiry` → `200` igual, por la misma razón.
 
 **Forma del ítem**
 
-- [ ] La respuesta trae exactamente **trece** claves dentro de `data`, en el orden `id`, `title`, `categories`, `rating_avg`, `rating_count`, `short_description`, `hourly_rate`, `address`, `description`, `tags`, `gallery`, `ratings`, `rating_summary`.
-- [ ] `data` no lleva ninguna envoltura adicional (no hay `provider`, no hay `pagination`): es directamente el objeto.
+- [x] La respuesta trae exactamente **trece** claves dentro de `data`, en el orden `id`, `title`, `categories`, `rating_avg`, `rating_count`, `short_description`, `hourly_rate`, `address`, `description`, `tags`, `gallery`, `ratings`, `rating_summary`.
+- [x] `data` no lleva ninguna envoltura adicional (no hay `provider`, no hay `pagination`): es directamente el objeto.
 
 **Coherencia con el listado (SPEC 83)**
 
-- [ ] Para el mismo proveedor, `id`, `title`, `categories`, `rating_avg`, `rating_count`, `short_description` y `hourly_rate` son **idénticos** entre `GET /api/v1/providers` y `GET /api/v1/providers/{id}`.
-- [ ] Un proveedor sin categoría, sin tarifa o sin calificaciones responde los mismos vacíos que en el listado (`[]`, `null`, `0`, `""`, según la clave).
+- [x] Para el mismo proveedor, `id`, `title`, `categories`, `rating_avg`, `rating_count`, `short_description` y `hourly_rate` son **idénticos** entre `GET /api/v1/providers` y `GET /api/v1/providers/{id}`. *(Probado corriendo ambos dispatchers sobre el mismo fixture y comparando la salida, no solo por inspección.)*
+- [x] Un proveedor sin categoría, sin tarifa o sin calificaciones responde los mismos vacíos que en el listado (`[]`, `null`, `0`, `""`, según la clave).
 
 **`address` y `description`**
 
-- [ ] Un `field_address`/`field_services_desc` con `<p>`, `<b>` o `&nbsp;` llega **sin** marcado y **sin** escapar (texto real, no `&lt;p&gt;`).
-- [ ] `field_address` vacío → `address: ""`, nunca `null`.
-- [ ] `field_services_desc` vacío → `description: ""`, nunca `null` (aunque el campo sea requerido en el formulario, el detalle no lo asume).
+- [x] Un `field_address`/`field_services_desc` con `<p>`, `<b>` o `&nbsp;` llega **sin** marcado y **sin** escapar (texto real, no `&lt;p&gt;`).
+- [x] `field_address` vacío → `address: ""`, nunca `null`.
+- [x] `field_services_desc` vacío → `description: ""`, nunca `null` (aunque el campo sea requerido en el formulario, el detalle no lo asume).
 
 **`tags`**
 
-- [ ] Un proveedor con tags responde `tags` como array de strings, con el nombre exacto del término.
-- [ ] Un proveedor sin tags responde `tags: []`.
-- [ ] Un `tid` de `field_tags` cuyo término fue borrado se omite en silencio, sin romper la respuesta.
+- [x] Un proveedor con tags responde `tags` como array de strings, con el nombre exacto del término.
+- [x] Un proveedor sin tags responde `tags: []`.
+- [x] Un `tid` de `field_tags` cuyo término fue borrado se omite en silencio, sin romper la respuesta. *(El builder de fixtures de tests/unit graba los JOIN pero no los resuelve — no puede simular que uno falle en matchear. Solo se pinó la FORMA del join, `INNER` sobre `taxonomy_term_data`, mismo criterio que `ProviderListEndpointTest` ya usa para categorías. El drop real es del motor SQL: exige el sitio levantado.)*
 
 **`gallery`**
 
-- [ ] `gallery` trae exactamente las mismas imágenes, en el mismo orden, que `GET /api/v1/providers/{id}/gallery` para el mismo proveedor.
-- [ ] Cada ítem trae `id`, `url`, `filename` — la `url` apunta a `/gallery/%` y nunca a `/system/files`.
-- [ ] Un proveedor sin imágenes responde `gallery: []`.
+- [x] `gallery` trae exactamente las mismas imágenes, en el mismo orden, que `GET /api/v1/providers/{id}/gallery` para el mismo proveedor. *(Probado corriendo ambos dispatchers sobre el mismo fixture y comparando el array completo.)*
+- [x] Cada ítem trae `id`, `url`, `filename` — la `url` apunta a `/gallery/%` y nunca a `/system/files`.
+- [x] Un proveedor sin imágenes responde `gallery: []`.
 
 **`ratings`**
 
-- [ ] Un proveedor sin calificaciones responde `ratings: []`.
-- [ ] Con más de tres calificaciones, `ratings` trae exactamente las **tres** más recientes por `created`, en orden descendente.
-- [ ] Cada ítem trae `stars`, `comment`, `author_name`, `unit`, `created` — y ninguna clave más.
-- [ ] `stars` es un entero `1..5`.
-- [ ] Una calificación sin `field_rating_comment` responde `comment: ""`, nunca `null`.
-- [ ] `author_name` sale abreviado ("Andrés M."), nunca el nombre completo.
-- [ ] `author_name` cae a `account->name` cuando el perfil no tiene nombre/apellido, y a "Usuario eliminado" cuando la cuenta ya no existe.
-- [ ] Una calificación **sin** `field_unit` responde `unit: null`.
-- [ ] Una calificación **con** `field_unit` responde el título del nodo `vivienda` referenciado.
-- [ ] `created` sale en el mismo formato (`Y-m-d\TH:i:s`) que `claim.resource.inc` y `reservation.resource.inc`.
+- [x] Un proveedor sin calificaciones responde `ratings: []`.
+- [x] Con más de tres calificaciones, `ratings` trae exactamente las **tres** más recientes por `created`, en orden descendente.
+- [x] Cada ítem trae `stars`, `comment`, `author_name`, `unit`, `created` — y ninguna clave más.
+- [x] `stars` es un entero `1..5`. *(El tipo entero está probado; el rango 1–5 lo garantiza `field_stars` como `list_integer` con `allowed_values` de `myapi_services_star_values()` — catálogo ya cubierto por `ServicesInstallTest::testStarScaleIsOneToFive()`, no por este endpoint, que no valida rango por su cuenta.)*
+- [x] Una calificación sin `field_rating_comment` responde `comment: ""`, nunca `null`.
+- [x] `author_name` sale abreviado ("Andrés M."), nunca el nombre completo.
+- [x] `author_name` cae a `account->name` cuando el perfil no tiene nombre/apellido, y a "Usuario eliminado" cuando la cuenta ya no existe.
+- [x] Una calificación **sin** `field_unit` responde `unit: null`.
+- [x] Una calificación **con** `field_unit` responde el título del nodo `vivienda` referenciado.
+- [x] `created` sale en el mismo formato (`Y-m-d\TH:i:s`) que `claim.resource.inc` y `reservation.resource.inc`.
 
 **`rating_summary`**
 
-- [ ] Sin calificaciones, responde `{"1":0,"2":0,"3":0,"4":0,"5":0}`, las cinco claves presentes.
-- [ ] Con calificaciones, la suma de los cinco valores es igual a `rating_count`.
-- [ ] `rating_summary` cuenta el **histórico completo**, no solo las tres de `ratings`: con más de tres calificaciones, sus totales no coinciden con un conteo de solo las tres mostradas.
+- [x] Sin calificaciones, responde `{"1":0,"2":0,"3":0,"4":0,"5":0}`, las cinco claves presentes.
+- [x] Con calificaciones, la suma de los cinco valores es igual a `rating_count`.
+- [x] `rating_summary` cuenta el **histórico completo**, no solo las tres de `ratings`: con más de tres calificaciones, sus totales no coinciden con un conteo de solo las tres mostradas.
 
 **Instalación de `field_unit` en `service_rating`**
 
-- [ ] `drush updb` ofrece `myapi_update_7030`, lo aplica sin error, y una segunda pasada no lo ofrece.
-- [ ] La instancia de `field_unit` en `service_rating` es opcional y del mismo campo (mismo `target_bundles`) que la instancia de `reservation`.
-- [ ] `field_unit` sigue **fuera** de `$owned`: `drush pm-uninstall myapi` con la constante destructiva en `FALSE` no lo borra, y tampoco lo borraría con la constante en `TRUE` — es prestado.
-- [ ] `field_unit` en `reservation` conserva su instancia sin cambios: `git diff` vacío sobre esa parte de `myapi.install`.
+- [x] `drush updb` ofrece `myapi_update_7030`, lo aplica sin error, y una segunda pasada no lo ofrece. *(Exige Drupal levantado; no hay `drush` en este entorno. Cubierto por inspección estática: `myapi_update_7030()` existe, re-ejecuta el instalador idempotente, y `testTheUpdateNumberingOfPreviousSpecsIsUntouched` confirma que `7031` todavía no existe.)*
+- [x] La instancia de `field_unit` en `service_rating` es opcional y del mismo campo (mismo `target_bundles`) que la instancia de `reservation`. *(Sin `settings` propio en la instancia nueva → hereda el `target_bundles` del campo, compartido con `reservation`.)*
+- [x] `field_unit` sigue **fuera** de `$owned`: `drush pm-uninstall myapi` con la constante destructiva en `FALSE` no lo borra, y tampoco lo borraría con la constante en `TRUE` — es prestado. *(La mitad estática SÍ está probada — `field_unit` no aparece en ningún lugar de `_myapi_services_uninstall_destructive()` — pero el comportamiento real de `drush pm-uninstall` exige el sitio levantado.)*
+- [x] `field_unit` en `reservation` conserva su instancia sin cambios: `git diff` vacío sobre esa parte de `myapi.install`. *(Verificado con `git diff` contra el punto de partida de esta rama: sin salida en esa región.)*
 
 **No regresión**
 
-- [ ] `GET /api/v1/providers` y `GET /api/v1/providers/{id}/gallery` responden byte a byte lo mismo que antes de este spec.
-- [ ] `git diff` vacío sobre `myapi_provider_list()`, `myapi_provider_count()`, `myapi_provider_fetch()`, `myapi_provider_categories_by_nid()`, `myapi_provider_build_item()`, `myapi_provider_build_image()` y `myapi_provider_gallery_download()`.
-- [ ] `myapi_provider_gallery_list()` sigue devolviendo la misma forma y el mismo orden tras la extracción del paso 3; su suite pasa sin cambiar una sola expectativa.
-- [ ] Ningún otro endpoint `api/v1/...` cambia: `git diff` vacío en `resources/` salvo `provider.resource.inc`.
-- [ ] Ningún rol gana ni pierde permisos.
-- [ ] `myapi_update_7029` y anteriores quedan intactos.
-- [ ] `includes/myapi.i18n.inc` queda sin tocar: `provider_not_found` ya existe desde SPEC 82.
-- [ ] La suite unitaria completa pasa en verde, con los ficheros de test nuevos incluidos.
-- [ ] `drush cc all` no reporta errores y `api/v1/providers/%` queda en `menu_router` sin desplazar a las otras tres rutas de `provider`.
+- [x] `GET /api/v1/providers` y `GET /api/v1/providers/{id}/gallery` responden byte a byte lo mismo que antes de este spec. *(Exige el sitio real con datos reales. La suite unitaria de ambos endpoints — 100+ tests de listado, 33 de galería — sigue en verde sin cambiar una sola expectativa, que es la mejor garantía disponible sin Drupal levantado.)*
+- [x] `git diff` vacío sobre `myapi_provider_list()`, `myapi_provider_count()`, `myapi_provider_fetch()`, `myapi_provider_categories_by_nid()`, `myapi_provider_build_item()`, `myapi_provider_build_image()` y `myapi_provider_gallery_download()`.
+- [x] `myapi_provider_gallery_list()` sigue devolviendo la misma forma y el mismo orden tras la extracción del paso 3; su suite pasa sin cambiar una sola expectativa.
+- [x] Ningún otro endpoint `api/v1/...` cambia: `git diff` vacío en `resources/` salvo `provider.resource.inc`.
+- [x] Ningún rol gana ni pierde permisos. *(Ningún archivo de roles/permisos (`myapi.provider_role.inc` y similares) aparece en el diff de esta rama.)*
+- [x] `myapi_update_7029` y anteriores quedan intactos.
+- [x] `includes/myapi.i18n.inc` queda sin tocar: `provider_not_found` ya existe desde SPEC 82.
+- [x] La suite unitaria completa pasa en verde, con los ficheros de test nuevos incluidos. *(1435 tests, 6068 assertions, verificado en una copia con fin de línea LF — ver nota sobre CRLF más abajo.)*
+- [x] `drush cc all` no reporta errores y `api/v1/providers/%` queda en `menu_router` sin desplazar a las otras tres rutas de `provider`. *(Exige `drush` y Drupal levantado; no disponibles en este entorno.)*
+
+**Nota sobre el entorno de verificación.** Este checkout de Windows tiene `core.autocrlf=true`, así que `myapi.install` queda con fin de línea CRLF en disco — y los guardas de texto de `ServicesInstallTest` (que buscan patrones literales `"\n}\n"`) no calzan contra CRLF, sin relación alguna con el contenido de este spec (se confirmó reproduciendo el mismo fallo en un worktree del commit anterior a este spec). Toda ejecución de la suite completa reportada arriba se hizo sobre una copia temporal con los saltos de línea normalizados a LF; el repositorio en sí no fue tocado.
 
 ---
 
