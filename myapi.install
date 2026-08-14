@@ -2604,6 +2604,20 @@ function _myapi_services_install() {
     'default_value' => [['value' => '', 'format' => 'plain_text']],
     'widget'        => ['type' => 'text_textarea'],
   ]);
+  // field_unit is borrowed from reservations (SPEC 32): only a new instance is
+  // added here, the field itself is neither created nor owned by this feature
+  // (same criterion as field_condominium/field_requester on service_request).
+  // Born optional and unwritten, like field_rating_avg did in this same
+  // function: no spec creates a rating yet, so nothing fills it in today.
+  _myapi_reservations_ensure_instance('field_unit', $rating_type, [
+    'field_name'  => 'field_unit',
+    'entity_type' => 'node',
+    'bundle'      => $rating_type,
+    'label'       => 'Vivienda',
+    'required'    => 0,
+    'description' => 'Vivienda del residente que calificó, si el flujo que crea la calificación la registra. Vacío en toda calificación existente hasta entonces.',
+    'widget'      => ['type' => 'entityreference_autocomplete'],
+  ]);
 
   // (d) Instances of 'service_transaction' — the timeline, built exactly like
   // 'claim_transaction' (SPEC 55): the same status field as its parent with no
@@ -3819,5 +3833,27 @@ function myapi_update_7029() {
 
   return t('SPEC 82: creado field_gallery (privado, hasta 10 imágenes) en @type y eliminado field_photo con sus datos.', [
     '@type' => MYAPI_SERVICES_PROVIDER_TYPE,
+  ]);
+}
+
+/**
+ * SPEC 84: adds a field_unit instance to 'service_rating'.
+ *
+ * Re-runs the WHOLE services installer instead of creating the instance on
+ * its own, exactly like myapi_update_7028()/7029(): every creation inside
+ * goes through the idempotent _ensure_* sub-helpers, so everything already in
+ * place is found and left alone, which also makes it safe to call twice.
+ *
+ * field_unit itself is NOT created here — it already exists, owned by
+ * reservations (SPEC 32). Only a new, OPTIONAL instance is added on
+ * 'service_rating', so no rating already loaded on the site becomes invalid.
+ * Nothing writes it yet: the flow that fills it in when a rating is created
+ * does not exist, same as field_rating_avg was born unwritten in SPEC 77.
+ */
+function myapi_update_7030() {
+  _myapi_services_install();
+
+  return t('SPEC 84: añadida a @type la instancia de field_unit (vivienda del residente que calificó).', [
+    '@type' => MYAPI_SERVICES_RATING_TYPE,
   ]);
 }
