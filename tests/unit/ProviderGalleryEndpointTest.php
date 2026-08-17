@@ -13,6 +13,9 @@ require_once __DIR__ . '/../../includes/myapi.building_admin.inc';
 require_once __DIR__ . '/../../includes/myapi.claims_files.inc';
 require_once __DIR__ . '/../../includes/myapi.services_common.inc';
 require_once __DIR__ . '/../../includes/myapi.provider_files.inc';
+// The third owner myapi_file_download() asks since SPEC 89. This file exercises
+// that chain end to end, so every link of it has to be loaded here.
+require_once __DIR__ . '/../../includes/myapi.service_request_files.inc';
 require_once __DIR__ . '/../../resources/provider.resource.inc';
 require_once __DIR__ . '/../../myapi.module';
 
@@ -844,16 +847,22 @@ class ProviderGalleryEndpointTest extends TestCase {
   }
 
   /**
-   * And a file NEITHER owner recognises — a payment receipt in
+   * And a file NONE of the owners recognises — a payment receipt in
    * private://comprobantes_pago, an area photo, another module's file — is
    * still NULL, which is what keeps the rest of the site behaving exactly as
    * it did before this spec.
+   *
+   * Since SPEC 89 the chain has a third link (service request files), and the
+   * seeding below grew field_data_field_attachment for it: the assertion is
+   * "nobody claims this receipt", so every field the chain looks into has to be
+   * present and empty, or a missing fixture table would be doing the work.
    */
   public function testAFileOfNeitherOwnerIsStillNull() {
     myapi_test_db_seed([
-      'file_managed'             => [['fid' => '90', 'uri' => 'private://comprobantes_pago/recibo.pdf']],
-      'field_data_field_images'  => [],
-      'field_data_field_gallery' => [],
+      'file_managed'                => [['fid' => '90', 'uri' => 'private://comprobantes_pago/recibo.pdf']],
+      'field_data_field_images'     => [],
+      'field_data_field_gallery'    => [],
+      'field_data_field_attachment' => [],
     ]);
     $GLOBALS['user'] = $this->account(1);
 

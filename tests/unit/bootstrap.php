@@ -67,12 +67,13 @@
  * test can read them back.
  *
  * myapi_user_fetch_profile_fields() (SPEC 73) is the one stub in this file that
- * replaces a MYAPI function rather than a Drupal one, and it carries a cost
- * worth stating: because the real definition in includes/myapi.user.inc is not
- * function_exists()-guarded, a future test file that require's that .inc will
- * fatal with "Cannot redeclare". That is deliberate — the real function is four
- * LEFT JOINs and belongs to tests/integration — but whoever hits that fatal
- * should read this block, not fight the guard.
+ * replaces a MYAPI function rather than a Drupal one: the real function is four
+ * LEFT JOINs and belongs to tests/integration, while what SPEC 73 tests is its
+ * consumer. SPEC 89 is what changed how it coexists with production. That same
+ * .inc now also holds myapi_user_display_names(), which the suite DOES exercise
+ * for real, so this file requires includes/myapi.user.inc — below the stub, and
+ * the real profile-fields function carries a function_exists() guard so the
+ * stub keeps winning. Nothing else in that file is stubbed.
  *
  * db_select(), user_load() and REQUEST_TIME (SPEC 74) are the newest kind and
  * the one that needs the loudest disclaimer. db_select() here is a FIXTURE
@@ -485,6 +486,24 @@ if (!function_exists('myapi_user_fetch_profile_fields')) {
       : $default;
   }
 }
+
+/**
+ * The real includes/myapi.user.inc, loaded after the stub above (SPEC 89).
+ *
+ * That file now holds two functions with opposite needs. The stub above must
+ * keep winning for myapi_user_fetch_profile_fields(), whose five consumers'
+ * tests seed $GLOBALS['myapi_test_profile_fields']; but
+ * myapi_user_display_names() — the "nombre apellidos" / users.name rule SPEC 89
+ * moved out of resources/unit.resource.inc — is real logic the suite exercises
+ * through myapi_unit_fetch_user_names() and through the service request detail,
+ * and it must be the production one, not a copy.
+ *
+ * Requiring the file here gives both: the stub is already declared, so the
+ * function_exists() guard in the .inc skips the real profile-fields function,
+ * and myapi_user_display_names() comes in for real. Order matters — this line
+ * must stay BELOW the stub.
+ */
+require_once __DIR__ . '/../../includes/myapi.user.inc';
 
 /**
  * The request timestamp (SPEC 74).
