@@ -59,4 +59,5 @@ files[] = resources/service_category.resource.inc
 files[] = includes/myapi.provider_files.inc
 files[] = resources/provider.resource.inc
 files[] = includes/myapi.provider_query.inc
+files[] = includes/myapi.service_request_files.inc
 files[] = resources/service_request.resource.inc

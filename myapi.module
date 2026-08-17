@@ -1041,22 +1041,29 @@ function myapi_query_user_access_alter(QueryAlterableInterface $query) {
  * different question (a Bearer token and the visibility rule of SPEC 64) of
  * the same shared include.
  *
- * Since SPEC 82 this module owns TWO families of private files, so the hook
- * asks TWO owners: claims first, and providers — the field_gallery of a
- * 'provider', decided in includes/myapi.provider_files.inc — only when claims
- * did not recognise the URI.
+ * Since SPEC 89 this module owns THREE families of private files, so the hook
+ * asks THREE owners in a chain: claims first, then providers — the
+ * field_gallery of a 'provider', decided in includes/myapi.provider_files.inc —
+ * and last the field_images and field_attachment of a 'service_request',
+ * decided in includes/myapi.service_request_files.inc. Each one is asked only
+ * when the previous did not recognise the URI.
+ *
+ * The order is most frequent first, and it is what keeps the hook cheap: it
+ * fires for EVERY private file of the site, and an URI none of the three owns —
+ * a payment receipt, an image-style derivative — costs one query per owner
+ * before falling through to Drupal.
  *
  * The cut is `$headers !== NULL` and NOT a loose `if (!$headers)`, and that is
  * the whole delicacy of the chain: NULL means "not mine", but -1 means "mine,
  * and denied" — a decision already taken on a claim file. Falling through with
- * a -1 would hand that file to the second owner, who would answer NULL for it,
+ * a -1 would hand that file to the next owner, who would answer NULL for it,
  * and a denial would quietly turn into somebody else's permission. A loose
  * comparison happens to work today because -1 is truthy, and stops working the
  * day anyone changes that value.
  *
  * Glue only, like the two hooks above: the three return values Drupal expects
- * — headers, -1, NULL — are decided in the two includes, next to the ownership
- * resolution the endpoints also call.
+ * — headers, -1, NULL — are decided in the three includes, next to the
+ * ownership resolution the endpoints also call.
  *
  * NULL for anything this module does not recognise is deliberate: -1 is a hard
  * deny that cuts other modules off, so answering NULL keeps this module
@@ -1086,7 +1093,17 @@ function myapi_file_download($uri) {
 
   module_load_include('inc', 'myapi', 'includes/myapi.provider_files');
 
-  return myapi_provider_file_download_headers($uri, $user);
+  $headers = myapi_provider_file_download_headers($uri, $user);
+
+  // Same cut, same reason: a -1 on a gallery file is a denial already taken,
+  // not an invitation to ask the third owner.
+  if ($headers !== NULL) {
+    return $headers;
+  }
+
+  module_load_include('inc', 'myapi', 'includes/myapi.service_request_files');
+
+  return myapi_service_request_file_download_headers($uri, $user);
 }
 
 /**
