@@ -229,9 +229,9 @@ needed it goes in the form or the endpoint that decides it.
 | `field_desired_start` | datestamp | 1 | Yes | |
 | `field_images` | image | ∞ | No | **Shared** (SPEC 55/65) → **`private://`**. |
 | `field_attachment` | file | 1 | No | **Shared** (SPEC 55/65) → **`private://`**. |
-| `field_request_status` | list_text | 1 | Yes | Default `open`. |
+| `field_request_status` | list_text | 1 | Yes | Default `open`. A request born with a provider already chosen is saved as `direct` instead (SPEC 87). |
 | `field_assigned_offer` | entityreference → `service_offer` | 1 | No | |
-| `field_assigned_provider` | entityreference → `provider` | 1 | No | Denormalised from the awarded offer. |
+| `field_assigned_provider` | entityreference → `provider` | 1 | No | Denormalised from the awarded offer, or the provider chosen directly when the status is `direct`. |
 | `field_closed_at` | datestamp | 1 | No | |
 
 `field_requester` does not duplicate the node's native `uid`: the `uid` is
@@ -271,14 +271,25 @@ have several accounts.
 
 | Field | Type | Card. | Required | Notes |
 |---|---|:---:|:---:|---|
-| `field_rating_offer` | entityreference → `service_offer` | 1 | Yes | The rating hangs off the **offer**, never the request. |
-| `field_rating_provider` | entityreference → `provider` | 1 | Yes | Denormalised from the offer. |
+| `field_rating_offer` | entityreference → `service_offer` | 1 | **No** (since SPEC 87) | The awarded offer being rated. Empty when the request was a **direct** one and there was no bidding round. |
+| `field_rating_provider` | entityreference → `provider` | 1 | Yes | The provider being scored. Denormalised from the offer, or taken from the direct request's `field_assigned_provider`. |
 | `field_stars` | list_integer | 1 | Yes | `1` to `5`. No zero, no half stars. |
 | `field_rating_comment` | text_long | 1 | No | `plain_text` pinned. |
 
-Pointing at the offer makes a rating of a provider who never offered on that
-request **unrepresentable** rather than merely forbidden: the offer is the only
-thing that joins a request to a provider.
+**`field_rating_offer` was required until SPEC 87, and the status catalogue is
+what freed it.** Closing a request in `direct` demands a rating
+(`myapi_services_close_requires_rating()`) and a direct job has no offer to hang
+it off, so a required offer would have demanded a rating that could not be
+saved. The reference that always exists is `field_rating_provider`, and that one
+stays required: a rating with no provider scores nobody.
+
+What this costs, stated plainly: a rating on an **assigned** request could point
+at an offer of a different request, and nothing in the schema stops it — the
+check that `field_rating_offer` belongs to the request being closed, and that its
+provider is `field_rating_provider`, is now business logic for the flow that
+creates ratings. Before SPEC 87 the offer was at least always present; it was
+never verified to be the right one (see
+[provider-detail.md](provider-detail.md)).
 
 ### Transacción de solicitud (`service_transaction`)
 
@@ -303,27 +314,42 @@ cannot drift apart. A unit test fails if the installer ever retypes the list.
 
 ```
 open|Abierta
+direct|Proveedor directo
 offered|Con ofertas
 assigned|Asignada
 closed|Cerrada
 cancelled|Cancelada
 ```
 
+`direct` is SPEC 87's; the other five are SPEC 77's. It sits second because the
+list is in lifecycle order and `direct` is an **entry** status, not a step of the
+round: `open` and `direct` are the two ways a request can be born.
+
 The transition graph, `myapi_services_request_transitions()`:
 
 ```
 open ──(first offer)──> offered ──(award)──> assigned
-  │                        │                    │
-  │                        └──────> closed <────┘
-  └──────────> cancelled <─────────┴────────────┘
+                           │                    │
+                           └──────> closed <────┘
+                                      ▲
+direct ───────────────────────────────┘
+
+open | direct | offered | assigned ──> cancelled
 ```
 
 - `closed` and `cancelled` are **terminal**. Nothing reopens a request:
   reopening would need its own rules for the offers and the chat of the closed
   round.
-- Closing **from `assigned` requires a rating**
-  (`myapi_services_close_requires_rating()`); closing from `offered` is the
-  contract's "no award" path and there is nobody to score.
+- `direct` is a **root**: no status leads into it. A request is either born with
+  a provider already chosen or it goes through the bidding round, and the two
+  paths never cross — `open → direct` would leave the offers already received
+  with nothing to resolve them, and `assigned → direct` would contradict the
+  offer the resident awarded. Its only exits are `closed` and `cancelled`.
+- Closing **from `assigned` or from `direct` requires a rating**
+  (`myapi_services_close_requires_rating()`): both mean there is a provider who
+  did the job. Closing from `offered` is the contract's "no award" path and
+  there is nobody to score. This is what made `field_rating_offer` optional —
+  see [Calificación de servicio](#calificación-de-servicio-service_rating).
 
 **Nothing enforces any of this yet.** The graph is written and unit-tested so
 the flow spec reads it instead of restating it in prose.
@@ -516,7 +542,7 @@ hand on the site survives the update untouched.
 | Site | What runs |
 |---|---|
 | Fresh install | `myapi_install()` → `_myapi_services_install()`, after `_myapi_claims_install()` (which creates the borrowed fields and makes them private) and before `_myapi_building_admin_install()`. |
-| Already installed | `drush updb` → `myapi_update_7025()` (SPEC 77), `myapi_update_7028()` (SPEC 81), `myapi_update_7029()` (SPEC 82), `myapi_update_7030()` (SPEC 84), `myapi_update_7031()` (SPEC 85) and `myapi_update_7032()` (SPEC 86) → the same `_myapi_services_install()` in all six. |
+| Already installed | `drush updb` → `myapi_update_7025()` (SPEC 77), `myapi_update_7028()` (SPEC 81), `myapi_update_7029()` (SPEC 82), `myapi_update_7030()` (SPEC 84), `myapi_update_7031()` (SPEC 85), `myapi_update_7032()` (SPEC 86) and `myapi_update_7033()` (SPEC 87) → the same `_myapi_services_install()` in all seven, plus two `field_update_*()` calls in `7033` (see below). |
 
 `drush cc all` afterwards. Update history of this feature:
 
@@ -528,6 +554,7 @@ hand on the site survives the update untouched.
 | `myapi_update_7030` | 84 | The borrowed `field_unit` instance on `service_rating`. |
 | `myapi_update_7031` | 85 | `field_logo` on `provider` — public, one image, born **empty** for every existing provider. |
 | `myapi_update_7032` | 86 | The borrowed `field_unit` instance on `service_request` — the first one of this feature that is **required**. |
+| `myapi_update_7033` | 87 | The `direct` status in `field_request_status` (both bundles at once), and `field_rating_offer` relaxed to optional. The first services update that does **more** than re-run the installer. |
 
 All of them create **structure only** — no permission, no role and no node, so
 running them changes nothing any user already has. **`7029` is different in two
@@ -556,6 +583,27 @@ drush sqlq "SELECT COUNT(*) FROM node WHERE type = 'service_request';"
 unit picked by hand — the update runs no backfill and touches no node, on
 purpose: nothing in the module can infer which unit a request meant (a resident
 may occupy several, see [provider-detail.md](provider-detail.md)).
+
+**`7033` is the first one that cannot just re-run the installer**, and the reason
+is worth knowing before writing the next update: the idempotent helpers only
+*create*. `_myapi_reservations_ensure_field()` skips a field that already exists
+and `_myapi_reservations_ensure_instance()` skips an existing instance, so on an
+installed site neither the wider `allowed_values` nor the relaxed `required`
+would ever be applied — and nothing would report the omission. `7033` therefore
+calls `field_update_field()` on `field_request_status` (with the values read from
+`myapi_services_request_statuses()`, never retyped) and `field_update_instance()`
+on `field_rating_offer`, then clears the field cache.
+
+It migrates **no data**, and needs none. Removing an allowed value in use throws
+core's `FieldUpdateForbiddenException` — that is what `myapi_update_7021()` had
+to rewrite rows around when it dropped `duplicated` from the claims catalogue —
+but *adding* one has nothing to forbid, and relaxing `required` cannot invalidate
+a stored rating: every row that satisfied the stricter rule satisfies the looser
+one. Re-running it writes the same six values again and sets the same flag.
+
+Because `field_request_status` is shared, one `field_update_field()` gives the
+status to **both** selects at once: the request's and the timeline's
+(`service_transaction`).
 
 ---
 

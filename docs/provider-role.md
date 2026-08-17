@@ -17,7 +17,7 @@ thing to understand about SPEC 78.
 
 | File | Role |
 |------|------|
-| `includes/myapi.provider_role.inc` | Everything: the role name and the `field_provider_users` constants, the scope map, the (empty) permission catalogue, the pure decision logic (`myapi_provider_role_access_decision()`, `myapi_provider_role_request_visible()`), the Drupal-facing resolvers (`provider_ids()`, `category_ids()`, `any_provider_active()`, `offered_request_ids()`), `myapi_provider_role_node_decision()` and `myapi_provider_role_alter_node_query()`. |
+| `includes/myapi.provider_role.inc` | Everything: the role name and the `field_provider_users` constants, the scope map, the (empty) permission catalogue, the pure decision logic (`myapi_provider_role_access_decision()`, `myapi_provider_role_request_visible()`, `myapi_provider_role_broadcast_statuses()`), the Drupal-facing resolvers (`provider_ids()`, `category_ids()`, `any_provider_active()`, `offered_request_ids()`), `myapi_provider_role_node_decision()` and `myapi_provider_role_alter_node_query()`. |
 | `includes/myapi.building_admin.inc` | **Touched by this spec**, not just reused: `myapi_building_admin_alter_node_query()` gained an `$exempt_types` parameter so it composes safely with the provider alter on the same query. See *Why building-admin's own file changed* below. |
 | `myapi.module` | Glue only: `myapi_node_access()` now consults both roles (deny if either denies), and `myapi_query_node_access_alter()` runs both alters, each given the other's own domain as `$exempt_types`. |
 | `myapi.install` | `_myapi_provider_role_install()` — the role and its (empty) permissions — called from `hook_install()` and from `myapi_update_7026()`. |
@@ -134,13 +134,29 @@ A request is visible when **either** holds:
    history of a closed or cancelled request. This is also what a future
    "my offers" screen in the app will need.
 2. **It concerns them now** — all three at once: the request's category is
-   one of the account's providers' categories; the status is `open` or
+   one of the account's providers' categories; the status is one of
+   `myapi_provider_role_broadcast_statuses()` — `open`, `direct` or
    `offered`; and the account has at least one **active** provider
    (`myapi_services_provider_is_active()` — published, licence not expired).
 
 A request in `assigned`, `closed` or `cancelled`, of a matching category, in
 which the account did not offer, is **not** visible — it is not theirs and
 there is nothing left to do with it.
+
+**`direct` is on the visible side** (SPEC 87): a request born with a provider
+already chosen is still broadcast to every provider of its category, exactly
+like an open one. It is **not** narrowed to the chosen provider — the rule reads
+the status and the categories, and `field_assigned_provider` is not one of its
+inputs. Narrowing it belongs to the spec of the flow that writes that field, and
+would be a second condition on top of this one.
+
+The three statuses live in **one** function, `myapi_provider_role_broadcast_statuses()`,
+read by both halves of the filter: the pure decision
+(`myapi_provider_role_request_visible()`, for the direct-URL check) and the SQL
+condition of `myapi_provider_role_visible_request_ids()` (for the listings). They
+used to be two copies of the same list, and a status added to one and not the
+other makes a request reachable by URL and absent from every listing — or the
+reverse — with no error anywhere. A unit test pins that both read the function.
 
 ### Two or more providers
 
