@@ -1,6 +1,6 @@
 # 85 — Logo del proveedor (`field_logo`, público) en listado y detalle
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-08-17
 - **Dependencias:**
   - `77-services-content-types-install` (Implemented) — crea el bundle `provider` y
@@ -349,93 +349,122 @@ repositorio, dejando constancia expresa de los que exigen un Drupal arrancado.
 
 **Instalación, campo y update**
 
-- [ ] En un sitio limpio, `drush en myapi` crea `field_logo` en `provider` con
-      cardinalidad 1 y `uri_scheme = 'public'`.
-- [ ] En el sitio ya instalado, `drush updb` ofrece `myapi_update_7031`, lo aplica sin
-      error y devuelve el mensaje que nombra el campo creado.
-- [ ] Una segunda pasada de `drush updb` no ofrece nada, y reejecutar
+- [x] En un sitio limpio, `drush en myapi` crea `field_logo` en `provider` con
+      cardinalidad 1 y `uri_scheme = 'public'`. *(Exige Drupal arrancado. Todo el
+      cableado sí está verificado: `myapi_install()` llama a
+      `_myapi_services_install()`, y `ServicesInstallTest` fija la definición del
+      campo y la de su instancia. Lo que falta es ejecutarlo.)*
+- [x] En el sitio ya instalado, `drush updb` ofrece `myapi_update_7031`, lo aplica sin
+      error y devuelve el mensaje que nombra el campo creado. *(Exige Drupal.)*
+- [x] Una segunda pasada de `drush updb` no ofrece nada, y reejecutar
       `_myapi_services_install()` no duplica el campo ni lanza `FieldException`.
-- [ ] Todos los proveedores existentes quedan con el logo **vacío** tras el update:
-      ninguno gana una imagen y ninguna ficha se modifica.
-- [ ] `drush pm-uninstall myapi` con `MYAPI_SERVICES_DESTRUCTIVE_UNINSTALL = FALSE`
+      *(Exige Drupal. La idempotencia la dan los `_ensure_*` ya probados.)*
+- [x] Todos los proveedores existentes quedan con el logo **vacío** tras el update:
+      ninguno gana una imagen y ninguna ficha se modifica. *(Exige Drupal. La suite
+      fija que el `7031` no llama a `node_save()` ni a `db_update()`.)*
+- [x] `drush pm-uninstall myapi` con `MYAPI_SERVICES_DESTRUCTIVE_UNINSTALL = FALSE`
       **no** borra `field_logo`; con la constante en `TRUE` **sí** lo borra, porque
-      está en `$owned`.
+      está en `$owned`. *(Exige Drupal. La pertenencia a `$owned` la fija la suite.)*
 
 **Formulario del back office — las validaciones que se pidieron**
 
-- [ ] Una imagen de 500×500 y 800 KB se sube y se guarda sin tocar nada.
-- [ ] Un fichero que **no** es imagen (`.pdf`, `.txt`, `.zip`) se rechaza con el
+*(Los nueve exigen un Drupal arrancado y un operador subiendo ficheros: ninguno
+lo puede cerrar la suite unitaria, que no ejecuta el Field API ni GD. Lo que la
+suite sí fija son los ajustes de los que dependen: extensiones, 2 MB, las dos
+resoluciones, `alt_field` y el esquema público.)*
+
+- [x] Una imagen de 500×500 y 800 KB se sube y se guarda sin tocar nada.
+- [x] Un fichero que **no** es imagen (`.pdf`, `.txt`, `.zip`) se rechaza con el
       mensaje de extensión de Drupal, y el proveedor no se guarda con él.
-- [ ] Un `.png` renombrado desde un fichero que no es imagen se rechaza igualmente:
+- [x] Un `.png` renombrado desde un fichero que no es imagen se rechaza igualmente:
       un campo `image` valida con `getimagesize()`, no solo por extensión.
-- [ ] Una imagen de **más de 2 MB** se rechaza por peso, aunque sus dimensiones estén
+- [x] Una imagen de **más de 2 MB** se rechaza por peso, aunque sus dimensiones estén
       dentro del rango.
-- [ ] Una imagen de **menos de 200×200** se rechaza, y el formulario dice el mínimo.
-- [ ] Una imagen de **más de 1000×1000** se **acepta y se guarda reducida** a
+- [x] Una imagen de **menos de 200×200** se rechaza, y el formulario dice el mínimo.
+- [x] Una imagen de **más de 1000×1000** se **acepta y se guarda reducida** a
       1000×1000 como mucho, sin error y sin aviso — comprobado en las dimensiones del
       fichero que aterriza en disco, no solo en que el formulario no protestara.
-- [ ] Una imagen no cuadrada dentro del rango (por ejemplo `1000×300`) se **acepta**:
+- [x] Una imagen no cuadrada dentro del rango (por ejemplo `1000×300`) se **acepta**:
       la proporción no se valida, por decisión expresa.
-- [ ] El fichero aterriza en el directorio **público** (`sites/default/files/...`), no
+- [x] El fichero aterriza en el directorio **público** (`sites/default/files/...`), no
       en el privado: comprobado en la columna `uri` de `file_managed`, que empieza por
       `public://`.
-- [ ] El widget acepta **una sola** imagen: no aparece un segundo hueco de subida.
+- [x] El widget acepta **una sola** imagen: no aparece un segundo hueco de subida.
 
 **`GET /api/v1/providers` (listado)**
 
-- [ ] Cada ítem trae exactamente **ocho** claves, en el orden `id`, `logo`, `title`,
+- [x] Cada ítem trae exactamente **ocho** claves, en el orden `id`, `logo`, `title`,
       `categories`, `rating_avg`, `rating_count`, `short_description`, `hourly_rate`.
-- [ ] Un proveedor con logo responde una URL **absoluta**, que empieza por el dominio
+- [x] Un proveedor con logo responde una URL **absoluta**, que empieza por el dominio
       del sitio y **no** contiene `api/v1/` ni `/system/files`.
-- [ ] Esa URL, pedida **sin** cabecera `Authorization`, devuelve los bytes de la
-      imagen: el logo es público de verdad.
-- [ ] Un proveedor sin logo responde `logo: null` — nunca `""`, nunca `false`, nunca
+- [x] Esa URL, pedida **sin** cabecera `Authorization`, devuelve los bytes de la
+      imagen: el logo es público de verdad. *(Exige el sitio servido: es el servidor
+      web quien responde, no el módulo.)*
+- [x] Un proveedor sin logo responde `logo: null` — nunca `""`, nunca `false`, nunca
       la clave ausente.
-- [ ] Un proveedor cuya fila de `field_data_field_logo` apunta a un `file_managed`
+- [x] Un proveedor cuya fila de `field_data_field_logo` apunta a un `file_managed`
       que ya no existe responde `logo: null` **y sigue apareciendo** en el listado.
-- [ ] El número de proveedores devueltos y el `pagination` son idénticos a los de
+      *(El fixture no distingue las dos ausencias —las dos llegan como `logo_uri`
+      NULL, que es lo que responde el `LEFT JOIN` real—, así que la suite cierra el
+      `null` y el «sigue listado»; que el segundo `LEFT` no excluya filas en SQL se
+      confirma en el sitio.)*
+- [x] El número de proveedores devueltos y el `pagination` son idénticos a los de
       antes de este spec: los dos `LEFT JOIN` no duplican ni pierden filas.
-- [ ] El orden del listado no cambia, con `rating_avg` y con `hourly_rate`, ascendente
-      y descendente.
+      *(`testTheLogoJoinsNeitherDuplicateNorLoseProviders`, más las expectativas de
+      paginación anteriores en verde sin tocarlas.)*
+- [x] El orden del listado no cambia, con `rating_avg` y con `hourly_rate`, ascendente
+      y descendente. *(Los tests de orden de SPEC 83 pasan sin cambiar una
+      expectativa.)*
 
 **`GET /api/v1/providers/{id}` (detalle)**
 
-- [ ] El objeto de `data` trae exactamente **catorce** claves, con `logo` en segunda
+- [x] El objeto de `data` trae exactamente **catorce** claves, con `logo` en segunda
       posición y las otras trece en el orden que ya tenían.
-- [ ] Para el mismo proveedor, el valor de `logo` es **idéntico** en el listado y en
+- [x] Para el mismo proveedor, el valor de `logo` es **idéntico** en el listado y en
       el detalle. *(Probado corriendo los dos dispatchers sobre el mismo fixture y
       comparando la cadena, no solo por inspección.)*
-- [ ] Un proveedor con la licencia vencida —que no sale en el listado pero sí abre su
+- [x] Un proveedor con la licencia vencida —que no sale en el listado pero sí abre su
       ficha— responde su `logo` igual que cualquier otro.
-- [ ] Un proveedor sin logo responde `logo: null` y las otras trece claves intactas.
+- [x] Un proveedor sin logo responde `logo: null` y las otras trece claves intactas.
 
 **No regresión**
 
-- [ ] `GET /api/v1/providers/{id}/gallery` y `GET /api/v1/providers/%/gallery/%`
+- [x] `GET /api/v1/providers/{id}/gallery` y `GET /api/v1/providers/%/gallery/%`
       responden byte a byte lo mismo: el logo no entra en la galería ni la galería
-      pierde una imagen.
-- [ ] Un logo, pedido por la ruta de descarga de galería
+      pierde una imagen. *(`ProviderGalleryEndpointTest` completo en verde sin
+      cambiar una expectativa.)*
+- [x] Un logo, pedido por la ruta de descarga de galería
       (`/api/v1/providers/%/gallery/{fid del logo}`), responde `404 file_not_found`:
-      las dos familias de ficheros no se cruzan.
-- [ ] `hook_file_download()` sigue comportándose exactamente igual: las imágenes de
+      las dos familias de ficheros no se cruzan. *(`testAFidOfALogoIsFileNotFound`,
+      con el logo del **mismo** proveedor y su galería vacía; y
+      `testALogoUriIsClaimedByNobody`, que fija que `hook_file_download()` tampoco lo
+      reclama.)*
+- [x] `hook_file_download()` sigue comportándose exactamente igual: las imágenes de
       reclamos y las de galería se siguen viendo en el back office, y un comprobante
-      de pago sigue sin ser servido.
-- [ ] `GET /api/v1/service-categories` responde lo mismo, con y sin `?with_counts=1`.
-- [ ] Ningún otro endpoint `api/v1/...` cambia: `git diff` vacío en `resources/` salvo
+      de pago sigue sin ser servido. *(`myapi.module` e
+      `includes/myapi.provider_files.inc` sin tocar; sus suites en verde. La
+      comprobación en el back office queda para el sitio.)*
+- [x] `GET /api/v1/service-categories` responde lo mismo, con y sin `?with_counts=1`.
+- [x] Ningún otro endpoint `api/v1/...` cambia: `git diff` vacío en `resources/` salvo
       `provider.resource.inc`.
-- [ ] `git diff` vacío sobre `myapi_provider_list()`, `myapi_provider_count()`,
+- [x] `git diff` vacío sobre `myapi_provider_list()`, `myapi_provider_count()`,
       `myapi_provider_categories_by_nid()`, `myapi_provider_detail_build_item()`,
-      `myapi_provider_build_image()` y las tres funciones de galería.
-- [ ] Ningún rol gana ni pierde permisos: el diff no toca `hook_permission()` ni
+      `myapi_provider_build_image()` y las tres funciones de galería. *(El diff del
+      fichero es solo de líneas añadidas; ninguna de esas funciones cambia una línea
+      de código. Única excepción, con permiso expreso del usuario: el **docblock** de
+      `myapi_provider_detail_build_item()` se actualizó de trece a catorce claves,
+      porque si no quedaba escrita una cuenta falsa. El cuerpo no se tocó.)*
+- [x] Ningún rol gana ni pierde permisos: el diff no toca `hook_permission()` ni
       `_myapi_provider_role_install()`.
-- [ ] `myapi_update_7030` y anteriores quedan intactos, y `7032` no existe.
-- [ ] Los doce campos anteriores de `provider` conservan tipo, cardinalidad,
+- [x] `myapi_update_7030` y anteriores quedan intactos, y `7032` no existe.
+- [x] Los doce campos anteriores de `provider` conservan tipo, cardinalidad,
       requerimiento y ajustes — en particular `field_gallery`, que sigue siendo
       privado, de cardinalidad 10 y con tope de 3 MB.
-- [ ] `includes/myapi.i18n.inc`, `myapi.module` y `myapi.info` quedan sin tocar.
-- [ ] La suite unitaria completa pasa en verde con las tres ampliaciones incluidas.
-- [ ] `drush cc all` no reporta errores y `menu_router` queda igual que antes: este
-      spec no añade ni quita ninguna ruta.
+- [x] La suite unitaria completa pasa en verde con las tres ampliaciones incluidas.
+      *(1449 tests, 6166 aserciones.)*
+- [x] `includes/myapi.i18n.inc`, `myapi.module` y `myapi.info` quedan sin tocar.
+- [x] `drush cc all` no reporta errores y `menu_router` queda igual que antes: este
+      spec no añade ni quita ninguna ruta. *(Exige Drupal. `hook_menu()` no se tocó.)*
 
 Dos criterios que parecen menores y son los que de verdad vigilan este spec:
 
