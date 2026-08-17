@@ -1,9 +1,9 @@
 ## GET /api/v1/providers
 
 Returns the **active** providers of the marketplace — a paginated list with the
-name, categories, rating, short description and hourly rate of each one. It is
-what the app paints the provider directory from, and what a category tile opens
-into.
+logo, name, categories, rating, short description and hourly rate of each one. It
+is what the app paints the provider directory from, and what a category tile
+opens into.
 
 Read-only collection: there is no create, update or delete over the API. A
 provider is loaded, edited and suspended by the operator from the back office.
@@ -13,8 +13,9 @@ hourly rate in both directions. Ordered by rating, descending, by default.
 
 The address, the long description (`field_services_desc`), the tags, the full
 gallery and the ratings of a provider do not travel through this listing — see
-[GET /api/v1/providers/%](provider-detail.md) for the detail. Images are a
-route apart: see [Images](#images).
+[GET /api/v1/providers/%](provider-detail.md) for the detail. The logo does
+travel, because it is public and it is what the card is for: see
+[The logo](#the-logo). The gallery is a route apart: see [Images](#images).
 
 **Authentication:** required (Bearer access token)
 
@@ -66,6 +67,7 @@ filters with what it just received and translates nothing.
     "providers": [
       {
         "id": 41,
+        "logo": "https://midominio.com/sites/default/files/logo-plomeria-torres.png",
         "title": "Plomería Torres",
         "categories": [
           { "id": 7, "code": "plomeria", "name": "Plomería" },
@@ -78,6 +80,7 @@ filters with what it just received and translates nothing.
       },
       {
         "id": 42,
+        "logo": null,
         "title": "Electricidad Ríos",
         "categories": [],
         "rating_avg": null,
@@ -94,12 +97,19 @@ filters with what it just received and translates nothing.
 `data` carries exactly two keys, `providers` and `pagination`, and nothing else.
 `providers` is always a JSON array, even with one element or none.
 
-Each element of `providers` contains exactly these **7 keys, always all 7, in
+Each element of `providers` contains exactly these **8 keys, always all 8, in
 this order**:
+
+> **Change of shape (SPEC 85).** The item used to carry **7** keys and now
+> carries **8**: `logo` was added in **second position**, right after `id`. Every
+> other key keeps its type, its value and its place. Adding a key is backwards
+> compatible for any reasonable parser, but a client that pins the number of
+> fields must be updated **before** the deployment.
 
 | Field | Type | Notes |
 |-------|------|-------|
 | `id` | int | The provider's `nid`. Never `null`. It is the id to use on `/api/v1/providers/%/gallery`. |
+| `logo` | string \| **null** | Absolute URL of the provider's logo (`field_logo`). **`null`** when the provider has none — never `""` and never a broken URL — and it is **still listed**. See [The logo](#the-logo). |
 | `title` | string | The node title as **plain text** (`myapi_text_to_plain()`): markup stripped, entities decoded, **not** HTML-escaped. A provider named `Luz & Cía` travels as `Luz & Cía`. Never empty (required by Drupal). |
 | `categories` | array | The categories of the provider, in the operator's own order. `[]` when it has none — the provider is **still listed**. See below. |
 | `rating_avg` | float \| **null** | Average rating, 1–5. **`null`** — never `0` — while nobody has rated the provider. |
@@ -224,11 +234,42 @@ since SPEC 83 the SQL half of it lives in one place,
 of providers this endpoint returns for a category matches the `providers_count`
 of that category, always.
 
+### The logo
+
+`logo` is the **absolute, direct URL of the file**, the kind
+`https://midominio.com/sites/default/files/logo-plomeria-torres.png`. It is
+**not** an `api/v1/...` path and not a `/system/files` one: `field_logo` is
+public storage, so the web server answers it and a bare Flutter
+`Image.network(provider['logo'])` paints it **with no `Authorization` header at
+all**. Same shape `icon_url` already has in `/api/v1/service-categories`.
+
+That is the whole difference with the gallery below, and it is deliberate: a
+logo is commercial identity — the shop window of the provider, which goes on
+every card of this listing — while a gallery image is content uploaded for one
+record. Catalogue and identity go public; content of a record goes private.
+
+Three things worth knowing before painting it:
+
+- **A provider with no logo answers `null`.** Never `""`, never `false`, never a
+  missing key: there is one empty case to handle, and the app decides its own
+  placeholder. The same `null` arrives when the file was deleted from disk
+  outside Drupal, and the provider is **still listed** either way.
+- **The image is not necessarily square.** The aspect ratio is not validated by
+  express decision, so a `1000×300` reaches the app. Paint it with
+  `BoxFit.contain` over a fixed-ratio box: the logo arrives whole, with margins,
+  instead of cropped or stretched.
+- **It is at most 1000×1000 and 2 MB**, the original file with no image style
+  and no thumbnail behind it. There is no `?style=` derivative served by the API.
+
+The logo is **read-only over the API**, like everything else in the marketplace:
+it is uploaded, replaced and removed by the operator from the back office.
+
 ### Images
 
-The listing carries **no image**. The gallery of a provider is private, so every
-image is an authenticated request through PHP, and a page of twenty providers
-would be twenty Drupal bootstraps just for the thumbnails.
+The gallery of a provider does **not** travel through this listing. Its images
+are private, so every one of them is an authenticated request through PHP, and a
+page of twenty providers would be twenty Drupal bootstraps just for the
+thumbnails — which is exactly the cost the public logo avoids.
 
 The app asks for them when it opens a provider's card:
 
@@ -244,9 +285,12 @@ See [provider-gallery.md](provider-gallery.md).
 - A provider whose category was deleted in the back office keeps the rest: the
   orphan category is omitted from its `categories` and the provider is answered
   the same. It never disappears from the marketplace because of a deleted term.
-- A provider with **no** rating, **no** rate, **no** description and **no**
-  category is listed all the same, with the four empty values. Nothing optional
-  filters anybody out.
+- A provider with **no** logo, **no** rating, **no** rate, **no** description and
+  **no** category is listed all the same, with the five empty values. Nothing
+  optional filters anybody out.
+- The logo costs **no extra query**: it travels in the same row of the page, and
+  the pagination is exactly the one it would be without it. There is no way to
+  filter or order the listing by "has a logo".
 - Filtering by category never duplicates a provider, not even one carrying the
   same category twice or working in three categories.
 - The request costs **four queries** whatever the page size: the token, the

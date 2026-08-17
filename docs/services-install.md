@@ -95,6 +95,7 @@ Native title = «Nombre comercial».
 | `field_tags` | taxonomy_term_reference → `provider_tag` | ∞ | No | SPEC 81. «Etiquetas». Autocomplete (`taxonomy_autocomplete`) that **creates the terms it does not find** — see [How the tags are born](#how-the-tags-are-born). |
 | `field_short_description` | text (255) | 1 | No | SPEC 81. «Descripción corta». One line for the marketplace card. No text format selector. |
 | `field_gallery` | image | **10** | No | SPEC 82. «Galería». `png jpg jpeg`, 3 MB, **`private://`** — see [Which files are private](#which-files-are-private) and [provider-gallery.md](provider-gallery.md). Replaces the deleted `field_photo`. |
+| `field_logo` | image | 1 | No | SPEC 85. «Logo». `png jpg jpeg`, 2 MB, `200x200`–`1000x1000`, **`public://`** — see [The logo](#the-logo) and [Which files are private](#which-files-are-private). |
 
 The two counters exist so the "providers of a category" listing does not run an
 `AVG()` per row. The hooks that recalculate them ship with the rating flow;
@@ -131,6 +132,51 @@ count the rows of `field_data_field_photo` and it does not abort if it finds
 any. Confirm `SELECT COUNT(*) FROM field_data_field_photo` and have a database
 and files backup **before** running `drush updb` on any environment where
 photos might have been loaded — they are lost with no way back.
+
+#### The logo
+
+SPEC 85 gave `provider` a **public** logo: one image, optional, that travels as
+the `logo` key of `GET /api/v1/providers` and `GET /api/v1/providers/{id}`.
+
+It sits next to a private gallery on the same bundle, and that is not an
+oversight to be tidied up — it is the criterion of
+[Which files are private](#which-files-are-private) applied twice: **catalogue
+and commercial identity go public; content uploaded for one record goes
+private**. The logo is the same kind of asset as `field_category_icon`.
+
+Two settings of the instance are **not symmetrical**, and reading them as two
+equivalent limits is the mistake worth avoiding:
+
+| Setting | What it does |
+|---|---|
+| `min_resolution = 200x200` | **REJECTS.** An image below it cannot be saved and the form says the minimum. |
+| `max_resolution = 1000x1000` | **RESIZES, silently.** A `2000×1500` is accepted and stored as `1000×750`, with no error and no warning. |
+
+And `max_filesize = 2 MB` **is validated BEFORE the resize**, so the resize never
+rescues a heavy file: a `4000×4000` PNG of 5 MB is rejected **by weight** and
+never gets reduced. The operator has to export it light already — the automatic
+resize saves pixels, not upload bytes. Both behaviours are written in the field's
+description, which is the only text the operator reads while uploading.
+
+Two more things that are so by express decision:
+
+- **The aspect ratio is not validated.** Drupal 7 has no native ratio check, and
+  the two resolutions are independent caps, so a `1000×300` passes both. The
+  «square» recommendation lives in the description, and the app paints the logo
+  with `BoxFit.contain`.
+- **`uri_scheme = 'public'` and cardinality 1 belong to the FIELD.** Same as with
+  the gallery, changing the scheme later needs `field_update_field()` **and** a
+  `file_move()` of every logo — the work `myapi_update_7023()` had to do in
+  SPEC 65.
+
+`myapi_update_7031()` creates the field **empty for every provider already on
+the site**: there is no backfill, nothing gains an image and no node is touched.
+A provider with no logo answers `logo: null`, and the app decides its
+placeholder.
+
+Nothing writes the logo over the API: it is uploaded, replaced and removed by
+the operator from the back office, like the gallery and like everything else in
+the marketplace.
 
 #### The hourly rate
 
@@ -326,12 +372,23 @@ the whole day.
 | `field_images`, `field_attachment` (request) | `private://` | They may show the inside of a home. Inherited from the field, which SPEC 65 made private for claims — this feature adds an instance and changes nothing. |
 | `field_gallery` (provider) | `private://` | SPEC 82. An express decision: the gallery of a provider is not reachable by a guessable URL for anybody without a session. The price is that every image goes through PHP and needs a token — see [provider-gallery.md](provider-gallery.md). |
 | `field_category_icon` (category) | `public://` | A catalogue asset shown in the app's category grid. |
+| `field_logo` (provider) | `public://` | SPEC 85. An express decision: a logo is the provider's commercial identity, it goes on every card of the listing and it reveals nothing about anybody. Private, a page of twenty providers would be twenty authenticated requests and twenty Drupal bootstraps just to paint the list. |
 
 The category icon stays public because making it private would mean an
 authenticated download endpoint per thumbnail of the grid, for an image that
-reveals nothing. **The two criteria coexist on purpose**, and the rule for
-future specs is: a catalogue asset of the site is public; content uploaded for
-one ficha or one case is private.
+reveals nothing, and the logo of SPEC 85 is public for exactly the same reason.
+**The two criteria coexist on purpose** — and they now coexist on the same
+bundle, `provider`, with a public logo next to a private gallery. The rule for
+future specs is: a catalogue asset or the commercial identity of the site is
+public; content uploaded for one ficha or one case is private.
+
+One consequence of a public logo, accepted with the decision: its URL is
+guessable and cacheable forever. Removing a logo from the field does not clear
+it from a browser cache or a CDN in front, and the old URL may keep serving the
+file until it expires. It is commercial information the provider publishes
+themselves, not personal data. Should a logo ever need to be genuinely
+retractable, the way out is to make it private with a `hook_update_N` and a
+`file_move()` — the work of `myapi_update_7023()` — not a patch in the endpoint.
 
 ### Maintenance rule — `hook_file_download()` now has TWO owners
 
@@ -355,10 +412,19 @@ The cut is `$headers !== NULL` and **never** a loose `if (!$headers)`: that one
 happens to work today because `-1` is truthy, and stops working the day anyone
 changes that value.
 
-Any new file field on `provider` must be created with
+Any new **private** file field on `provider` must be created with
 `'settings' => ['uri_scheme' => 'private']` **and** added to the ownership
-resolution in `includes/myapi.provider_files.inc`. A field created without both
-is born public, or private and unreachable by both readers — the same rule
+resolution in `includes/myapi.provider_files.inc`. Half the job is worse than
+none: a field created without both is born public, or private and unreachable by
+both readers.
+
+A **public** one — `field_logo` is the only case today — does neither. It never
+goes through PHP, so it has no owner to resolve, and `hook_file_download()`
+knows nothing about it: that is exactly what makes it cheap, and why SPEC 85
+touched neither `myapi_file_download()` nor
+`includes/myapi.provider_files.inc`. What decides which of the two a new field
+is, is the criterion of [Which files are private](#which-files-are-private),
+never convenience. It is the same rule
 `includes/myapi.claims_files.inc` states for `reclamo` and `claim_transaction`,
 and payment receipts (`private://comprobantes_pago`, SPEC 20) are still
 recognised by nobody.
@@ -437,7 +503,7 @@ hand on the site survives the update untouched.
 | Site | What runs |
 |---|---|
 | Fresh install | `myapi_install()` → `_myapi_services_install()`, after `_myapi_claims_install()` (which creates the borrowed fields and makes them private) and before `_myapi_building_admin_install()`. |
-| Already installed | `drush updb` → `myapi_update_7025()` (SPEC 77), `myapi_update_7028()` (SPEC 81) and `myapi_update_7029()` (SPEC 82) → the same `_myapi_services_install()` in all three. |
+| Already installed | `drush updb` → `myapi_update_7025()` (SPEC 77), `myapi_update_7028()` (SPEC 81), `myapi_update_7029()` (SPEC 82), `myapi_update_7030()` (SPEC 84) and `myapi_update_7031()` (SPEC 85) → the same `_myapi_services_install()` in all five. |
 
 `drush cc all` afterwards. Update history of this feature:
 
@@ -446,13 +512,21 @@ hand on the site survives the update untouched.
 | `myapi_update_7025` | 77 | The `service_category` vocabulary, the five bundles and their fields. |
 | `myapi_update_7028` | 81 | The `provider_tag` vocabulary and the three new fields of `provider`. |
 | `myapi_update_7029` | 82 | `field_gallery` on `provider`, and the **deletion** of `field_photo` with its data. |
+| `myapi_update_7030` | 84 | The borrowed `field_unit` instance on `service_rating`. |
+| `myapi_update_7031` | 85 | `field_logo` on `provider` — public, one image, born **empty** for every existing provider. |
 
-The first two create **structure only**: no permission, no role, no route and no
-node, so running them changes nothing any user or the app can see. **`7029` is
-different in two ways**: it deletes a field and its data irreversibly (see
+All of them create **structure only** — no permission, no role and no node, so
+running them changes nothing any user already has. **`7029` is different in two
+ways**: it deletes a field and its data irreversibly (see
 [The gallery, and the photo that is gone](#the-gallery-and-the-photo-that-is-gone)),
 and SPEC 82 does add two routes — the ones documented in
 [provider-gallery.md](provider-gallery.md).
+
+**`7031` adds no route** and no field to fill in, but it does change the shape of
+two responses already in production: `GET /api/v1/providers` and
+`GET /api/v1/providers/{id}` gain the `logo` key, in second position. Whoever
+maintains the app has to know **before** the deployment — see
+[provider.md](provider.md) and [provider-detail.md](provider-detail.md).
 
 ---
 

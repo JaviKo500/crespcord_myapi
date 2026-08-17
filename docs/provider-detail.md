@@ -1,6 +1,6 @@
 ## GET /api/v1/providers/%
 
-One provider's full ficha (SPEC 84): the seven fields of the marketplace
+One provider's full ficha (SPEC 84): the eight fields of the marketplace
 listing ([provider.md](provider.md)) plus the address, the long description,
 the tags, the full gallery and the last three ratings with the whole
 history's summary grouped by star.
@@ -35,6 +35,7 @@ collection, and there is nothing else to wrap it with.
   "success": true,
   "data": {
     "id": 41,
+    "logo": "https://midominio.com/sites/default/files/logo-plomeria-torres.png",
     "title": "Plomería Torres",
     "categories": [
       { "id": 7, "code": "plomeria", "name": "Plomería" }
@@ -63,11 +64,18 @@ collection, and there is nothing else to wrap it with.
 }
 ```
 
-`data` carries exactly **13 keys, always all 13, in this order**:
+`data` carries exactly **14 keys, always all 14, in this order**:
+
+> **Change of shape (SPEC 85).** `data` used to carry **13** keys and now
+> carries **14**: `logo` was added in **second position**, right after `id`, the
+> same place it occupies in the listing. The other thirteen keep their type,
+> their value and their order. A client that pins the number of fields must be
+> updated **before** the deployment.
 
 | Field | Type | Notes |
 |-------|------|-------|
 | `id` | int | The provider's `nid`. Never `null`. |
+| `logo` | string \| **null** | Absolute URL of the provider's logo (`field_logo`), **identical** to the one the listing answers for this provider. `null` when it has none. It is a **direct, public** URL and needs **no `Authorization` header** — unlike every `url` of `gallery` below. See [The logo](provider.md#the-logo) in provider.md. |
 | `title` | string | Plain text, unescaped. Never empty. |
 | `categories` | array | Same shape and rule as the listing. `[]` when it has none. |
 | `rating_avg` | float \| **null** | See [rating_avg: null is not zero stars](provider.md#rating_avg-null-is-not-zero-stars) in provider.md — the same value, the same rule, not repeated here. |
@@ -81,9 +89,20 @@ collection, and there is nothing else to wrap it with.
 | `ratings` | array | The last **3** ratings, most recent `created` first. `[]` when the provider has none. |
 | `rating_summary` | object | Count of the **whole** rating history grouped by star, five keys always present. See below. |
 
-The first seven are the same keys the listing answers, with the same types
+The first eight are the same keys the listing answers, with the same types
 and the same empty-value rules — not repeated here in detail to avoid two
 sources of the same truth. See [provider.md](provider.md).
+
+They are not merely documented as equal: the two routes build them with the
+**same function**, so for a given provider the `logo` of this ficha is the very
+same string the listing answers, and the two can never diverge.
+
+Two URLs of very different natures travel in this response, and mixing them up
+is the mistake worth avoiding: `logo` is served by the **web server** and needs
+no header, while every `url` of `gallery` is served by **this module** and needs
+the same `Authorization` header as the request that brought them. The logo is
+public because it is commercial identity; the gallery is private because it is
+content uploaded for one record.
 
 **Every string of this response is plain text and travels unescaped** —
 `title`, `short_description`, `address`, `description`, the `tags`, both
@@ -130,7 +149,7 @@ The detail only requires the node to be **published** (`status = 1`) — it
 does **not** require the licence to be current, unlike the listing
 ([Who is an active provider](provider.md#who-is-an-active-provider)). A
 provider whose `field_license_expiry` is in the past still answers `200`
-here, with the same data — the same asymmetry
+here, with the same data — its `logo` included — the same asymmetry
 [provider-gallery.md](provider-gallery.md) already documents for its images:
 a lapsed provider disappears from the marketplace listing, but a ficha
 already open, and its gallery, keep serving. A provider with **no**
