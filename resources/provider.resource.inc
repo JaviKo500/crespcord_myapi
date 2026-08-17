@@ -522,12 +522,12 @@ function myapi_provider_count($category_id = NULL) {
  * myapi_provider_count(), plus the four columns the item needs and the
  * ordering.
  *
- * THE FOUR FIELD JOINS ARE LEFT AND NEVER INNER. All four fields are optional,
- * so an INNER JOIN would not return fewer columns — it would make providers
- * DISAPPEAR from the marketplace: no rate, no listing. It raises no error and
- * breaks no test about the shape of the response; nobody notices until a
- * provider calls asking why they are not there. That is the whole reason this
- * comment exists.
+ * EVERY FIELD JOIN IS LEFT AND NEVER INNER — the four of SPEC 83 and the two
+ * the logo of SPEC 85 adds. All those fields are optional, so an INNER JOIN
+ * would not return fewer columns — it would make providers DISAPPEAR from the
+ * marketplace: no rate, no listing. It raises no error and breaks no test about
+ * the shape of the response; nobody notices until a provider calls asking why
+ * they are not there. That is the whole reason this comment exists.
  *
  * THE ORDERING IS THREE CRITERIA, and each one answers something:
  *
@@ -558,7 +558,7 @@ function myapi_provider_count($category_id = NULL) {
  *
  * @return array
  *   Rows carrying `nid`, `title`, `rating_avg`, `rating_count`,
- *   `short_description` and `hourly_rate` — the aliases
+ *   `short_description`, `hourly_rate` and `logo_uri` — the aliases
  *   myapi_provider_build_item() reads.
  */
 function myapi_provider_fetch($category_id, $page, $limit, $order_by, $sort) {
@@ -580,6 +580,19 @@ function myapi_provider_fetch($category_id, $page, $limit, $order_by, $sort) {
 
   $query->leftJoin('field_data_field_hourly_rate', 'hr', "hr.entity_id = n.nid AND hr.entity_type = 'node' AND hr.deleted = 0");
   $query->addField('hr', 'field_hourly_rate_value', 'hourly_rate');
+
+  // The logo of SPEC 85, in two chained joins. BOTH ARE LEFT, and the second as
+  // much as the first: an INNER on field_data_field_logo would drop every
+  // provider with no logo, and an INNER on file_managed would drop the one whose
+  // file was deleted from disk outside Drupal. The two failures are the same
+  // kind — a missing image cannot make a company disappear from the marketplace.
+  //
+  // No extra query and no query per provider: the uri travels in the row the
+  // listing was already fetching. Neither join can multiply rows, because
+  // field_logo has cardinality 1 and file_managed.fid is a primary key.
+  $query->leftJoin('field_data_field_logo', 'lg', "lg.entity_id = n.nid AND lg.entity_type = 'node' AND lg.deleted = 0");
+  $query->leftJoin('file_managed', 'fm', 'fm.fid = lg.field_logo_fid');
+  $query->addField('fm', 'uri', 'logo_uri');
 
   if ($category_id !== NULL) {
     $query->exists(myapi_provider_category_exists($category_id));
@@ -684,20 +697,32 @@ function myapi_provider_categories_by_nid(array $nids) {
 /**
  * Shapes one provider row into the item of the listing (SPEC 83).
  *
- * ALWAYS THE SAME SEVEN KEYS, IN THIS ORDER — id, title, categories,
+ * ALWAYS THE SAME EIGHT KEYS, IN THIS ORDER — id, logo, title, categories,
  * rating_avg, rating_count, short_description, hourly_rate — because that order
  * is the one drupal_json_encode() prints and the one docs/provider.md shows. No
- * key is ever added or dropped by the data: a provider with no rating, no rate,
- * no description and no category answers all seven just the same.
+ * key is ever added or dropped by the data: a provider with no logo, no rating,
+ * no rate, no description and no category answers all eight just the same.
  *
- * Nothing of the detail travels: no phone, no address, no field_services_desc,
- * no tags and no image. That is not an omission, it is the scope line between
- * the listing and the future GET /api/v1/providers/% (SPEC 83, "Fuera de
- * alcance"), and the gallery is a route of its own precisely because those
- * files are private.
+ * THE DETAIL INHERITS EVERY ONE OF THEM. GET /api/v1/providers/% builds its
+ * first keys by calling this very builder (SPEC 84), so `logo` appeared on both
+ * endpoints with a single change and the two routes CANNOT diverge — no card of
+ * the listing can show a logo the record then fails to show. That is why the key
+ * is added here and not twice, once per endpoint.
  *
- * Four typing decisions live here, and each one has a symptom behind it:
+ * Nothing else of the detail travels: no phone, no address, no
+ * field_services_desc and no tags. That is not an omission, it is the scope line
+ * between the listing and GET /api/v1/providers/% (SPEC 83, "Fuera de alcance").
+ * The GALLERY does not travel either, and for a different reason: those files
+ * are private and have a route of their own. The logo does travel because it is
+ * public (SPEC 85) and it is what the card of the listing is for.
  *
+ * Five typing decisions live here, and each one has a symptom behind it:
+ *
+ * - `logo` is an ABSOLUTE, DIRECT URL to the file or NULL, never "" and never a
+ *   broken URL. It is NOT an api/v1/... path, unlike the gallery: field_logo is
+ *   public storage, so the web server serves it and a bare Flutter
+ *   Image.network paints it with no Authorization header at all. Same shape
+ *   `icon_url` already has in GET /api/v1/service-categories.
  * - `rating_avg` is float or NULL, never 0.0. Zero is OUTSIDE the 1–5 scale of
  *   myapi_services_star_values(), so it would be an impossible value travelling
  *   as if it were real, and the app would paint five empty stars where it
@@ -730,8 +755,9 @@ function myapi_provider_categories_by_nid(array $nids) {
  *
  * @param object $row
  *   One row of myapi_provider_fetch(), carrying the aliases `nid`, `title`,
- *   `rating_avg`, `rating_count`, `short_description` and `hourly_rate`. The
- *   four field columns arrive from LEFT JOINs, so any of them may be NULL.
+ *   `rating_avg`, `rating_count`, `short_description`, `hourly_rate` and
+ *   `logo_uri`. Every field column arrives from a LEFT JOIN, so any of them may
+ *   be NULL.
  * @param array $categories
  *   The categories of THIS provider, already built as {id, code, name} items
  *   and in delta order. Passed in and not looked up: resolving them here would
@@ -740,7 +766,7 @@ function myapi_provider_categories_by_nid(array $nids) {
  *   that has none.
  *
  * @return array
- *   The seven keys above, in that order.
+ *   The eight keys above, in that order.
  */
 function myapi_provider_build_item($row, array $categories = []) {
   $rating_avg = isset($row->rating_avg) && $row->rating_avg !== ''
@@ -753,8 +779,17 @@ function myapi_provider_build_item($row, array $categories = []) {
 
   $short_description = isset($row->short_description) ? $row->short_description : '';
 
+  // Same emptiness guard as rating_avg and hourly_rate above — isset() AND
+  // !== '' — so a provider with no logo, or one whose field row points at a
+  // file_managed that no longer exists, answers NULL and never "" nor a broken
+  // URL. The app has one empty case to handle, not two.
+  $logo = isset($row->logo_uri) && $row->logo_uri !== ''
+    ? file_create_url($row->logo_uri)
+    : NULL;
+
   return [
     'id'                => (int) $row->nid,
+    'logo'              => $logo,
     'title'             => myapi_text_to_plain($row->title),
     'categories'        => $categories,
     'rating_avg'        => $rating_avg,
@@ -780,19 +815,19 @@ function myapi_provider_build_item($row, array $categories = []) {
 /**
  * The provider row of the detail (SPEC 84).
  *
- * Same base and same six aliases as myapi_provider_fetch() — nid, title,
- * rating_avg, rating_count, short_description, hourly_rate — plus two new
- * LEFT JOINs for address and description. UNLIKE the listing, this does NOT
+ * Same base and same aliases as myapi_provider_fetch() — nid, title,
+ * rating_avg, rating_count, short_description, hourly_rate and logo_uri — plus
+ * two more LEFT JOINs for address and description. UNLIKE the listing, this does NOT
  * call myapi_provider_apply_active_conditions(): the detail only requires the
  * node to be PUBLISHED, not "active" (published AND licensed). A provider
  * with an expired licence keeps answering 200 here, exactly like its gallery
  * (SPEC 82) already does — the licence rule lives where it means something,
  * the listing.
  *
- * All six field joins are LEFT, for the same reason as the listing: every one
- * of these fields is optional, and an INNER JOIN would make the detail
- * disappear (404) for a provider who simply has not filled in a rate or a
- * description, instead of answering the documented empty value.
+ * EVERY field join is LEFT, for the same reason as the listing: every one of
+ * these fields is optional, and an INNER JOIN would make the detail disappear
+ * (404) for a provider who simply has not filled in a rate, a description or a
+ * logo, instead of answering the documented empty value.
  *
  * @param int $id  The provider nid, already validated as a positive integer.
  *
@@ -823,6 +858,14 @@ function myapi_provider_detail_fetch($id) {
 
   $query->leftJoin('field_data_field_services_desc', 'de', "de.entity_id = n.nid AND de.entity_type = 'node' AND de.deleted = 0");
   $query->addField('de', 'field_services_desc_value', 'description');
+
+  // The same pair of chained joins as myapi_provider_fetch(), with the same
+  // alias, so both endpoints read the logo from the same column name. BOTH ARE
+  // LEFT for the same reason: here an INNER would turn a provider with no logo —
+  // or with a file deleted from disk — into a 404 on their own detail page.
+  $query->leftJoin('field_data_field_logo', 'lg', "lg.entity_id = n.nid AND lg.entity_type = 'node' AND lg.deleted = 0");
+  $query->leftJoin('file_managed', 'fm', 'fm.fid = lg.field_logo_fid');
+  $query->addField('fm', 'uri', 'logo_uri');
 
   $query->range(0, 1);
 
@@ -1015,11 +1058,16 @@ function myapi_provider_build_rating_item($row) {
 /**
  * Shapes the whole provider detail item (SPEC 84).
  *
- * Starts from myapi_provider_build_item() — the same seven keys the listing
- * (SPEC 83) answers for this provider, byte for byte — and adds the six new
- * ones of the detail, in the exact order docs/provider-detail.md documents:
- * id, title, categories, rating_avg, rating_count, short_description,
- * hourly_rate, address, description, tags, gallery, ratings, rating_summary.
+ * Starts from myapi_provider_build_item() — the same eight keys the listing
+ * (SPEC 83, plus the logo of SPEC 85) answers for this provider, byte for byte —
+ * and adds the six new ones of the detail, in the exact order
+ * docs/provider-detail.md documents: id, logo, title, categories, rating_avg,
+ * rating_count, short_description, hourly_rate, address, description, tags,
+ * gallery, ratings, rating_summary.
+ *
+ * `logo` is inherited and not mapped here, which is the point: the listing and
+ * the detail answer the same URL for the same provider because there is one
+ * builder and not two.
  *
  * `address` and `description` go through myapi_text_to_plain(), which is by now
  * the only string helper this resource uses: they are text_long fields with
@@ -1047,7 +1095,7 @@ function myapi_provider_build_rating_item($row) {
  *   The five-key map myapi_provider_rating_summary() returns.
  *
  * @return array
- *   The thirteen keys of the detail, in order.
+ *   The fourteen keys of the detail, in order.
  */
 function myapi_provider_detail_build_item($row, array $categories, array $tags, $gallery_rows, array $ratings_rows, array $rating_summary) {
   $item = myapi_provider_build_item($row, $categories);

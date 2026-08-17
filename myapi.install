@@ -2148,6 +2148,28 @@ function _myapi_services_install() {
     'cardinality' => 10,
     'settings'    => ['uri_scheme' => 'private'],
   ]);
+  // The logo of SPEC 85. It is born PUBLIC, right next to a private gallery on
+  // the same bundle, and that is deliberate: the criterion SPEC 82 wrote down is
+  // "site catalogue and commercial identity -> public; content uploaded for one
+  // record or one case -> private". A logo is the shop window of the provider,
+  // the same kind of asset as field_category_icon (SPEC 79), which is already
+  // public in this feature. It also goes on every card of the listing: with
+  // twenty providers per page, a private logo would be twenty authenticated
+  // requests and twenty Drupal bootstraps just to paint the list.
+  //
+  // uri_scheme belongs to the FIELD (storage), not to the instance, exactly like
+  // field_gallery above: deciding it here and once is what avoids a
+  // field_update_field() plus a file_move() per file later on — the work
+  // myapi_update_7023() had to do in SPEC 65.
+  //
+  // Cardinality 1: one file or none, never a list. Uploading a new one replaces
+  // the previous one in the form.
+  _myapi_reservations_ensure_field('field_logo', [
+    'field_name'  => 'field_logo',
+    'type'        => 'image',
+    'cardinality' => 1,
+    'settings'    => ['uri_scheme' => 'public'],
+  ]);
 
   // Own fields of 'service_request'.
   _myapi_reservations_ensure_field('field_category', [
@@ -2405,6 +2427,40 @@ function _myapi_services_install() {
     'settings'    => [
       'file_extensions'    => 'png jpg jpeg',
       'max_filesize'       => '3 MB',
+      'alt_field'          => 1,
+      'alt_field_required' => 0,
+    ],
+    'widget'      => ['type' => 'image_image'],
+  ]);
+  // The logo instance of SPEC 85. The two resolution settings are NOT
+  // symmetrical, and reading them as two equivalent limits is the mistake this
+  // comment exists to prevent:
+  //
+  //   - min_resolution REJECTS. An image below 200x200 cannot be saved and the
+  //     form says so.
+  //   - max_resolution RESIZES, silently. An image of 2000x1500 is accepted and
+  //     stored as 1000x750, with no error and no warning.
+  //
+  // And max_filesize is validated BEFORE the resize, so the resize never
+  // rescues a heavy file: a 4000x4000 PNG of 5 MB is rejected by weight and
+  // never gets reduced. The 2 MB are those of the file leaving the operator's
+  // disk.
+  //
+  // The aspect ratio is not validated: D7 has no native ratio check and
+  // min/max_resolution are independent caps, so a 1000x300 passes both. The
+  // "square" recommendation lives in the description, by explicit decision.
+  _myapi_reservations_ensure_instance('field_logo', $provider_type, [
+    'field_name'  => 'field_logo',
+    'entity_type' => 'node',
+    'bundle'      => $provider_type,
+    'label'       => 'Logo',
+    'required'    => 0,
+    'description' => 'Logo del proveedor. Se recomienda cuadrado, mínimo 200×200 px y máximo 2 MB. Una imagen mayor de 1000×1000 se reduce automáticamente al guardar; una menor de 200×200 se rechaza.',
+    'settings'    => [
+      'file_extensions'    => 'png jpg jpeg',
+      'max_filesize'       => '2 MB',
+      'min_resolution'     => '200x200',
+      'max_resolution'     => '1000x1000',
       'alt_field'          => 1,
       'alt_field_required' => 0,
     ],
@@ -2762,6 +2818,10 @@ function _myapi_services_uninstall_destructive() {
     // myapi_update_7029(). Same reasoning as the three names above: the name is
     // new in the whole module, so deleting it takes nobody else's data down.
     'field_gallery',
+    // SPEC 85. Same reasoning again: the name is new in the whole module and no
+    // other bundle uses it, so deleting it takes nobody else's data down. A
+    // destructive uninstall does remove every logo and its files.
+    'field_logo',
   ];
   foreach ($owned as $field_name) {
     if (field_info_field($field_name)) {
@@ -3855,5 +3915,30 @@ function myapi_update_7030() {
 
   return t('SPEC 84: añadida a @type la instancia de field_unit (vivienda del residente que calificó).', [
     '@type' => MYAPI_SERVICES_RATING_TYPE,
+  ]);
+}
+
+/**
+ * SPEC 85: adds the public logo (field_logo) to 'provider'.
+ *
+ * Re-runs the WHOLE services installer instead of creating the field on its
+ * own, exactly like myapi_update_7028(), 7029() and 7030(): every creation
+ * inside goes through the idempotent _ensure_* sub-helpers, so everything
+ * already in place is found and left alone, which also makes it safe to call
+ * twice.
+ *
+ * The field is born EMPTY for every provider already on the site and there is
+ * no backfill: nothing gains an image and no node is touched by this update,
+ * the same way field_short_description was born empty in SPEC 81. The logo is
+ * optional, so no provider already loaded becomes invalid.
+ *
+ * It is born PUBLIC, so there is no file_move() here either: nothing is
+ * migrated from anywhere.
+ */
+function myapi_update_7031() {
+  _myapi_services_install();
+
+  return t('SPEC 85: creado field_logo (público, una imagen de hasta 2 MB) en @type. Nace vacío para todos los proveedores existentes.', [
+    '@type' => MYAPI_SERVICES_PROVIDER_TYPE,
   ]);
 }
