@@ -483,6 +483,48 @@ class ProviderGalleryEndpointTest extends TestCase {
   }
 
   /**
+   * And so is the fid of a LOGO (SPEC 85), even the logo of THIS very provider.
+   *
+   * The logo is the third family of files hanging off a provider and the only
+   * PUBLIC one: it lives in field_data_field_logo, it is served by the web
+   * server and it never goes through this route. This case is what proves the
+   * two families do not cross — the download endpoint only ever recognises what
+   * hangs from field_data_field_gallery, so a logo fid is simply not a member of
+   * this provider's gallery and fails closed, exactly like a claim's.
+   *
+   * Seeding an EMPTY gallery is the point: the logo must not become an image of
+   * the carousel by the mere fact of belonging to the same provider.
+   */
+  public function testAFidOfALogoIsFileNotFound() {
+    $this->seedRequest([
+      'field_data_field_gallery' => [],
+      'field_data_field_logo'    => [
+        [
+          'entity_id'      => self::PROVIDER,
+          'entity_type'    => 'node',
+          'deleted'        => 0,
+          'delta'          => 0,
+          'field_logo_fid' => 55,
+          'fid'            => 55,
+          'uri'            => 'public://logo-taller-el-sauco.png',
+        ],
+      ],
+    ]);
+    // Perfectly loadable, like the claim file above: the only thing refusing it
+    // is the membership check.
+    myapi_test_file_seed([55 => [
+      'fid' => 55, 'uri' => __FILE__,
+      'filemime' => 'image/png', 'filesize' => 100, 'filename' => 'logo-taller-el-sauco.png',
+    ]]);
+
+    $result = $this->download((string) self::PROVIDER, '55');
+
+    $this->assertSame(404, $result['status']);
+    $this->assertSame('file_not_found', $result['json']['error_code']);
+    $this->assertSame([], myapi_test_file_transfers(), 'a logo is never streamed by the gallery route');
+  }
+
+  /**
    * A file_managed row pointing at bytes that are not on disk answers 404 too,
    * never a 200 of zero bytes and never a PHP warning out of fopen().
    */
@@ -645,6 +687,26 @@ class ProviderGalleryEndpointTest extends TestCase {
     ]);
     $this->assertNull(myapi_provider_file_download_headers('private://otros/x.pdf', $this->account(1)));
     $this->assertCount(2, myapi_test_db_queries(), 'the fid lookup plus the ownership one');
+  }
+
+  /**
+   * A LOGO uri (SPEC 85) answers NULL here too, and that is not a gap: the hook
+   * only ever fires for PRIVATE files, and a public:// logo is served by the web
+   * server without PHP ever being asked. Even seeded as a real file_managed row
+   * of this provider, it belongs to no gallery, so the ownership resolution says
+   * "not mine" and nobody claims it.
+   *
+   * The case exists because the alternative would be silent: a logo that this
+   * module decided to own would be a public file gaining an access check it does
+   * not need, on the hot path of every private download of the site.
+   */
+  public function testALogoUriIsClaimedByNobody() {
+    myapi_test_db_seed([
+      'file_managed'             => [['fid' => '55', 'uri' => 'public://logo-taller-el-sauco.png']],
+      'field_data_field_gallery' => [],
+    ]);
+
+    $this->assertNull(myapi_provider_file_download_headers('public://logo-taller-el-sauco.png', $this->account(41)));
   }
 
   /**
