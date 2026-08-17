@@ -223,6 +223,7 @@ needed it goes in the form or the endpoint that decides it.
 |---|---|:---:|:---:|---|
 | `field_requester` | entityreference → user | 1 | Yes | **Shared** with `reservation`/`reclamo` (SPEC 32). The resident who owns the request and the recipient of its notifications. |
 | `field_condominium` | entityreference → `condominio` | 1 | Yes | **Shared** (SPEC 32). |
+| `field_unit` | entityreference → `vivienda` | 1 | Yes | **Shared** with `reservation` (SPEC 32) and `service_rating` (SPEC 84). The unit the service is for. Added by SPEC 86. |
 | `field_category` | taxonomy_term_reference → `service_category` | 1 | Yes | |
 | `field_description` | text_long | 1 | Yes | **Shared** with `reclamo` (SPEC 55). |
 | `field_desired_start` | datestamp | 1 | Yes | |
@@ -237,6 +238,17 @@ needed it goes in the form or the endpoint that decides it.
 whoever saved the node (the backend, possibly) and `field_requester` is the
 resident the request belongs to. Same distinction `reservation` has made since
 SPEC 32.
+
+`field_unit` is **required here and optional on `service_rating`**, and that is
+deliberate. `required` is an *instance* setting, so the three instances of this
+one field diverge freely: `reservation` required, `service_rating` optional
+(SPEC 84 was added to a bundle that could already hold nodes), `service_request`
+required (SPEC 86 — a service goes to one specific unit, and the bundle had no
+stored node to invalidate). Nothing writes it yet: the endpoint that creates a
+request does not exist. Whoever writes it also has to decide something Drupal
+does not validate — that the chosen `vivienda` belongs to the
+`field_condominium` of the same request. `myapi_units_condominium_nids()`
+(`includes/myapi.unit_access.inc`) resolves it.
 
 ### Oferta (`service_offer`)
 
@@ -433,12 +445,13 @@ recognised by nobody.
 
 ## Shared fields — read this before editing the installer
 
-Seven fields are **borrowed**, not created. Each gets a new instance here and
+Eight fields are **borrowed**, not created. Each gets a new instance here and
 the field itself is untouched:
 
 | Field | Owner | Used on |
 |---|---|---|
 | `field_requester`, `field_condominium` | reservations (SPEC 32) | `service_request` |
+| `field_unit` | reservations (SPEC 32) | `service_rating` (SPEC 84), `service_request` (SPEC 86) |
 | `field_description`, `field_images`, `field_attachment` | claims (SPEC 55/65) | `service_request` |
 | `field_status_date`, `field_comment` | claims (SPEC 55) | `service_transaction` |
 
@@ -503,7 +516,7 @@ hand on the site survives the update untouched.
 | Site | What runs |
 |---|---|
 | Fresh install | `myapi_install()` → `_myapi_services_install()`, after `_myapi_claims_install()` (which creates the borrowed fields and makes them private) and before `_myapi_building_admin_install()`. |
-| Already installed | `drush updb` → `myapi_update_7025()` (SPEC 77), `myapi_update_7028()` (SPEC 81), `myapi_update_7029()` (SPEC 82), `myapi_update_7030()` (SPEC 84) and `myapi_update_7031()` (SPEC 85) → the same `_myapi_services_install()` in all five. |
+| Already installed | `drush updb` → `myapi_update_7025()` (SPEC 77), `myapi_update_7028()` (SPEC 81), `myapi_update_7029()` (SPEC 82), `myapi_update_7030()` (SPEC 84), `myapi_update_7031()` (SPEC 85) and `myapi_update_7032()` (SPEC 86) → the same `_myapi_services_install()` in all six. |
 
 `drush cc all` afterwards. Update history of this feature:
 
@@ -514,6 +527,7 @@ hand on the site survives the update untouched.
 | `myapi_update_7029` | 82 | `field_gallery` on `provider`, and the **deletion** of `field_photo` with its data. |
 | `myapi_update_7030` | 84 | The borrowed `field_unit` instance on `service_rating`. |
 | `myapi_update_7031` | 85 | `field_logo` on `provider` — public, one image, born **empty** for every existing provider. |
+| `myapi_update_7032` | 86 | The borrowed `field_unit` instance on `service_request` — the first one of this feature that is **required**. |
 
 All of them create **structure only** — no permission, no role and no node, so
 running them changes nothing any user already has. **`7029` is different in two
@@ -527,6 +541,21 @@ two responses already in production: `GET /api/v1/providers` and
 `GET /api/v1/providers/{id}` gain the `logo` key, in second position. Whoever
 maintains the app has to know **before** the deployment — see
 [provider.md](provider.md) and [provider-detail.md](provider-detail.md).
+
+**`7032` is the one to check before running.** It adds no route and changes no
+response — `service_request` still has no endpoint — but its instance is
+**required**, and a required instance on an already-installed bundle stops any
+node without a value from being saved again. Count them first:
+
+```bash
+drush sqlq "SELECT COUNT(*) FROM node WHERE type = 'service_request';"
+```
+
+`0` is the expected answer, because no flow creates requests yet and only
+`administrator`/`backend` reach the form. If it is not `0`, those requests need a
+unit picked by hand — the update runs no backfill and touches no node, on
+purpose: nothing in the module can infer which unit a request meant (a resident
+may occupy several, see [provider-detail.md](provider-detail.md)).
 
 ---
 
