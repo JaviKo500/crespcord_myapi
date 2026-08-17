@@ -11,6 +11,7 @@ module_load_include('inc', 'myapi', 'includes/myapi.i18n');
 module_load_include('inc', 'myapi', 'includes/myapi.token');
 module_load_include('inc', 'myapi', 'includes/myapi.auth');
 module_load_include('inc', 'myapi', 'includes/myapi.unit_access');
+module_load_include('inc', 'myapi', 'includes/myapi.user');
 
 /**
  * Dispatcher for /api/v1/units.
@@ -254,40 +255,16 @@ function myapi_unit_fetch_occupant_uids($nids) {
 /**
  * Fetches display names for a set of user ids (owners and/or occupants).
  *
- * Uses "$field_nombre $field_apellidos" when both are non-empty; falls back
- * to the full users.name otherwise, to avoid hybrid names mixing a username
- * with only one of the two parts.
+ * Thin wrapper over myapi_user_display_names(): SPEC 89 moved the name rule
+ * ("nombre apellidos", or users.name when either part is missing) to
+ * includes/myapi.user.inc, since the service request detail became its second
+ * consumer. The wrapper stays so this resource's callers and the
+ * GET /api/v1/units contract keep working untouched.
  *
  * @param array $uids  User ids to fetch.
  *
  * @return array  Map of uid => name.
  */
 function myapi_unit_fetch_user_names($uids) {
-  if (empty($uids)) {
-    return [];
-  }
-
-  $query = db_select('users', 'u')
-    ->fields('u', ['uid', 'name'])
-    ->condition('u.uid', $uids, 'IN');
-
-  $query->leftJoin('field_data_field_nombre', 'fn', "fn.entity_id = u.uid AND fn.entity_type = 'user' AND fn.deleted = 0");
-  $query->addField('fn', 'field_nombre_value', 'first_name');
-
-  $query->leftJoin('field_data_field_apellidos', 'fa', "fa.entity_id = u.uid AND fa.entity_type = 'user' AND fa.deleted = 0");
-  $query->addField('fa', 'field_apellidos_value', 'last_name');
-
-  $result = $query->execute();
-
-  $names = [];
-  foreach ($result as $account) {
-    if ($account->first_name !== NULL && $account->first_name !== '' && $account->last_name !== NULL && $account->last_name !== '') {
-      $names[$account->uid] = $account->first_name . ' ' . $account->last_name;
-    }
-    else {
-      $names[$account->uid] = $account->name;
-    }
-  }
-
-  return $names;
+  return myapi_user_display_names($uids);
 }
