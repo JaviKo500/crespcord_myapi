@@ -198,12 +198,21 @@ function myapi_provider_role_access_decision($belongs, array $account_provider_i
  *    enablement. What was already touched stays visible, including the
  *    history of a closed or cancelled request the provider took part in.
  * 2. It concerns the provider NOW — all three at once: the request's
- *    category is one of the provider's; the status is 'open' or 'offered';
- *    and the provider is active (myapi_services_provider_is_active()).
+ *    category is one of the provider's; the status is 'open', 'direct' or
+ *    'offered'; and the provider is active
+ *    (myapi_services_provider_is_active()).
  *
  * A request in 'assigned', 'closed' or 'cancelled' of a matching category, in
  * which the provider did NOT offer, is therefore not visible: it is not
  * theirs and there is nothing left for them to do with it.
+ *
+ * 'direct' is on the visible side, alongside 'open': a request born with a
+ * provider already chosen is still broadcast by category, exactly like an open
+ * one. This function reads the status and the categories and nothing else, so
+ * it does NOT narrow a direct request to the chosen provider —
+ * field_assigned_provider is not an input here. Narrowing it belongs to the
+ * spec of the flow that writes that field, and would be a second condition on
+ * top of this one, not a change to it.
  *
  * @param int|null $request_category
  *   The tid of the request's field_category, or NULL when unset.
@@ -243,10 +252,27 @@ function myapi_provider_role_request_visible(
     return FALSE;
   }
 
-  return in_array($request_status, [
+  return in_array($request_status, myapi_provider_role_broadcast_statuses(), TRUE);
+}
+
+/**
+ * The request statuses a provider may see by category.
+ *
+ * Extracted so the pure decision above and the SQL condition of
+ * myapi_provider_role_visible_request_ids() read the SAME list: the two used to
+ * repeat it, and a status added to one and not to the other would make a
+ * request reachable by direct URL but absent from every listing (or the other
+ * way round) — the hardest kind of access bug to notice.
+ *
+ * @return array
+ *   The status keys that are broadcast to the providers of the category.
+ */
+function myapi_provider_role_broadcast_statuses() {
+  return [
     MYAPI_SERVICES_REQUEST_STATUS_OPEN,
+    MYAPI_SERVICES_REQUEST_STATUS_DIRECT,
     MYAPI_SERVICES_REQUEST_STATUS_OFFERED,
-  ], TRUE);
+  ];
 }
 
 /**
@@ -621,7 +647,8 @@ function myapi_provider_role_has_offered($request_nid, array $provider_ids) {
  * The category-mode counterpart of myapi_provider_role_offered_request_ids():
  * the union of "already offered" (myapi_provider_role_request_visible()'s
  * first branch, status- and enablement-independent) and "concerns them now"
- * (its second branch: category matches, status is 'open' or 'offered', AND
+ * (its second branch: category matches, status is one of
+ * myapi_provider_role_broadcast_statuses(), AND
  * the account has at least one active provider — the category sub-query is
  * skipped entirely when it does not, since nothing in it would survive
  * myapi_provider_role_request_visible() either).
@@ -682,10 +709,11 @@ function myapi_provider_role_visible_request_ids($account = NULL) {
       );
       $query->condition('n.type', MYAPI_SERVICES_REQUEST_TYPE);
       $query->condition('fcat.field_category_tid', $category_ids, 'IN');
-      $query->condition('frs.field_request_status_value', [
-        MYAPI_SERVICES_REQUEST_STATUS_OPEN,
-        MYAPI_SERVICES_REQUEST_STATUS_OFFERED,
-      ], 'IN');
+      $query->condition(
+        'frs.field_request_status_value',
+        myapi_provider_role_broadcast_statuses(),
+        'IN'
+      );
 
       $visible = array_merge($visible, array_map('intval', $query->execute()->fetchCol()));
     }

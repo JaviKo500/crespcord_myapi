@@ -216,6 +216,11 @@ class ProviderRoleTest extends TestCase {
     return array(
       'category+, open,    active   -> visible'     => array(TRUE,  MYAPI_SERVICES_REQUEST_STATUS_OPEN,      TRUE,  TRUE,  'cat+/open/active'),
       'category+, offered, active   -> visible'     => array(TRUE,  MYAPI_SERVICES_REQUEST_STATUS_OFFERED,   TRUE,  TRUE,  'cat+/offered/active'),
+      // SPEC 87: a request born with a provider already chosen is still
+      // broadcast by category, exactly like an open one.
+      'category+, direct, active    -> visible'     => array(TRUE,  MYAPI_SERVICES_REQUEST_STATUS_DIRECT,    TRUE,  TRUE,  'cat+/direct/active'),
+      'category-, direct, active    -> not visible' => array(FALSE, MYAPI_SERVICES_REQUEST_STATUS_DIRECT,    TRUE,  FALSE, 'cat-/direct/active'),
+      'category+, direct, inactive  -> not visible' => array(TRUE,  MYAPI_SERVICES_REQUEST_STATUS_DIRECT,    FALSE, FALSE, 'cat+/direct/inactive'),
       'category+, assigned, active  -> not visible' => array(TRUE,  MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED,  TRUE,  FALSE, 'cat+/assigned/active'),
       'category+, closed, active    -> not visible' => array(TRUE,  MYAPI_SERVICES_REQUEST_STATUS_CLOSED,    TRUE,  FALSE, 'cat+/closed/active'),
       'category+, cancelled, active -> not visible' => array(TRUE,  MYAPI_SERVICES_REQUEST_STATUS_CANCELLED, TRUE,  FALSE, 'cat+/cancelled/active'),
@@ -261,6 +266,58 @@ class ProviderRoleTest extends TestCase {
    */
   public function testRequestVisibleWithNoProviderCategoriesIsNotVisible() {
     $this->assertFalse(myapi_provider_role_request_visible(5, array(), MYAPI_SERVICES_REQUEST_STATUS_OPEN, FALSE, TRUE));
+  }
+
+  /**
+   * The broadcast list is exactly the three non-terminal statuses in which a
+   * provider still has something to do: 'open', 'direct' (SPEC 87) and
+   * 'offered'. 'assigned' is out — the job is somebody else's — and so are the
+   * two terminals.
+   */
+  public function testBroadcastStatusesAreTheThreeActionableOnes() {
+    $this->assertSame(
+      array(
+        MYAPI_SERVICES_REQUEST_STATUS_OPEN,
+        MYAPI_SERVICES_REQUEST_STATUS_DIRECT,
+        MYAPI_SERVICES_REQUEST_STATUS_OFFERED,
+      ),
+      myapi_provider_role_broadcast_statuses()
+    );
+
+    foreach (array(
+      MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED,
+      MYAPI_SERVICES_REQUEST_STATUS_CLOSED,
+      MYAPI_SERVICES_REQUEST_STATUS_CANCELLED,
+    ) as $status) {
+      $this->assertNotContains($status, myapi_provider_role_broadcast_statuses(), $status . ' must not be broadcast');
+    }
+  }
+
+  /**
+   * GUARD, and the reason the list was extracted at all: the SQL half of the
+   * filter — the category sub-query of myapi_provider_role_visible_request_ids()
+   * — must read the SAME list as the pure decision, not a second copy of it. A
+   * status added to one and not to the other makes a request reachable by
+   * direct URL and absent from every listing, or the other way round, with no
+   * error anywhere.
+   */
+  public function testTheQueryFilterReadsTheSameBroadcastList() {
+    $source = preg_replace(
+      '/\s+/',
+      ' ',
+      file_get_contents(__DIR__ . '/../../includes/myapi.provider_role.inc')
+    );
+
+    // The pure decision.
+    $this->assertStringContainsString(
+      'in_array($request_status, myapi_provider_role_broadcast_statuses(), TRUE)',
+      $source
+    );
+    // The SQL condition, reading the very same function.
+    $this->assertStringContainsString(
+      "\$query->condition( 'frs.field_request_status_value', myapi_provider_role_broadcast_statuses(), 'IN' )",
+      $source
+    );
   }
 
   /* -------------------------------------------------------------------------

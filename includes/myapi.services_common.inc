@@ -73,13 +73,22 @@ if (!defined('MYAPI_SERVICES_REQUEST_STATUS_OPEN')) {
   define('MYAPI_SERVICES_REQUEST_STATUS_OPEN', 'open');
 }
 
+// The second status a request can be BORN in: the resident went straight to a
+// provider of their choice, with no bidding round. It is not reachable from any
+// other status — see myapi_services_request_transitions() — and closing from it
+// requires a rating exactly like 'assigned' does, because there is a provider
+// who did the job.
+if (!defined('MYAPI_SERVICES_REQUEST_STATUS_DIRECT')) {
+  define('MYAPI_SERVICES_REQUEST_STATUS_DIRECT', 'direct');
+}
+
 // At least one offer received, none awarded yet.
 if (!defined('MYAPI_SERVICES_REQUEST_STATUS_OFFERED')) {
   define('MYAPI_SERVICES_REQUEST_STATUS_OFFERED', 'offered');
 }
 
-// An offer has been awarded. This is the ONE status from which closing
-// requires a rating — see myapi_services_close_requires_rating().
+// An offer has been awarded. Closing from here requires a rating — see
+// myapi_services_close_requires_rating(), which says the same of 'direct'.
 if (!defined('MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED')) {
   define('MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED', 'assigned');
 }
@@ -129,12 +138,20 @@ function myapi_services_node_types() {
  * only ever seen in the back office. This is the same criterion as
  * field_area_category (SPEC 32) and field_status (SPEC 55).
  *
+ * Order is lifecycle order, with one deliberate detail: the TWO statuses a
+ * request can be born in — 'open' and 'direct' — come first, then the bidding
+ * chain, then the two terminals. 'direct' sits next to 'open' and not next to
+ * 'assigned' because it is an entry point, not a step of the round; that it
+ * behaves like 'assigned' when closing is a rule of
+ * myapi_services_close_requires_rating(), not a place in the list.
+ *
  * @return array
  *   Status key => Spanish label, in lifecycle order.
  */
 function myapi_services_request_statuses() {
   return [
     MYAPI_SERVICES_REQUEST_STATUS_OPEN      => 'Abierta',
+    MYAPI_SERVICES_REQUEST_STATUS_DIRECT    => 'Proveedor directo',
     MYAPI_SERVICES_REQUEST_STATUS_OFFERED   => 'Con ofertas',
     MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED  => 'Asignada',
     MYAPI_SERVICES_REQUEST_STATUS_CLOSED    => 'Cerrada',
@@ -187,19 +204,30 @@ function myapi_services_star_values() {
  * The graph agreed for this module:
  *
  *   open ──(first offer)──> offered ──(award)──> assigned
- *     │                        │                    │
- *     │                        └──> closed <────────┘
- *     └────────────> cancelled <────┴────────────────┘
+ *                              │                    │
+ *                              └────> closed <──────┘
+ *                                       ▲
+ *   direct ─────────────────────────────┘
+ *
+ *   open | direct | offered | assigned ──> cancelled
  *
  * - open → offered      automatic, on the first offer.
  * - offered → assigned  the resident picks an offer.
  * - offered → closed    closing with no award, allowed by the contract (7.2.4).
  * - assigned → closed   closing after the job; needs a rating (see below).
+ * - direct → closed     closing a direct job; needs a rating too (see below).
  * - anything → cancelled, except from a terminal status.
  *
  * 'closed' and 'cancelled' are TERMINAL: they map to an empty list, and
  * nothing reopens a request. That is a decision, not an omission — reopening
  * would need its own rules about the offers and the chat of the closed round.
+ *
+ * 'direct' is a ROOT: no status leads to it. A request either is born with a
+ * provider already chosen or it goes through the bidding round, and the two
+ * paths never cross — 'open' → 'direct' would leave the offers already
+ * received with nothing to resolve them, and 'assigned' → 'direct' would
+ * contradict the offer the resident already awarded. The two ways in and out
+ * of it live in the same graph so nothing has to restate them.
  *
  * SPEC 77 does not enforce any of this: no endpoint and no form validation
  * reads this catalogue yet. It is written here now so the flow spec has one
@@ -212,6 +240,10 @@ function myapi_services_request_transitions() {
   return [
     MYAPI_SERVICES_REQUEST_STATUS_OPEN => [
       MYAPI_SERVICES_REQUEST_STATUS_OFFERED,
+      MYAPI_SERVICES_REQUEST_STATUS_CANCELLED,
+    ],
+    MYAPI_SERVICES_REQUEST_STATUS_DIRECT => [
+      MYAPI_SERVICES_REQUEST_STATUS_CLOSED,
       MYAPI_SERVICES_REQUEST_STATUS_CANCELLED,
     ],
     MYAPI_SERVICES_REQUEST_STATUS_OFFERED => [
@@ -257,13 +289,17 @@ function myapi_services_transition_allowed($from, $to) {
  * Tells whether closing a request from this status requires a rating first.
  *
  * The rule agreed for this module: a rating is demanded when — and only when —
- * the request reached 'assigned', that is, when there is an awarded provider
- * to rate. Closing from 'offered' is the "no award" path of the contract
- * (7.2.4) and there is nobody to score.
+ * there is a provider who did the job, which happens in exactly two statuses:
+ * 'assigned' (the provider of the awarded offer) and 'direct' (the provider the
+ * resident picked with no round). Closing from 'offered' is the "no award" path
+ * of the contract (7.2.4) and there is nobody to score.
  *
- * The invariant this protects sits in the data model too: a service_rating
- * points at an OFFER (field_rating_offer), so a rating with no awarded offer
- * is unrepresentable rather than merely forbidden.
+ * The two paths differ in what the rating can hang off, and that is why
+ * field_rating_offer is OPTIONAL on 'service_rating': an assigned request has
+ * an offer to point at, a direct one has none, and the reference that always
+ * exists is field_rating_provider. Making a direct close demand a rating and
+ * leaving the offer required would have demanded a rating that could not be
+ * saved.
  *
  * @param string $status
  *   The status the request is in when the close is attempted.
@@ -272,7 +308,8 @@ function myapi_services_transition_allowed($from, $to) {
  *   TRUE when a rating is required to close.
  */
 function myapi_services_close_requires_rating($status) {
-  return $status === MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED;
+  return $status === MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED
+    || $status === MYAPI_SERVICES_REQUEST_STATUS_DIRECT;
 }
 
 /**

@@ -2647,13 +2647,19 @@ function _myapi_services_install() {
   ]);
 
   // (d) Instances of 'service_rating'.
+  // OPTIONAL since SPEC 87, and the status catalogue is what made it so: a
+  // request in 'direct' is closed demanding a rating
+  // (myapi_services_close_requires_rating()) and has no offer to hang it off.
+  // Keeping this required would have demanded a rating that could not be saved.
+  // The reference that ALWAYS exists is field_rating_provider, still required:
+  // without it a rating scores nobody.
   _myapi_reservations_ensure_instance('field_rating_offer', $rating_type, [
     'field_name'  => 'field_rating_offer',
     'entity_type' => 'node',
     'bundle'      => $rating_type,
     'label'       => 'Oferta',
-    'required'    => 1,
-    'description' => 'La calificación cuelga de la oferta, no de la solicitud: la oferta es lo único que une solicitud y proveedor, así que calificar a un proveedor que no ofertó ahí es irrepresentable.',
+    'required'    => 0,
+    'description' => 'Oferta adjudicada que se califica. Se deja vacía cuando la solicitud fue de proveedor directo y no hubo ronda de ofertas; el proveedor calificado es siempre el del campo Proveedor.',
     'widget'      => ['type' => 'entityreference_autocomplete'],
   ]);
   _myapi_reservations_ensure_instance('field_rating_provider', $rating_type, [
@@ -2662,7 +2668,7 @@ function _myapi_services_install() {
     'bundle'      => $rating_type,
     'label'       => 'Proveedor',
     'required'    => 1,
-    'description' => 'Se rellena a partir de la oferta calificada. No editar a mano.',
+    'description' => 'Se rellena a partir de la oferta calificada, o del proveedor directo de la solicitud cuando no hubo oferta. No editar a mano.',
     'widget'      => ['type' => 'entityreference_autocomplete'],
   ]);
   _myapi_reservations_ensure_instance('field_stars', $rating_type, [
@@ -3990,5 +3996,68 @@ function myapi_update_7032() {
 
   return t('SPEC 86: añadida a @type la instancia obligatoria de field_unit (vivienda a la que va dirigido el servicio). Sin backfill: no se toca ningún nodo.', [
     '@type' => MYAPI_SERVICES_REQUEST_TYPE,
+  ]);
+}
+
+/**
+ * SPEC 87: adds 'direct' to field_request_status and frees field_rating_offer.
+ *
+ * The first services update that cannot just re-run the installer. Two of the
+ * idempotent _ensure_* helpers only CREATE — _myapi_reservations_ensure_field()
+ * skips a field that already exists and _myapi_reservations_ensure_instance()
+ * skips an existing instance — so on an installed site neither the wider
+ * allowed_values nor the new 'required' flag would ever be applied. Both are
+ * written here by hand, with the Field API functions that do modify:
+ *
+ * 1. field_update_field() on field_request_status, with the allowed_values read
+ *    from myapi_services_request_statuses() — never a list retyped here, which
+ *    is the rule ServicesInstallTest pins for the installer and holds just as
+ *    much for an update. The field is SHARED by 'service_request' and
+ *    'service_transaction' (SPEC 77), so one write gives the status to the
+ *    request select and to the timeline select at once.
+ * 2. field_update_instance() on field_rating_offer / 'service_rating', to
+ *    required = 0. Closing a 'direct' request demands a rating
+ *    (myapi_services_close_requires_rating()) and a direct job has no offer to
+ *    point at, so a required offer would demand a rating that cannot be saved.
+ *
+ * No data migration, and none is needed: this ADDS an allowed value instead of
+ * removing one, so core's hook_field_update_forbid() — the
+ * FieldUpdateForbiddenException myapi_update_7021() had to work around when it
+ * dropped 'duplicated' — has nothing to forbid. Relaxing 'required' cannot
+ * invalidate a stored rating either: every row that satisfied the stricter rule
+ * satisfies the looser one.
+ *
+ * _myapi_services_install() is still called first, so a site that somehow lacks
+ * a bundle or an instance gets it, and re-running the whole update is a no-op:
+ * the same six values are written again and the flag is set to the value it
+ * already has.
+ *
+ * @return string
+ *   A summary line, shown by drush and by update.php.
+ */
+function myapi_update_7033() {
+  module_load_include('inc', 'myapi', 'includes/myapi.services_common');
+
+  _myapi_services_install();
+
+  $field = field_read_field('field_request_status');
+  if ($field) {
+    $field['settings']['allowed_values'] = myapi_services_request_statuses();
+    field_update_field($field);
+  }
+
+  $instance = field_read_instance('node', 'field_rating_offer', MYAPI_SERVICES_RATING_TYPE);
+  if ($instance) {
+    $instance['required'] = 0;
+    $instance['description'] = 'Oferta adjudicada que se califica. Se deja vacía cuando la solicitud fue de proveedor directo y no hubo ronda de ofertas; el proveedor calificado es siempre el del campo Proveedor.';
+    field_update_instance($instance);
+  }
+
+  field_info_cache_clear();
+
+  return t("SPEC 87: añadido el estado «Proveedor directo» (@key) al catálogo de field_request_status, en @request y en @transaction. La oferta de una calificación pasa a ser opcional: un directo se califica sin oferta. Ningún nodo se ha tocado.", [
+    '@key'         => MYAPI_SERVICES_REQUEST_STATUS_DIRECT,
+    '@request'     => MYAPI_SERVICES_REQUEST_TYPE,
+    '@transaction' => MYAPI_SERVICES_TRANSACTION_TYPE,
   ]);
 }

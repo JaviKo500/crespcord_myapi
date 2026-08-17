@@ -138,7 +138,7 @@ class ServicesInstallTest extends TestCase {
 
   public function testRequestStatusCatalogue() {
     $this->assertSame(
-      ['open', 'offered', 'assigned', 'closed', 'cancelled'],
+      ['open', 'direct', 'offered', 'assigned', 'closed', 'cancelled'],
       array_keys(myapi_services_request_statuses())
     );
   }
@@ -220,6 +220,9 @@ class ServicesInstallTest extends TestCase {
       'cancelled while open'    => ['open', 'cancelled'],
       'cancelled with offers'   => ['offered', 'cancelled'],
       'cancelled once assigned' => ['assigned', 'cancelled'],
+      // SPEC 87. The two, and only two, ways out of 'direct'.
+      'direct job closed'       => ['direct', 'closed'],
+      'direct job cancelled'    => ['direct', 'cancelled'],
     ];
   }
 
@@ -240,6 +243,18 @@ class ServicesInstallTest extends TestCase {
       'offered back to open'      => ['offered', 'open'],
       // Staying put is not a transition either.
       'open to open'              => ['open', 'open'],
+      // SPEC 87: 'direct' is a ROOT. Nothing leads to it — a request is born
+      // with a provider chosen or it goes through the round, never both — and
+      // it does not fall back into the round either.
+      'open into direct'          => ['open', 'direct'],
+      'offered into direct'       => ['offered', 'direct'],
+      'assigned into direct'      => ['assigned', 'direct'],
+      'closed into direct'        => ['closed', 'direct'],
+      'cancelled into direct'     => ['cancelled', 'direct'],
+      'direct back to open'       => ['direct', 'open'],
+      'direct into the round'     => ['direct', 'offered'],
+      'direct into assigned'      => ['direct', 'assigned'],
+      'direct to direct'          => ['direct', 'direct'],
       // An unknown status answers FALSE instead of throwing: a hand-written
       // value in the field must be refused, not crash the caller.
       'unknown origin'            => ['pendiente', 'closed'],
@@ -270,12 +285,14 @@ class ServicesInstallTest extends TestCase {
    * ---------------------------------------------------------------------- */
 
   /**
-   * The rule the user set: the rating is demanded when the request reached
-   * 'assigned', and only then. Closing from 'offered' is the "no award" path
-   * of the contract and there is nobody to score.
+   * The rule the user set: the rating is demanded exactly when there is a
+   * provider who did the job — 'assigned' (SPEC 77) and 'direct' (SPEC 87).
+   * Closing from 'offered' is the "no award" path of the contract and there is
+   * nobody to score.
    */
-  public function testOnlyAnAssignedRequestDemandsARatingToClose() {
+  public function testOnlyAnAssignedOrDirectRequestDemandsARatingToClose() {
     $this->assertTrue(myapi_services_close_requires_rating('assigned'));
+    $this->assertTrue(myapi_services_close_requires_rating('direct'));
 
     foreach (['open', 'offered', 'closed', 'cancelled', 'pendiente'] as $status) {
       $this->assertFalse(
@@ -283,6 +300,25 @@ class ServicesInstallTest extends TestCase {
         'closing from ' . $status . ' must not demand a rating'
       );
     }
+  }
+
+  /**
+   * The consequence of the rule above on the data model, pinned where the rule
+   * is: a 'direct' close demands a rating and a direct job has no offer, so the
+   * offer of a rating CANNOT be required. If somebody ever makes
+   * field_rating_offer required again, this pair of assertions is the one that
+   * explains why the two decisions cannot both stand.
+   */
+  public function testADirectCloseNeedsARatingThatHasNoOfferToPointAt() {
+    $this->assertTrue(myapi_services_close_requires_rating('direct'));
+
+    $instance = $this->definitionAt(
+      $this->functionSource('_myapi_services_install'),
+      "_myapi_reservations_ensure_instance('field_rating_offer', \$rating_type, [",
+      'the service_rating instance of field_rating_offer must exist'
+    );
+
+    $this->assertStringContainsString("'required' => 0", $instance);
   }
 
   /* -------------------------------------------------------------------------
@@ -817,7 +853,8 @@ class ServicesInstallTest extends TestCase {
     $this->assertStringContainsString('function myapi_update_7030()', $source);
     $this->assertStringContainsString('function myapi_update_7031()', $source);
     $this->assertStringContainsString('function myapi_update_7032()', $source);
-    $this->assertStringNotContainsString('function myapi_update_7033()', $source);
+    $this->assertStringContainsString('function myapi_update_7033()', $source);
+    $this->assertStringNotContainsString('function myapi_update_7034()', $source);
     // 7028 is still SPEC 81's, not this spec's.
     $this->assertStringContainsString(
       '_myapi_services_install();',
@@ -1065,5 +1102,103 @@ class ServicesInstallTest extends TestCase {
     $this->assertStringNotContainsString('field_delete_field(', $update);
     $this->assertStringNotContainsString('node_save(', $update);
     $this->assertStringNotContainsString('db_update(', $update);
+  }
+
+  /* -------------------------------------------------------------------------
+   * SPEC 87 — the 'direct' status.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * The status exists as a constant, with the key the API will carry and the
+   * label the back office shows. Written as its own test because the key is a
+   * contract with the app the moment a request travels in a response.
+   */
+  public function testTheDirectStatusIsCatalogued() {
+    $this->assertTrue(defined('MYAPI_SERVICES_REQUEST_STATUS_DIRECT'));
+    $this->assertSame('direct', MYAPI_SERVICES_REQUEST_STATUS_DIRECT);
+
+    $statuses = myapi_services_request_statuses();
+
+    $this->assertArrayHasKey('direct', $statuses);
+    $this->assertSame('Proveedor directo', $statuses['direct']);
+  }
+
+  /**
+   * 'direct' is a root of the graph: it has an entry of its own, its two exits
+   * are the terminals, and NO status lists it as a destination. The closure test
+   * above would not catch this — a status nothing reaches is well-formed — and
+   * the product decision is exactly that unreachability.
+   */
+  public function testTheDirectStatusIsARootOfTheGraph() {
+    $transitions = myapi_services_request_transitions();
+
+    $this->assertSame(['closed', 'cancelled'], $transitions['direct']);
+
+    foreach ($transitions as $from => $targets) {
+      $this->assertNotContains(
+        'direct',
+        $targets,
+        $from . ' must not lead into direct: a request is born direct or it is not direct'
+      );
+    }
+  }
+
+  /**
+   * The two updates that a new allowed value needs, and that re-running the
+   * installer cannot do: _myapi_reservations_ensure_field() skips an existing
+   * field and _myapi_reservations_ensure_instance() skips an existing instance,
+   * so without these two calls an installed site would keep the five old values
+   * and a required offer, with no error to show for it.
+   */
+  public function testTheUpdate7033WidensTheFieldAndFreesTheOffer() {
+    $update = $this->functionSource('myapi_update_7033');
+
+    $this->assertStringContainsString("field_read_field('field_request_status')", $update);
+    $this->assertStringContainsString('field_update_field($field);', $update);
+    $this->assertStringContainsString("field_read_instance('node', 'field_rating_offer'", $update);
+    $this->assertStringContainsString('field_update_instance($instance);', $update);
+    $this->assertStringContainsString("\$instance['required'] = 0;", $update);
+    // And the caches, or the old allowed_values survive the request.
+    $this->assertStringContainsString('field_info_cache_clear();', $update);
+  }
+
+  /**
+   * The update must read the catalogue, never retype the six values. Same rule
+   * the installer is held to by testStatusFieldsTakeTheirValuesFromTheCatalogue:
+   * a hand-typed list here would drift the day a seventh status arrives, and the
+   * symptom — a status the API accepts that the field refuses to store — would
+   * point everywhere except at this function.
+   */
+  public function testTheUpdate7033TakesTheValuesFromTheCatalogue() {
+    $update = $this->functionSource('myapi_update_7033');
+
+    $this->assertStringContainsString(
+      "\$field['settings']['allowed_values'] = myapi_services_request_statuses();",
+      $update
+    );
+    // No status key written out by hand next to it.
+    foreach (array_keys(myapi_services_request_statuses()) as $key) {
+      $this->assertStringNotContainsString(
+        "'" . $key . "' =>",
+        $update,
+        'the update must not retype the catalogue it can read'
+      );
+    }
+  }
+
+  /**
+   * Adding a value is not removing one: there is nothing to migrate, and the
+   * update must not touch a single row. myapi_update_7021() had to rewrite rows
+   * before shrinking a catalogue because core forbids dropping a value still in
+   * use; widening one has no such hazard, and a db_update() here would be
+   * somebody guessing which requests are "really" direct.
+   */
+  public function testTheUpdate7033MigratesNoData() {
+    $update = $this->functionSource('myapi_update_7033');
+
+    $this->assertStringNotContainsString('db_update(', $update);
+    $this->assertStringNotContainsString('node_save(', $update);
+    $this->assertStringNotContainsString('field_delete_field(', $update);
+    $this->assertStringNotContainsString('field_delete_instance(', $update);
   }
 }
