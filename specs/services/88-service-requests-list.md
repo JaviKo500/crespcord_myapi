@@ -1,6 +1,6 @@
 # 88 — Listado de solicitudes de servicio del residente (`GET /api/v1/service-requests`)
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-08-17
 - **Dependencias:**
   - `77-services-content-types-install` (Implemented) — dueña de los bundles
@@ -315,97 +315,97 @@ ninguna ruta cambie de comportamiento, y el 4 es el que enciende el endpoint.
 
 **Contrato de respuesta**
 
-- [ ] `GET /api/v1/service-requests` con token válido responde `200` y
+- [x] `GET /api/v1/service-requests` con token válido responde `200` y
       `{"success": true, "data": {"service_requests": [...], "pagination": {...}}}`.
-- [ ] Cada elemento trae exactamente las diez claves: `id`, `title`,
+- [x] Cada elemento trae exactamente las diez claves: `id`, `title`,
       `description`, `status`, `category`, `offers_count`, `assigned_offer`,
       `assigned_provider`, `created`, `desired_start`. Ni una más.
-- [ ] `id`, `category.id`, `offers_count`, `assigned_offer.id` y
+- [x] `id`, `category.id`, `offers_count`, `assigned_offer.id` y
       `assigned_provider.id` viajan como **enteros** JSON, no como strings.
-- [ ] `status` es una de las seis claves del catálogo, en inglés, sin etiqueta
+- [x] `status` es una de las seis claves del catálogo, en inglés, sin etiqueta
       acompañante.
-- [ ] `description` conserva los saltos de línea que el operador escribió.
-- [ ] `created` y `desired_start` tienen la forma `Y-m-d\TH:i:s`, igual que
+- [x] `description` conserva los saltos de línea que el operador escribió.
+- [x] `created` y `desired_start` tienen la forma `Y-m-d\TH:i:s`, igual que
       `created` en `GET /api/v1/claims`.
 
 **La adjudicación**
 
-- [ ] Una solicitud en `open` u `offered` responde `assigned_offer: null` **y**
+- [x] Una solicitud en `open` u `offered` responde `assigned_offer: null` **y**
       `assigned_provider: null`.
-- [ ] Una solicitud en `direct` con proveedor responde `assigned_offer: null` y
+- [x] Una solicitud en `direct` con proveedor responde `assigned_offer: null` y
       `assigned_provider: {id, name}` — la fila que justifica que sean dos claves.
-- [ ] Una solicitud en `assigned` responde las dos, y `assigned_offer.status` es
+- [x] Una solicitud en `assigned` responde las dos, y `assigned_offer.status` es
       una clave de `myapi_services_offer_statuses()`.
-- [ ] Una solicitud cuyo `field_assigned_provider` apunta a un nodo despublicado
+- [x] Una solicitud cuyo `field_assigned_provider` apunta a un nodo despublicado
       o borrado responde `assigned_provider: null` **y sigue apareciendo en el
       listado**.
 
 **`offers_count`**
 
-- [ ] Una solicitud sin ofertas responde `0`, no `null` ni la clave ausente.
-- [ ] Con tres ofertas —una `sent`, una `rejected` y una `withdrawn`— responde
+- [x] Una solicitud sin ofertas responde `0`, no `null` ni la clave ausente.
+- [x] Con tres ofertas —una `sent`, una `rejected` y una `withdrawn`— responde
       `3`: se cuentan todas las recibidas.
-- [ ] Una oferta despublicada **no** cuenta.
-- [ ] Añadir entradas de línea de tiempo (`service_transaction`) a una solicitud
+- [x] Una oferta despublicada **no** cuenta.
+- [x] Añadir entradas de línea de tiempo (`service_transaction`) a una solicitud
       **no** mueve su `offers_count`. Es el criterio que prueba el filtro por
       tipo.
 
 **Alcance y seguridad**
 
-- [ ] Sin cabecera `Authorization`: `401 missing_authorization`. Con un token
+- [x] Sin cabecera `Authorization`: `401 missing_authorization`. Con un token
       inválido o caducado: `401 invalid_token`.
-- [ ] Una solicitud cuyo `field_requester` es **otro** uid no aparece, aunque sea
+- [x] Una solicitud cuyo `field_requester` es **otro** uid no aparece, aunque sea
       del mismo condominio y la misma vivienda.
-- [ ] Una solicitud creada desde el back office por un administrador **con
+- [x] Una solicitud creada desde el back office por un administrador **con
       `field_requester` apuntando al lector** sí aparece: el filtro es
       `field_requester`, no `node.uid`.
-- [ ] Un usuario con rol `proveedor` que además sea residente ve **sus**
+- [x] Un usuario con rol `proveedor` que además sea residente ve **sus**
       solicitudes, completas, sin que la categoría del proveedor recorte nada. La
       consulta no lleva `addTag('node_access')`.
-- [ ] Un lector sin ninguna solicitud recibe `200` con lista vacía y `total: 0` —
+- [x] Un lector sin ninguna solicitud recibe `200` con lista vacía y `total: 0` —
       nunca un `403`.
-- [ ] `POST`, `PUT` y `DELETE` sobre la ruta responden `405 method_not_allowed`.
+- [x] `POST`, `PUT` y `DELETE` sobre la ruta responden `405 method_not_allowed`.
 
 **Query string**
 
-- [ ] `?page=2&limit=5` pagina; `?limit=-1` devuelve todo en una página con
+- [x] `?page=2&limit=5` pagina; `?limit=-1` devuelve todo en una página con
       `page: 1`; `?limit=999` se recorta a 50.
-- [ ] `?page=abc`, `?limit=0`, `?sort=arriba` y `?status=inventado` caen a su
+- [x] `?page=abc`, `?limit=0`, `?sort=arriba` y `?status=inventado` caen a su
       valor por defecto **en silencio**, sin `422`.
-- [ ] `?status=open,offered` filtra por los dos; `?status=open,inventado` filtra
+- [x] `?status=open,offered` filtra por los dos; `?status=open,inventado` filtra
       solo por `open`.
-- [ ] `?category_id=12` devuelve solo las solicitudes de esa categoría, y
+- [x] `?category_id=12` devuelve solo las solicitudes de esa categoría, y
       `pagination.total` cuenta **ese** subconjunto, no el listado completo.
-- [ ] `?category_id=999999` (tid bien formado que no existe) responde `200` con
+- [x] `?category_id=999999` (tid bien formado que no existe) responde `200` con
       lista vacía y `total: 0`, **no** un `422` ni un `404`.
-- [ ] `?category_id=abc`, `?category_id=0`, `?category_id=-3`, `?category_id=`
+- [x] `?category_id=abc`, `?category_id=0`, `?category_id=-3`, `?category_id=`
       y `?category_id[]=1` responden `422 invalid_field` con `@field` =
       `category_id`. Es el **único** parámetro que puede dar `422` en este
       endpoint.
-- [ ] `?category_id=12&status=open,offered` compone los dos filtros en `AND`, y
+- [x] `?category_id=12&status=open,offered` compone los dos filtros en `AND`, y
       la paginación describe el resultado de los dos juntos.
-- [ ] Un `422` por `category_id` se responde **sin haber ejecutado ninguna
+- [x] Un `422` por `category_id` se responde **sin haber ejecutado ninguna
       consulta** de listado.
-- [ ] `?sort=asc` invierte el orden y `pagination.total` no cambia.
-- [ ] Una página más allá de la última responde `200` con lista vacía, no `404`.
-- [ ] `pagination.total_pages` es `0` cuando `total` es `0`.
+- [x] `?sort=asc` invierte el orden y `pagination.total` no cambia.
+- [x] Una página más allá de la última responde `200` con lista vacía, no `404`.
+- [x] `pagination.total_pages` es `0` cuando `total` es `0`.
 
 **Rendimiento**
 
-- [ ] Una petición ejecuta **tres** consultas de listado, con 1 solicitud y con
+- [x] Una petición ejecuta **tres** consultas de listado, con 1 solicitud y con
       50: el conteo, la página y las ofertas de la página. Ninguna crece con el
       número de filas.
 
 **No regresión**
 
-- [ ] `GET /api/v1/providers`, `GET /api/v1/providers/{id}`,
+- [x] `GET /api/v1/providers`, `GET /api/v1/providers/{id}`,
       `GET /api/v1/service-categories` y `GET /api/v1/claims` responden byte a
       byte igual.
-- [ ] `myapi.install` no tiene ni un cambio: `drush updb` no encuentra ningún
+- [x] `myapi.install` no tiene ni un cambio: `drush updb` no encuentra ningún
       update pendiente y `myapi_update_7033` sigue siendo el último.
-- [ ] Ningún rol gana ni pierde permisos, y `myapi_provider_role_*` queda sin
+- [x] Ningún rol gana ni pierde permisos, y `myapi_provider_role_*` queda sin
       tocar.
-- [ ] La suite unitaria pasa completa y `drush cc all` no reporta errores.
+- [x] La suite unitaria pasa completa y `drush cc all` no reporta errores.
 
 ---
 
