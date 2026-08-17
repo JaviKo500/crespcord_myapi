@@ -374,6 +374,23 @@ function myapi_menu() {
     'file'             => 'resources/provider.resource.inc',
   ];
 
+  // The resident's own service requests (SPEC 88): the first route of the
+  // 'service_request' bundle, whose schema SPEC 77, 86 and 87 built without one.
+  // Read-only and authenticated; the scope is field_requester = uid and NOT the
+  // reader's roles, so a resident who also holds 'proveedor' reads here what
+  // they created as a resident. Every write answers 405, and the detail
+  // 'api/v1/service-requests/%' is another spec.
+  //
+  // Plural and in English, like the fifteen routes before it — the singular
+  // 'api/v1/services-request' would be the one path the app has to remember as
+  // a special case.
+  $items['api/v1/service-requests'] = [
+    'page callback'    => 'myapi_service_request_dispatch',
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/service_request.resource.inc',
+  ];
+
   // Back-office reservation calendar (SPEC 47). The only route of this module
   // that is not an api/v1 endpoint: it renders HTML for an operator, not the
   // JSON envelope for the app, which is why its callback lives in includes/
