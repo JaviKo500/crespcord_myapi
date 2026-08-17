@@ -2,16 +2,29 @@
 
 /**
  * @file
- * Service request resource for the myapi module (SPEC 88).
+ * Service request resource for the myapi module (SPECS 88 and 89).
  *
- * One route, read-only and authenticated:
+ * Three routes, read-only and authenticated:
  *
  *   - GET /api/v1/service-requests — the paginated listing of the service
  *     requests the reader created (SPEC 88).
+ *   - GET /api/v1/service-requests/% — the detail of one request: the listing's
+ *     ten keys plus the unit, the condominium, the requester, the images, the
+ *     attachment, closed_at and the offers (SPEC 89).
+ *   - GET /api/v1/service-requests/%/files/% — the bytes of one image or of the
+ *     attachment, both private:// since SPEC 77 (SPEC 89).
  *
- * The first endpoint of the 'service_request' bundle. SPEC 77, 86 and 87 built
+ * The first endpoints of the 'service_request' bundle. SPEC 77, 86 and 87 built
  * its schema — the fields, the status catalogue, the 'direct' status — without
- * a single route; this file is where the bundle finally gets one.
+ * a single route; this file is where the bundle finally gets them.
+ *
+ * TWO READERS, TWO ANSWERS, ONE ACCESS RULE. The detail is the first endpoint
+ * of this module whose response depends on WHO ASKS: the resident who created
+ * the request reads it whole with every offer; a provider of its category who
+ * may still bid reads the same eighteen keys with `unit` null and `offers`
+ * trimmed to their own. Both routes above decide with the SAME function,
+ * myapi_service_request_viewer(), and neither reimplements a condition of it —
+ * a copy would drift into a 403 on the detail that still serves the photos.
  *
  * THE SCOPE IS field_requester = uid, AND NOTHING ELSE. Not the condominium
  * (unlike GET /api/v1/claims, where a claim can be public inside one), not
@@ -33,10 +46,8 @@
  *
  * NOTHING HERE WRITES. Requests and offers are loaded by the operator from the
  * back office, and field_assigned_offer / field_assigned_provider are filled in
- * by no flow yet: POST, PUT and DELETE answer 405. The detail
- * (GET /api/v1/service-requests/%) — with the unit, the condominium, the
- * images, the attachment, closed_at and the offers one by one — is another
- * spec, and so is every write.
+ * by no flow yet: POST, PUT and DELETE answer 405 on all three routes. Creating,
+ * editing, cancelling, closing, awarding and offering are each another spec.
  *
  * Like the other read resources of this module, the queries read the
  * field_data_* tables directly instead of going through node_load(): the
@@ -55,6 +66,14 @@ module_load_include('inc', 'myapi', 'includes/myapi.auth');
 // myapi_services_request_statuses(): neither a bundle machine name nor a status
 // key is ever written as a literal in this file.
 module_load_include('inc', 'myapi', 'includes/myapi.services_common');
+// SPEC 89, the detail: the four questions the provider's half of
+// myapi_service_request_viewer() hangs on — which providers the reader
+// operates, their categories, whether any of them is active, and whether one of
+// them already offered.
+module_load_include('inc', 'myapi', 'includes/myapi.provider_role');
+// SPEC 89: myapi_user_display_names(), the "nombre apellidos" / users.name rule
+// this resource shares with GET /api/v1/units instead of copying.
+module_load_include('inc', 'myapi', 'includes/myapi.user');
 
 /**
  * Dispatcher for /api/v1/service-requests (SPEC 88).
@@ -315,7 +334,26 @@ function myapi_service_request_parse_category_id() {
  * query, and a resident who also holds the 'proveedor' role would stop seeing
  * their own requests of categories they do not attend.
  *
- * @param int   $uid      Authenticated reader uid. The whole scope.
+ * $uid ACCEPTS NULL SINCE SPEC 89, and that is the ONE thing the detail asked
+ * of the listing. NULL means "do not add the requester condition" — never
+ * "compare the column with NULL", which would answer an empty set — and the
+ * INNER JOIN to field_data_field_requester stays either way, so a request still
+ * has to HAVE a requester to exist for this module. The detail needs it because
+ * its reader may be a provider, who is not the requester of anything and would
+ * be locked out by a condition written into the shared base.
+ *
+ * A second base query for the detail was the alternative, and it is worse: two
+ * functions answering "which requests are real" drift the day one of them
+ * changes, and the listing already shares this one between its count and its
+ * page for exactly that reason. Writing an OR into the SQL to cover both
+ * readers was the other, and it mixes two access rules into a WHERE clause
+ * where nobody can see them — the access rule of the detail lives in
+ * myapi_service_request_viewer(), in PHP, in one place.
+ *
+ * @param int|NULL $uid  Authenticated reader uid, or NULL for "every request,
+ *                       whoever the requester is". Only the detail passes NULL;
+ *                       the listing always passes a uid, and its behaviour is
+ *                       byte for byte what it was.
  * @param array $filters  ['status' => array|NULL (list of status keys),
  *                        'category_id' => int|NULL]. Both optional; NULL means
  *                        no filter on that column, and they compose with AND.
@@ -329,9 +367,14 @@ function myapi_service_request_base_query($uid, array $filters = []) {
     ->condition('n.type', MYAPI_SERVICES_REQUEST_TYPE)
     ->condition('n.status', 1);
 
-  // The scope, and the only one: whose request this is.
+  // The scope, and the only one: whose request this is. The join is
+  // unconditional — every request has a requester — and only the CONDITION is
+  // optional, which is what keeps a NULL from widening what a request is.
   $query->innerJoin('field_data_field_requester', 'fr', "fr.entity_id = n.nid AND fr.entity_type = 'node' AND fr.deleted = 0");
-  $query->condition('fr.field_requester_target_id', $uid);
+
+  if ($uid !== NULL) {
+    $query->condition('fr.field_requester_target_id', $uid);
+  }
 
   // The category, INNER on both tables — see the docblock. The '?category_id'
   // filter below adds NO table: it is one more condition on a join that was
@@ -655,4 +698,920 @@ function myapi_service_request_build_item($row, array $offer_counts) {
       ? format_date((int) $row->desired_start, 'custom', 'Y-m-d\TH:i:s')
       : NULL,
   ];
+}
+
+/* ---------------------------------------------------------------------------
+ * The detail — GET /api/v1/service-requests/% (SPEC 89).
+ *
+ * The listing above answers ten keys about many requests; this half answers
+ * eighteen about one, and — for the first time in this module — answers them
+ * DIFFERENTLY DEPENDING ON WHO ASKS. Two readers reach it: the resident who
+ * created the request, and a provider of its category who may still bid on it.
+ * The keys are always the same eighteen for both; three of them change content.
+ *
+ * Nothing here writes, and nothing here is tagged 'node_access' either — the
+ * @file docblock's reasoning applies unchanged, and this half is where it
+ * matters most: the access decision is myapi_service_request_viewer(), in one
+ * place and in plain sight, and a node_access tag would add a second, invisible
+ * one that contradicts it for a resident holding the 'proveedor' role.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Dispatcher for /api/v1/service-requests/% (SPEC 89).
+ *
+ * A SIBLING of myapi_service_request_dispatch(), not a branch inside it: Drupal
+ * 7 resolves routes by number of segments first, so the collection and the item
+ * are two menu entries that never compete, and one dispatcher per route keeps
+ * each one's 405 as simple as it looks.
+ *
+ * Only GET. Creating, editing, cancelling, closing, awarding and offering are
+ * all out of SPEC 89 — every one of them needs decisions a read does not have
+ * to make.
+ *
+ * The method is checked BEFORE the token and before the nid, same criterion as
+ * every other dispatcher of this module: a POST answers 405 without a token and
+ * without a query, because the method is wrong whoever is asking and whatever
+ * they are asking about.
+ *
+ * @param mixed $nid  The route's wildcard, RAW as Drupal hands it over — a
+ *                    string, and not necessarily a number. Validating it is
+ *                    myapi_service_request_detail()'s first job.
+ */
+function myapi_service_request_item_dispatch($nid) {
+  if (myapi_request_method() === 'GET') {
+    myapi_service_request_detail($nid);
+  }
+  else {
+    myapi_error('method_not_allowed', 405);
+  }
+}
+
+/**
+ * GET /api/v1/service-requests/% — the detail of one request (SPEC 89).
+ *
+ * Orchestration only; every decision it makes lives in one of the helpers
+ * below. In order: validate the nid, authenticate, load the row, resolve WHO IS
+ * ASKING, and then the four loads and the serialisation.
+ *
+ * THE FIRST TWO STEPS ARE IN THIS ORDER ON PURPOSE. A '/service-requests/abc',
+ * '/0' or '/-3' answers 404 without costing a single query — not even the
+ * token's — because a wildcard that is not a positive integer cannot name a
+ * request whoever is asking. Nothing is leaked by answering before the token:
+ * the answer is about the SHAPE of the URL, not about what exists.
+ *
+ * 404 AND 403 MEAN DIFFERENT THINGS HERE, unlike in the listing, which simply
+ * does not show a row:
+ *
+ *   404 not_found  — no such request: it does not exist, it is unpublished, it
+ *                    is of another bundle, or its category tid is orphaned.
+ *   403 forbidden  — it exists, and the reader is neither its requester nor a
+ *                    provider who may still bid on it.
+ *
+ * That is the module's own idiom (GET /api/v1/claims/{id} answers the same way)
+ * and the one that gives an actionable message: "this request no longer takes
+ * offers" is useful to a provider, and the nid is not a secret — they reached
+ * it from a listing that handed it to them.
+ *
+ * FIVE CONTENT QUERIES, FIXED, plus the one the token costs. None of them grows
+ * with the number of images or of offers:
+ *
+ *   1. the request row, with unit, condominium, category, status, award and
+ *      attachment                       — myapi_service_request_detail_row()
+ *   2. the requester's name             — myapi_user_display_names()
+ *   3. the images, in delta order       — myapi_service_request_load_images()
+ *   4. offers_count                     — myapi_service_request_offer_counts_by_nid()
+ *   5. the offers, with their provider  — myapi_service_request_load_offers()
+ *
+ * A provider reader adds the provider_role questions on top — which providers
+ * they operate, their categories, whether any is active, whether one already
+ * offered — all statically cached per uid by that include, and none of them
+ * reached at all by a requester.
+ *
+ * offers_count COMES FROM QUERY 4 AND NEVER FROM count($offers), even though
+ * for the requester the two numbers are identical: the provider receives a
+ * trimmed list and the full total, so deriving it from the list would answer
+ * them 1 or 0 where the key promises the total. Reusing SPEC 88's aggregate has
+ * a second benefit — the bundle filter that stops 'service_transaction' rows
+ * from being counted is already written and tested in there.
+ *
+ * @param mixed $nid  The route's wildcard, raw.
+ */
+function myapi_service_request_detail($nid) {
+  // 1. The nid, before anything else. ctype_digit() over the string form
+  // rejects 'abc', '-3', '1.5' and '' alike; the > 0 then rejects '0'.
+  if (!is_scalar($nid) || !ctype_digit((string) $nid) || (int) $nid <= 0) {
+    myapi_error('not_found', 404);
+  }
+  $nid = (int) $nid;
+
+  // 2. Authentication. Answers 401 missing_authorization / invalid_token on its
+  // own and never returns on failure.
+  $token = myapi_auth_require_access_token();
+  $uid = (int) $token->uid;
+
+  // 3. The request itself. FALSE covers all four "no such request" cases at
+  // once, and the reader is told none of them apart.
+  $row = myapi_service_request_detail_row($nid);
+  if (!$row) {
+    myapi_error('not_found', 404);
+  }
+
+  // 4. WHO IS ASKING. The one function that decides, shared with the file
+  // endpoint. NULL is a 403 and never a 404: the request does exist — step 3
+  // just proved it.
+  $viewer = myapi_service_request_viewer($row, $uid);
+  if ($viewer === NULL) {
+    myapi_error('forbidden', 403);
+  }
+
+  // 5. The requester's name, by the shared rule of includes/myapi.user.inc.
+  // Written onto the row because that is what the serialiser reads; no contact
+  // detail is fetched, for either reader.
+  $row->requester_name = NULL;
+  if (isset($row->requester_uid) && $row->requester_uid !== '') {
+    $names = myapi_user_display_names([(int) $row->requester_uid]);
+    $row->requester_name = isset($names[(int) $row->requester_uid])
+      ? $names[(int) $row->requester_uid]
+      : NULL;
+  }
+
+  // 6. The images, the total, and the offers. The trim is a query argument and
+  // never a filter in PHP: an empty list means "every offer" and is exactly
+  // what the requester passes.
+  $images = myapi_service_request_load_images($nid);
+
+  $offer_counts = myapi_service_request_offer_counts_by_nid([$nid]);
+  $offers_count = isset($offer_counts[$nid]) ? $offer_counts[$nid] : 0;
+
+  // Statically cached by the include: for a provider this was already resolved
+  // inside myapi_service_request_viewer(), and for a requester it is skipped.
+  $provider_ids = ($viewer === 'provider')
+    ? myapi_provider_role_provider_ids((object) ['uid' => $uid])
+    : [];
+
+  $offers = array_map(
+    'myapi_service_request_build_offer',
+    myapi_service_request_load_offers($nid, $provider_ids)
+  );
+
+  // 7. Respond 200 (read-only endpoint, no message_key). One object under
+  // 'service_request', never a list.
+  myapi_respond([
+    'service_request' => myapi_service_request_build_detail($row, $viewer, $images, $offers, $offers_count),
+  ], 200);
+}
+
+/**
+ * WHO IS ASKING: 'requester', 'provider', or NULL for a 403 (SPEC 89).
+ *
+ * The access rule of the detail and of its file endpoint, written ONCE. Both
+ * routes call this same function; neither reimplements a condition of it. That
+ * is not tidiness: a rule copied in two places drifts, and the shape the drift
+ * takes here is a 403 on the detail that still lets the photos be downloaded,
+ * or the reverse.
+ *
+ * Three rules, evaluated in this order, first hit wins:
+ *
+ *   1. THE REQUESTER — field_requester = uid. Whatever the status, whatever the
+ *      reader's roles: a resident who also holds 'proveedor' reads their own
+ *      request of a category they do not attend, complete.
+ *   2. ALREADY OFFERED — one of the reader's providers has an offer on this
+ *      request. Whatever the status, and whatever the category is TODAY: whoever
+ *      has a live offer needs to see what became of it, and losing the detail
+ *      the moment it is awarded to somebody else would leave an offer in their
+ *      app with nothing behind it and a 403 as the only explanation.
+ *   3. AN ELIGIBLE PROVIDER — the request is still biddable AND of one of the
+ *      reader's categories AND at least one of their providers is active:
+ *        status ∈ ('open', 'offered')
+ *        AND field_assigned_offer is empty AND field_assigned_provider is empty
+ *        AND field_category_tid ∈ myapi_provider_role_category_ids()
+ *        AND myapi_provider_role_any_provider_active()
+ *
+ * Anything else is NULL, and the caller answers 403. NULL never means "not
+ * found": a request that does not exist or is unpublished never reaches this
+ * function — myapi_service_request_detail_row() answered 404 first.
+ *
+ * WHY THIS DOES NOT CALL myapi_provider_role_broadcast_statuses(), even though
+ * that function exists and looks like exactly this list: it includes 'direct',
+ * and rule 3 must not. They are TWO POLICIES OVER THE SAME DATUM — "what do I
+ * hide from this provider in the back office" versus "what may they still bid
+ * on in the app" — and they have to be able to diverge. A 'direct' request is
+ * born with a provider already chosen, which is precisely what "unawarded"
+ * excludes. The consequence is known and written down in the spec's Riesgos:
+ * today the provider of a 'direct' request cannot read its detail. The spec
+ * that creates direct requests is the one that will know what relation it
+ * leaves behind, and whether rule 3 grows a fourth clause.
+ *
+ * BOTH AWARD KEYS ARE CHECKED, NOT JUST THE STATUS, and they are read from the
+ * RAW target_id and not from the joined node: a request left in 'offered' with
+ * field_assigned_offer already filled in — an incoherent datum nothing prevents
+ * today — stops being biddable, which is the safe reading. Reading the joined
+ * nid instead would make an award pointing at an unpublished offer look like no
+ * award at all, and reopen the request to every provider of the category.
+ *
+ * The account handed to myapi_provider_role_* is built from the uid alone. Those
+ * four functions read ->uid and nothing else — provider_ids is a REVERSE lookup
+ * over field_provider_users, not a role read — so this costs no user_load(), and
+ * the reader's ROLE is never consulted: what makes somebody a provider here is a
+ * 'provider' node pointing at them, not the label on their account. A user
+ * holding the 'proveedor' role with no provider node behind it gets an empty
+ * provider_ids and falls straight through to NULL. If a future change made those
+ * functions read roles, a synthetic account with none would deny, never grant.
+ *
+ * Costs NO query for the requester — rule 1 is decided on a column already in
+ * $row. The provider's path costs the provider_role queries, all statically
+ * cached per uid.
+ *
+ * @param object $row
+ *   The row of myapi_service_request_detail_row(), carrying `nid`,
+ *   `requester_uid`, `status`, `category_id` and the two RAW award columns
+ *   `assigned_offer_raw` and `assigned_provider_raw`.
+ * @param mixed $uid
+ *   The authenticated reader's uid, from the token row.
+ *
+ * @return string|NULL
+ *   'requester', 'provider', or NULL when neither rule applies.
+ */
+function myapi_service_request_viewer($row, $uid) {
+  $uid = (int) $uid;
+
+  if ($uid <= 0 || !is_object($row)) {
+    return NULL;
+  }
+
+  // Rule 1. field_requester and NOT node.uid, the same criterion the listing
+  // scope uses: node.uid is the operator who loaded the request.
+  if (isset($row->requester_uid) && (int) $row->requester_uid === $uid) {
+    return 'requester';
+  }
+
+  // From here on the reader can only get in as a provider, and everything below
+  // needs the providers they operate. None: nothing else to ask.
+  $account = (object) ['uid' => $uid];
+  $provider_ids = myapi_provider_role_provider_ids($account);
+
+  if (!$provider_ids) {
+    return NULL;
+  }
+
+  // Rule 2. Status-independent and category-independent, on purpose.
+  if (myapi_provider_role_has_offered(isset($row->nid) ? $row->nid : 0, $provider_ids)) {
+    return 'provider';
+  }
+
+  // Rule 3, condition by condition. The list of statuses is built from the
+  // catalogue constants, never typed as strings, and is deliberately NOT
+  // myapi_provider_role_broadcast_statuses() — see the docblock.
+  $biddable = [
+    MYAPI_SERVICES_REQUEST_STATUS_OPEN,
+    MYAPI_SERVICES_REQUEST_STATUS_OFFERED,
+  ];
+
+  if (!isset($row->status) || !in_array($row->status, $biddable, TRUE)) {
+    return NULL;
+  }
+
+  // Awarded by either key — even inconsistently — is awarded.
+  if (!empty($row->assigned_offer_raw) || !empty($row->assigned_provider_raw)) {
+    return NULL;
+  }
+
+  if (!isset($row->category_id) || $row->category_id === '') {
+    return NULL;
+  }
+
+  $categories = array_map('intval', myapi_provider_role_category_ids($account));
+
+  if (!in_array((int) $row->category_id, $categories, TRUE)) {
+    return NULL;
+  }
+
+  // Last because it is the most expensive of the three and the least likely to
+  // be the one that fails: a suspended provider — unpublished node or expired
+  // licence — loses the marketplace, which is what suspending them means.
+  if (!myapi_provider_role_any_provider_active($account)) {
+    return NULL;
+  }
+
+  return 'provider';
+}
+
+/**
+ * The whole request in ONE query: the row the detail is built from (SPEC 89).
+ *
+ * Starts from myapi_service_request_base_query() WITH NO uid — see that
+ * function's docblock — so what counts as an existing request is decided in one
+ * place for the listing and for the detail. A nid that answers no row is a 404,
+ * and the three reasons are indistinguishable on purpose: it does not exist, it
+ * is unpublished, or it is of another bundle. The reader learns "no such
+ * request", which is all three.
+ *
+ * It projects the twelve aliases of the listing item PLUS the nine the detail
+ * adds. The overlap with myapi_service_request_fetch() is projection, not
+ * decision: the fetch pages and orders a listing, this one reads a single row,
+ * and the ONE thing the two must agree on — which requests are real — is the
+ * base query they share. SPEC 89 deliberately changed nothing else in the
+ * fetch.
+ *
+ * THE AWARDED PAIR IS PROJECTED TWICE, resolved and raw, and the second is not
+ * redundant:
+ *
+ *   assigned_offer_id / assigned_provider_id — the JOINED node's nid, NULL when
+ *     the reference points at an unpublished or deleted node. This is what the
+ *     response paints, exactly as the listing does.
+ *   assigned_offer_raw / assigned_provider_raw — the field's target_id, however
+ *     broken. This is what myapi_service_request_viewer() reads to decide
+ *     whether the request is still biddable: an award pointing at an
+ *     unpublished offer must close the request to new providers, and reading
+ *     the resolved nid would reopen it.
+ *
+ * EVERY JOIN ADDED HERE IS LEFT, the same rule the fetch follows and for the
+ * same reason: losing your own request because a reference is broken is the
+ * worst failure a read endpoint can have. The category is the one exception,
+ * and it is inherited from the base query — an orphan tid answers 404 here and
+ * a missing row in the listing, which is the coherent pair. docs/service-
+ * request.md carries the query that diagnoses it.
+ *
+ * The unit's name is field_nombre_vivienda and NOT the 'vivienda' node title,
+ * the same value GET /api/v1/units answers as `name`. The condominium's name IS
+ * the node title, which is what that bundle carries.
+ *
+ * No join can multiply rows: every field joined has cardinality 1, and
+ * node.nid / file_managed.fid are primary keys. field_images is the one
+ * unlimited field of this bundle and it is deliberately NOT here — it has its
+ * own query, myapi_service_request_load_images().
+ *
+ * THE QUERY CARRIES NO ->addTag('node_access'), like every other query of this
+ * file. See the @file docblock.
+ *
+ * @param mixed $nid  The request nid, already validated as a positive integer
+ *                    by the caller.
+ *
+ * @return object|FALSE  The row, or FALSE when there is no such request.
+ */
+function myapi_service_request_detail_row($nid) {
+  // NULL: the detail's reader may be a provider, not the requester.
+  $query = myapi_service_request_base_query(NULL);
+  $query->condition('n.nid', (int) $nid);
+
+  $query->addField('n', 'nid', 'nid');
+  $query->addField('n', 'title', 'title');
+  $query->addField('n', 'created', 'created');
+
+  // The category, off the two INNER JOINs the base query already made.
+  $query->addField('fcat', 'field_category_tid', 'category_id');
+  $query->addField('td', 'name', 'category_name');
+
+  $query->addField('frs', 'field_request_status_value', 'status');
+
+  // The requester: the uid off the join the base query already made, so the
+  // access rule costs no query of its own for a resident.
+  $query->addField('fr', 'field_requester_target_id', 'requester_uid');
+
+  $query->leftJoin('field_data_field_description', 'fd', "fd.entity_id = n.nid AND fd.entity_type = 'node' AND fd.deleted = 0");
+  $query->addField('fd', 'field_description_value', 'description');
+
+  $query->leftJoin('field_data_field_desired_start', 'fds', "fds.entity_id = n.nid AND fds.entity_type = 'node' AND fds.deleted = 0");
+  $query->addField('fds', 'field_desired_start_value', 'desired_start');
+
+  $query->leftJoin('field_data_field_closed_at', 'fca', "fca.entity_id = n.nid AND fca.entity_type = 'node' AND fca.deleted = 0");
+  $query->addField('fca', 'field_closed_at_value', 'closed_at');
+
+  // The unit (SPEC 86). Two LEFT hops: the reference, then the name field of
+  // the 'vivienda' it points at. The node join carries the bundle so a
+  // reference to something else can never paint its name here.
+  $query->leftJoin('field_data_field_unit', 'fu', "fu.entity_id = n.nid AND fu.entity_type = 'node' AND fu.deleted = 0");
+  $query->leftJoin('node', 'nu', "nu.nid = fu.field_unit_target_id AND nu.type = 'vivienda' AND nu.status = 1");
+  $query->addField('nu', 'nid', 'unit_id');
+  $query->leftJoin('field_data_field_nombre_vivienda', 'fnv', "fnv.entity_id = nu.nid AND fnv.entity_type = 'node' AND fnv.deleted = 0");
+  $query->addField('fnv', 'field_nombre_vivienda_value', 'unit_name');
+
+  // The condominium. Its name is the node title, unlike the unit's.
+  $query->leftJoin('field_data_field_condominium', 'fco', "fco.entity_id = n.nid AND fco.entity_type = 'node' AND fco.deleted = 0");
+  $query->leftJoin('node', 'nc', "nc.nid = fco.field_condominium_target_id AND nc.type = 'condominio' AND nc.status = 1");
+  $query->addField('nc', 'nid', 'condominium_id');
+  $query->addField('nc', 'title', 'condominium_name');
+
+  // The attachment: cardinality 1, so it is a column of this row and not a
+  // query of its own. INNER on file_managed would drop the whole REQUEST if the
+  // file had been deleted from disk, so it is LEFT like everything else and the
+  // serialiser answers attachment: null.
+  $query->leftJoin('field_data_field_attachment', 'fat', "fat.entity_id = n.nid AND fat.entity_type = 'node' AND fat.deleted = 0");
+  $query->leftJoin('file_managed', 'fma', 'fma.fid = fat.field_attachment_fid');
+  $query->addField('fma', 'fid', 'attachment_fid');
+  $query->addField('fma', 'filename', 'attachment_filename');
+
+  // The awarded offer, resolved exactly as the listing resolves it...
+  $query->leftJoin('field_data_field_assigned_offer', 'fao', "fao.entity_id = n.nid AND fao.entity_type = 'node' AND fao.deleted = 0");
+  $query->leftJoin('node', 'no', 'no.nid = fao.field_assigned_offer_target_id AND no.type = :offer_type AND no.status = 1', [':offer_type' => MYAPI_SERVICES_OFFER_TYPE]);
+  $query->addField('no', 'nid', 'assigned_offer_id');
+  $query->leftJoin('field_data_field_offer_status', 'fos', "fos.entity_id = no.nid AND fos.entity_type = 'node' AND fos.deleted = 0");
+  $query->addField('fos', 'field_offer_status_value', 'assigned_offer_status');
+
+  // ...and the awarded provider on its own, never through the offer: a 'direct'
+  // request has a provider and no offer at all (SPEC 87).
+  $query->leftJoin('field_data_field_assigned_provider', 'fap', "fap.entity_id = n.nid AND fap.entity_type = 'node' AND fap.deleted = 0");
+  $query->leftJoin('node', 'np', 'np.nid = fap.field_assigned_provider_target_id AND np.type = :provider_type AND np.status = 1', [':provider_type' => MYAPI_SERVICES_PROVIDER_TYPE]);
+  $query->addField('np', 'nid', 'assigned_provider_id');
+  $query->addField('np', 'title', 'assigned_provider_name');
+
+  // The raw target_ids, for the access rule only — see the docblock. They are
+  // read off the field rows, so a broken reference still reads as "awarded".
+  $query->addField('fao', 'field_assigned_offer_target_id', 'assigned_offer_raw');
+  $query->addField('fap', 'field_assigned_provider_target_id', 'assigned_provider_raw');
+
+  $query->range(0, 1);
+
+  return $query->execute()->fetchObject();
+}
+
+/**
+ * The images of one request, in ONE query and in delta order (SPEC 89).
+ *
+ * The shape of myapi_claim_load_images() with one request instead of a page:
+ * field_images is the only unlimited field of this bundle, so it cannot ride in
+ * myapi_service_request_detail_row() without multiplying that row by the number
+ * of photos.
+ *
+ * INNER and not LEFT on file_managed, same as claims: a field row pointing at a
+ * file that no longer exists has no URL to offer, and an entry with a null url
+ * would be worse for the client than no entry at all.
+ *
+ * ORDER BY delta — the order the operator uploaded them in, which is the order
+ * the app paints them. Nothing else would be stable.
+ *
+ * @param mixed $nid  The request nid.
+ *
+ * @return array  A list of myapi_service_request_build_file() items. Empty when
+ *                the request has no images — never NULL.
+ */
+function myapi_service_request_load_images($nid) {
+  $nid = (int) $nid;
+
+  $query = db_select('field_data_field_images', 'fi');
+  $query->condition('fi.entity_type', 'node');
+  $query->condition('fi.deleted', 0);
+  $query->condition('fi.entity_id', $nid);
+  $query->innerJoin('file_managed', 'fm', 'fm.fid = fi.field_images_fid');
+  $query->addField('fm', 'fid', 'fid');
+  $query->addField('fm', 'filename', 'filename');
+  $query->orderBy('fi.delta', 'ASC');
+
+  $images = [];
+  foreach ($query->execute() as $row) {
+    $images[] = myapi_service_request_build_file($row->fid, $row->filename, $nid);
+  }
+
+  return $images;
+}
+
+/**
+ * The offers of one request, in ONE query, with their provider (SPEC 89).
+ *
+ * ONE QUERY WHATEVER THE NUMBER OF OFFERS, and never a node_load() per offer:
+ * the provider's title and logo ride along as joined columns, exactly as the
+ * listing resolves its awarded provider.
+ *
+ * $provider_ids IS THE PROVIDER'S TRIM, AND IT IS MADE HERE AND NOT IN PHP.
+ * Empty means "every offer of this request" — the requester's answer; a
+ * non-empty list narrows field_provider to the reader's own provider nodes, so
+ * a provider gets zero offers or their own (two, if they operate two provider
+ * nodes that both bid). Filtering afterwards would mean loading every
+ * competitor's amount and message into memory in order to drop them, and the
+ * whole point of the trim is that those never reach the process.
+ *
+ * The condition sits on the LEFT-joined field_data_field_provider, so an offer
+ * with no provider at all is excluded from a provider's trimmed list and kept
+ * in the requester's — which is the right answer for both.
+ *
+ * THE INNER JOIN TO node IS WHAT MAKES THE LIST AGREE WITH offers_count.
+ * field_request is SHARED by 'service_offer' and 'service_transaction' (SPEC
+ * 77), so without the bundle condition the timeline entries of the request
+ * would be listed as offers. `status = 1` is there for the same reason
+ * myapi_service_request_offer_counts_by_nid() has it: an unpublished offer must
+ * neither be listed nor counted, and the two functions have to make that call
+ * identically or the number and the list contradict each other.
+ *
+ * EVERY PUBLISHED OFFER TRAVELS, WHATEVER ITS STATUS — 'sent', 'selected',
+ * 'rejected' and 'withdrawn' alike — which is exactly what offers_count counts.
+ *
+ * ORDER: created DESC, nid DESC. The most recent on top, and the tie-break is
+ * not decoration — two offers of the same second swap places between two reads
+ * of the same screen without it, the trap SPEC 83 and SPEC 88 documented.
+ *
+ * @param mixed $nid           The request nid.
+ * @param array $provider_ids  The reader's provider nids, from
+ *                             myapi_provider_role_provider_ids(). EMPTY MEANS
+ *                             NO TRIM (the requester), never "no offers".
+ *
+ * @return array  Rows carrying `nid`, `provider_id`, `provider_name`,
+ *                `provider_logo_uri`, `amount`, `message`, `status` and
+ *                `created` — the aliases myapi_service_request_build_offer()
+ *                reads.
+ */
+function myapi_service_request_load_offers($nid, array $provider_ids) {
+  $query = db_select('field_data_field_request', 'fq');
+  $query->condition('fq.entity_type', 'node');
+  $query->condition('fq.deleted', 0);
+  $query->condition('fq.field_request_target_id', (int) $nid);
+
+  // INNER, and the bundle and the published flag as conditions — same shape,
+  // same reasons, as myapi_service_request_offer_counts_by_nid().
+  $query->innerJoin('node', 'no', 'no.nid = fq.entity_id');
+  $query->condition('no.type', MYAPI_SERVICES_OFFER_TYPE);
+  $query->condition('no.status', 1);
+  $query->addField('no', 'nid', 'nid');
+  $query->addField('no', 'created', 'created');
+
+  // The provider, in three LEFT hops: the reference, the node, its logo file.
+  // The node join carries the bundle and status = 1, so an unpublished provider
+  // leaves provider_id NULL and the offer STAYS in the list — dropping it would
+  // make the list disagree with offers_count.
+  $query->leftJoin('field_data_field_provider', 'fp', "fp.entity_id = no.nid AND fp.entity_type = 'node' AND fp.deleted = 0");
+  $query->leftJoin('node', 'np', 'np.nid = fp.field_provider_target_id AND np.type = :provider_type AND np.status = 1', [':provider_type' => MYAPI_SERVICES_PROVIDER_TYPE]);
+  $query->addField('np', 'nid', 'provider_id');
+  $query->addField('np', 'title', 'provider_name');
+
+  // The logo is public:// (SPEC 85), so what travels is the uri and the
+  // serialiser turns it into a direct URL. Both hops LEFT: no logo, or a
+  // file_managed row that no longer exists, answers null.
+  $query->leftJoin('field_data_field_logo', 'lg', "lg.entity_id = np.nid AND lg.entity_type = 'node' AND lg.deleted = 0");
+  $query->leftJoin('file_managed', 'fml', 'fml.fid = lg.field_logo_fid');
+  $query->addField('fml', 'uri', 'provider_logo_uri');
+
+  $query->leftJoin('field_data_field_offer_amount', 'foa', "foa.entity_id = no.nid AND foa.entity_type = 'node' AND foa.deleted = 0");
+  $query->addField('foa', 'field_offer_amount_value', 'amount');
+
+  $query->leftJoin('field_data_field_offer_message', 'fom', "fom.entity_id = no.nid AND fom.entity_type = 'node' AND fom.deleted = 0");
+  $query->addField('fom', 'field_offer_message_value', 'message');
+
+  $query->leftJoin('field_data_field_offer_status', 'fost', "fost.entity_id = no.nid AND fost.entity_type = 'node' AND fost.deleted = 0");
+  $query->addField('fost', 'field_offer_status_value', 'status');
+
+  // The trim. Empty list = no condition at all, and never an "IN ()", which is
+  // invalid SQL in Drupal 7.
+  if ($provider_ids) {
+    $query->condition('fp.field_provider_target_id', $provider_ids, 'IN');
+  }
+
+  $query->orderBy('no.created', 'DESC');
+  $query->orderBy('no.nid', 'DESC');
+
+  return $query->execute()->fetchAll();
+}
+
+/**
+ * Shapes one private file into {id, url, filename}, or NULL (SPEC 89).
+ *
+ * A copy of myapi_claim_build_file() in shape and in reasoning, pointed at this
+ * bundle's route: field_images and field_attachment are private:// at the field
+ * level since SPEC 77, so the URL that travels is the authenticated endpoint of
+ * this module — GET /api/v1/service-requests/{id}/files/{fid} — and never a
+ * system/files/... path, which the app could not open with a Bearer token.
+ *
+ * ABSOLUTE, because the app has no base URL of its own to resolve a relative
+ * path against.
+ *
+ * PURE: no database. The fid and the filename arrive already read.
+ *
+ * @param mixed  $fid          file_managed.fid, or NULL for "no file".
+ * @param mixed  $filename     file_managed.filename.
+ * @param mixed  $request_nid  The request the route is built around. It is the
+ *                             {id} of the URL, and the file endpoint checks the
+ *                             fid really belongs to it.
+ *
+ * @return array|NULL  ['id' => int, 'url' => string, 'filename' => string], or
+ *                     NULL when there is no file.
+ */
+function myapi_service_request_build_file($fid, $filename, $request_nid) {
+  if ($fid === NULL || $fid === '') {
+    return NULL;
+  }
+
+  return [
+    'id'       => (int) $fid,
+    'url'      => url('api/v1/service-requests/' . (int) $request_nid . '/files/' . (int) $fid, ['absolute' => TRUE]),
+    'filename' => $filename,
+  ];
+}
+
+/**
+ * Shapes one offer row into the item of the `offers` list (SPEC 89).
+ *
+ * ALWAYS THE SAME SIX KEYS, IN THIS ORDER — id, provider, amount, message,
+ * status, created — whatever the data. PURE: no database, no node_load().
+ *
+ * `provider` IS THE WHOLE OBJECT OR NULL, AND THE OFFER STAYS IN THE LIST
+ * EITHER WAY. The provider is resolved through a LEFT JOIN restricted to
+ * published 'provider' nodes, so an unpublished or deleted one leaves this NULL
+ * — and dropping the offer instead would make `offers` disagree with
+ * `offers_count`, which counts it. The same distinction
+ * myapi_service_request_build_item() makes with the awarded pair.
+ *
+ * `logo` IS AN ABSOLUTE, DIRECT URL, unlike the request's own images: field_logo
+ * is public:// (SPEC 85), so it is served by the web server and needs no token.
+ * Same guard as myapi_provider_build_item() — isset() AND !== '' — so a provider
+ * with no logo, or one whose field row points at a file_managed that no longer
+ * exists, answers NULL and never "" nor a broken URL.
+ *
+ * `amount` IS A FLOAT OR NULL, NEVER "95.50" AND NEVER 0.0. The field is
+ * optional by SPEC 77's decision — the price can be settled in the chat — and 0
+ * is a price somebody offered, not a missing one. Same rule as `hourly_rate` in
+ * GET /api/v1/providers.
+ *
+ * `message` travels AS STORED, with the line breaks the provider typed, exactly
+ * like `description` in the listing item. The instance pins the 'plain_text'
+ * format (SPEC 77); the note in docs/service-request.md says what depends on
+ * that.
+ *
+ * @param object $row
+ *   One row of myapi_service_request_load_offers(), carrying `nid`,
+ *   `provider_id`, `provider_name`, `provider_logo_uri`, `amount`, `message`,
+ *   `status` and `created`.
+ *
+ * @return array  The six keys above, in that order.
+ */
+function myapi_service_request_build_offer($row) {
+  $provider = NULL;
+  if (isset($row->provider_id) && $row->provider_id !== '') {
+    $provider = [
+      'id'   => (int) $row->provider_id,
+      'name' => isset($row->provider_name) ? $row->provider_name : NULL,
+      'logo' => isset($row->provider_logo_uri) && $row->provider_logo_uri !== ''
+        ? file_create_url($row->provider_logo_uri)
+        : NULL,
+    ];
+  }
+
+  return [
+    'id'       => (int) $row->nid,
+    'provider' => $provider,
+    'amount'   => isset($row->amount) && $row->amount !== ''
+      ? (float) $row->amount
+      : NULL,
+    'message'  => isset($row->message) ? $row->message : '',
+    'status'   => isset($row->status) ? $row->status : NULL,
+    'created'  => isset($row->created)
+      ? format_date((int) $row->created, 'custom', 'Y-m-d\TH:i:s')
+      : NULL,
+  ];
+}
+
+/**
+ * Shapes the whole detail item, for either reader (SPEC 89).
+ *
+ * THE TEN FIRST KEYS ARE THE LISTING'S, PRODUCED BY THE LISTING'S OWN
+ * SERIALISER. This function calls myapi_service_request_build_item() and adds
+ * eight keys after it; it does not restate one of them. That is what makes
+ * "the ten first keys are byte for byte what GET /api/v1/service-requests
+ * answers for that request" an acceptance criterion this file cannot break by
+ * accident, and it is why SPEC 88's response does not change by a single key.
+ *
+ * EIGHTEEN KEYS, ALWAYS, FOR BOTH READERS. Nothing appears and nothing
+ * disappears with the data or with who is asking: a null is an answer, an absent
+ * key is a question, and a client that has to test for the existence of a key
+ * before reading it is a client that will forget to. (The spec's prose says
+ * "seventeen" in a couple of places and then lists eight new keys next to the
+ * listing's ten; the enumeration is the part that is unambiguous, and this is
+ * it.)
+ *
+ * THE PROVIDER'S TRIM LIVES HERE AND NOWHERE ELSE, and it is exactly two keys:
+ *
+ *   viewer : 'requester' | 'provider' — the reason the trim is legible at all.
+ *            Without it, `unit: null` cannot be told apart from "this request
+ *            has no unit", and the client cannot decide whether to paint "make
+ *            an offer" or "award". Deducing the role by comparing requester.id
+ *            with the token's uid would work today and would put the server's
+ *            access rule inside the app.
+ *   unit   : NULL for the provider. To decide whether to bid they need the
+ *            category, the description, the photos, the desired date and the
+ *            condominium; the flat number adds nothing to that decision and does
+ *            say where a specific person lives, to anyone of the category.
+ *
+ * Everything else the provider receives whole, `requester {id, name}` and
+ * `condominium` included, and `offers_count` is the FULL count and not the size
+ * of the trimmed list — the caller passes it in from
+ * myapi_service_request_offer_counts_by_nid() precisely so this cannot be
+ * derived from `count($offers)`, which for a provider would always be 0 or 1.
+ * The third difference between the two readers — `offers` trimmed to the
+ * reader's own — is made by the QUERY, not here: filtering in PHP would mean
+ * loading every competitor's amount into memory to then drop it.
+ *
+ * NO CONTACT DETAILS TRAVEL, for either reader: `requester` is {id, name} and
+ * nothing else. myapi_user_fetch_profile_fields() is not called from this
+ * resource — the name says who you would be dealing with, the phone and the
+ * email are contact data and belong to no read endpoint of this bundle.
+ *
+ * PURE: no database, no node_load(), no $_GET. Every input arrives resolved.
+ *
+ * @param object $row
+ *   The row of myapi_service_request_detail_row(), carrying the twelve aliases
+ *   myapi_service_request_build_item() reads plus `requester_uid`,
+ *   `requester_name` (written onto the row by the caller after
+ *   myapi_user_display_names()), `unit_id`, `unit_name`, `condominium_id`,
+ *   `condominium_name`, `attachment_fid`, `attachment_filename` and
+ *   `closed_at`.
+ * @param string $viewer
+ *   'requester' or 'provider', from myapi_service_request_viewer().
+ * @param array $images
+ *   The list of myapi_service_request_build_file() items, in delta order.
+ *   Always an array, empty when there are none.
+ * @param array $offers
+ *   The list of myapi_service_request_build_offer() items, already ordered and
+ *   already trimmed to the reader by the query. Always an array.
+ * @param mixed $offers_count
+ *   The TOTAL number of published offers of the request, from
+ *   myapi_service_request_offer_counts_by_nid().
+ *
+ * @return array  The eighteen keys, in order.
+ */
+function myapi_service_request_build_detail($row, $viewer, array $images, array $offers, $offers_count) {
+  $nid = (int) $row->nid;
+
+  // The ten keys of the listing, from the listing's own serialiser. The count
+  // is handed over as the one-entry map that function expects.
+  $item = myapi_service_request_build_item($row, [$nid => (int) $offers_count]);
+
+  // Required on the bundle, but LEFT-joined: a field row deleted by hand
+  // answers null rather than a PHP notice in the middle of the response.
+  $requester = NULL;
+  if (isset($row->requester_uid) && $row->requester_uid !== '') {
+    $requester = [
+      'id'   => (int) $row->requester_uid,
+      'name' => isset($row->requester_name) ? $row->requester_name : NULL,
+    ];
+  }
+
+  // The whole trim, both halves of it. NULL for the provider is a decision, not
+  // a missing datum — which is what `viewer` above makes readable.
+  $unit = NULL;
+  if ($viewer !== 'provider' && isset($row->unit_id) && $row->unit_id !== '') {
+    $unit = [
+      'id' => (int) $row->unit_id,
+      // field_nombre_vivienda, NOT the 'vivienda' node title: the title is an
+      // internal label and the name the resident knows their unit by is the
+      // field — the same value GET /api/v1/units answers as `name`.
+      'name' => isset($row->unit_name) ? $row->unit_name : NULL,
+    ];
+  }
+
+  $condominium = NULL;
+  if (isset($row->condominium_id) && $row->condominium_id !== '') {
+    $condominium = [
+      'id'   => (int) $row->condominium_id,
+      'name' => isset($row->condominium_name) ? $row->condominium_name : NULL,
+    ];
+  }
+
+  return array_merge($item, [
+    'viewer'      => $viewer,
+    'requester'   => $requester,
+    'unit'        => $unit,
+    'condominium' => $condominium,
+    // Always an array, never null: "no photos" is an empty list, and a client
+    // that can iterate has nothing to branch on.
+    'images'      => array_values($images),
+    'attachment'  => myapi_service_request_build_file(
+      isset($row->attachment_fid) ? $row->attachment_fid : NULL,
+      isset($row->attachment_filename) ? $row->attachment_filename : NULL,
+      $nid
+    ),
+    // A datestamp like desired_start, so format_date() and not the raw column.
+    // NULL — and not format_date(0), a 1970 nobody typed — while the request is
+    // not closed, which is every request that is not 'closed'.
+    'closed_at'   => isset($row->closed_at) && $row->closed_at !== ''
+      ? format_date((int) $row->closed_at, 'custom', 'Y-m-d\TH:i:s')
+      : NULL,
+    'offers'      => array_values($offers),
+  ]);
+}
+
+/**
+ * Dispatcher for /api/v1/service-requests/%/files/% (SPEC 89).
+ *
+ * Its own dispatcher and not a second case inside the item one: routing
+ * "detail or file" by the presence of $fid would turn two responsibilities into
+ * a chain of isset(). Three routes, three dispatchers, one job each — the same
+ * split myapi_claim_file_dispatch() made in SPEC 65 and
+ * myapi_provider_gallery_file_dispatch() in SPEC 82.
+ *
+ * It is also what makes "POST, PUT and DELETE answer 405 on BOTH routes,
+ * without a token and before any query" true of this one too: the method is
+ * wrong whoever is asking.
+ *
+ * @param mixed $nid  The request nid from the route.
+ * @param mixed $fid  The file id from the route.
+ */
+function myapi_service_request_file_dispatch($nid = NULL, $fid = NULL) {
+  if (myapi_request_method() === 'GET') {
+    myapi_service_request_file_download($nid, $fid);
+  }
+  else {
+    myapi_error('method_not_allowed', 405);
+  }
+}
+
+/**
+ * GET /api/v1/service-requests/%/files/% — the bytes of one file (SPEC 89).
+ *
+ * NOT A JSON ENDPOINT ON THE HAPPY PATH: it answers the file itself, streamed
+ * by file_transfer(). Errors do travel in the module's envelope. It exists
+ * because field_images and field_attachment are private:// at the field level
+ * since SPEC 77 — without it the detail would serve filenames nobody can open —
+ * and it is the same shape SPEC 65 gave claims and SPEC 82 gave provider
+ * galleries, with THIS spec's access rule.
+ *
+ * FOUR CHECKS, IN THIS ORDER, and the order is the security of the route:
+ *
+ *   1. The token. 401 before anything else is read.
+ *   2. The request exists — myapi_service_request_detail_row(). 404 covers "no
+ *      such request", "unpublished" and "another bundle" alike.
+ *   3. WHO IS ASKING — myapi_service_request_viewer(), THE SAME FUNCTION the
+ *      detail calls, not a copy of its conditions. This is what makes "whoever
+ *      cannot read the detail cannot download its photos either" true by
+ *      construction rather than by two lists somebody has to keep in sync. The
+ *      day a condition changes it changes for both routes at once.
+ *   4. THE FID BELONGS TO THIS REQUEST — myapi_service_request_file_request_nid()
+ *      from includes/myapi.service_request_files.inc, the include
+ *      hook_file_download() also calls. THIS IS THE CHECK THAT MAKES THE ROUTE
+ *      SAFE: without it, /service-requests/128/files/999 would serve any
+ *      private file of the site — a payment receipt, another resident's claim
+ *      photo, a provider's private gallery — to anyone with access to ONE
+ *      request, and access to an 'open' one of your category is access every
+ *      active provider has. A fid of another request, or of no request at all,
+ *      answers 404 BEFORE file_load() is ever reached.
+ *
+ * The membership check is a comparison against the {id} OF THE ROUTE, which is
+ * the same nid step 2 proved exists and step 3 granted access to. Comparing
+ * against anything else — the fid's own owner, say — would grant access to a
+ * request the reader never passed the rule for.
+ *
+ * WHAT IT DOES NOT DO: image styles. The URL serves the original file;
+ * private://styles/... is neither generated nor offered (out of scope), and the
+ * back office's thumbnails are core's business through hook_file_download().
+ *
+ * @param mixed $nid  The request nid, raw from the route.
+ * @param mixed $fid  The file id, raw from the route.
+ */
+function myapi_service_request_file_download($nid, $fid) {
+  // 1. Token. Answers 401 missing_authorization / invalid_token on its own and
+  // never returns on failure.
+  $token = myapi_auth_require_access_token();
+  $uid = (int) $token->uid;
+
+  if (!is_scalar($nid) || !ctype_digit((string) $nid) || (int) $nid <= 0) {
+    myapi_error('not_found', 404);
+  }
+  $nid = (int) $nid;
+
+  // 2. The request. Same function, same 404, as the detail.
+  $row = myapi_service_request_detail_row($nid);
+  if (!$row) {
+    myapi_error('not_found', 404);
+  }
+
+  // 3. The access rule. THE SAME FUNCTION, not a copy — see the docblock.
+  if (myapi_service_request_viewer($row, $uid) === NULL) {
+    myapi_error('forbidden', 403);
+  }
+
+  // 4. The file. From here on the reader has proved they may read this request,
+  // so telling "that file is not of this request" apart from "no such file"
+  // leaks nothing — and both answer the same 404 anyway.
+  module_load_include('inc', 'myapi', 'includes/myapi.service_request_files');
+
+  if (!is_scalar($fid) || !ctype_digit((string) $fid) || (int) $fid <= 0) {
+    myapi_error('not_found', 404);
+  }
+  $fid = (int) $fid;
+
+  // Membership, resolved by the include the back-office hook also calls. The
+  // strict comparison is against the route's nid, and it happens BEFORE
+  // file_load().
+  if (myapi_service_request_file_request_nid($fid) !== $nid) {
+    myapi_error('not_found', 404);
+  }
+
+  $file = file_load($fid);
+
+  // A file_managed row pointing at a file that is not on disk answers 404 too,
+  // not a 200 of zero bytes nor a PHP warning from fopen().
+  if (!is_object($file) || !file_exists($file->uri)) {
+    myapi_error('not_found', 404);
+  }
+
+  // 5. The bytes. file_transfer() sends the headers, streams the file in chunks
+  // and ends the request; nothing after this line runs.
+  //
+  // 'inline' because the app renders these images on screen and 'attachment'
+  // would force a download in any web viewer; the original filename travels in
+  // the header either way. 'private, no-store' because the whole point of this
+  // endpoint is that the file is not cacheable by anything between the app and
+  // Drupal.
+  file_transfer($file->uri, [
+    'Content-Type'        => $file->filemime,
+    'Content-Length'      => $file->filesize,
+    'Content-Disposition' => 'inline; filename="' . $file->filename . '"',
+    'Cache-Control'       => 'private, no-store',
+  ]);
 }

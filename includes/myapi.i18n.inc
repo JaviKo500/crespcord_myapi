@@ -151,6 +151,16 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       // keys between resources. file_not_found IS reused, because "the file is
       // not there" reads the same for a claim and for a gallery.
       'provider_not_found'                 => 'Provider not found.',
+      // SPEC 89. The two GENERIC keys of this catalogue, and the exception to
+      // the per-resource rule right above: the spec names them 'not_found' and
+      // 'forbidden' in its response tables and in its acceptance criteria, and
+      // error_code is a contract the app branches on. The service request
+      // detail is also the first endpoint where the two mean strictly different
+      // things — 404 "it does not exist or is unpublished" versus 403 "it
+      // exists and you may not read it" — and that distinction is the message,
+      // whatever resource it is about.
+      'not_found'                          => 'Not found.',
+      'forbidden'                          => 'You do not have access to this resource.',
     ],
     'es' => [
       'invalid_credentials'    => 'Usuario o contraseña incorrectos.',
@@ -230,6 +240,9 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'claim_invalid_attachment'           => 'Adjunto inválido. Permitidos: PDF, DOC, DOCX, XLS o XLSX hasta 3 MB.',
       'file_not_found'                     => 'Archivo no encontrado.',
       'provider_not_found'                 => 'Proveedor no encontrado.',
+      // SPEC 89 — see the note next to the English pair.
+      'not_found'                          => 'No encontrado.',
+      'forbidden'                          => 'No tienes acceso a este recurso.',
     ],
   ];
 

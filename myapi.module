@@ -378,14 +378,44 @@ function myapi_menu() {
   // 'service_request' bundle, whose schema SPEC 77, 86 and 87 built without one.
   // Read-only and authenticated; the scope is field_requester = uid and NOT the
   // reader's roles, so a resident who also holds 'proveedor' reads here what
-  // they created as a resident. Every write answers 405, and the detail
-  // 'api/v1/service-requests/%' is another spec.
+  // they created as a resident. Every write answers 405.
   //
   // Plural and in English, like the fifteen routes before it — the singular
   // 'api/v1/services-request' would be the one path the app has to remember as
   // a special case.
   $items['api/v1/service-requests'] = [
     'page callback'    => 'myapi_service_request_dispatch',
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/service_request.resource.inc',
+  ];
+
+  // The detail of one request and the bytes of its private files (SPEC 89).
+  //
+  // Siblings of the collection above and NOT displaced by it: Drupal 7 matches
+  // by the number of path components first, so the three routes never compete
+  // for the same request — the same reasoning the provider gallery routes carry.
+  //
+  // 'access callback' => TRUE on both, like every other api/v1 route of this
+  // module: Drupal's access layer is not the one deciding here. The token is
+  // checked inside the dispatcher, and WHO may read this particular request is
+  // myapi_service_request_viewer(), the single function both callbacks call.
+  //
+  // The second route is not optional decoration: field_images and
+  // field_attachment are private:// at the field level since SPEC 77, so
+  // without it the detail would answer filenames the app cannot open. Same pair
+  // of routes SPEC 65 gave claims and SPEC 82 gave provider galleries.
+  $items['api/v1/service-requests/%'] = [
+    'page callback'    => 'myapi_service_request_item_dispatch',
+    'page arguments'   => [3],
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/service_request.resource.inc',
+  ];
+
+  $items['api/v1/service-requests/%/files/%'] = [
+    'page callback'    => 'myapi_service_request_file_dispatch',
+    'page arguments'   => [3, 5],
     'access callback'  => TRUE,
     'type'             => MENU_CALLBACK,
     'file'             => 'resources/service_request.resource.inc',
