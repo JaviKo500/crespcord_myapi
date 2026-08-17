@@ -126,6 +126,7 @@ class ServiceRequestListEndpointTest extends TestCase {
       'uid'                            => '1',
       'fr.field_requester_target_id'   => (string) self::UID,
       'fcat.field_category_tid'        => '12',
+      'category_code'                  => 'plumbing',
       'category_name'                  => 'Plomería',
       'frs.field_request_status_value' => MYAPI_SERVICES_REQUEST_STATUS_OPEN,
       'description'                    => 'El calentador gotea.',
@@ -447,6 +448,7 @@ class ServiceRequestListEndpointTest extends TestCase {
           'created'                 => (string) (self::CREATED - 100),
           'description'             => 'La puerta de servicio no cierra.',
           'fcat.field_category_tid' => '14',
+          'category_code'           => 'locksmith',
           'category_name'           => 'Cerrajería',
         ]),
       ],
@@ -463,7 +465,7 @@ class ServiceRequestListEndpointTest extends TestCase {
             'title'             => 'Fuga en el calentador',
             'description'       => 'El calentador del baño principal gotea desde el lunes.',
             'status'            => 'assigned',
-            'category'          => ['id' => 12, 'name' => 'Plomería'],
+            'category'          => ['id' => 12, 'code' => 'plumbing', 'name' => 'Plomería'],
             'offers_count'      => 3,
             'assigned_offer'    => ['id' => 45, 'status' => 'selected'],
             'assigned_provider' => ['id' => 7, 'name' => 'Plomería Rivas'],
@@ -475,7 +477,7 @@ class ServiceRequestListEndpointTest extends TestCase {
             'title'             => 'Cambiar cerradura',
             'description'       => 'La puerta de servicio no cierra.',
             'status'            => 'open',
-            'category'          => ['id' => 14, 'name' => 'Cerrajería'],
+            'category'          => ['id' => 14, 'code' => 'locksmith', 'name' => 'Cerrajería'],
             'offers_count'      => 0,
             'assigned_offer'    => NULL,
             'assigned_provider' => NULL,
@@ -517,7 +519,7 @@ class ServiceRequestListEndpointTest extends TestCase {
         'created',
         'desired_start',
       ], array_keys($item));
-      $this->assertSame(['id', 'name'], array_keys($item['category']));
+      $this->assertSame(['id', 'code', 'name'], array_keys($item['category']));
     }
 
     $this->assertSame(['service_requests', 'pagination'], array_keys($result['json']['data']));
@@ -553,6 +555,49 @@ class ServiceRequestListEndpointTest extends TestCase {
     }
     $this->assertStringNotContainsString('"id":"', $result['output']);
     $this->assertStringNotContainsString('"offers_count":"', $result['output']);
+  }
+
+  /**
+   * The category carries the STABLE CODE beside the tid — the same
+   * field_category_code /api/v1/service-categories and /api/v1/providers
+   * already answer for that same term. It is the value the app hangs its
+   * per-category logic on: the tid changes if the vocabulary is reimported and
+   * the code does not.
+   */
+  public function testTheCategoryCarriesTheStableCodeBesideTheTid() {
+    $result = $this->listing([
+      $this->request(128, 'Fuga'),
+      $this->request(127, 'Cerradura', [
+        'fcat.field_category_tid' => '14',
+        'category_code'           => 'locksmith',
+        'category_name'           => 'Cerrajería',
+      ]),
+    ]);
+
+    $items = $this->items($result);
+    $this->assertSame(['id' => 12, 'code' => 'plumbing', 'name' => 'Plomería'], $items[0]['category']);
+    $this->assertSame(['id' => 14, 'code' => 'locksmith', 'name' => 'Cerrajería'], $items[1]['category']);
+    $this->assertStringContainsString('"code":"plumbing"', $result['output']);
+  }
+
+  /**
+   * A term with no field_category_code answers `code: ""` and KEEPS its
+   * request: the field is required on the vocabulary, so an empty one is
+   * corrupt data and not a business case, and hiding the request would make it
+   * vanish from the resident's own listing with no trace. Same criterion
+   * /api/v1/service-categories and /api/v1/providers already apply, which is
+   * why the join is the one LEFT among the category's three tables.
+   */
+  public function testATermWithNoCodeAnswersAnEmptyCodeAndKeepsItsRequest() {
+    $result = $this->listing([
+      $this->request(128, 'Fuga', ['category_code' => NULL]),
+    ]);
+
+    $item = $this->items($result)[0];
+    $this->assertSame('', $item['category']['code']);
+    $this->assertSame(12, $item['category']['id']);
+    $this->assertSame(1, $this->pagination($result)['total']);
+    $this->assertStringNotContainsString('"code":null', $result['output']);
   }
 
   /**
@@ -1349,6 +1394,9 @@ class ServiceRequestListEndpointTest extends TestCase {
       'field_data_field_category fcat'         => 'INNER',
       'taxonomy_term_data td'                  => 'INNER',
       'field_data_field_request_status frs'    => 'LEFT',
+      // The category CODE is LEFT even though its two term joins are INNER: a
+      // term with no field_category_code answers code "" and keeps its request.
+      'field_data_field_category_code cc'      => 'LEFT',
       'field_data_field_description fd'        => 'LEFT',
       'field_data_field_desired_start fds'     => 'LEFT',
       'field_data_field_assigned_offer fao'    => 'LEFT',

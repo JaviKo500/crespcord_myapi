@@ -429,8 +429,8 @@ function myapi_service_request_count($uid, array $filters = []) {
  *
  * Starts from the same myapi_service_request_base_query() the count uses — so
  * the page is always a slice of the counted set — and adds ONLY what projects
- * columns: the term name, the description, the desired start, and the awarded
- * offer and provider.
+ * columns: the term name and code, the description, the desired start, and the
+ * awarded offer and provider.
  *
  * EVERY JOIN ADDED HERE IS LEFT AND NEVER INNER, and the awarded pair is the
  * reason the rule exists: nothing validates today that field_assigned_offer
@@ -462,7 +462,7 @@ function myapi_service_request_count($uid, array $filters = []) {
  *                         unpaginated" (SPEC 15).
  * @param string $sort     'asc' or 'desc' on the creation date.
  *
- * @return array  Rows carrying the twelve aliases
+ * @return array  Rows carrying the thirteen aliases
  *                myapi_service_request_build_item() reads.
  */
 function myapi_service_request_fetch($uid, array $filters, $page, $limit, $sort) {
@@ -473,9 +473,15 @@ function myapi_service_request_fetch($uid, array $filters, $page, $limit, $sort)
   $query->addField('n', 'created', 'created');
 
   // The category: the tid off the field row, the name off the term. Both joins
-  // already live in the base query.
+  // already live in the base query. The code is one more column and therefore
+  // LEFT: field_category_code is required on the vocabulary, so a term without
+  // one is corrupt data, not a business case — it answers code "" and keeps its
+  // request, exactly what /api/v1/service-categories and /api/v1/providers
+  // already do with this same field.
   $query->addField('fcat', 'field_category_tid', 'category_id');
   $query->addField('td', 'name', 'category_name');
+  $query->leftJoin('field_data_field_category_code', 'cc', "cc.entity_id = td.tid AND cc.entity_type = 'taxonomy_term' AND cc.deleted = 0");
+  $query->addField('cc', 'field_category_code_value', 'category_code');
 
   $query->addField('frs', 'field_request_status_value', 'status');
 
@@ -631,17 +637,21 @@ function myapi_service_request_offer_counts_by_nid(array $nids) {
  *   field_reception_date — so both get format_date() in the site's timezone,
  *   identical to `created` in GET /api/v1/claims.
  *
- * The isset() guards are not decoration. `category` comes from two INNER JOINs
- * and cannot be missing in practice, and description and desired_start are
- * required at the instance level; but they are LEFT-joined, so a field row
- * deleted by hand would hand a NULL in here, and answering "" or null beats a
- * PHP notice in the middle of a listing.
+ * The isset() guards are not decoration. `category.id` and `category.name` come
+ * from two INNER JOINs and cannot be missing in practice, and description and
+ * desired_start are required at the instance level; but they are LEFT-joined, so
+ * a field row deleted by hand would hand a NULL in here, and answering "" or
+ * null beats a PHP notice in the middle of a listing. `category.code` is the one
+ * whose guard fires in real data: its join IS left, and a term with no
+ * field_category_code answers "" — the same "" /api/v1/service-categories and
+ * /api/v1/providers already answer for that same term.
  *
  * @param object $row
  *   One row of myapi_service_request_fetch(), carrying the aliases `nid`,
- *   `title`, `description`, `status`, `category_id`, `category_name`,
- *   `assigned_offer_id`, `assigned_offer_status`, `assigned_provider_id`,
- *   `assigned_provider_name`, `created` and `desired_start`.
+ *   `title`, `description`, `status`, `category_id`, `category_code`,
+ *   `category_name`, `assigned_offer_id`, `assigned_offer_status`,
+ *   `assigned_provider_id`, `assigned_provider_name`, `created` and
+ *   `desired_start`.
  * @param array $offer_counts
  *   The map myapi_service_request_offer_counts_by_nid() returns for the WHOLE
  *   page, keyed by nid. Passed in and not looked up: resolving it here would
@@ -681,8 +691,15 @@ function myapi_service_request_build_item($row, array $offer_counts) {
     // breaks, and claims already answers this same field this same way.
     'description' => isset($row->description) ? $row->description : '',
     'status'      => isset($row->status) ? $row->status : NULL,
+    // Three keys, in the same order /api/v1/service-categories prints them —
+    // id, code, name. `code` is the stable identifier the app hangs its
+    // per-category logic on (the tid changes if the vocabulary is reimported;
+    // the code does not), and "" when the term has none, never NULL: the field
+    // is required on the vocabulary, so an empty one is corrupt data and the
+    // client still has a string to compare.
     'category'    => [
       'id'   => isset($row->category_id) ? (int) $row->category_id : NULL,
+      'code' => isset($row->category_code) ? $row->category_code : '',
       'name' => isset($row->category_name) ? $row->category_name : '',
     ],
     // (int) of a missing entry is 0, which is exactly the answer wanted: the
@@ -1006,7 +1023,7 @@ function myapi_service_request_viewer($row, $uid) {
  * is unpublished, or it is of another bundle. The reader learns "no such
  * request", which is all three.
  *
- * It projects the twelve aliases of the listing item PLUS the nine the detail
+ * It projects the thirteen aliases of the listing item PLUS the nine the detail
  * adds. The overlap with myapi_service_request_fetch() is projection, not
  * decision: the fetch pages and orders a listing, this one reads a single row,
  * and the ONE thing the two must agree on — which requests are real — is the
@@ -1058,9 +1075,13 @@ function myapi_service_request_detail_row($nid) {
   $query->addField('n', 'title', 'title');
   $query->addField('n', 'created', 'created');
 
-  // The category, off the two INNER JOINs the base query already made.
+  // The category, off the two INNER JOINs the base query already made, plus the
+  // code — LEFT, like in the listing's fetch and for the same reason: a term
+  // with no field_category_code answers code "" instead of dropping the row.
   $query->addField('fcat', 'field_category_tid', 'category_id');
   $query->addField('td', 'name', 'category_name');
+  $query->leftJoin('field_data_field_category_code', 'cc', "cc.entity_id = td.tid AND cc.entity_type = 'taxonomy_term' AND cc.deleted = 0");
+  $query->addField('cc', 'field_category_code_value', 'category_code');
 
   $query->addField('frs', 'field_request_status_value', 'status');
 
@@ -1405,7 +1426,7 @@ function myapi_service_request_build_offer($row) {
  * PURE: no database, no node_load(), no $_GET. Every input arrives resolved.
  *
  * @param object $row
- *   The row of myapi_service_request_detail_row(), carrying the twelve aliases
+ *   The row of myapi_service_request_detail_row(), carrying the thirteen aliases
  *   myapi_service_request_build_item() reads plus `requester_uid`,
  *   `requester_name` (written onto the row by the caller after
  *   myapi_user_display_names()), `unit_id`, `unit_name`, `condominium_id`,

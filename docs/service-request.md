@@ -125,7 +125,7 @@ status the filter accepts it with no code change here.
         "title": "Fuga en el calentador",
         "description": "El calentador del baño principal gotea desde el lunes.\nEmpeoró el martes.",
         "status": "assigned",
-        "category": { "id": 12, "name": "Plomería" },
+        "category": { "id": 12, "code": "plumbing", "name": "Plomería" },
         "offers_count": 3,
         "assigned_offer": { "id": 45, "status": "selected" },
         "assigned_provider": { "id": 7, "name": "Plomería Rivas" },
@@ -137,7 +137,7 @@ status the filter accepts it with no code change here.
         "title": "Pintar la reja del patio",
         "description": "Ya hablé con ellos, vienen el sábado.",
         "status": "direct",
-        "category": { "id": 15, "name": "Pintura" },
+        "category": { "id": 15, "code": "painting", "name": "Pintura" },
         "offers_count": 0,
         "assigned_offer": null,
         "assigned_provider": { "id": 7, "name": "Plomería Rivas" },
@@ -162,7 +162,7 @@ Each element contains exactly these **10 keys, always all 10, in this order**:
 | `title` | string | The node title, **as stored**. The bundle has no title field of its own. |
 | `description` | string | `field_description`, **as stored**: the line breaks the resident typed are preserved. See [The description travels raw](#the-description-travels-raw). |
 | `status` | string | One of the six catalogue keys above, in English and **with no label beside it**. |
-| `category` | object | `{ "id": int, "name": string }`, exactly two keys. Never `null` — see [The category is required](#the-category-is-required). |
+| `category` | object | `{ "id": int, "code": string, "name": string }`, exactly three keys. Never `null` — see [The category is required](#the-category-is-required). `code` is `field_category_code`, the stable identifier `/api/v1/service-categories` answers for the same term, and `""` when the term has none — see [The category code](#the-category-code). |
 | `offers_count` | int | Offers received. **`0`** when there are none, never `null` and never absent. See below. |
 | `assigned_offer` | object \| **null** | `{ "id": int, "status": string }` or `null`. `status` is a key of the **offer** catalogue: `sent`, `selected`, `rejected`, `withdrawn`. |
 | `assigned_provider` | object \| **null** | `{ "id": int, "name": string }` or `null`. |
@@ -270,6 +270,25 @@ WHERE fc.entity_type = 'node' AND fc.deleted = 0 AND td.tid IS NULL;
 
 The fix is to reassign the category. Preventing it at the root belongs to the
 spec that allows **deleting** categories.
+
+### The category code
+
+`category.code` is `field_category_code`, **the same value
+`GET /api/v1/service-categories` and `GET /api/v1/providers` answer for that
+same term**. It exists because the `tid` is not stable — reimporting the
+vocabulary changes it and the code does not — so any per-category logic in the
+app (a local icon, a special screen) hangs off `code` and never off `id`.
+
+Two rules, and they are the ones the sibling endpoints already follow:
+
+- **`""`, never `null`, and the request is never hidden.** `field_category_code`
+  is required on the vocabulary, so a term without one is corrupt data rather
+  than a business case; the client still gets a string to compare, and a
+  category that would otherwise vanish from the resident's own listing stays
+  visible. This is the one join of the category that is **`LEFT`** — its two
+  term joins are `INNER`, see above.
+- **It travels as stored**, unescaped, exactly like `title` and `category.name`
+  in this endpoint. The consumer is a Flutter `Text` widget, not an HTML page.
 
 ### Ordering
 
@@ -468,7 +487,7 @@ query**, not even the token's: the shape of the URL is wrong whoever is asking.
       "title": "Fuga en el calentador",
       "description": "El calentador del baño principal gotea desde el lunes.",
       "status": "offered",
-      "category": { "id": 12, "name": "Plomería" },
+      "category": { "id": 12, "code": "plumbing", "name": "Plomería" },
       "offers_count": 2,
       "assigned_offer": null,
       "assigned_provider": null,
@@ -565,10 +584,12 @@ offers, not hundreds.
   answers for the same request — the same serialiser produces them.
 - No query here carries `->addTag('node_access')` either, for the reason written
   in the listing's notes. A unit test fails if it appears.
-- Everything about `description`, the required category and its orphan-tid
-  diagnosis, above, applies unchanged to the detail — including that an orphan
-  category makes the request answer `404` here and disappear from the listing
-  there. The two views agree, which is the point.
+- Everything about `description`, the required category, its `code` and its
+  orphan-tid diagnosis, above, applies unchanged to the detail — including that
+  an orphan category makes the request answer `404` here and disappear from the
+  listing there. The two views agree, which is the point. `category` is one of
+  the keys the provider receives **whole**: deciding whether to bid is exactly
+  what they need it for.
 
 **Possible errors**
 | Code | error_code | When |

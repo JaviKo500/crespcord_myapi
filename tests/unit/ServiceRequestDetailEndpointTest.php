@@ -161,6 +161,7 @@ class ServiceRequestDetailEndpointTest extends TestCase {
       'fr.field_requester_target_id'   => (string) self::UID,
       'requester_uid'                  => (string) self::UID,
       'fcat.field_category_tid'        => (string) self::CATEGORY,
+      'category_code'                  => 'plumbing',
       'category_name'                  => 'Plomería',
       'frs.field_request_status_value' => MYAPI_SERVICES_REQUEST_STATUS_OPEN,
       'description'                    => "El calentador gotea.\nDesde el lunes.",
@@ -523,7 +524,7 @@ class ServiceRequestDetailEndpointTest extends TestCase {
       'title'             => 'Fuga en el calentador',
       'description'       => "El calentador gotea.\nDesde el lunes.",
       'status'            => 'open',
-      'category'          => ['id' => 12, 'name' => 'Plomería'],
+      'category'          => ['id' => 12, 'code' => 'plumbing', 'name' => 'Plomería'],
       'offers_count'      => 2,
       'assigned_offer'    => NULL,
       'assigned_provider' => NULL,
@@ -628,6 +629,33 @@ class ServiceRequestDetailEndpointTest extends TestCase {
     $listed = $listing['json']['data']['service_requests'][0];
 
     $this->assertSame($listed, array_slice($detail, 0, 10, TRUE));
+  }
+
+  /**
+   * The category carries the stable code beside the tid, for BOTH readers —
+   * the provider's trim takes the unit and the offers, never the category, and
+   * deciding whether to bid is exactly what a provider needs the category for.
+   * A term with no field_category_code answers `code: ""` and keeps its
+   * request, the same criterion the listing applies.
+   */
+  public function testTheCategoryCarriesTheStableCodeForBothReaders() {
+    $requester = $this->item($this->detailFor(self::UID));
+    $this->assertSame(
+      ['id' => self::CATEGORY, 'code' => 'plumbing', 'name' => 'Plomería'],
+      $requester['category']
+    );
+
+    $this->authenticate();
+    $this->seed($this->providerScenario(), self::PROVIDER_UID);
+    $provider = $this->item($this->dispatch());
+    $this->assertSame('provider', $provider['viewer']);
+    $this->assertSame($requester['category'], $provider['category']);
+
+    $this->authenticate();
+    $this->seed(['node' => [$this->request(['category_code' => NULL])]], self::UID);
+    $no_code = $this->item($this->dispatch());
+    $this->assertSame('', $no_code['category']['code']);
+    $this->assertSame(self::CATEGORY, $no_code['category']['id']);
   }
 
   /**
