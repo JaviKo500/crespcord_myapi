@@ -78,10 +78,15 @@ class ProviderDetailEndpointTest extends TestCase {
   }
 
   /**
-   * The provider row, as myapi_provider_detail_fetch()'s six LEFT JOINs
-   * deliver it: the provider's own columns plus the alias each join gives
-   * its field ('rating_avg', not 'field_rating_avg_value' — see the class
-   * docblock). No field_license_expiry anywhere: the detail never joins it.
+   * The provider row, as myapi_provider_detail_fetch()'s LEFT JOINs deliver
+   * it: the provider's own columns plus the alias each join gives its field
+   * ('rating_avg', not 'field_rating_avg_value' — see the class docblock). No
+   * field_license_expiry anywhere: the detail never joins it.
+   *
+   * `logo_uri` is the alias of the second half of the logo pair (SPEC 85) —
+   * file_managed.uri — and it defaults to a real public:// uri because the
+   * provider of this suite is the complete one, the one that has everything.
+   * The cases about an absent logo override it.
    */
   private function providerNode($overrides = []) {
     return $overrides + [
@@ -95,6 +100,7 @@ class ProviderDetailEndpointTest extends TestCase {
       'hourly_rate'        => '25.50',
       'address'            => 'Av. Siempre Viva 123',
       'description'        => 'Instalaciones eléctricas residenciales.',
+      'logo_uri'           => 'public://logo-plomeria-torres.png',
     ];
   }
 
@@ -374,13 +380,18 @@ class ProviderDetailEndpointTest extends TestCase {
    * The shape of the item.
    * ---------------------------------------------------------------------- */
 
-  public function testTheItemCarriesExactlyThirteenKeysInOrder() {
+  /**
+   * The fourteen keys of the detail, in order, with `logo` SECOND — the
+   * thirteen of SPEC 84 plus the logo of SPEC 85, which lands in the same
+   * position it has in the listing because both come out of the same builder.
+   */
+  public function testTheItemCarriesExactlyFourteenKeysInOrder() {
     $this->seedRequest();
 
     $item = $this->data($this->detail((string) self::PROVIDER));
 
     $this->assertSame([
-      'id', 'title', 'categories', 'rating_avg', 'rating_count',
+      'id', 'logo', 'title', 'categories', 'rating_avg', 'rating_count',
       'short_description', 'hourly_rate', 'address', 'description', 'tags',
       'gallery', 'ratings', 'rating_summary',
     ], array_keys($item));
@@ -398,15 +409,25 @@ class ProviderDetailEndpointTest extends TestCase {
   }
 
   /**
-   * The seven keys the detail shares with the listing (SPEC 83) are
-   * IDENTICAL for the same provider, because both routes shape them through
-   * the very same myapi_provider_build_item() — proven here by running both
-   * dispatchers over the same fixture and diffing the output, not merely by
-   * inspecting the source.
+   * The eight keys the detail shares with the listing (SPEC 83, plus the logo
+   * of SPEC 85) are IDENTICAL for the same provider, because both routes shape
+   * them through the very same myapi_provider_build_item() — proven here by
+   * running both dispatchers over the same fixture and diffing the output, not
+   * merely by inspecting the source.
+   *
+   * The `logo` assertion is the one that would catch the day someone maps the
+   * key twice, once per endpoint: the symptom would be a card of the listing
+   * with a logo and a record without it, or two different URLs for one file.
    */
-  public function testTheSevenSharedKeysMatchTheListingForTheSameProvider() {
+  public function testTheEightSharedKeysMatchTheListingForTheSameProvider() {
     $this->seedRequest(
-      ['rating_avg' => '4.75', 'rating_count' => '12', 'short_description' => 'Destapes.', 'hourly_rate' => '25.50'],
+      [
+        'rating_avg'        => '4.75',
+        'rating_count'      => '12',
+        'short_description' => 'Destapes.',
+        'hourly_rate'       => '25.50',
+        'logo_uri'          => 'public://logo-plomeria-torres.png',
+      ],
       [],
       [
         'field_data_field_categories'      => [$this->categoryRow(self::PROVIDER, 7, 'Plomería')],
@@ -419,9 +440,11 @@ class ProviderDetailEndpointTest extends TestCase {
     $listed = myapi_test_capture('myapi_provider_dispatch')['json']['data']['providers'][0];
     $item = $this->data($this->detail((string) self::PROVIDER));
 
-    foreach (['id', 'title', 'categories', 'rating_avg', 'rating_count', 'short_description', 'hourly_rate'] as $key) {
+    foreach (['id', 'logo', 'title', 'categories', 'rating_avg', 'rating_count', 'short_description', 'hourly_rate'] as $key) {
       $this->assertSame($listed[$key], $item[$key], $key);
     }
+    // And it is a real URL on both sides, not two matching NULLs.
+    $this->assertSame('https://crespcord.example.com/sites/default/files/logo-plomeria-torres.png', $item['logo']);
   }
 
   /**
@@ -461,10 +484,12 @@ class ProviderDetailEndpointTest extends TestCase {
       'hourly_rate'       => NULL,
       'address'           => NULL,
       'description'       => NULL,
+      'logo_uri'          => NULL,
     ]);
 
     $item = $this->data($this->detail((string) self::PROVIDER));
 
+    $this->assertNull($item['logo']);
     $this->assertNull($item['rating_avg']);
     $this->assertSame(0, $item['rating_count']);
     $this->assertSame('', $item['short_description']);
@@ -487,6 +512,75 @@ class ProviderDetailEndpointTest extends TestCase {
     $this->assertIsFloat($item['rating_avg']);
     $this->assertSame(25.5, $item['hourly_rate']);
     $this->assertIsFloat($item['hourly_rate']);
+  }
+
+  /* -------------------------------------------------------------------------
+   * The logo (SPEC 85).
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * The logo of the detail is the absolute, direct URL of the public file —
+   * NOT this module's own download route, unlike every url of `gallery`, which
+   * is private and goes through hook_file_download(). Both keys travel in the
+   * same object, so the difference is asserted side by side.
+   */
+  public function testTheLogoIsAPublicUrlWhileTheGalleryStaysOnTheApiRoute() {
+    $this->seedRequest([], [], [
+      'field_data_field_gallery' => [$this->galleryRow(501)],
+    ]);
+
+    $item = $this->data($this->detail((string) self::PROVIDER));
+
+    $this->assertSame('https://crespcord.example.com/sites/default/files/logo-plomeria-torres.png', $item['logo']);
+    $this->assertStringNotContainsString('api/v1/', $item['logo']);
+    $this->assertStringNotContainsString('/system/files', $item['logo']);
+    // And the gallery keeps its own, authenticated route untouched.
+    $this->assertStringContainsString('api/v1/providers/' . self::PROVIDER . '/gallery/501', $item['gallery'][0]['url']);
+  }
+
+  /**
+   * A provider with no logo answers null and the other THIRTEEN keys intact:
+   * the absent logo removes nothing else from the record.
+   */
+  public function testAProviderWithoutALogoAnswersNullAndKeepsEveryOtherKey() {
+    $this->seedRequest(['logo_uri' => NULL]);
+
+    $result = $this->detail((string) self::PROVIDER);
+    $item = $this->data($result);
+
+    $this->assertSame(200, $result['status']);
+    $this->assertNull($item['logo']);
+    $this->assertStringContainsString('"logo":null', $result['output']);
+    $this->assertSame([
+      'id', 'logo', 'title', 'categories', 'rating_avg', 'rating_count',
+      'short_description', 'hourly_rate', 'address', 'description', 'tags',
+      'gallery', 'ratings', 'rating_summary',
+    ], array_keys($item));
+    $this->assertSame('Plomería Torres', $item['title']);
+    $this->assertSame(4.9, $item['rating_avg']);
+    $this->assertSame('Av. Siempre Viva 123', $item['address']);
+  }
+
+  /**
+   * A provider with a LAPSED LICENCE — the one the listing hides but whose
+   * record still opens — answers its logo like anybody else. The licence rule
+   * lives in the listing and never touched the logo, and this is the case that
+   * proves the two joins of SPEC 85 did not quietly import it into the detail.
+   */
+  public function testALapsedLicenceStillAnswersItsLogo() {
+    $this->seedRequest([], [], [
+      'field_data_field_license_expiry' => [
+        ['entity_id' => (string) self::PROVIDER, 'field_license_expiry_value' => (string) (REQUEST_TIME - 86400)],
+      ],
+    ]);
+
+    $result = $this->detail((string) self::PROVIDER);
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame(
+      'https://crespcord.example.com/sites/default/files/logo-plomeria-torres.png',
+      $this->data($result)['logo']
+    );
   }
 
   /* -------------------------------------------------------------------------

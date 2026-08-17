@@ -84,13 +84,18 @@ class ProviderListEndpointTest extends TestCase {
   }
 
   /**
-   * One provider row, as the four LEFT JOINs and the licence join deliver it.
+   * One provider row, as every LEFT JOIN and the licence join deliver it.
    *
    * Active by default — published, licence expiring tomorrow — so every case
-   * that is not about the active rule reads without noise. The four optional
-   * values are NULL unless overridden, which is the honest default: SPEC 77
-   * creates field_rating_avg and field_rating_count empty and nothing writes
-   * them yet.
+   * that is not about the active rule reads without noise. The optional values
+   * are NULL unless overridden, which is the honest default: SPEC 77 creates
+   * field_rating_avg and field_rating_count empty and nothing writes them yet,
+   * and SPEC 85 creates field_logo empty for every provider already on the site.
+   *
+   * `logo_uri` is the alias of the SECOND join of the pair — file_managed.uri —
+   * so seeding it NULL covers the two ways the logo can be absent at once: no
+   * row in field_data_field_logo, and a row pointing at a file_managed that no
+   * longer exists. A LEFT JOIN answers NULL for both.
    */
   private function provider($nid, $title, array $overrides = []) {
     return $overrides + [
@@ -103,6 +108,7 @@ class ProviderListEndpointTest extends TestCase {
       'rating_count'               => NULL,
       'short_description'          => NULL,
       'hourly_rate'                => NULL,
+      'logo_uri'                   => NULL,
     ];
   }
 
@@ -853,6 +859,7 @@ class ProviderListEndpointTest extends TestCase {
           'rating_count'      => '12',
           'short_description' => 'Destapes y reparaciones, atención en el día.',
           'hourly_rate'       => '25.50',
+          'logo_uri'          => 'public://logo-plomeria-torres.png',
         ]),
         $this->provider(42, 'Electricidad Ríos'),
       ],
@@ -869,6 +876,7 @@ class ProviderListEndpointTest extends TestCase {
         'providers' => [
           [
             'id'         => 41,
+            'logo'       => 'https://crespcord.example.com/sites/default/files/logo-plomeria-torres.png',
             'title'      => 'Plomería Torres',
             'categories' => [
               ['id' => 7, 'code' => 'plomeria', 'name' => 'Plomería'],
@@ -881,6 +889,7 @@ class ProviderListEndpointTest extends TestCase {
           ],
           [
             'id'                => 42,
+            'logo'              => NULL,
             'title'             => 'Electricidad Ríos',
             'categories'        => [],
             'rating_avg'        => NULL,
@@ -895,18 +904,25 @@ class ProviderListEndpointTest extends TestCase {
   }
 
   /**
-   * Every item carries EXACTLY the seven documented keys, in the documented
+   * Every item carries EXACTLY the eight documented keys, in the documented
    * order — the assertion that catches a column leaking into the listing.
+   *
+   * `logo` is SECOND, right after `id` and before `title` (SPEC 85): it goes
+   * with the visual identity of the provider, not tucked away at the end. The
+   * provider with a logo and the one without answer the same eight keys.
    */
-  public function testEveryItemHasExactlySevenKeysInOrder() {
+  public function testEveryItemHasExactlyEightKeysInOrder() {
     $result = $this->listing([
-      $this->provider(41, 'Plomería Torres', ['rating_avg' => '4.75']),
+      $this->provider(41, 'Plomería Torres', [
+        'rating_avg' => '4.75',
+        'logo_uri'   => 'public://logo-plomeria-torres.png',
+      ]),
       $this->provider(42, 'Electricidad Ríos'),
     ]);
 
     foreach ($this->providers($result) as $provider) {
       $this->assertSame(
-        ['id', 'title', 'categories', 'rating_avg', 'rating_count', 'short_description', 'hourly_rate'],
+        ['id', 'logo', 'title', 'categories', 'rating_avg', 'rating_count', 'short_description', 'hourly_rate'],
         array_keys($provider)
       );
     }
@@ -965,8 +981,8 @@ class ProviderListEndpointTest extends TestCase {
   }
 
   /**
-   * A provider with none of the four optional values is listed all the same:
-   * four LEFT JOINs and not one of them excludes anybody.
+   * A provider with none of the optional values is listed all the same: six
+   * LEFT JOINs and not one of them excludes anybody — the logo's two included.
    */
   public function testAProviderWithNoOptionalValueAtAllIsStillListed() {
     $result = $this->listing([$this->provider(41, 'Recién dado de alta')]);
@@ -974,6 +990,7 @@ class ProviderListEndpointTest extends TestCase {
     $this->assertSame(1, $this->pagination($result)['total']);
     $this->assertSame([
       'id'                => 41,
+      'logo'              => NULL,
       'title'             => 'Recién dado de alta',
       'categories'        => [],
       'rating_avg'        => NULL,
@@ -981,6 +998,118 @@ class ProviderListEndpointTest extends TestCase {
       'short_description' => '',
       'hourly_rate'       => NULL,
     ], $this->providers($result)[0]);
+  }
+
+  /* -------------------------------------------------------------------------
+   * The logo (SPEC 85).
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * A provider with a logo answers the ABSOLUTE, DIRECT URL of the file.
+   *
+   * The three negative assertions are the point of the key: no `api/v1/` and no
+   * `/system/files` means the URL is NOT served by PHP, so a bare Flutter
+   * Image.network paints it with no Authorization header. That is the whole
+   * difference with the gallery of SPEC 82, whose URLs are this module's own
+   * download route precisely because those files are private.
+   */
+  public function testAProviderWithALogoAnswersAnAbsolutePublicUrl() {
+    $result = $this->listing([
+      $this->provider(41, 'Plomería Torres', ['logo_uri' => 'public://logo-plomeria-torres.png']),
+    ]);
+
+    $logo = $this->providers($result)[0]['logo'];
+
+    $this->assertSame('https://crespcord.example.com/sites/default/files/logo-plomeria-torres.png', $logo);
+    $this->assertStringStartsWith($GLOBALS['base_url'] . '/', $logo);
+    $this->assertStringNotContainsString('api/v1/', $logo);
+    $this->assertStringNotContainsString('/system/files', $logo);
+  }
+
+  /**
+   * A provider with no logo answers null AND IS LISTED — never "", never false
+   * and never a missing key.
+   *
+   * The listed half is the one an INNER JOIN on field_data_field_logo would
+   * break, and it would break it in silence: no error, no broken shape, just
+   * every provider without a logo quietly gone from the marketplace.
+   */
+  public function testAProviderWithoutALogoAnswersNullAndIsStillListed() {
+    $result = $this->listing([
+      $this->provider(41, 'Sin logo'),
+      $this->provider(42, 'Con logo', ['logo_uri' => 'public://logo-42.png']),
+    ]);
+
+    $this->assertSame(2, $this->pagination($result)['total']);
+    $this->assertEqualsCanonicalizing([41, 42], $this->ids($result));
+
+    $without = $this->providers($result)[1];
+    $this->assertSame(41, $without['id']);
+    $this->assertNull($without['logo']);
+    $this->assertArrayHasKey('logo', $without);
+    $this->assertStringContainsString('"logo":null', $result['output']);
+    $this->assertStringNotContainsString('"logo":""', $result['output']);
+    $this->assertStringNotContainsString('"logo":false', $result['output']);
+  }
+
+  /**
+   * A field row pointing at a file_managed that no longer exists answers null
+   * and KEEPS THE PROVIDER LISTED: the second join is as LEFT as the first.
+   *
+   * The fixture cannot tell the two absences apart — the query builder of
+   * tests/unit records joins and never resolves them, so both "no row in
+   * field_data_field_logo" and "row pointing at a deleted file" arrive as the
+   * same flat row with logo_uri NULL, which is precisely what the two chained
+   * LEFT JOINs answer in real SQL. What this case does pin is the OTHER half of
+   * the guard, the one the NULL case never exercises: an empty uri is treated as
+   * no logo too, so the app never receives "" nor a URL pointing nowhere.
+   */
+  public function testALogoWhoseFileIsGoneAnswersNullAndKeepsTheProviderListed() {
+    $result = $this->listing([
+      $this->provider(41, 'Fichero borrado del disco', ['logo_uri' => '']),
+      $this->provider(42, 'Sin fila de campo', ['logo_uri' => NULL]),
+    ]);
+
+    $this->assertSame(2, $this->pagination($result)['total']);
+    $this->assertEqualsCanonicalizing([41, 42], $this->ids($result));
+
+    foreach ($this->providers($result) as $provider) {
+      $this->assertNull($provider['logo']);
+    }
+    $this->assertStringNotContainsString('"logo":""', $result['output']);
+  }
+
+  /**
+   * THE PAGINATION IS THE SAME AS BEFORE THE LOGO EXISTED.
+   *
+   * The bug a badly written LEFT JOIN introduces without making any noise: if
+   * the pair of joins multiplied rows, the listing would answer repeated
+   * providers and a total that no longer matches, and EVERY shape test above
+   * would still be green, because each item on its own would be perfectly fine.
+   *
+   * Six providers, three with a logo and three without, on a page of five: the
+   * total, the number of items and the ids must be exactly what they would be
+   * with no logo in the world.
+   */
+  public function testTheLogoJoinsNeitherDuplicateNorLoseProviders() {
+    $providers = [];
+    for ($i = 0; $i < 6; $i++) {
+      $nid = 100 + $i;
+      $providers[] = $this->provider($nid, 'Proveedor ' . $i, [
+        'rating_avg' => number_format(5 - ($i / 100), 2, '.', ''),
+        'logo_uri'   => $i % 2 === 0 ? 'public://logo-' . $nid . '.png' : NULL,
+      ]);
+    }
+
+    $_GET['limit'] = '5';
+    $result = $this->listing($providers);
+
+    $this->assertSame(6, $this->pagination($result)['total']);
+    $this->assertSame(2, $this->pagination($result)['total_pages']);
+    $this->assertCount(5, $this->providers($result));
+    $ids = $this->ids($result);
+    $this->assertSame($ids, array_unique($ids), 'no provider is answered twice');
+    $this->assertSame([100, 101, 102, 103, 104], $ids);
   }
 
   /**
@@ -1395,10 +1524,11 @@ class ProviderListEndpointTest extends TestCase {
   }
 
   /**
-   * The page query left-joins the four optional fields and inner-joins only the
-   * licence — the shape assertion behind "a provider with no rate is listed".
+   * The page query left-joins every optional field — the four of SPEC 83 and
+   * the two of the logo (SPEC 85) — and inner-joins only the licence: the shape
+   * assertion behind "a provider with no rate, or no logo, is listed".
    */
-  public function testThePageQueryLeftJoinsTheFourOptionalFields() {
+  public function testThePageQueryLeftJoinsEveryOptionalField() {
     $this->listing([$this->provider(41, 'Plomería Torres')]);
 
     $queries = myapi_test_db_queries();
@@ -1415,6 +1545,10 @@ class ProviderListEndpointTest extends TestCase {
       'field_data_field_rating_count'     => 'LEFT',
       'field_data_field_short_description' => 'LEFT',
       'field_data_field_hourly_rate'      => 'LEFT',
+      // Both halves of the logo, and the second as LEFT as the first: a file
+      // deleted from disk cannot drop the provider from the listing.
+      'field_data_field_logo'             => 'LEFT',
+      'file_managed'                      => 'LEFT',
     ], $joins);
   }
 

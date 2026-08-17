@@ -815,7 +815,8 @@ class ServicesInstallTest extends TestCase {
     $this->assertStringContainsString('function myapi_update_7028()', $source);
     $this->assertStringContainsString('function myapi_update_7029()', $source);
     $this->assertStringContainsString('function myapi_update_7030()', $source);
-    $this->assertStringNotContainsString('function myapi_update_7031()', $source);
+    $this->assertStringContainsString('function myapi_update_7031()', $source);
+    $this->assertStringNotContainsString('function myapi_update_7032()', $source);
     // 7028 is still SPEC 81's, not this spec's.
     $this->assertStringContainsString(
       '_myapi_services_install();',
@@ -883,5 +884,102 @@ class ServicesInstallTest extends TestCase {
       '_myapi_services_install();',
       $this->functionSource('myapi_update_7030')
     );
+  }
+
+  /* -------------------------------------------------------------------------
+   * SPEC 85 — the public logo.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * The decision of this spec that cannot be corrected later without moving
+   * files: uri_scheme = 'public' is a FIELD setting, decided the moment the
+   * field is created. Same reasoning as the gallery above and the opposite
+   * value, on purpose — catalogue and commercial identity go public, content
+   * uploaded for one record goes private.
+   *
+   * Cardinality 1 belongs to the field too: one file or none, never a list.
+   */
+  public function testTheLogoIsAPublicImageFieldWithCardinalityOne() {
+    $field = $this->fieldDefinition('field_logo');
+
+    $this->assertStringContainsString("'type' => 'image'", $field);
+    $this->assertStringContainsString("'cardinality' => 1", $field);
+    $this->assertStringContainsString("'settings' => ['uri_scheme' => 'public']", $field);
+    $this->assertStringNotContainsString("'uri_scheme' => 'private'", $field);
+  }
+
+  /**
+   * The instance: optional, on the provider bundle, with the image widget, the
+   * three extensions, the 2 MB cap and BOTH resolutions.
+   *
+   * The two resolutions are not symmetrical and that is the reason both are
+   * pinned here: min_resolution is the only one that REJECTS, so dropping it
+   * would leave the field with no dimension validation at all — just a silent
+   * resize. max_resolution is what keeps a 4000x4000 from taking disk.
+   */
+  public function testTheLogoInstanceIsOptionalAndCapsSizeAndResolution() {
+    $instance = $this->providerInstanceDefinition('field_logo');
+
+    $this->assertStringContainsString("'bundle' => \$provider_type", $instance);
+    $this->assertStringContainsString("'required' => 0", $instance);
+    $this->assertStringContainsString("'widget' => ['type' => 'image_image']", $instance);
+    $this->assertStringContainsString("'file_extensions' => 'png jpg jpeg'", $instance);
+    $this->assertStringContainsString("'max_filesize' => '2 MB'", $instance);
+    $this->assertStringContainsString("'min_resolution' => '200x200'", $instance);
+    $this->assertStringContainsString("'max_resolution' => '1000x1000'", $instance);
+    $this->assertStringContainsString("'alt_field' => 1", $instance);
+    // webp and svg are out of scope by express decision: GD without imagewebp
+    // cannot resize a webp, and getimagesize() does not recognise an svg.
+    $this->assertStringNotContainsString('webp', $instance);
+    $this->assertStringNotContainsString('svg', $instance);
+  }
+
+  /**
+   * The logo is deleted by a destructive uninstall: the name is new in the
+   * whole module and no other bundle uses it, exactly like field_gallery and
+   * the three fields of SPEC 81.
+   */
+  public function testTheLogoIsOwnedByThisFeaturesTeardown() {
+    $teardown = $this->functionSource('_myapi_services_uninstall_destructive');
+    $owned_start = strpos($teardown, '$owned = [');
+    $owned = substr($teardown, $owned_start, strpos($teardown, '];', $owned_start) - $owned_start);
+
+    $this->assertStringContainsString(
+      "'field_logo'",
+      $owned,
+      'the logo is created by this feature and must be deleted by its teardown'
+    );
+  }
+
+  /**
+   * myapi_update_7031() re-runs the whole installer, exactly like
+   * myapi_update_7028(), 7029() and 7030(), and does nothing else: no backfill,
+   * no node touched, no field deleted. The field is born empty for every
+   * provider already on the site.
+   */
+  public function testTheUpdate7031ReRunsTheInstallerAndNothingElse() {
+    $update = $this->functionSource('myapi_update_7031');
+
+    $this->assertStringContainsString('_myapi_services_install();', $update);
+    $this->assertStringContainsString('field_logo', $update);
+    $this->assertStringNotContainsString('field_delete_field(', $update);
+    $this->assertStringNotContainsString('node_save(', $update);
+    $this->assertStringNotContainsString('db_update(', $update);
+  }
+
+  /**
+   * And the gallery keeps every one of its own settings: this spec adds a
+   * second image field to the same bundle and must not have leaked a single
+   * value into the first one — the private scheme least of all.
+   */
+  public function testTheGalleryIsUntouchedByTheLogo() {
+    $field = $this->fieldDefinition('field_gallery');
+    $instance = $this->providerInstanceDefinition('field_gallery');
+
+    $this->assertStringContainsString("'cardinality' => 10", $field);
+    $this->assertStringContainsString("'settings' => ['uri_scheme' => 'private']", $field);
+    $this->assertStringContainsString("'max_filesize' => '3 MB'", $instance);
+    $this->assertStringNotContainsString("'min_resolution'", $instance);
+    $this->assertStringNotContainsString("'max_resolution'", $instance);
   }
 }
