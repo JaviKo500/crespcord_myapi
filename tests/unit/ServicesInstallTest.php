@@ -816,7 +816,8 @@ class ServicesInstallTest extends TestCase {
     $this->assertStringContainsString('function myapi_update_7029()', $source);
     $this->assertStringContainsString('function myapi_update_7030()', $source);
     $this->assertStringContainsString('function myapi_update_7031()', $source);
-    $this->assertStringNotContainsString('function myapi_update_7032()', $source);
+    $this->assertStringContainsString('function myapi_update_7032()', $source);
+    $this->assertStringNotContainsString('function myapi_update_7033()', $source);
     // 7028 is still SPEC 81's, not this spec's.
     $this->assertStringContainsString(
       '_myapi_services_install();',
@@ -981,5 +982,88 @@ class ServicesInstallTest extends TestCase {
     $this->assertStringContainsString("'max_filesize' => '3 MB'", $instance);
     $this->assertStringNotContainsString("'min_resolution'", $instance);
     $this->assertStringNotContainsString("'max_resolution'", $instance);
+  }
+
+  /* -------------------------------------------------------------------------
+   * SPEC 86 — the required field_unit instance on 'service_request'.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * The instance is REQUIRED, which is what separates this spec from SPEC 84.
+   * No 'settings' either: target_bundles is a FIELD setting, already fixed by
+   * the field itself and shared with the other two instances.
+   */
+  public function testFieldUnitGetsARequiredInstanceOnServiceRequest() {
+    $instance = $this->definitionAt(
+      $this->functionSource('_myapi_services_install'),
+      "_myapi_reservations_ensure_instance('field_unit', \$request_type, [",
+      'field_unit must have an instance on the service_request bundle'
+    );
+
+    $this->assertStringContainsString("'required' => 1", $instance);
+    $this->assertStringContainsString("'widget' => ['type' => 'entityreference_autocomplete']", $instance);
+    $this->assertStringNotContainsString("'settings'", $instance);
+  }
+
+  /**
+   * The two instances of the same borrowed field diverge on purpose, and both
+   * values are pinned here so no later change quietly levels them: a required
+   * rating unit would invalidate ratings already stored, and an optional
+   * request unit would push the validation into the endpoint.
+   *
+   * 'required' is an INSTANCE setting, which is what makes the divergence legal
+   * at all — the field-level settings (type, cardinality, target_bundles) stay
+   * single and shared.
+   */
+  public function testFieldUnitStaysOptionalOnServiceRatingAfterThisSpec() {
+    $installer = $this->functionSource('_myapi_services_install');
+
+    $rating = $this->definitionAt(
+      $installer,
+      "_myapi_reservations_ensure_instance('field_unit', \$rating_type, [",
+      'the service_rating instance of field_unit must survive this spec'
+    );
+    $request = $this->definitionAt(
+      $installer,
+      "_myapi_reservations_ensure_instance('field_unit', \$request_type, [",
+      'the service_request instance of field_unit must exist'
+    );
+
+    $this->assertStringContainsString("'required' => 0", $rating);
+    $this->assertStringContainsString("'required' => 1", $request);
+  }
+
+  /**
+   * Still not re-created and still not owned: this spec adds an instance and
+   * touches neither the field nor the teardown. The SPEC 84 guards above cover
+   * the same two rules; these repeat them because a second instance is a second
+   * chance to get them wrong.
+   */
+  public function testTheSecondServicesInstanceDoesNotMakeFieldUnitOwned() {
+    $this->assertStringNotContainsString(
+      "_myapi_reservations_ensure_field('field_unit'",
+      $this->functionSource('_myapi_services_install')
+    );
+    $this->assertStringNotContainsString(
+      'field_unit',
+      $this->functionSource('_myapi_services_uninstall_destructive')
+    );
+  }
+
+  /**
+   * myapi_update_7032() re-runs the whole installer and does nothing else: no
+   * backfill of the requests already on the site, no node saved, no field
+   * deleted. It is the first services update to create a REQUIRED instance, so
+   * "nothing else" is the part that matters — anything writing rows here would
+   * be guessing a unit the module cannot infer.
+   */
+  public function testTheUpdate7032ReRunsTheInstallerAndNothingElse() {
+    $update = $this->functionSource('myapi_update_7032');
+
+    $this->assertStringContainsString('_myapi_services_install();', $update);
+    $this->assertStringContainsString('field_unit', $update);
+    $this->assertStringNotContainsString('field_delete_field(', $update);
+    $this->assertStringNotContainsString('node_save(', $update);
+    $this->assertStringNotContainsString('db_update(', $update);
   }
 }

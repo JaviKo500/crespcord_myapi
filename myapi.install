@@ -2491,6 +2491,29 @@ function _myapi_services_install() {
     'required'    => 1,
     'widget'      => ['type' => 'entityreference_autocomplete'],
   ]);
+  // SPEC 86: field_unit is borrowed from reservations too, which owns the field
+  // and its 'reservation' instance; only a new instance is added here. No
+  // 'settings' key: target_bundles ('vivienda') is a FIELD setting, already
+  // fixed by _myapi_entityreference_field_settings()['field_unit'] and shared
+  // with the 'reservation' and 'service_rating' instances.
+  //
+  // Required here and OPTIONAL on 'service_rating' (SPEC 84) on purpose:
+  // 'required' is an instance setting, so the two diverge without touching each
+  // other. A service goes to one specific unit — a request without it is not
+  // actionable — and it can be demanded on a bundle that already exists because
+  // no flow creates requests yet, so there is no node to invalidate. That is
+  // exactly what SPEC 84 could NOT assume about ratings.
+  //
+  // Nothing writes it yet: the endpoint that creates a request does not exist.
+  _myapi_reservations_ensure_instance('field_unit', $request_type, [
+    'field_name'  => 'field_unit',
+    'entity_type' => 'node',
+    'bundle'      => $request_type,
+    'label'       => 'Vivienda',
+    'required'    => 1,
+    'description' => 'Vivienda a la que va dirigido el servicio.',
+    'widget'      => ['type' => 'entityreference_autocomplete'],
+  ]);
   _myapi_reservations_ensure_instance('field_category', $request_type, [
     'field_name'  => 'field_category',
     'entity_type' => 'node',
@@ -3940,5 +3963,32 @@ function myapi_update_7031() {
 
   return t('SPEC 85: creado field_logo (público, una imagen de hasta 2 MB) en @type. Nace vacío para todos los proveedores existentes.', [
     '@type' => MYAPI_SERVICES_PROVIDER_TYPE,
+  ]);
+}
+
+/**
+ * SPEC 86: adds a REQUIRED field_unit instance to 'service_request'.
+ *
+ * Re-runs the WHOLE services installer instead of creating the instance on its
+ * own, exactly like myapi_update_7028() through 7031(): every creation inside
+ * goes through the idempotent _ensure_* sub-helpers, so everything already in
+ * place is found and left alone, which also makes it safe to call twice.
+ *
+ * field_unit itself is NOT created here — it already exists, owned by
+ * reservations, and its 'reservation' and 'service_rating' instances are left
+ * exactly as they are. Only a new instance is added on 'service_request'.
+ *
+ * Unlike every services update before it, this instance is REQUIRED. That is
+ * safe here and only here: no flow creates a service request yet (SPEC 77 left
+ * it out of scope) so the bundle has no stored node to invalidate. If a site
+ * did have requests saved without a unit, they could not be saved again until
+ * someone picked one — there is no backfill in this update, on purpose. Check
+ * the count before running it.
+ */
+function myapi_update_7032() {
+  _myapi_services_install();
+
+  return t('SPEC 86: añadida a @type la instancia obligatoria de field_unit (vivienda a la que va dirigido el servicio). Sin backfill: no se toca ningún nodo.', [
+    '@type' => MYAPI_SERVICES_REQUEST_TYPE,
   ]);
 }
