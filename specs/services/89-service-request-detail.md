@@ -1,6 +1,6 @@
 # 89 — Detalle de una solicitud de servicio (`GET /api/v1/service-requests/{id}`)
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-08-17
 - **Dependencias:**
   - `88-service-requests-list` (Implemented) — la **hermana exacta**. Es dueña de
@@ -484,161 +484,161 @@ existente; el 8 es el que enciende los dos endpoints.
 
 **Contrato de respuesta**
 
-- [ ] `GET /api/v1/service-requests/{id}` con token válido responde `200` y
+- [x] `GET /api/v1/service-requests/{id}` con token válido responde `200` y
       `{"success": true, "data": {"service_request": { }}}` — un objeto bajo
       `service_request`, nunca una lista.
-- [ ] El objeto trae exactamente **diecisiete** claves: las diez de
+- [x] El objeto trae exactamente **diecisiete** claves: las diez de
       `myapi_service_request_build_item()` en su mismo orden, y después
       `viewer`, `requester`, `unit`, `condominium`, `images`, `attachment`,
       `closed_at` y `offers`. Ni una más, ni una menos, para ninguno de los dos
       lectores.
-- [ ] Las diez primeras claves valen **byte a byte** lo mismo que en
+- [x] Las diez primeras claves valen **byte a byte** lo mismo que en
       `GET /api/v1/service-requests` para esa misma solicitud.
-- [ ] `id`, `requester.id`, `unit.id`, `condominium.id`, `category.id`,
+- [x] `id`, `requester.id`, `unit.id`, `condominium.id`, `category.id`,
       `offers_count`, `images[].id`, `attachment.id`, `offers[].id` y
       `offers[].provider.id` viajan como **enteros** JSON, no como strings.
-- [ ] `images` es siempre un array —vacío cuando no hay— y `offers` también;
+- [x] `images` es siempre un array —vacío cuando no hay— y `offers` también;
       `attachment`, `closed_at` y `unit` sí pueden ser `null` enteros.
-- [ ] `closed_at` tiene la forma `Y-m-d\TH:i:s` en una solicitud cerrada y es
+- [x] `closed_at` tiene la forma `Y-m-d\TH:i:s` en una solicitud cerrada y es
       `null` en cualquier otra.
-- [ ] `unit.name` es `field_nombre_vivienda`, **no** el título del nodo
+- [x] `unit.name` es `field_nombre_vivienda`, **no** el título del nodo
       `vivienda`.
-- [ ] `requester.name` es «nombre apellidos» cuando ambos campos están, y
+- [x] `requester.name` es «nombre apellidos» cuando ambos campos están, y
       `users.name` cuando falta cualquiera de los dos — nunca un híbrido tipo
       «Ana» a secas cuando el apellido está vacío.
-- [ ] `requester` no lleva teléfono, email ni cédula para ningún lector.
+- [x] `requester` no lleva teléfono, email ni cédula para ningún lector.
 
 **Acceso — el solicitante**
 
-- [ ] El creador (`field_requester = uid`) ve el detalle en cualquier estado,
+- [x] El creador (`field_requester = uid`) ve el detalle en cualquier estado,
       incluidas `closed` y `cancelled`, con `viewer: "requester"`.
-- [ ] Lo ve aunque además tenga el rol `proveedor` y la categoría de su
+- [x] Lo ve aunque además tenga el rol `proveedor` y la categoría de su
       solicitud no sea una de las suyas: el rol no recorta nada, y ninguna
       consulta lleva `addTag('node_access')`.
-- [ ] Una solicitud creada desde el back office por un administrador **con
+- [x] Una solicitud creada desde el back office por un administrador **con
       `field_requester` apuntando al lector** se ve: el criterio es
       `field_requester`, no `node.uid`.
 
 **Acceso — el proveedor**
 
-- [ ] Un proveedor activo cuya categoría coincide ve una solicitud en `open` con
+- [x] Un proveedor activo cuya categoría coincide ve una solicitud en `open` con
       `viewer: "provider"`.
-- [ ] La misma solicitud en `offered` (ya tiene ofertas de otros, ninguna
+- [x] La misma solicitud en `offered` (ya tiene ofertas de otros, ninguna
       adjudicada) también se ve.
-- [ ] En `assigned`, `closed` o `cancelled` responde `403`, aunque la categoría
+- [x] En `assigned`, `closed` o `cancelled` responde `403`, aunque la categoría
       coincida.
-- [ ] En `direct` responde `403`, aunque la categoría coincida y el estado sea
+- [x] En `direct` responde `403`, aunque la categoría coincida y el estado sea
       uno de los que el back office difunde.
-- [ ] Una solicitud en `open` cuyo `field_assigned_provider` o
+- [x] Una solicitud en `open` cuyo `field_assigned_provider` o
       `field_assigned_offer` ya está relleno —dato incoherente— responde `403`:
       se comprueban el estado **y** las dos claves.
-- [ ] Un proveedor de **otra** categoría responde `403`.
-- [ ] Un proveedor con el nodo despublicado, o con `field_license_expiry`
+- [x] Un proveedor de **otra** categoría responde `403`.
+- [x] Un proveedor con el nodo despublicado, o con `field_license_expiry`
       vencida, responde `403` — `myapi_services_provider_is_active()` se aplica
       de verdad.
-- [ ] Un usuario con el rol `proveedor` pero sin ningún nodo `provider` que lo
+- [x] Un usuario con el rol `proveedor` pero sin ningún nodo `provider` que lo
       referencie (`field_provider_users`) responde `403`, sin reventar.
-- [ ] Un proveedor que **ya ofertó** ve el detalle en `assigned`, en `closed` y
+- [x] Un proveedor que **ya ofertó** ve el detalle en `assigned`, en `closed` y
       en `cancelled`, y también si la categoría de la solicitud cambió después
       de su oferta.
-- [ ] Un usuario autenticado sin rol `proveedor` y que no es el solicitante
+- [x] Un usuario autenticado sin rol `proveedor` y que no es el solicitante
       responde `403`.
 
 **El recorte del proveedor**
 
-- [ ] El proveedor recibe `unit: null` y `viewer: "provider"`, y todas las demás
+- [x] El proveedor recibe `unit: null` y `viewer: "provider"`, y todas las demás
       claves con el mismo contenido que el solicitante.
-- [ ] El proveedor recibe `condominium` completo y `requester {id, name}`
+- [x] El proveedor recibe `condominium` completo y `requester {id, name}`
       completo.
-- [ ] `offers` del proveedor contiene **solo** ofertas cuyo `field_provider` es
+- [x] `offers` del proveedor contiene **solo** ofertas cuyo `field_provider` es
       uno de sus nodos `provider`: cero elementos si no ha ofertado, uno si
       ofertó.
-- [ ] `offers_count` del proveedor es el **total** de la solicitud, no el tamaño
+- [x] `offers_count` del proveedor es el **total** de la solicitud, no el tamaño
       de su lista recortada: con tres ofertas de tres proveedores distintos, el
       que ofertó ve `offers_count: 3` y `offers` con un elemento.
-- [ ] Un proveedor que opera **dos** nodos `provider` que ofertaron los dos ve
+- [x] Un proveedor que opera **dos** nodos `provider` que ofertaron los dos ve
       sus dos ofertas.
 
 **Las ofertas**
 
-- [ ] El solicitante ve todas las ofertas publicadas, incluidas las `rejected` y
+- [x] El solicitante ve todas las ofertas publicadas, incluidas las `rejected` y
       las `withdrawn`.
-- [ ] Una oferta despublicada no aparece en `offers` **ni** cuenta en
+- [x] Una oferta despublicada no aparece en `offers` **ni** cuenta en
       `offers_count`.
-- [ ] Para el solicitante, `count(offers)` es siempre igual a `offers_count`.
-- [ ] El orden es por fecha de creación **descendente**, y dos ofertas creadas
+- [x] Para el solicitante, `count(offers)` es siempre igual a `offers_count`.
+- [x] El orden es por fecha de creación **descendente**, y dos ofertas creadas
       en el mismo segundo salen siempre en el mismo orden entre dos lecturas
       (desempate por `nid`).
-- [ ] Una oferta cuyo `field_provider` apunta a un nodo despublicado o borrado
+- [x] Una oferta cuyo `field_provider` apunta a un nodo despublicado o borrado
       responde `provider: null` **y sigue en la lista**.
-- [ ] `amount` viaja como número (`95.5`) y no como `"95.50"`; una oferta sin
+- [x] `amount` viaja como número (`95.5`) y no como `"95.50"`; una oferta sin
       monto responde `null`, nunca `0`.
-- [ ] `provider.logo` es una URL absoluta directa al fichero, o `null` — no una
+- [x] `provider.logo` es una URL absoluta directa al fichero, o `null` — no una
       ruta `api/v1/...`.
-- [ ] `message` conserva los saltos de línea que el proveedor escribió.
-- [ ] Una solicitud sin ofertas responde `offers: []` y `offers_count: 0`.
-- [ ] Las entradas de `service_transaction` de la solicitud no aparecen en
+- [x] `message` conserva los saltos de línea que el proveedor escribió.
+- [x] Una solicitud sin ofertas responde `offers: []` y `offers_count: 0`.
+- [x] Las entradas de `service_transaction` de la solicitud no aparecen en
       `offers` ni mueven `offers_count`.
 
 **Los ficheros**
 
-- [ ] `images[].url` y `attachment.url` apuntan a
+- [x] `images[].url` y `attachment.url` apuntan a
       `GET /api/v1/service-requests/{id}/files/{fid}`, absolutas, y **no** a
       `system/files/...`.
-- [ ] Las imágenes salen en el orden de `delta` en que el operador las subió.
-- [ ] `GET /api/v1/service-requests/{id}/files/{fid}` con el token del
+- [x] Las imágenes salen en el orden de `delta` en que el operador las subió.
+- [x] `GET /api/v1/service-requests/{id}/files/{fid}` con el token del
       solicitante devuelve `200` y los bytes, con `Content-Type` y
       `Content-Disposition: inline`.
-- [ ] El proveedor que puede ver el detalle puede descargar sus imágenes y su
+- [x] El proveedor que puede ver el detalle puede descargar sus imágenes y su
       adjunto con el mismo `200`.
-- [ ] Quien no puede ver el detalle recibe **el mismo `403`** en la ruta de
+- [x] Quien no puede ver el detalle recibe **el mismo `403`** en la ruta de
       ficheros: la regla es la misma función, no una copia.
-- [ ] Un `fid` que existe pero pertenece a **otra** solicitud responde `404`, no
+- [x] Un `fid` que existe pero pertenece a **otra** solicitud responde `404`, no
       los bytes.
-- [ ] Un `fid` de un comprobante de pago o de una galería de proveedor responde
+- [x] Un `fid` de un comprobante de pago o de una galería de proveedor responde
       `404`.
-- [ ] Sin cabecera `Authorization`, la ruta de ficheros responde `401`, no los
+- [x] Sin cabecera `Authorization`, la ruta de ficheros responde `401`, no los
       bytes.
-- [ ] En el back office, un administrador abre `node/{id}/edit` de una solicitud
+- [x] En el back office, un administrador abre `node/{id}/edit` de una solicitud
       y **ve** las miniaturas; un `administrador edificio` las ve solo en las
       solicitudes de sus condominios.
-- [ ] Un usuario con sesión Drupal y sin rol administrativo que pega la URL
+- [x] Un usuario con sesión Drupal y sin rol administrativo que pega la URL
       privada de una imagen recibe `403` de Drupal.
 
 **Errores y métodos**
 
-- [ ] Sin cabecera `Authorization`: `401 missing_authorization`. Con token
+- [x] Sin cabecera `Authorization`: `401 missing_authorization`. Con token
       inválido o caducado: `401 invalid_token`.
-- [ ] Un `{id}` que no existe, o que existe pero está despublicado, o que es de
+- [x] Un `{id}` que no existe, o que existe pero está despublicado, o que es de
       otro bundle (un `provider`, un `reclamo`): `404 not_found`.
-- [ ] `/api/v1/service-requests/abc`, `/0` y `/-3`: `404 not_found`, **sin
+- [x] `/api/v1/service-requests/abc`, `/0` y `/-3`: `404 not_found`, **sin
       ejecutar ninguna consulta**.
-- [ ] Una solicitud que existe y el lector no puede ver: `403 forbidden`. El
+- [x] Una solicitud que existe y el lector no puede ver: `403 forbidden`. El
       `404` y el `403` no se confunden nunca.
-- [ ] `POST`, `PUT` y `DELETE` sobre las dos rutas responden
+- [x] `POST`, `PUT` y `DELETE` sobre las dos rutas responden
       `405 method_not_allowed`, sin token y antes de cualquier consulta.
 
 **Rendimiento**
 
-- [ ] Un detalle leído por el solicitante ejecuta **cinco** consultas de
+- [x] Un detalle leído por el solicitante ejecuta **cinco** consultas de
       contenido, con una imagen y con veinte, y con una oferta y con veinte:
       ninguna crece con el número de filas.
-- [ ] Ninguna función del recurso llama a `node_load()` dentro de un bucle.
+- [x] Ninguna función del recurso llama a `node_load()` dentro de un bucle.
 
 **No regresión**
 
-- [ ] `GET /api/v1/service-requests` responde byte a byte igual, con y sin
+- [x] `GET /api/v1/service-requests` responde byte a byte igual, con y sin
       filtros — el `$uid` opcional de `base_query()` no le movió nada.
-- [ ] `GET /api/v1/units`, `GET /api/v1/claims`,
+- [x] `GET /api/v1/units`, `GET /api/v1/claims`,
       `GET /api/v1/claims/{id}/files/{fid}`, `GET /api/v1/providers/{id}` y
       `GET /api/v1/providers/{id}/gallery/{fid}` responden byte a byte igual.
-- [ ] Los ficheros privados de claims, de galerías de proveedor y de
+- [x] Los ficheros privados de claims, de galerías de proveedor y de
       comprobantes de pago se sirven exactamente como antes en el back office.
-- [ ] `myapi.install` no tiene ni un cambio: `drush updb` no encuentra ningún
+- [x] `myapi.install` no tiene ni un cambio: `drush updb` no encuentra ningún
       update pendiente.
-- [ ] Ningún rol gana ni pierde permisos, y `myapi_provider_role_*` queda sin
+- [x] Ningún rol gana ni pierde permisos, y `myapi_provider_role_*` queda sin
       tocar.
-- [ ] La suite unitaria pasa completa y `drush cc all` no reporta errores.
+- [x] La suite unitaria pasa completa y `drush cc all` no reporta errores.
 
 ---
 

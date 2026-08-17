@@ -9,16 +9,22 @@ the API yet: `POST`, `PUT` and `DELETE` answer `405`. Requests and offers are
 loaded today by the operator from the back office.
 
 This is the **first route** of the `service_request` bundle, whose schema was
-built by SPEC 77, 86 and 87 without one. Two things are deliberately **not**
-here and are their own spec:
+built by SPEC 77, 86 and 87 without one. Two more routes live in this same
+document, added by SPEC 89:
 
-- **The detail**, `GET /api/v1/service-requests/{id}` — the unit, the
-  condominium, the images, the attachment, `closed_at` and the offers one by
-  one. This listing only **counts** the offers, and of the awarded one it reads
-  `id` and `status`.
-- **The provider's side of the marketplace** — *the requests I may attend*. That
-  is the other half of the market, with another scope and another shape, and it
-  does not go through this route.
+- [`GET /api/v1/service-requests/{id}`](#get-apiv1service-requestsid) — the
+  **detail**: everything this listing answers, plus the unit, the condominium,
+  the requester, the images, the attachment, `closed_at` and the offers one by
+  one. It is also the first endpoint of the module whose answer **depends on who
+  asks**.
+- [`GET /api/v1/service-requests/{id}/files/{fid}`](#get-apiv1service-requestsidfilesfid)
+  — the **bytes** of one image or of the attachment, both `private://`.
+
+One thing is deliberately **not** here and is its own spec: **the provider's
+side of the marketplace** — *the requests I may attend*. That is the other half
+of the market, with another scope and another shape. SPEC 89 gives a provider
+the **detail** of a request they already know about; how they come to know about
+it is that other endpoint.
 
 > **Nothing creates a service request yet.** On the day this endpoint is
 > deployed it answers an empty list to everybody, and that is the real state of
@@ -329,3 +335,347 @@ listing of the module.
 | 401  | `invalid_token` | Access token not found in the database, already revoked, expired, or the associated user does not exist or is blocked (`status = 0`). |
 | 405  | `method_not_allowed` | Any method other than `GET` (`POST`, `PUT`, `DELETE`, …). Answered **before** authentication: a `POST` with no token is `405`, not `401`. |
 | 422  | `invalid_field` | `category_id` is present and is not a positive integer (`abc`, `-3`, `0`, empty, an array). The message names the field. It is the **only** `422` this endpoint can answer. |
+
+---
+
+## GET /api/v1/service-requests/{id}
+
+Returns **one** service request in full: the ten keys of the listing plus the
+requester, the unit, the condominium, the images, the attachment, `closed_at`
+and the offers one by one.
+
+Read-only. `POST`, `PUT` and `DELETE` answer `405`, before the token and before
+any query.
+
+**Authentication:** required (Bearer access token)
+
+### Two readers, two answers
+
+This is the **first endpoint of the module whose response depends on who asks**.
+
+| Reader | Who they are | What they get |
+|--------|--------------|---------------|
+| **The requester** | `field_requester = uid` | The whole request, every offer, the unit included. |
+| **The provider** | Operates a `provider` node that either already bid on this request, or is active and of its category while the request is still unawarded | The same eighteen keys, with `unit: null` and `offers` trimmed to their own. |
+| Anybody else | — | `403 forbidden` |
+
+**The keys are always the same eighteen, for both readers.** None appears and
+none disappears; what changes is the content of three:
+
+| Key | Requester | Provider |
+|-----|-----------|----------|
+| `viewer` | `"requester"` | `"provider"` |
+| `unit` | `{id, name}` | **`null`** |
+| `offers` | **all of them**, `created DESC` | **only their own** (zero, one, or one per provider node they operate) |
+| `offers_count` | the total | **the total, the same** — they know how many they compete against, not who nor for how much |
+| `requester` | `{id, name}` | `{id, name}`, the same |
+| `condominium` | `{id, name}` | the same |
+| `images` / `attachment` | downloadable | downloadable, same URLs |
+| everything else | | the same |
+
+`viewer` travels because without it `unit: null` cannot be told apart from *this
+request has no unit*, and the app cannot decide whether to paint **make an
+offer** or **award**. Deducing the role by comparing `requester.id` with the
+token's uid would work today and would put the server's access rule inside the
+client.
+
+`unit` is `null` for the provider by explicit decision: to decide whether to bid
+they need the category, the description, the photos, the desired date and the
+condominium. The flat number adds nothing to that decision and does say where a
+specific person lives, to anyone of the category. The day a provider is awarded
+the job they will need it — and that is the award spec, not this one.
+
+`requester` travels with `id` and `name` and **nothing else**, for both readers:
+no phone, no email, no dni. The name says who you would be dealing with; the
+rest is contact data and does not travel from this bundle.
+
+### The access rule, exactly
+
+Three rules, evaluated in order, first hit wins. Both this endpoint and the file
+one below call the **same function** to decide.
+
+| # | Rule | Condition | Result |
+|---|------|-----------|--------|
+| 0 | The request exists | `type = 'service_request' AND status = 1` (and its category term exists) | Otherwise **`404 not_found`**, nothing else evaluated |
+| 1 | The requester | `field_requester = uid` | `viewer: "requester"` |
+| 2 | Already offered | one of the reader's `provider` nodes has an offer on this request | `viewer: "provider"` — **whatever the status**, and whatever the category is today |
+| 3 | Eligible provider | status ∈ (`open`, `offered`) **and** `field_assigned_offer` empty **and** `field_assigned_provider` empty **and** the request's category is one of theirs **and** at least one of their providers is active | `viewer: "provider"` |
+| — | None | | **`403 forbidden`** |
+
+Four things this table decides, each with a reason:
+
+- **Rule 1 ignores roles entirely.** A resident who also holds `proveedor` reads
+  their own request of a category they do not attend, complete. Same reasoning
+  as the listing, and the same reason no query here is tagged `node_access`.
+- **Rule 2 is status- and category-independent.** Whoever has a live offer needs
+  to see what became of it. Losing the detail the moment it is awarded to
+  somebody else would leave an offer in their app with nothing behind it and a
+  `403` as the only explanation.
+- **Rule 3 checks the status AND both award keys**, and reads them **raw**. A
+  request left in `offered` with `field_assigned_offer` already filled in — an
+  incoherent datum nothing prevents today — stops being biddable, which is the
+  safe reading. Reading the *resolved* reference instead would make an award
+  pointing at an unpublished offer look like no award at all and reopen the
+  request to every provider of the category.
+- **Being "a provider" is a `provider` node pointing at you** through
+  `field_provider_users`, never the `proveedor` role on your account. A user
+  holding the role with no provider node behind them is `403`.
+
+> **`direct` requests are `403` for providers, and that is deliberate.**
+> `myapi_provider_role_broadcast_statuses()` — what the back office does *not*
+> hide from a provider — includes `direct`; **rule 3 does not**. They are two
+> policies over the same datum and they have to be able to diverge: a `direct`
+> request is born with a provider already chosen, which is exactly what
+> "unawarded" excludes.
+>
+> **The consequence, written down so it is not discovered in production:** today
+> the provider of a `direct` request **cannot read its detail**. Nothing creates
+> direct requests yet, so it costs nothing now. The spec that creates them is
+> the one that will know what relation it leaves behind and whether the rule
+> grows a fourth clause. A unit test pins the current behaviour, so equalising
+> the two lists breaks the suite.
+
+### `404` and `403` mean different things
+
+Unlike the listing, which simply does not show a row:
+
+- **`404 not_found`** — no such request: it does not exist, it is unpublished,
+  it is of another bundle, or its category tid is orphaned (see *The category is
+  required* above). The reader is told none of the four apart.
+- **`403 forbidden`** — it exists, and this reader is neither its requester nor
+  a provider who may still bid.
+
+The nid is not a secret: a provider reached it from a listing that handed it to
+them, and *this request no longer takes offers* is actionable where *it does not
+exist* is a lie.
+
+`/api/v1/service-requests/abc`, `/0` and `/-3` answer `404` **without a single
+query**, not even the token's: the shape of the URL is wrong whoever is asking.
+
+**Headers**
+| Header | Value |
+|--------|-------|
+| Authorization | Bearer `<access_token>` |
+
+**Success response (200) — the requester**
+
+```json
+{
+  "success": true,
+  "data": {
+    "service_request": {
+      "id": 128,
+      "title": "Fuga en el calentador",
+      "description": "El calentador del baño principal gotea desde el lunes.",
+      "status": "offered",
+      "category": { "id": 12, "name": "Plomería" },
+      "offers_count": 2,
+      "assigned_offer": null,
+      "assigned_provider": null,
+      "created": "2026-08-14T09:12:33",
+      "desired_start": "2026-08-19T08:00:00",
+
+      "viewer": "requester",
+      "requester": { "id": 42, "name": "Ana Pérez" },
+      "unit": { "id": 55, "name": "A-301" },
+      "condominium": { "id": 7, "name": "Torres del Este" },
+      "images": [
+        { "id": 91, "url": "https://.../api/v1/service-requests/128/files/91", "filename": "fuga.jpg" }
+      ],
+      "attachment": { "id": 92, "url": "https://.../api/v1/service-requests/128/files/92", "filename": "presupuesto.pdf" },
+      "closed_at": null,
+      "offers": [
+        {
+          "id": 46,
+          "provider": { "id": 9, "name": "Servicios Díaz", "logo": "https://.../sites/default/files/logo-diaz.png" },
+          "amount": 95.5,
+          "message": "Puedo pasar el jueves por la mañana.",
+          "status": "sent",
+          "created": "2026-08-15T18:40:02"
+        },
+        {
+          "id": 45,
+          "provider": { "id": 7, "name": "Plomería Rivas", "logo": null },
+          "amount": null,
+          "message": "Necesito ver la instalación antes de dar precio.",
+          "status": "sent",
+          "created": "2026-08-15T11:03:17"
+        }
+      ]
+    }
+  }
+}
+```
+
+**Success response (200) — the provider**: the same body with
+`"viewer": "provider"`, `"unit": null` and `offers` holding only their own —
+`offers_count` unchanged.
+
+### The keys the detail adds
+
+| Key | Source | Nullable | Notes |
+|-----|--------|:--------:|-------|
+| `viewer` | the access rule | No | `"requester"` or `"provider"`. Never `null`: a reader with no role already got a `403`. |
+| `requester` | `field_requester` → `users` | No¹ | `{id, name}`. The name is `field_nombre + field_apellidos`, or `users.name` when **either** is missing — never a hybrid. The same rule `/api/v1/units` uses, shared in `includes/myapi.user.inc`. |
+| `unit` | `field_unit` → `field_nombre_vivienda` | **Yes** | `{id, name}`, or `null` entirely for the provider. `name` is `field_nombre_vivienda`, **not** the `vivienda` node title. |
+| `condominium` | `field_condominium` → `node.title` | No¹ | `{id, name}`. Here the name **is** the node title, unlike the unit. |
+| `images` | `field_images` → `file_managed` | No | **Always an array**, empty when there are none. `{id, url, filename}` each, in the `delta` order the operator uploaded them. |
+| `attachment` | `field_attachment` → `file_managed` | **Yes** | `{id, url, filename}` or `null`. Cardinality 1. |
+| `closed_at` | `field_closed_at` | **Yes** | `Y-m-d\TH:i:s`, `null` while the request is not closed. |
+| `offers` | `service_offer` via `field_request` | No | **Always an array**, empty when there are none — every `direct` request among them. |
+
+¹ Required on the bundle; the `LEFT JOIN`s leave them `NULL` if somebody deleted
+the row by hand, and the serialiser answers `null` instead of breaking.
+
+**Each offer:**
+
+| Key | Source | Nullable | Notes |
+|-----|--------|:--------:|-------|
+| `id` | the offer's `nid` | No | JSON integer. |
+| `provider.id` / `.name` | `field_provider` → `node.title` | **Yes** (the whole object) | An unpublished or deleted provider leaves `provider: null` and **the offer stays in the list** — dropping it would make the list disagree with `offers_count`. |
+| `provider.logo` | `field_logo` → `file_create_url()` | **Yes** | An absolute, **direct** URL: `field_logo` is `public://` (SPEC 85), unlike the request's own images. Never an `api/v1/...` path. |
+| `amount` | `field_offer_amount` | **Yes** | **A number or `null`**, never `"95.50"`. `null` means *no price yet* — the field is optional because the price can be settled in the chat. `0` is a price somebody offered. |
+| `message` | `field_offer_message` | No¹ | As stored, with its line breaks, exactly like `description`. |
+| `status` | `field_offer_status` | No¹ | `sent` / `selected` / `rejected` / `withdrawn`. |
+| `created` | `node.created` | No | `Y-m-d\TH:i:s`. |
+
+**Which offers travel:** every **published** one, whatever its status —
+`withdrawn` and `rejected` included — which is exactly what `offers_count`
+counts, so the number and the list cannot contradict each other. An unpublished
+offer is neither listed nor counted. A `service_transaction` of the request is
+neither: `field_request` is shared by the two bundles, and the bundle condition
+is what stops the timeline from being read as bids.
+
+**Order:** `created DESC`, tie-broken by `id DESC`. The tie-break is not
+decoration — two offers of the same second would otherwise swap places between
+two reads of the same screen.
+
+**Offers are not paginated.** They all travel. A request receives units of
+offers, not hundreds.
+
+**Notes**
+- The detail costs **five content queries**, fixed — the request row, the
+  requester's name, the images, `offers_count`, and the offers — plus the token
+  lookup. None of them grows with the number of images or of offers. A provider
+  reader adds the role questions of `includes/myapi.provider_role.inc`, all
+  statically cached.
+- `offers_count` comes from the **aggregate query**, never from
+  `count(offers)`: the provider gets a trimmed list and the full total.
+- The ten first keys are **byte for byte** what `GET /api/v1/service-requests`
+  answers for the same request — the same serialiser produces them.
+- No query here carries `->addTag('node_access')` either, for the reason written
+  in the listing's notes. A unit test fails if it appears.
+- Everything about `description`, the required category and its orphan-tid
+  diagnosis, above, applies unchanged to the detail — including that an orphan
+  category makes the request answer `404` here and disappear from the listing
+  there. The two views agree, which is the point.
+
+**Possible errors**
+| Code | error_code | When |
+|------|------------|------|
+| 401  | `missing_authorization` | `Authorization` header absent or malformed. |
+| 401  | `invalid_token` | Token unknown, revoked, expired, or its user is missing or blocked. |
+| 403  | `forbidden` | The request exists and the reader is neither its requester nor a provider who may still bid on it. |
+| 404  | `not_found` | No such request (missing, unpublished, another bundle, orphan category), **or** an `{id}` that is not a positive integer — the latter without any query. |
+| 405  | `method_not_allowed` | Any method other than `GET`. Answered before the token and before any query. |
+
+---
+
+## GET /api/v1/service-requests/{id}/files/{fid}
+
+Serves **the bytes** of one image of the request or of its attachment. Not JSON
+on the happy path; errors do travel in the module's envelope.
+
+It exists because `field_images` and `field_attachment` are `private://` **at
+the field level** since SPEC 77: without it the detail would answer filenames
+nobody could open. Same pair of routes [claims](claim.md) got in SPEC 65 and
+provider galleries in SPEC 82, with **this** endpoint's access rule.
+
+**Authentication:** required (Bearer access token)
+
+**The access rule is the same function as the detail's**, not a copy of its
+conditions: whoever cannot read the detail cannot download its files, and the
+day a condition changes it changes for both routes at once. A unit test asks
+both routes with the same token in six scenarios and fails if they disagree.
+
+| Situation | Response |
+|-----------|----------|
+| Token absent / invalid | `401` |
+| The request does not exist or is unpublished | `404 not_found` |
+| The reader does not pass the access rule | `403 forbidden` |
+| The fid belongs to neither `field_images` nor `field_attachment` **of that** request | `404 not_found` |
+| The file is not on disk | `404 not_found` |
+| Any method other than `GET` | `405 method_not_allowed`, before the token |
+| Everything fine | `200` with `Content-Type`, `Content-Length`, `Content-Disposition: inline`, `Cache-Control: private, no-store` and the bytes |
+
+> **The membership check is what makes this route safe.** Without it,
+> `/service-requests/128/files/999` would serve **any private file of the site**
+> — a payment receipt, another resident's claim photo, a provider's private
+> gallery — to anyone with access to *one* request; and access to an `open`
+> request of your category is access every active provider has. The fid's owner
+> is resolved and compared with the `{id}` of the route **before** the file is
+> ever loaded. A structural test fails if that comparison disappears.
+
+The URL serves the **original** file. Image styles are not generated and not
+offered: `private://styles/...` is out of scope.
+
+### The back office
+
+`hook_file_download()` decides for the operator, and it is a **different rule**
+from the app's: the administrative roles (`administrator`, `backend`,
+`administrador edificio`), with `administrador edificio` scoped to the
+condominiums assigned to them — read from the request's `field_condominium`.
+
+Without that hook nobody would see the thumbnails on `node/{id}/edit`, because
+in `private://` nothing is served without an explicit decision. With it, a user
+with a Drupal session and no administrative role who pastes the private URL gets
+Drupal's `403`.
+
+`myapi_file_download()` asks **three owners in a chain** — claims, provider
+galleries, and service requests — and each answers `NULL` for a file that is not
+theirs, which is what keeps payment receipts and every other private file of the
+site behaving exactly as before.
+
+> **MAINTENANCE RULE — read this before adding another file field to
+> `service_request`.** Two things must happen or the file is born unreachable by
+> both consumers, with no error to explain it:
+>
+> 1. create the field with `'settings' => ['uri_scheme' => 'private']`;
+> 2. **add its name to the list `myapi_service_request_file_request_nid()`
+>    walks** in `includes/myapi.service_request_files.inc`.
+>
+> The same rule `includes/myapi.claims_files.inc` carries for claims.
+
+**Possible errors**
+| Code | error_code | When |
+|------|------------|------|
+| 401  | `missing_authorization` / `invalid_token` | No token, or a token that is not valid. |
+| 403  | `forbidden` | The reader may not read this request — the same `403` the detail answers. |
+| 404  | `not_found` | No such request; or `{id}` / `{fid}` not a positive integer; or the fid does not belong to that request; or the file is missing from disk. |
+| 405  | `method_not_allowed` | Any method other than `GET`, before the token. |
+
+---
+
+## What is still not here
+
+Written down so it is not looked for in this document:
+
+- **Every write.** Creating, editing, cancelling, closing, awarding, offering,
+  uploading and deleting files. All `405`.
+- **Offers as a resource of their own** — creating them, withdrawing them,
+  `GET /api/v1/offers/{id}`. Here they are only **read**, inside one request.
+- **The chat.** `field_firebase_path`, `field_chat_opened_at` and
+  `field_last_message_at` do not travel: who opens the thread and when the path
+  is generated is another spec, and a key served today is a contract that spec
+  could no longer change.
+- **The timeline.** `service_transaction` exists since SPEC 77 and is not
+  served.
+- **Ratings.** Neither served nor required.
+- **The provider's listing** — *the requests I may attend*.
+- **`?include=`, `ETag`, conditional caching.** The detail always answers whole.
+
+> **On the day this is deployed it answers `403` to almost everybody**, because
+> nothing creates requests, offers or providers through the API yet and the data
+> is loaded by hand. That is the real state of the system, not a failure of the
+> access rule. It is verified against requests, offers and providers loaded from
+> the back office, exactly as SPEC 86, 87 and 88 were.
