@@ -4,33 +4,31 @@ Returns the service requests **the authenticated resident created** — a
 paginated list with the status, the category, the number of offers received and,
 when there is one, the awarded offer and the awarded provider.
 
-Read-only collection. There is no create, update, cancel, close or award over
-the API yet: `POST`, `PUT` and `DELETE` answer `405`. Requests and offers are
-loaded today by the operator from the back office.
+Reads the requester's own requests. `PUT` and `DELETE` answer `405` on this
+route; `POST` **creates** one — see
+[`POST /api/v1/service-requests`](#post-apiv1service-requests) below. Editing,
+cancelling, closing, awarding and offering are still not here.
 
 This is the **first route** of the `service_request` bundle, whose schema was
-built by SPEC 77, 86 and 87 without one. Two more routes live in this same
-document, added by SPEC 89:
+built by SPEC 77, 86 and 87 without one. Three more routes live in this same
+document:
 
 - [`GET /api/v1/service-requests/{id}`](#get-apiv1service-requestsid) — the
   **detail**: everything this listing answers, plus the unit, the condominium,
   the requester, the images, the attachment, `closed_at` and the offers one by
   one. It is also the first endpoint of the module whose answer **depends on who
-  asks**.
+  asks** (SPEC 89).
 - [`GET /api/v1/service-requests/{id}/files/{fid}`](#get-apiv1service-requestsidfilesfid)
-  — the **bytes** of one image or of the attachment, both `private://`.
+  — the **bytes** of one image or of the attachment, both `private://` (SPEC 89).
+- [`POST /api/v1/service-requests`](#post-apiv1service-requests) — **creates**
+  a request for the authenticated resident, with the condominium derived
+  server-side and an optional direct award to an eligible provider (SPEC 90).
 
 One thing is deliberately **not** here and is its own spec: **the provider's
 side of the marketplace** — *the requests I may attend*. That is the other half
 of the market, with another scope and another shape. SPEC 89 gives a provider
 the **detail** of a request they already know about; how they come to know about
 it is that other endpoint.
-
-> **Nothing creates a service request yet.** On the day this endpoint is
-> deployed it answers an empty list to everybody, and that is the real state of
-> the system, not a failure of the endpoint. It is verified against requests
-> loaded by hand from the back office, exactly as the fields of SPEC 86 and 87
-> are.
 
 **Authentication:** required (Bearer access token)
 
@@ -352,8 +350,8 @@ listing of the module.
 |------|------------|------|
 | 401  | `missing_authorization` | `Authorization` header is absent or does not match the `Bearer <token>` pattern. |
 | 401  | `invalid_token` | Access token not found in the database, already revoked, expired, or the associated user does not exist or is blocked (`status = 0`). |
-| 405  | `method_not_allowed` | Any method other than `GET` (`POST`, `PUT`, `DELETE`, …). Answered **before** authentication: a `POST` with no token is `405`, not `401`. |
-| 422  | `invalid_field` | `category_id` is present and is not a positive integer (`abc`, `-3`, `0`, empty, an array). The message names the field. It is the **only** `422` this endpoint can answer. |
+| 405  | `method_not_allowed` | Any method other than `GET` or `POST` (`PUT`, `DELETE`, …). Answered **before** authentication: a `PUT` with no token is `405`, not `401`. `POST` no longer answers `405` here since SPEC 90 — see [`POST /api/v1/service-requests`](#post-apiv1service-requests). |
+| 422  | `invalid_field` | `category_id` is present and is not a positive integer (`abc`, `-3`, `0`, empty, an array). The message names the field. It is the **only** `422` a `GET` on this endpoint can answer. |
 
 ---
 
@@ -447,12 +445,16 @@ Four things this table decides, each with a reason:
 > request is born with a provider already chosen, which is exactly what
 > "unawarded" excludes.
 >
-> **The consequence, written down so it is not discovered in production:** today
-> the provider of a `direct` request **cannot read its detail**. Nothing creates
-> direct requests yet, so it costs nothing now. The spec that creates them is
-> the one that will know what relation it leaves behind and whether the rule
-> grows a fourth clause. A unit test pins the current behaviour, so equalising
-> the two lists breaks the suite.
+> **The consequence, written down so it is not discovered in production:** the
+> provider chosen in a direct award **cannot read the detail of that very
+> request** — not being the requester, not having offered (there was no bidding
+> round), and not eligible under rule 3 (the request is already awarded).
+> `POST /api/v1/service-requests` (SPEC 90) is what creates `direct` requests,
+> and it deliberately does **not** touch this rule — see that endpoint's
+> "Fuera de alcance". A future spec that lets a resident's app notify the chosen
+> provider, or that widens the detail to whoever a request is awarded to, is
+> where a fourth clause would be decided. A unit test pins the current
+> behaviour, so equalising the two lists breaks the suite.
 
 ### `404` and `403` mean different things
 
@@ -677,12 +679,222 @@ site behaving exactly as before.
 
 ---
 
+## POST /api/v1/service-requests
+
+Creates a `service_request` node for the authenticated resident, in their own
+unit. The request is `multipart/form-data` (text fields plus files), not JSON —
+same contract as `POST /api/v1/claims`. The condominium is **derived from the
+unit**, never sent by the client. An `assigned_provider_id` may be sent to
+award the request **directly**, with no bidding round, to a provider eligible
+for the request's category — the request is then born in `direct` instead of
+`open`.
+
+The response is the **same eighteen-key object**
+[`GET /api/v1/service-requests/{id}`](#get-apiv1service-requestsid) returns,
+`viewer` fixed to `"requester"` (the creator is always the requester),
+`offers: []` and `offers_count: 0` (nothing can have offered on a node that did
+not exist a moment ago), `closed_at: null`.
+
+Out of scope of this endpoint: editing, cancelling, closing or awarding a
+request already created; offering on a request; any notification on creation;
+restricting a `direct` request's visibility to the provider it names — a
+provider not of the chosen category still cannot see it, but one of the same
+category the resident did **not** pick still can, exactly like every other
+`open` or `offered` request of that category (SPEC 87). Each of these, if it
+arrives, is its own spec.
+
+**Authentication:** required (Bearer access token)
+
+**Headers**
+| Header | Value |
+|--------|-------|
+| Authorization | Bearer `<access_token>` |
+| Content-Type | `multipart/form-data` |
+
+**Request body (form-data fields)**
+| Field | Required | Type | Rule |
+|-------|----------|------|------|
+| `title` | **yes** | string | ≤ 255 chars (`node.title` is `varchar(255)`). Otherwise → `422 invalid_field`. |
+| `unit_id` | **yes** | int (nid) | Integer > 0, and one of the units the authenticated resident owns or occupies (`myapi_unit_related_nids($uid)`). Bad format → `422 invalid_field`; a foreign unit, or a resident with no unit at all → `403 unit_access_denied`. **The condominium is derived from this unit** — see below, `condominium_id` is not a field of this request. |
+| `category_id` | **yes** | int (tid) | Integer > 0, and a real term of the `service_category` vocabulary. Otherwise → `422 invalid_field`. The `id` to send is the one `/api/v1/service-categories` returns. |
+| `description` | **yes** | string | Non-empty after `trim()`. Otherwise → `422 invalid_field`. No maximum (`text_long`). |
+| `desired_start` | **yes** | string `Y-m-d H:i` | Must parse with `strtotime()` into an instant **strictly later** than the server's clock at the moment of the request — the exact same second is rejected too, not only the past. Either failure → `422 invalid_field`. |
+| `assigned_provider_id` | no | int (nid) | See **Direct award** below. |
+| `images[]` | no | file[] | Up to 5 files. See file rules below. |
+| `attachment` | no | file | At most 1 file. See file rules below. |
+
+`condominium_id`, `field_requester`, `field_assigned_offer` and `field_closed_at`
+are **not fields of this request**: none is ever read from the body, sending
+them has no effect because there is no such input to send.
+
+### The condominium is derived, never sent
+
+`field_condominium` is resolved from `unit_id`'s own `field_condominio` — the
+same table `myapi_condominium_related_nids()` reads, but for **one** unit
+instead of every unit of the resident. This is why `condominium_id` is absent
+from the request body above: sending one would be accepted silently and ignored,
+so the field does not exist at all rather than existing and lying.
+
+> **A unit with no `field_condominio` row** (a data inconsistency nothing today
+> prevents) has no condominium to derive. There is no client-facing fix for it
+> — it is not a value the resident typed wrong — so the endpoint answers
+> `500 server_error` and logs the case with `watchdog()`, instead of creating a
+> request with no condominium. Diagnosed the same way the orphan category tid is
+> in the listing's notes above:
+> ```sql
+> SELECT v.nid FROM node v
+> LEFT JOIN field_data_field_condominio fc ON fc.entity_id = v.nid AND fc.entity_type = 'node' AND fc.deleted = 0
+> WHERE v.type = 'vivienda' AND fc.entity_id IS NULL;
+> ```
+
+### Direct award: `assigned_provider_id`
+
+Sending a provider is a **second, complete validation**, not a simple optional
+field. All four conditions must hold, or the request answers a single
+`403 provider_not_eligible` — the four say the same thing to the client: *this
+provider cannot receive this request right now*.
+
+| # | Condition |
+|---|-----------|
+| 1 | `assigned_provider_id` is the `nid` of a **real** node of bundle `provider`. |
+| 2 | That node is **published** (`node.status = 1`). |
+| 3 | Its licence has **not expired** — the same rule `GET /api/v1/providers` and the marketplace use. |
+| 4 | `category_id` (the one already validated above) is among the provider's own `field_categories`. |
+
+`assigned_provider_id` not even a positive integer is `422 invalid_field`, like
+any other malformed field — that is the **one** exception to the single `403`.
+
+The provider is validated **before** any file touches the filesystem: a request
+rejected for its provider never leaves an orphaned upload behind.
+
+**What a direct award changes**
+| Field | `open` (no provider, or none sent) | `direct` (eligible provider) |
+|-------|---|---|
+| `status` | `open` | `direct` |
+| `assigned_provider` | `null` | `{ id, name }` |
+| `assigned_offer` | `null` | `null` — a direct award never adjudicates an offer |
+| `closed_at` | `null` | `null` |
+
+**Images (`images[]`) and attachment (`attachment`)**
+| Aspect | Images | Attachment |
+|--------|--------|------------|
+| Extensions | `jpg`, `jpeg`, `png` | `pdf`, `doc`, `docx`, `xls`, `xlsx` |
+| Size | ≤ 3 MB each (inherited from the field instance, same limit `field_images`/`field_attachment` have carried since SPEC 77) | ≤ 3 MB |
+| Count | Up to 5. A 6th file → `422 service_request_too_many_images`, none saved. | At most 1 — `attachment` is not an array field. |
+| Real MIME | Checked with `finfo`, derived from the field's own allowed extensions. Mismatch (e.g. a `.php` renamed to `.jpg`) → `422 invalid_file_type`. | Same check → `422 invalid_file_type`. |
+| Rejected extension/size | `422 service_request_invalid_image` | `422 service_request_invalid_attachment` |
+| Storage | Saved as **permanent** managed files under the field's configured `private://` directory, each with a `file_usage` row tied to the node. | Same. |
+
+Nothing about extensions or sizes is hardcoded in the endpoint: it reads
+`field_images` / `field_attachment`'s own Field API instance, the same
+`includes/myapi.node_files.inc` helper `POST /api/v1/claims` uses — extracted by
+this spec from what used to be a claims-only function, so both endpoints share
+one implementation instead of two copies that could drift.
+
+**All-or-nothing on files.** Any image or attachment that fails validation
+aborts the whole request: every file already saved **in that same request**
+(earlier valid images, if the attachment is what failed) is deleted before the
+error response, and no node is created. There is no partial request with only
+the valid files attached.
+
+**Fields the server always sets, never the client**
+| Field | Value |
+|-------|-------|
+| `node.uid` | `uid` of the Bearer token |
+| `node.status` | `1` (published) |
+| `field_requester` | `uid` of the Bearer token |
+| `field_condominium` | Derived from `unit_id` — see above. |
+| `field_request_status` | `'direct'` when `assigned_provider_id` was sent and passed all four conditions; `'open'` otherwise — including when the field was not sent at all. |
+| `field_assigned_provider` | The validated provider's `nid`, or left empty. |
+| `field_assigned_offer` | Always empty. |
+| `field_closed_at` | Always empty. |
+
+**No `service_transaction` is created.** Unlike `reclamo`, `service_request` has
+no `hook_node_insert()` branch reacting to its own creation — nothing here
+writes one, on purpose.
+
+**Success response (201)**
+
+```json
+{
+  "success": true,
+  "data": {
+    "service_request": {
+      "id": 145,
+      "title": "Fuga en el calentador",
+      "description": "El calentador del baño principal gotea desde el lunes.",
+      "status": "open",
+      "category": { "id": 12, "code": "plumbing", "name": "Plomería" },
+      "offers_count": 0,
+      "assigned_offer": null,
+      "assigned_provider": null,
+      "created": "2026-08-17T10:05:00",
+      "desired_start": "2026-08-19T08:00:00",
+
+      "viewer": "requester",
+      "requester": { "id": 42, "name": "Ana Pérez" },
+      "unit": { "id": 55, "name": "A-301" },
+      "condominium": { "id": 7, "name": "Torres del Este" },
+      "images": [
+        { "id": 210, "url": "https://.../api/v1/service-requests/145/files/210", "filename": "fuga.jpg" }
+      ],
+      "attachment": null,
+      "closed_at": null,
+      "offers": []
+    }
+  },
+  "message": "Solicitud de servicio creada correctamente."
+}
+```
+
+A request with a valid `assigned_provider_id` answers the same shape with
+`"status": "direct"` and `assigned_provider` already filled in.
+
+**Possible errors**
+| Code | `error_code` | When |
+|------|--------------|------|
+| 401 | `missing_authorization` | `Authorization` header absent or not a `Bearer <token>`. |
+| 401 | `invalid_token` | Access token invalid, revoked, expired, or its user is missing/blocked. |
+| 403 | `unit_access_denied` | `unit_id` is a positive integer the resident does not own or occupy, or the resident has no unit at all. Nothing is created. |
+| 403 | `provider_not_eligible` | `assigned_provider_id` was sent and fails any of the four conditions above. Nothing is created, and nothing already uploaded in the request is saved — the provider is validated before any file. |
+| 405 | `method_not_allowed` | Any method other than `GET` or `POST` on `/api/v1/service-requests`; or **any** method on `/api/v1/service-requests/{id}` — creation is always on the collection, never on an item. |
+| 422 | `missing_field` | A required field is absent or empty (`@field` names it): `title`, `unit_id`, `category_id`, `description`, or `desired_start`. |
+| 422 | `invalid_field` | `title` over 255 chars; `unit_id` or `category_id` or `assigned_provider_id` not a positive integer; `category_id` not a real term of the vocabulary; `description` empty after `trim()`; `desired_start` unparseable or not strictly in the future. |
+| 422 | `service_request_too_many_images` | More than 5 files in `images[]`. Nothing is saved. |
+| 422 | `service_request_invalid_image` | An image fails extension or size validation. All-or-nothing: any images already saved in the same request are deleted too. |
+| 422 | `service_request_invalid_attachment` | The attachment fails extension or size validation. All-or-nothing: any images already saved in the same request are deleted too. |
+| 422 | `invalid_file_type` | An image's or the attachment's real MIME (checked with `finfo`) does not match its extension. |
+| 500 | `server_error` | `unit_id`'s own unit has no `field_condominio` row to derive a condominium from — a data inconsistency, not a client mistake. Logged with `watchdog()`. |
+
+Validation runs in the order listed in **Request body** above (`title` →
+`unit_id` → `category_id` → `description` → `desired_start` →
+`assigned_provider_id` → `images[]` → `attachment`), and each check aborts
+before anything is created or saved to disk. See [i18n.md](i18n.md) for the
+translated `error`/`message` text.
+
+**Example (direct award, with one image, no attachment):**
+```bash
+curl -i -X POST https://host/api/v1/service-requests \
+  -H 'Authorization: Bearer <access_token>' \
+  -F 'title=Fuga en el calentador' \
+  -F 'unit_id=55' \
+  -F 'category_id=12' \
+  -F 'description=El calentador del baño principal gotea desde el lunes.' \
+  -F 'desired_start=2026-08-19 08:00' \
+  -F 'assigned_provider_id=7' \
+  -F 'images[]=@fuga.jpg'
+```
+
+---
+
 ## What is still not here
 
 Written down so it is not looked for in this document:
 
-- **Every write.** Creating, editing, cancelling, closing, awarding, offering,
-  uploading and deleting files. All `405`.
+- **Every write except creation.** Editing, cancelling, closing, awarding,
+  offering, uploading or deleting files **on a request that already exists**.
+  All `405` — see [`POST /api/v1/service-requests`](#post-apiv1service-requests)
+  for the one write this module does.
 - **Offers as a resource of their own** — creating them, withdrawing them,
   `GET /api/v1/offers/{id}`. Here they are only **read**, inside one request.
 - **The chat.** `field_firebase_path`, `field_chat_opened_at` and
@@ -690,13 +902,17 @@ Written down so it is not looked for in this document:
   is generated is another spec, and a key served today is a contract that spec
   could no longer change.
 - **The timeline.** `service_transaction` exists since SPEC 77 and is not
-  served.
+  served, and creating a request generates none — unlike `reclamo`, this bundle
+  has no `hook_node_insert()` reacting to its own birth.
 - **Ratings.** Neither served nor required.
 - **The provider's listing** — *the requests I may attend*.
 - **`?include=`, `ETag`, conditional caching.** The detail always answers whole.
+- **Rate limiting or deduplication on creation.** A double tap or a retried
+  request creates two requests; no endpoint of this module is idempotent except
+  login, and this spec does not add it here either.
 
-> **On the day this is deployed it answers `403` to almost everybody**, because
-> nothing creates requests, offers or providers through the API yet and the data
-> is loaded by hand. That is the real state of the system, not a failure of the
-> access rule. It is verified against requests, offers and providers loaded from
-> the back office, exactly as SPEC 86, 87 and 88 were.
+> **Providers are still loaded by hand from the back office.** Creating a
+> `service_request` no longer needs data planted outside the API, but a `direct`
+> award still needs a real `provider` node to point at, and offering on a
+> request still needs a real one to bid — neither exists through this API yet.
+> That is the real state of the system, not a failure of this endpoint.
