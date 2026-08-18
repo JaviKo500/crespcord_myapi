@@ -2,12 +2,16 @@
 
 /**
  * @file
- * Service request resource for the myapi module (SPECS 88 and 89).
+ * Service request resource for the myapi module (SPECS 88, 89 and 90).
  *
- * Three routes, read-only and authenticated:
+ * Four routes, authenticated throughout:
  *
  *   - GET /api/v1/service-requests — the paginated listing of the service
  *     requests the reader created (SPEC 88).
+ *   - POST /api/v1/service-requests — creates a service request for the
+ *     authenticated resident's own unit, with the condominium derived
+ *     server-side, an optional direct award to an eligible provider, and
+ *     optional images/attachment saved all-or-nothing (SPEC 90).
  *   - GET /api/v1/service-requests/% — the detail of one request: the listing's
  *     ten keys plus the unit, the condominium, the requester, the images, the
  *     attachment, closed_at and the offers (SPEC 89).
@@ -44,10 +48,15 @@
  * The same docblock also states that no query of this module carries the tag;
  * this file keeps that sentence true instead of turning it into an exception.
  *
- * NOTHING HERE WRITES. Requests and offers are loaded by the operator from the
- * back office, and field_assigned_offer / field_assigned_provider are filled in
- * by no flow yet: POST, PUT and DELETE answer 405 on all three routes. Creating,
- * editing, cancelling, closing, awarding and offering are each another spec.
+ * CREATION IS THE ONLY WRITE THIS FILE DOES, AND IT LIVES ON THE COLLECTION
+ * ONLY (SPEC 90): POST /api/v1/service-requests, never on the item — creating
+ * is always about the collection, the same criterion SPEC 66 gave claims.
+ * PUT and DELETE still answer 405 on every route, and so does POST on the item
+ * path: /api/v1/service-requests/% does not gain a write of its own. Editing,
+ * cancelling, closing, awarding and offering are all still another spec —
+ * field_assigned_offer is never written by this file, and
+ * field_assigned_provider is written only at birth, by
+ * myapi_service_request_build_node(), never afterwards.
  *
  * Like the other read resources of this module, the queries read the
  * field_data_* tables directly instead of going through node_load(): the
@@ -74,21 +83,38 @@ module_load_include('inc', 'myapi', 'includes/myapi.provider_role');
 // SPEC 89: myapi_user_display_names(), the "nombre apellidos" / users.name rule
 // this resource shares with GET /api/v1/units instead of copying.
 module_load_include('inc', 'myapi', 'includes/myapi.user');
+// SPEC 90: myapi_unit_related_nids() to validate 'unit_id' belongs to the
+// reader, and myapi_units_condominium_nids() to derive the condominium from
+// it — the same table myapi_condominium_related_nids() reads, but for one
+// unit instead of every unit of the reader.
+module_load_include('inc', 'myapi', 'includes/myapi.unit_access');
+// SPEC 90: myapi_node_files_save() / myapi_node_files_delete(), the
+// all-or-nothing upload helpers this resource shares with claims (see
+// includes/myapi.node_files.inc — extracted from claim.resource.inc by this
+// same spec).
+module_load_include('inc', 'myapi', 'includes/myapi.node_files');
 
 /**
- * Dispatcher for /api/v1/service-requests (SPEC 88).
+ * Dispatcher for /api/v1/service-requests (SPECS 88 and 90).
  *
- * Only GET is allowed. Creating, editing, cancelling, closing and awarding a
- * request are all out of this spec — every one of them needs decisions this
- * listing does not have to make — so there is no POST, PUT or DELETE.
+ * GET lists (SPEC 88); POST with no id creates (SPEC 90) — creation is always
+ * on the collection, never on an item, the same criterion SPEC 66 gave claims.
+ * Editing, cancelling, closing and awarding a request are all still out of
+ * scope — every one of them needs decisions neither the listing nor the
+ * creation have to make — so PUT and DELETE still answer 405.
  *
  * The method is checked BEFORE any authentication, the same criterion every
- * other dispatcher of this module follows: a POST answers 405 without a token,
- * because the method is wrong whoever is asking.
+ * other dispatcher of this module follows: an unsupported method answers 405
+ * without a token, because the method is wrong whoever is asking.
  */
 function myapi_service_request_dispatch() {
-  if (myapi_request_method() === 'GET') {
+  $method = myapi_request_method();
+
+  if ($method === 'GET') {
     myapi_service_request_list();
+  }
+  elseif ($method === 'POST') {
+    myapi_service_request_create();
   }
   else {
     myapi_error('method_not_allowed', 405);
@@ -1635,4 +1661,510 @@ function myapi_service_request_file_download($nid, $fid) {
     'Content-Disposition' => 'inline; filename="' . $file->filename . '"',
     'Cache-Control'       => 'private, no-store',
   ]);
+}
+
+/* ---------------------------------------------------------------------------
+ * Write-path helpers (SPEC 90).
+ *
+ * Three pure(-ish) validators for POST /api/v1/service-requests, written before
+ * the endpoint that uses them so each is testable against fixture rows with no
+ * site booted. None of them routes anything yet — myapi_service_request_create()
+ * and the dispatcher's POST branch are the next step of the plan.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Whether $tid is a real term of the service_category vocabulary (SPEC 90).
+ *
+ * Two Drupal calls and a comparison of vids: taxonomy_term_load() resolves the
+ * term (FALSE for a tid that names nothing), and
+ * taxonomy_vocabulary_machine_name_load(MYAPI_SERVICES_CATEGORY_VOCABULARY)
+ * resolves the vocabulary this bundle's category field is meant to point at.
+ * A tid of ANOTHER vocabulary loads a real term whose vid simply does not
+ * match, which is what stops it here instead of leaking through as a category
+ * that does not belong to this marketplace.
+ *
+ * Deliberately NOT myapi_service_category_provider_counts()'s or
+ * myapi_provider_role_category_ids()'s query-based approach: this is a single
+ * id, not a set, and taxonomy_term_load() is Drupal's own single-entity
+ * primitive for exactly that — the same reason
+ * myapi_service_request_validate_provider() below reads its provider with a
+ * query instead: THAT one needs three columns of the SAME node in one round
+ * trip, this one needs one column of a term Drupal already knows how to load.
+ *
+ * @param mixed $tid  Raw category_id from the request, already known to be a
+ *                     positive integer by the caller's earlier check.
+ *
+ * @return bool  TRUE when $tid is a real term of the category vocabulary.
+ */
+function myapi_service_request_valid_category($tid) {
+  $tid = (int) $tid;
+
+  if ($tid <= 0) {
+    return FALSE;
+  }
+
+  $term = taxonomy_term_load($tid);
+  if (!$term || !isset($term->vid)) {
+    return FALSE;
+  }
+
+  $vocabulary = taxonomy_vocabulary_machine_name_load(MYAPI_SERVICES_CATEGORY_VOCABULARY);
+  if (!$vocabulary) {
+    return FALSE;
+  }
+
+  return (int) $term->vid === (int) $vocabulary->vid;
+}
+
+/**
+ * Parses 'desired_start' into a timestamp, or FALSE when invalid (SPEC 90).
+ *
+ * ONE SIGNAL FOR TWO FAILURES, ON PURPOSE: a string strtotime() cannot parse
+ * and a string that parses into the past or into REQUEST_TIME itself both
+ * answer FALSE, because the caller's response to either is the identical
+ * 422 invalid_field — there is no second message that would help the client
+ * tell the two apart, and inventing one would be a distinction the spec's
+ * error table does not draw.
+ *
+ * STRICTLY FUTURE, NOT "AT OR AFTER": the comparison is `<= REQUEST_TIME`,
+ * so the exact instant of REQUEST_TIME is rejected along with the past. A
+ * client racing the clock to send exactly now is not a case worth a second
+ * code path — see the spec's Decisiones table.
+ *
+ * PURE: no database, no Field API. Every caller that has already read the
+ * field out of $_POST can test this against a fixed REQUEST_TIME with no site
+ * booted.
+ *
+ * @param mixed $raw  Raw 'desired_start' from the request, expected as
+ *                     'Y-m-d H:i' but parsed with strtotime() rather than a
+ *                     strict format check, the same laxness core's own form
+ *                     widgets allow.
+ *
+ * @return int|FALSE  The Unix timestamp when $raw parses into the strict
+ *                     future, FALSE otherwise.
+ */
+function myapi_service_request_parse_desired_start($raw) {
+  if (!is_string($raw) || $raw === '') {
+    return FALSE;
+  }
+
+  $timestamp = strtotime($raw);
+
+  if ($timestamp === FALSE || $timestamp <= REQUEST_TIME) {
+    return FALSE;
+  }
+
+  return $timestamp;
+}
+
+/**
+ * Whether a provider may receive a direct award of $category_id (SPEC 90).
+ *
+ * THE FOUR CONDITIONS OF THE SPEC, ALL OR NOTHING, ANSWERED FROM ONE QUERY:
+ *
+ *   1. $provider_id is the nid of a REAL node of bundle 'provider'.
+ *   2 & 3. That node is active — myapi_services_provider_is_active(), the same
+ *      function myapi_provider_role_any_provider_active() calls, which already
+ *      folds "published" into "active" (a status of 0 answers FALSE on its
+ *      own, so condition 2 costs no extra check here).
+ *   4. $category_id is among the tids of the provider's OWN field_categories.
+ *
+ * ONE QUERY, NOT FOUR, because the caller must answer a single 403 for all
+ * four causes (see the spec's Decisiones table) and there is no reason to pay
+ * for a node_load() plus a separate field_categories read when a single LEFT-
+ * JOINed SELECT already carries every column the four conditions need. The
+ * shape mirrors myapi_provider_role_any_provider_active(): node + LEFT JOIN
+ * field_license_expiry, with field_categories added as a second LEFT JOIN —
+ * unlimited cardinality, so the query answers one row per category (or one
+ * row with a NULL category_tid when the provider has none), never fewer than
+ * one row for a provider that exists.
+ *
+ * NOT myapi_provider_role_category_ids(): that function resolves the
+ * categories of the PROVIDERS THE AUTHENTICATED OPERATOR OWNS, a completely
+ * different question from "what categories does THIS ARBITRARY NID attend" —
+ * confusing the two would filter eligibility by the wrong provider's
+ * categories. See the spec's Riesgos table.
+ *
+ * @param mixed $provider_id  Raw 'assigned_provider_id' from the request,
+ *                             already known to be a positive integer by the
+ *                             caller's earlier check.
+ * @param mixed $category_id  The already-validated category tid of the
+ *                             request (step 5 of the validation order).
+ *
+ * @return bool  TRUE when all four conditions hold.
+ */
+function myapi_service_request_validate_provider($provider_id, $category_id) {
+  $provider_id = (int) $provider_id;
+  $category_id = (int) $category_id;
+
+  if ($provider_id <= 0) {
+    return FALSE;
+  }
+
+  $query = db_select('node', 'n');
+  $query->fields('n', ['type', 'status']);
+  $query->leftJoin(
+    'field_data_field_license_expiry',
+    'fle',
+    "fle.entity_id = n.nid AND fle.entity_type = 'node' AND fle.deleted = 0"
+  );
+  $query->addField('fle', 'field_license_expiry_value', 'license_expiry');
+  $query->leftJoin(
+    'field_data_field_categories',
+    'fc',
+    "fc.entity_id = n.nid AND fc.entity_type = 'node' AND fc.deleted = 0"
+  );
+  $query->addField('fc', 'field_categories_tid', 'category_tid');
+  $query->condition('n.nid', $provider_id);
+
+  $type = NULL;
+  $status = NULL;
+  $license_expiry = NULL;
+  $category_tids = [];
+
+  foreach ($query->execute() as $row) {
+    // Repeated identically on every row (the node columns do not vary per
+    // category), so overwriting on each iteration is harmless and simpler
+    // than reading only the first row.
+    $type = $row->type;
+    $status = (int) $row->status;
+    $license_expiry = $row->license_expiry;
+
+    if ($row->category_tid !== NULL && $row->category_tid !== '') {
+      $category_tids[] = (int) $row->category_tid;
+    }
+  }
+
+  // Condition 1: a real node, and of the right bundle. An unknown nid answers
+  // no rows at all, which leaves $type NULL and fails the same comparison.
+  if ($type !== MYAPI_SERVICES_PROVIDER_TYPE) {
+    return FALSE;
+  }
+
+  // Conditions 2 and 3, together: published AND licence not expired.
+  if (!myapi_services_provider_is_active($status, $license_expiry, REQUEST_TIME)) {
+    return FALSE;
+  }
+
+  // Condition 4. An empty $category_tids (a provider with no categories at
+  // all) fails the same IN as one with the wrong categories — no special case
+  // needed, see the spec's Riesgos table.
+  return in_array($category_id, $category_tids, TRUE);
+}
+
+/**
+ * Builds an unsaved 'service_request' node from the validated input (SPEC 90).
+ *
+ * Same pattern as myapi_claim_build_node(): every value has already been
+ * validated by the caller, and the node is returned UNSAVED so the
+ * orchestrator controls the order against file_usage_add() — node_save()
+ * first, then usage, exactly as SPEC 89 assumes for every file already
+ * attached to a request.
+ *
+ * FOUR FIELDS ARE FIXED HERE, NEVER READ FROM THE REQUEST (see the Modelo de
+ * datos of SPEC 90 — "Campos que el servidor fija, nunca el cliente"):
+ *   - field_requester is always $uid, the token's own.
+ *   - field_condominium is the DERIVED condominium of $unit_id, resolved by
+ *     the caller before this is called — never the client's.
+ *   - field_request_status is 'direct' when $assigned_provider_id is not
+ *     NULL (meaning the caller already ran it through
+ *     myapi_service_request_validate_provider() and it passed all four
+ *     conditions), 'open' otherwise — including a $assigned_provider_id the
+ *     request never sent at all, which is exactly the "any other case"
+ *     the spec's field table describes.
+ *   - field_assigned_offer and field_closed_at are never written: leaving a
+ *     cardinality-1 field entirely unset on a new node is what "always
+ *     empty" means to node_save(), the same as field_assigned_offer already
+ *     is on every claim this module creates.
+ *
+ * field_assigned_provider is written ONLY when $assigned_provider_id is not
+ * NULL — an entityreference field left unset, not one pointed at a target_id
+ * of 0, is what keeps a request with no direct award from resolving to a
+ * phantom provider.
+ *
+ * @param int         $uid                  Authenticated resident (token
+ *                                            uid): node.uid and
+ *                                            field_requester.
+ * @param string      $title                Validated title, <= 255 chars.
+ * @param int         $unit_id              Validated field_unit target nid,
+ *                                            already checked to belong to the
+ *                                            reader.
+ * @param int         $condominium_id       The condominium DERIVED from
+ *                                            $unit_id — never the client's.
+ * @param int         $category_id          Validated field_category target
+ *                                            tid, a real term of the category
+ *                                            vocabulary.
+ * @param string      $description          Validated, non-empty
+ *                                            field_description.
+ * @param int         $desired_start        Validated field_desired_start
+ *                                            timestamp, strictly in the
+ *                                            future.
+ * @param int|NULL    $assigned_provider_id The validated provider nid, or
+ *                                            NULL when the request carried
+ *                                            none or it failed eligibility —
+ *                                            NULL is what decides 'open'
+ *                                            below.
+ * @param array       $image_files          Saved permanent file objects for
+ *                                            field_images, in upload order.
+ *                                            May be empty.
+ * @param object|null $attachment_file      Saved permanent file object for
+ *                                            field_attachment, or NULL when
+ *                                            none.
+ *
+ * @return object  The prepared, unsaved node object.
+ */
+function myapi_service_request_build_node($uid, $title, $unit_id, $condominium_id, $category_id, $description, $desired_start, $assigned_provider_id, array $image_files, $attachment_file) {
+  $node = new stdClass();
+  $node->type = MYAPI_SERVICES_REQUEST_TYPE;
+  node_object_prepare($node);
+  $node->uid = $uid;
+  $node->status = 1;
+  $node->language = LANGUAGE_NONE;
+  $node->title = $title;
+
+  $node->field_unit[LANGUAGE_NONE][0]['target_id'] = $unit_id;
+  $node->field_condominium[LANGUAGE_NONE][0]['target_id'] = $condominium_id;
+  $node->field_category[LANGUAGE_NONE][0]['target_id'] = $category_id;
+  $node->field_requester[LANGUAGE_NONE][0]['target_id'] = $uid;
+  $node->field_description[LANGUAGE_NONE][0]['value'] = $description;
+  $node->field_desired_start[LANGUAGE_NONE][0]['value'] = $desired_start;
+
+  $node->field_request_status[LANGUAGE_NONE][0]['value'] = $assigned_provider_id !== NULL
+    ? MYAPI_SERVICES_REQUEST_STATUS_DIRECT
+    : MYAPI_SERVICES_REQUEST_STATUS_OPEN;
+
+  if ($assigned_provider_id !== NULL) {
+    $node->field_assigned_provider[LANGUAGE_NONE][0]['target_id'] = $assigned_provider_id;
+  }
+
+  foreach ($image_files as $delta => $file) {
+    $node->field_images[LANGUAGE_NONE][$delta] = ['fid' => $file->fid, 'display' => 1];
+  }
+
+  if ($attachment_file) {
+    $node->field_attachment[LANGUAGE_NONE][0] = ['fid' => $attachment_file->fid, 'display' => 1];
+  }
+
+  return $node;
+}
+
+/**
+ * POST /api/v1/service-requests — creates a request for the authenticated
+ * resident (SPEC 90).
+ *
+ * multipart/form-data, not JSON: text fields through
+ * myapi_request_post_field() ($_POST), files through $_FILES — same contract
+ * as POST /api/v1/claims. Every step below aborts with its own error BEFORE
+ * anything touches the database or the filesystem, in the exact order of the
+ * Modelo de datos section of SPEC 90:
+ *
+ *   1. Authentication.
+ *   2. Required fields present (title, unit_id, category_id, description,
+ *      desired_start). assigned_provider_id, images[] and attachment are all
+ *      optional and are not in this list.
+ *   3. title <= 255 chars.
+ *   4. unit_id is a positive integer AND one of the reader's own units
+ *      (myapi_unit_related_nids($uid)) — a user with no unit at all simply
+ *      has an empty set, so every unit_id falls outside it and answers the
+ *      same 403, never a 422 or a 200.
+ *   4b. The condominium DERIVED from unit_id — never read from the request.
+ *      A unit with no field_condominio row is a data inconsistency no client
+ *      input can cause or fix, so it answers 500 and is logged rather than
+ *      creating a request with no condominium — see the spec's Riesgos.
+ *   5. category_id is a positive integer AND a real tid of the
+ *      service_category vocabulary.
+ *   6. description non-empty after trim() (myapi_request_post_field()
+ *      already trims).
+ *   7. desired_start parses with strtotime() into a strictly future instant.
+ *   8. assigned_provider_id (if any) — the four conditions of
+ *      myapi_service_request_validate_provider(), a single 403
+ *      provider_not_eligible for all four. Resolved BEFORE any file touches
+ *      the filesystem, so a request rejected for its provider never leaves an
+ *      orphaned upload to clean up.
+ *   9. images[] (if any) — myapi_node_files_save(), all-or-nothing.
+ *   10. attachment (if any) — same, and on failure also deletes the images
+ *      already saved by step 9 (the $also_delete parameter).
+ *
+ * field_requester, field_condominium, field_assigned_offer and field_closed_at
+ * are NEVER read from the request: see myapi_service_request_build_node().
+ *
+ * NO service_transaction IS CREATED. Unlike 'reclamo', this bundle has no
+ * hook_node_insert() branch that reacts to a new request — nothing here fires
+ * one, on purpose (out of scope by the spec's own decision).
+ *
+ * The 201 response reuses myapi_service_request_detail_row() +
+ * myapi_user_display_names() + myapi_service_request_load_images() +
+ * myapi_service_request_build_detail() — the very same functions
+ * GET /api/v1/service-requests/% uses, with `viewer` fixed to 'requester' (the
+ * creator is always the requester), so the two responses can never drift
+ * apart. `offers` and `offers_count` are put directly in code as `[]` and `0`,
+ * never queried: at the instant of creation nothing can have offered on a
+ * node that did not exist a moment ago, and querying anyway would be one more
+ * read on the write path to confirm what the flow already knows.
+ */
+function myapi_service_request_create() {
+  // 1. Authentication.
+  $token = myapi_auth_require_access_token();
+  $uid = (int) $token->uid;
+
+  // 2. Read the multipart/form-data text fields.
+  $title = myapi_request_post_field('title');
+  $unit_raw = myapi_request_post_field('unit_id');
+  $category_raw = myapi_request_post_field('category_id');
+  $description = myapi_request_post_field('description');
+  $desired_start_raw = myapi_request_post_field('desired_start');
+
+  $required = [
+    'title'         => $title,
+    'unit_id'       => $unit_raw,
+    'category_id'   => $category_raw,
+    'description'   => $description,
+    'desired_start' => $desired_start_raw,
+  ];
+  foreach ($required as $name => $value) {
+    if ($value === NULL || $value === '') {
+      myapi_error('missing_field', 422, ['@field' => $name]);
+    }
+  }
+
+  // 3. title: node.title is varchar(255).
+  if (strlen($title) > 255) {
+    myapi_error('invalid_field', 422, ['@field' => 'title']);
+  }
+
+  // 4. unit_id: positive integer, then one of the reader's own units. An
+  // empty set (no unit at all) makes every id fall outside it, so this is the
+  // SAME 403 for both cases — no special code for "no unit" beyond the
+  // natural consequence of the rule.
+  if (!ctype_digit($unit_raw) || (int) $unit_raw <= 0) {
+    myapi_error('invalid_field', 422, ['@field' => 'unit_id']);
+  }
+  $unit_id = (int) $unit_raw;
+  if (!in_array($unit_id, array_map('intval', myapi_unit_related_nids($uid)), TRUE)) {
+    myapi_error('unit_access_denied', 403);
+  }
+
+  // 4b. The condominium, derived and never read from the client. A unit with
+  // no field_condominio row is corrupt data no client input can cause or fix
+  // — see the spec's Riesgos — so it is logged and answered as a server
+  // error instead of silently creating a request with no condominium.
+  $condo_nids = myapi_units_condominium_nids([$unit_id]);
+  if (empty($condo_nids)) {
+    watchdog(
+      'myapi',
+      'SPEC 90: unit @unit has no field_condominio row; service request creation aborted for uid @uid.',
+      ['@unit' => $unit_id, '@uid' => $uid],
+      WATCHDOG_ERROR
+    );
+    myapi_error('server_error', 500);
+  }
+  $condominium_id = (int) reset($condo_nids);
+
+  // 5. category_id: positive integer, then a real tid of the vocabulary.
+  if (!ctype_digit($category_raw) || (int) $category_raw <= 0) {
+    myapi_error('invalid_field', 422, ['@field' => 'category_id']);
+  }
+  $category_id = (int) $category_raw;
+  if (!myapi_service_request_valid_category($category_id)) {
+    myapi_error('invalid_field', 422, ['@field' => 'category_id']);
+  }
+
+  // 6. description: non-empty after trim() (already trimmed above).
+  if ($description === '') {
+    myapi_error('invalid_field', 422, ['@field' => 'description']);
+  }
+
+  // 7. desired_start: strtotime() must parse it into a strictly future
+  // instant. FALSE covers both failures with the same 422 — see the
+  // helper's docblock.
+  $desired_start = myapi_service_request_parse_desired_start($desired_start_raw);
+  if ($desired_start === FALSE) {
+    myapi_error('invalid_field', 422, ['@field' => 'desired_start']);
+  }
+
+  // 8. assigned_provider_id: optional. Resolved BEFORE any file touches the
+  // filesystem — see the docblock.
+  $assigned_provider_raw = myapi_request_post_field('assigned_provider_id');
+  $assigned_provider_id = NULL;
+  if ($assigned_provider_raw !== NULL) {
+    if (!ctype_digit($assigned_provider_raw) || (int) $assigned_provider_raw <= 0) {
+      myapi_error('invalid_field', 422, ['@field' => 'assigned_provider_id']);
+    }
+    $candidate_provider_id = (int) $assigned_provider_raw;
+    if (!myapi_service_request_validate_provider($candidate_provider_id, $category_id)) {
+      myapi_error('provider_not_eligible', 403);
+    }
+    $assigned_provider_id = $candidate_provider_id;
+  }
+
+  // 9. images[]: up to 5, all-or-nothing.
+  $image_files = myapi_node_files_save(
+    'field_images',
+    MYAPI_SERVICES_REQUEST_TYPE,
+    isset($_FILES['images']) ? $_FILES['images'] : [],
+    5,
+    'service_request_invalid_image',
+    'service_request_too_many_images'
+  );
+
+  // 10. attachment: at most 1 (field_attachment is not an array input, so
+  // $_FILES can never carry more than one). On failure, the images already
+  // saved in step 9 are deleted too — see $also_delete.
+  $attachment_file = NULL;
+  $attachment_saved = myapi_node_files_save(
+    'field_attachment',
+    MYAPI_SERVICES_REQUEST_TYPE,
+    isset($_FILES['attachment']) ? $_FILES['attachment'] : [],
+    1,
+    'service_request_invalid_attachment',
+    'service_request_too_many_images',
+    $image_files
+  );
+  if (!empty($attachment_saved)) {
+    $attachment_file = reset($attachment_saved);
+  }
+
+  // 11. Build and persist the node. No hook_node_insert() branch reacts to
+  // this bundle — see the docblock.
+  $node = myapi_service_request_build_node(
+    $uid,
+    $title,
+    $unit_id,
+    $condominium_id,
+    $category_id,
+    $description,
+    $desired_start,
+    $assigned_provider_id,
+    $image_files,
+    $attachment_file
+  );
+  node_save($node);
+
+  // 12. Tie every saved file to the node so cron does not reap it as unused.
+  foreach ($image_files as $file) {
+    file_usage_add($file, 'myapi', 'node', $node->nid);
+  }
+  if ($attachment_file) {
+    file_usage_add($attachment_file, 'myapi', 'node', $node->nid);
+  }
+
+  // 13. Respond 201 with the same eighteen-key shape as
+  // GET /api/v1/service-requests/%, reusing SPEC 89's own serialiser. `viewer`
+  // is always 'requester' here: the creator IS the requester. `offers` and
+  // `offers_count` are put directly as `[]` and `0` — see the docblock.
+  $row = myapi_service_request_detail_row($node->nid);
+
+  $row->requester_name = NULL;
+  $names = myapi_user_display_names([$uid]);
+  if (isset($names[$uid])) {
+    $row->requester_name = $names[$uid];
+  }
+
+  $images = myapi_service_request_load_images($node->nid);
+
+  myapi_respond(
+    ['service_request' => myapi_service_request_build_detail($row, 'requester', $images, [], 0)],
+    201,
+    'service_request_created'
+  );
 }

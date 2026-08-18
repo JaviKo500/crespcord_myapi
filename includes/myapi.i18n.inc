@@ -161,6 +161,12 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       // whatever resource it is about.
       'not_found'                          => 'Not found.',
       'forbidden'                          => 'You do not have access to this resource.',
+      // SPEC 90.
+      'service_request_created'            => 'Service request created successfully.',
+      'service_request_too_many_images'    => 'Maximum 5 images per service request.',
+      'service_request_invalid_image'      => 'Invalid image. Allowed: JPG, JPEG or PNG up to 3 MB.',
+      'service_request_invalid_attachment' => 'Invalid attachment. Allowed: PDF, DOC, DOCX, XLS or XLSX up to 3 MB.',
+      'provider_not_eligible'              => 'The selected provider cannot receive this request.',
     ],
     'es' => [
       'invalid_credentials'    => 'Usuario o contraseña incorrectos.',
@@ -243,6 +249,12 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       // SPEC 89 — see the note next to the English pair.
       'not_found'                          => 'No encontrado.',
       'forbidden'                          => 'No tienes acceso a este recurso.',
+      // SPEC 90.
+      'service_request_created'            => 'Solicitud de servicio creada correctamente.',
+      'service_request_too_many_images'    => 'Máximo 5 imágenes por solicitud.',
+      'service_request_invalid_image'      => 'Imagen inválida. Permitidos: JPG, JPEG o PNG hasta 3 MB.',
+      'service_request_invalid_attachment' => 'Adjunto inválido. Permitidos: PDF, DOC, DOCX, XLS o XLSX hasta 3 MB.',
+      'provider_not_eligible'              => 'El proveedor seleccionado no puede recibir esta solicitud.',
     ],
   ];
 

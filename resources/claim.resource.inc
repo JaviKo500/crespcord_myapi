@@ -730,188 +730,6 @@ function myapi_claim_valid_catalogue_value($field_name, $value) {
 }
 
 /**
- * Deletes a batch of just-saved managed files.
- *
- * The all-or-nothing cleanup primitive: used both inside
- * myapi_claim_create_save_files() (when a later file of the SAME field fails)
- * and by myapi_claim_create() (when the attachment fails after the images of
- * the same request already saved). One place for the loop instead of two.
- *
- * @param array $files  file_managed objects, as returned by file_save().
- */
-function myapi_claim_create_delete_files(array $files) {
-  foreach ($files as $file) {
-    file_delete($file);
-  }
-}
-
-/**
- * Validates and saves the files of one upload field, all-or-nothing.
- *
- * Serves both 'field_images' ($max_count = 5, multi-file input) and
- * 'field_attachment' ($max_count = 1, single-file input) — one function for
- * the two fields, since the only difference between them is which Field API
- * instance they read. $files is the raw $_FILES entry for the input
- * ($_FILES['images'] or $_FILES['attachment']): PHP gives a multi-file input
- * ('images[]') as parallel arrays keyed by index, and a single-file input
- * ('attachment') as one flat entry; both shapes are normalized here into a
- * list of individual files before anything is validated or saved.
- *
- * Nothing about extensions or sizes is hardcoded: $field_name's Field API
- * field and instance (field_info_field() / field_info_instance()) are read to
- * build the same #upload_validators and #upload_location the native widget
- * would use (file_field_widget_upload_validators() / file_field_widget_uri()),
- * exactly like myapi_claim_transaction_create_form() (SPEC 57) does for the
- * back office — so this endpoint inherits SPEC 55's limits instead of
- * duplicating them. The real-MIME whitelist is not hardcoded either: it is
- * derived from $validators['file_validate_extensions'][0] — the very string
- * the extension check above it already enforces, not a second read of
- * $instance['settings']['file_extensions'] under a different name — via
- * file_get_mimetype('dummy.<ext>'), Drupal core's own extension-to-mimetype
- * map. Same double-check myapi_payment_save_file() does with a hardcoded
- * list; here the list follows the field instead.
- *
- * On the first failure (too many files, a rejected extension/size, or a MIME
- * mismatch) every file already saved BY THIS CALL is deleted with
- * myapi_claim_create_delete_files() before myapi_error() ends the request:
- * no orphaned file_managed row survives a failed images[] or attachment
- * upload on its own. $also_delete extends that same cleanup to files saved by
- * an EARLIER call within the same request — myapi_claim_create() passes its
- * already-saved $image_files here when it calls this function for the
- * attachment, so a rejected attachment does not leave the request's valid
- * images orphaned. myapi_error() never returns to its caller (it ends the
- * request with drupal_exit()), which is exactly why this cleanup has to
- * happen HERE, before it is called, rather than by the orchestrator
- * afterwards.
- *
- * @param string $field_name   Machine name of the field ('field_images' or
- *                              'field_attachment').
- * @param string $bundle       Node bundle the field is attached to
- *                              ('reclamo').
- * @param array  $files        The raw $_FILES[...] entry for this input, or
- *                              an empty array when nothing was sent.
- * @param int    $max_count    Maximum number of files allowed.
- * @param string $error_key    i18n key to answer when a file is rejected for
- *                              its extension or size ('claim_invalid_image'
- *                              or 'claim_invalid_attachment'). A MIME
- *                              mismatch always answers 'invalid_file_type'
- *                              instead, regardless of this parameter.
- * @param array  $also_delete  Managed file objects saved by an earlier field
- *                              of the SAME request, to delete together with
- *                              this call's own batch on any failure. Empty by
- *                              default — the images call passes none, the
- *                              attachment call passes the images.
- *
- * @return array  The saved, permanent file objects, in the order they were
- *                sent. Empty when $files carried nothing.
- */
-function myapi_claim_create_save_files($field_name, $bundle, array $files, $max_count, $error_key, array $also_delete = []) {
-  // Normalize into a flat list of individual file specs, whichever shape
-  // $files arrived in.
-  $items = [];
-  if (isset($files['name']) && is_array($files['name'])) {
-    foreach ($files['name'] as $delta => $name) {
-      if ($name === '' || (int) $files['error'][$delta] === UPLOAD_ERR_NO_FILE) {
-        continue;
-      }
-      $items[] = [
-        'name'     => $files['name'][$delta],
-        'type'     => $files['type'][$delta],
-        'tmp_name' => $files['tmp_name'][$delta],
-        'error'    => $files['error'][$delta],
-        'size'     => $files['size'][$delta],
-      ];
-    }
-  }
-  elseif (isset($files['name']) && $files['name'] !== '' && (int) $files['error'] !== UPLOAD_ERR_NO_FILE) {
-    $items[] = $files;
-  }
-
-  if (empty($items)) {
-    return [];
-  }
-
-  // The only count this module currently enforces past a field's own
-  // cardinality: 'images[]' is unlimited at the field level (SPEC 55), so the
-  // "max 5" from this spec is applied here. 'field_attachment' is a
-  // non-array PHP input, so $_FILES can never hand this function more than
-  // one item for it — this branch exists for 'field_images' in practice.
-  if (count($items) > $max_count) {
-    myapi_claim_create_delete_files($also_delete);
-    myapi_error('claim_too_many_images', 422);
-  }
-
-  $field_info = field_info_field($field_name);
-  $instance = field_info_instance('node', $field_name, $bundle);
-  $validators = file_field_widget_upload_validators($field_info, $instance);
-  $directory = file_field_widget_uri($field_info, $instance);
-
-  if (!file_prepare_directory($directory, FILE_CREATE_DIRECTORY)) {
-    myapi_claim_create_delete_files($also_delete);
-    myapi_error($error_key, 422);
-  }
-
-  // The extensions actually enforced by $validators itself
-  // ('file_validate_extensions', the same key file_save_upload() reads),
-  // rather than re-reading $instance['settings']['file_extensions'] under a
-  // second name: this way the MIME whitelist can never drift from what the
-  // extension check above it already validated, whichever key Drupal stores
-  // it under.
-  $extensions = isset($validators['file_validate_extensions'][0])
-    ? preg_split('/\s+/', trim($validators['file_validate_extensions'][0]))
-    : [];
-  $allowed_mimes = [];
-  foreach ($extensions as $extension) {
-    $allowed_mimes[] = file_get_mimetype('dummy.' . $extension);
-  }
-
-  $finfo = finfo_open(FILEINFO_MIME_TYPE);
-  $saved = [];
-
-  foreach ($items as $delta => $item) {
-    // Remap into the nested $_FILES['files'][...][<key>] shape
-    // file_save_upload() expects — the same remap myapi_payment_save_file()
-    // does for its single field, generalized to one key per item so N files
-    // of the same input can each be uploaded on their own call.
-    $form_key = $field_name . '_' . $delta;
-    foreach (['name', 'type', 'tmp_name', 'error', 'size'] as $part) {
-      $_FILES['files'][$part][$form_key] = $item[$part];
-    }
-
-    $file = file_save_upload($form_key, $validators, $directory . '/');
-    if (!is_object($file)) {
-      myapi_claim_create_delete_files($saved);
-      myapi_claim_create_delete_files($also_delete);
-      if ($finfo) {
-        finfo_close($finfo);
-      }
-      myapi_error($error_key, 422);
-    }
-
-    $real_path = drupal_realpath($file->uri);
-    $mime = $finfo ? finfo_file($finfo, $real_path) : FALSE;
-    if (!in_array($mime, $allowed_mimes, TRUE)) {
-      file_delete($file);
-      myapi_claim_create_delete_files($saved);
-      myapi_claim_create_delete_files($also_delete);
-      if ($finfo) {
-        finfo_close($finfo);
-      }
-      myapi_error('invalid_file_type', 422);
-    }
-
-    $file->status = FILE_STATUS_PERMANENT;
-    $saved[] = file_save($file);
-  }
-
-  if ($finfo) {
-    finfo_close($finfo);
-  }
-
-  return $saved;
-}
-
-/**
  * Builds an unsaved 'reclamo' node from the validated claim input.
  *
  * Same pattern as myapi_payment_build_node(): every value is already
@@ -1058,7 +876,7 @@ function myapi_claim_update_parse_removals(array $current_fids) {
 /**
  * Deletes files that an update took out of a claim (SPEC 67).
  *
- * The counterpart of myapi_claim_create_delete_files(): that one cleans up
+ * The counterpart of myapi_node_files_delete(): that one cleans up
  * files this request had just saved and the node never referenced, this one
  * removes files the node HAD referenced and no longer does — the images named
  * in remove_image_ids[] and the attachment that was replaced or dropped. They
@@ -1378,7 +1196,7 @@ function myapi_claim_close($id) {
  *   6. description non-empty after trim() (myapi_request_post_field()
  *      already trims).
  *   7. visibility is a key of field_visibility's allowed_values.
- *   8. images[] (if any) — myapi_claim_create_save_files(), all-or-nothing.
+ *   8. images[] (if any) — myapi_node_files_save(), all-or-nothing.
  *   9. attachment (if any) — same, and on failure also deletes the images
  *      already saved by step 8 (the $also_delete parameter — see that
  *      function's docblock for why the cleanup has to live there and not
@@ -1459,24 +1277,26 @@ function myapi_claim_create() {
   }
 
   // 8. images[]: up to 5, all-or-nothing.
-  $image_files = myapi_claim_create_save_files(
+  $image_files = myapi_node_files_save(
     'field_images',
     'reclamo',
     isset($_FILES['images']) ? $_FILES['images'] : [],
     5,
-    'claim_invalid_image'
+    'claim_invalid_image',
+    'claim_too_many_images'
   );
 
   // 9. attachment: at most 1 (field_attachment is not an array input, so
   // $_FILES can never carry more than one). On failure, the images already
   // saved in step 8 are deleted too — see $also_delete.
   $attachment_file = NULL;
-  $attachment_saved = myapi_claim_create_save_files(
+  $attachment_saved = myapi_node_files_save(
     'field_attachment',
     'reclamo',
     isset($_FILES['attachment']) ? $_FILES['attachment'] : [],
     1,
     'claim_invalid_attachment',
+    'claim_too_many_images',
     $image_files
   );
   if (!empty($attachment_saved)) {
@@ -1525,7 +1345,7 @@ function myapi_claim_create() {
  * POST on an item and not PUT: PHP fills neither $_POST nor $_FILES on a PUT,
  * so a multipart/form-data body would arrive raw through php://input and would
  * need a hand-written MIME parser. POST reuses myapi_request_post_field() and
- * myapi_claim_create_save_files() unchanged. It is the only POST-on-an-item
+ * myapi_node_files_save() unchanged. It is the only POST-on-an-item
  * route of the module, and that is a decision, not an oversight.
  *
  * The update is TOTAL, not partial: the five text fields are required on every
@@ -1554,7 +1374,7 @@ function myapi_claim_create() {
  *      where a fid that is not one of THIS claim's images answers 422.
  *   13. Image quota: the number of new images admissible is
  *      5 - (current - removed), passed as $max_count to
- *      myapi_claim_create_save_files(), which already answers
+ *      myapi_node_files_save(), which already answers
  *      claim_too_many_images. No counting code of its own.
  *   14-15. images[] and attachment, same all-or-nothing helper as creation.
  *
@@ -1676,7 +1496,7 @@ function myapi_claim_update($id) {
   $removed_image_fids = myapi_claim_update_parse_removals($current_image_fids);
 
   // 14. Image quota: what is left after the removals decides how many new
-  // images fit. myapi_claim_create_save_files() already answers
+  // images fit. myapi_node_files_save() already answers
   // claim_too_many_images when the request sends more than that.
   $kept_count = count($current_image_fids) - count($removed_image_fids);
   $max_new_images = 5 - $kept_count;
@@ -1686,23 +1506,25 @@ function myapi_claim_update($id) {
 
   // 15. images[]: all-or-nothing. On failure nothing has been written yet, so
   // the claim keeps its text and its original files.
-  $image_files = myapi_claim_create_save_files(
+  $image_files = myapi_node_files_save(
     'field_images',
     'reclamo',
     isset($_FILES['images']) ? $_FILES['images'] : [],
     $max_new_images,
-    'claim_invalid_image'
+    'claim_invalid_image',
+    'claim_too_many_images'
   );
 
   // 16. attachment: at most 1. On failure the images just saved by step 15 are
   // deleted too ($also_delete), so a rejected attachment leaves no orphan.
   $attachment_file = NULL;
-  $attachment_saved = myapi_claim_create_save_files(
+  $attachment_saved = myapi_node_files_save(
     'field_attachment',
     'reclamo',
     isset($_FILES['attachment']) ? $_FILES['attachment'] : [],
     1,
     'claim_invalid_attachment',
+    'claim_too_many_images',
     $image_files
   );
   if (!empty($attachment_saved)) {
