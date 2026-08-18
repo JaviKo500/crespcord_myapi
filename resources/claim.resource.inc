@@ -54,6 +54,11 @@ module_load_include('inc', 'myapi', 'includes/myapi.token');
 module_load_include('inc', 'myapi', 'includes/myapi.auth');
 module_load_include('inc', 'myapi', 'includes/myapi.unit_access');
 module_load_include('inc', 'myapi', 'includes/myapi.claims_common');
+// SPEC 90 moved myapi_node_files_save() / myapi_node_files_delete() out of
+// this file and into includes/myapi.node_files.inc, shared with service
+// requests. The include has to be loaded here or the upload paths of
+// myapi_claim_create() and myapi_claim_files_add() fatal.
+module_load_include('inc', 'myapi', 'includes/myapi.node_files');
 
 /**
  * Maximum length, in CHARACTERS, of the closing reason (SPEC 70).
