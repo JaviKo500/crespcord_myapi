@@ -259,12 +259,17 @@ class ServiceRequestListEndpointTest extends TestCase {
    * ---------------------------------------------------------------------- */
 
   /**
-   * Everything that is not GET is 405, and the method is checked BEFORE the
-   * token: a POST with a perfectly valid token is still 405, and one with no
-   * token at all is 405 too — never 401. Every write is out of SPEC 88.
+   * Everything that is not GET or POST is 405, and the method is checked
+   * BEFORE the token: a PUT with a perfectly valid token is still 405, and one
+   * with no token at all is 405 too — never 401. Every write except creation
+   * is out of scope — PUT and DELETE still answer 405 exactly as SPEC 88 left
+   * them. POST is the one method that moved: since SPEC 90 it creates a
+   * request instead of answering 405, and its own guards — auth first, then
+   * the field validators — are covered by
+   * tests/unit/ServiceRequestCreateEndpointTest.php, not here.
    */
-  public function testEveryMethodOtherThanGetIs405BeforeAuthentication() {
-    foreach (['POST', 'PUT', 'DELETE', 'PATCH'] as $method) {
+  public function testEveryMethodOtherThanGetOrPostIs405BeforeAuthentication() {
+    foreach (['PUT', 'DELETE', 'PATCH'] as $method) {
       $this->authenticate();
       $this->seed([$this->request(128, 'Fuga en el calentador')]);
       $_SERVER['REQUEST_METHOD'] = $method;

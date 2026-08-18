@@ -2089,6 +2089,51 @@ if (!function_exists('entity_load')) {
   }
 }
 
+if (!function_exists('taxonomy_term_load')) {
+  /**
+   * Answers a single seeded term, hydrated with its OWN vid (SPEC 90).
+   *
+   * A real Drupal term object always carries its own `vid` — which vocabulary
+   * it belongs to — and that is precisely the column
+   * myapi_service_request_valid_category() compares against
+   * taxonomy_vocabulary_machine_name_load()'s vid. myapi_test_taxonomy_seed()
+   * stores the vid only on the vocabulary, keyed by it
+   * ($GLOBALS['myapi_test_taxonomy_terms'][$vid]), so this stub is what stamps
+   * it onto a COPY of the matching term before answering — never onto the
+   * fixture itself, so a second load of the same tid is not corrupted by the
+   * first.
+   *
+   * FALSE for an unknown tid, the same answer taxonomy_vocabulary_machine_name_
+   * load() gives for an unknown machine name, and what
+   * myapi_service_request_valid_category() reads as "not a real term".
+   */
+  function taxonomy_term_load($tid) {
+    $GLOBALS['myapi_test_taxonomy_calls'][] = [
+      'function' => 'taxonomy_term_load',
+      'args'     => [$tid],
+    ];
+
+    $key = (string) $tid;
+
+    if (!empty($GLOBALS['myapi_test_taxonomy_terms'])) {
+      foreach ($GLOBALS['myapi_test_taxonomy_terms'] as $vid => $terms) {
+        foreach ($terms as $term) {
+          if (isset($term->tid) && (string) $term->tid === $key) {
+            $hydrated = isset($GLOBALS['myapi_test_taxonomy_entities'][$key])
+              ? clone $GLOBALS['myapi_test_taxonomy_entities'][$key]
+              : clone $term;
+            $hydrated->vid = $vid;
+
+            return $hydrated;
+          }
+        }
+      }
+    }
+
+    return FALSE;
+  }
+}
+
 if (!function_exists('file_create_url')) {
   /**
    * Builds the absolute URL of a stored file URI (SPEC 79).

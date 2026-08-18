@@ -9,6 +9,7 @@ require_once __DIR__ . '/../../includes/myapi.token.inc';
 require_once __DIR__ . '/../../includes/myapi.auth.inc';
 require_once __DIR__ . '/../../includes/myapi.unit_access.inc';
 require_once __DIR__ . '/../../includes/myapi.claims_common.inc';
+require_once __DIR__ . '/../../includes/myapi.node_files.inc';
 require_once __DIR__ . '/../../resources/claim.resource.inc';
 
 /**
@@ -33,7 +34,7 @@ require_once __DIR__ . '/../../resources/claim.resource.inc';
  * — and in particular never that hook_node_insert() created the initial
  * transaction or that the closing sync moved the claim's status. Uploads are
  * out entirely: every case sends no file, which is the shape that reaches
- * myapi_claim_create_save_files() and returns immediately. Both belong to
+ * myapi_node_files_save() and returns immediately. Both belong to
  * tests/integration and are named here rather than skipped in silence.
  */
 class ClaimWriteGuardsTest extends TestCase {
