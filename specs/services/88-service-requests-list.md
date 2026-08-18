@@ -2,6 +2,11 @@
 
 - **Estado:** Implemented
 - **Fecha:** 2026-08-17
+- **Ampliado:** 2026-08-18 — `?date_from` / `?date_to`, el rango sobre
+  `node.created` que la versión original dejó explícitamente fuera de alcance.
+  Todo lo que añade va marcado **(ampliación)** en su sitio; el resto del
+  documento es el contrato original, intacto. Nada de lo ya entregado cambia de
+  comportamiento: sin esos dos parámetros la respuesta es byte a byte la misma.
 - **Dependencias:**
   - `77-services-content-types-install` (Implemented) — dueña de los bundles
     `service_request` y `service_offer`, de sus campos (`field_requester`,
@@ -73,6 +78,14 @@ Cuatro notas que la cabecera fija:
   - `myapi_service_request_parse_category_id()` — el **único** parámetro
     estricto: `422 invalid_field` si no es un entero positivo, igual que en
     `myapi_provider_list()`.
+  - `myapi_service_request_parse_created_range()` **(ampliación)** — envuelve
+    `myapi_parse_date_range_param()`, la validación compartida que ya usan
+    expenses y el resumen de condominio, y **no** reimplementa ni el patrón ISO
+    ni `checkdate()` ni la regla del rango invertido. Lo único que añade es la
+    conversión al tipo de la columna: `n.created` es un timestamp entero, así
+    que cada extremo se convierte al instante que hace el **día inclusivo**
+    —`00:00:00` y `23:59:59` locales—, igual que
+    `myapi_bulletin_parse_date_range()`, que filtra esta misma columna.
 - **`myapi.module`** (modificar): la ruta `api/v1/service-requests` en
   `myapi_menu()`, con `'access callback' => TRUE` y `'file'`, igual que las
   demás. Nada de lógica.
@@ -97,8 +110,14 @@ Cuatro notas que la cabecera fija:
 - **El listado del proveedor** — «las solicitudes que puedo atender». Es el otro
   lado del mercado, con `myapi_provider_role_visible_request_ids()` de dueña, y
   no comparte ni el alcance ni la forma con este.
-- **Filtros que no se pidieron**: por vivienda, por rango de fechas,
-  `?include=`. Solo `?status` y `?category_id`.
+- **Filtros que no se pidieron**: por vivienda, `?include=`. `?status` y
+  `?category_id` son los del contrato original; **el rango de fechas salió de
+  aquí en la ampliación del 2026-08-18** y hoy forma parte del alcance.
+- **El rango sobre `field_desired_start`** (cuándo se quiere el trabajo), que
+  sigue fuera aun después de la ampliación: pregunta otra cosa que la fecha de
+  alta, obliga a decidir qué pasa con las solicitudes sin fecha deseada, y
+  compara contra una columna de texto en vez de contra un timestamp. Otro spec
+  **(ampliación)**.
 - **`?category_id` multivalor** (`?category_id=3,7`). Es un valor único, como en
   `GET /api/v1/providers`. Aceptar una lista es trivial en SQL y nada trivial en
   el contrato: obliga a decidir qué pasa cuando un elemento de la lista es
@@ -192,9 +211,9 @@ o a devolver `null` entero y perder el proveedor.
    `ORDER BY n.created DESC, n.nid DESC` y `range()`.
    La frontera entre las dos mitades es exacta: la **base** lleva todo lo que
    decide **qué filas existen** —el bundle, `n.status`, `field_requester`, el
-   `INNER JOIN` de la categoría y las condiciones de `?status` y
-   `?category_id`—, y la página añade solo lo que aporta **columnas y nunca
-   filas** (`td.name`, la descripción, la fecha deseada, la oferta y el
+   `INNER JOIN` de la categoría y las condiciones de `?status`, `?category_id` y
+   el rango de fechas **(ampliación)**—, y la página añade solo lo que aporta
+   **columnas y nunca filas** (`td.name`, la descripción, la fecha deseada, la oferta y el
    proveedor adjudicados). Es la regla que `myapi_provider_count()` deja escrita
    y la que garantiza que `total` cuente exactamente las solicitudes que las
    páginas devuelven.
@@ -221,13 +240,29 @@ node n
     AND field_requester.target_id = :uid
     [AND field_request_status.value IN (:status_list)]
     [AND field_category.tid = :category_id]
+    [AND n.created >= :created_from]   -- ampliación
+    [AND n.created <= :created_to]     -- ampliación
 ```
 
-Los dos filtros son opcionales y componen en `AND`. El de categoría **no añade
+Los filtros son opcionales y componen en `AND`. El de categoría **no añade
 ninguna tabla**: el `INNER JOIN` a `field_data_field_category` ya vive en la base
 —porque decide qué filas existen, no solo qué columnas se pintan—, así que
 filtrar es una condición más sobre un `JOIN` que ya estaba. El conteo y la página
 lo aplican los dos o ninguno, por salir de la misma `base_query()`.
+
+**El rango de fechas tampoco añade tabla ni `JOIN` (ampliación):** `created` es
+una columna del propio `node`, la misma por la que ya ordena `?sort`, con su
+índice de core (`node_created`). Dos condiciones sobre `n`, que no pueden
+multiplicar una fila, y que por vivir en la base valen igual para el conteo y
+para la página — si vivieran solo en el `fetch()`, `pagination.total` describiría
+el listado entero y las filas un subconjunto, exactamente la incoherencia que
+`myapi_provider_count()` documenta.
+
+**Los extremos llegan ya convertidos a timestamps.** La `base_query()` compara
+números y no parsea ninguna fecha: la conversión día → instante vive entera en
+`myapi_service_request_parse_created_range()`, y la validación del texto en
+`myapi_parse_date_range_param()`. Tres responsabilidades, tres sitios, y el
+recurso no contiene ni un `checkdate()` ni un `$_GET['date_from']`.
 
 Sin `->addTag('node_access')`, **a propósito**: `myapi_query_node_access_alter()`
 documenta que ninguna consulta de este módulo la lleva, y añadirla haría que un
@@ -308,6 +343,20 @@ ninguna ruta cambie de comportamiento, y el 4 es el que enciende el endpoint.
 
 7. **Aplicar y verificar.** `drush cc all` y recorrer los criterios de
    aceptación contra el sitio.
+
+8. **El rango de fechas (ampliación, 2026-08-18).** Un solo paso, aditivo, sobre
+   un endpoint ya en producción: `myapi_service_request_parse_created_range()`
+   —que llama al parser compartido y convierte cada extremo al instante que hace
+   el día inclusivo—, sus dos claves `created_from` / `created_to` en el array
+   `$filters` de `myapi_service_request_list()`, y las dos condiciones sobre
+   `n.created` en `myapi_service_request_base_query()`, con `!== NULL` en vez de
+   `!empty()` porque `0` es un timestamp legal. Más los casos nuevos de
+   `ServiceRequestListEndpointTest` y la sección de `docs/service-request.md`.
+   **No toca `myapi.info` ni `myapi_menu()`** —no hay fichero ni ruta nuevos—,
+   así que tampoco hace falta `drush cc all`.
+   *Verificación: `php -l`; suite completa en verde; y una comprobación de
+   mutación —cambiar `>=` por `>`— que debe romper la suite, porque un test que
+   pasa con el filtro roto no está probando el filtro.*
 
 ---
 
@@ -390,6 +439,38 @@ ninguna ruta cambie de comportamiento, y el 4 es el que enciende el endpoint.
 - [x] Una página más allá de la última responde `200` con lista vacía, no `404`.
 - [x] `pagination.total_pages` es `0` cuando `total` es `0`.
 
+**Query string: el rango de fechas (ampliación)**
+
+- [x] `?date_from=D&date_to=D` devuelve solo las solicitudes creadas ese día, y
+      `pagination.total` cuenta **ese** subconjunto.
+- [x] **Los dos extremos incluyen el día entero.** Una solicitud creada a las
+      `00:00:00` y otra a las `23:59:59` del mismo día sobreviven las dos a
+      `?date_from=D&date_to=D`; la del segundo anterior y la del segundo
+      siguiente, no. Es el criterio que justifica convertir a timestamps en vez
+      de comparar contra la medianoche pelada.
+- [x] Los extremos son independientes: `?date_from` solo es abierto hacia
+      adelante y `?date_to` solo abierto hacia atrás.
+- [x] `?date_from=abc`, `2026-13-05`, `2026-02-30`, `18-08-2026`, `2026-8-6`,
+      `2026-08-06 10:00:00`, el valor vacío, un array y un `2026-08-06` con
+      salto de línea al final se **ignoran en silencio**: `200`, listado
+      completo, sin `422`.
+- [x] Un extremo mal formado **no tumba a su gemelo válido**:
+      `?date_from=2026-13-05&date_to=D` sigue filtrando por `date_to`.
+- [x] Un rango **invertido** (`from > to`) descarta el filtro **entero** y
+      responde como si no se hubiera enviado ninguna fecha — no la lista vacía
+      que describiría literalmente.
+- [x] Un rango válido que no casa con nada responde `200`, lista vacía y
+      `total: 0`.
+- [x] El rango compone en `AND` con `?status` y `?category_id`, y la paginación
+      describe el resultado de los tres juntos.
+- [x] **Las dos condiciones viajan en SQL, en el conteo y en la página.** Un
+      guard estructural lee las condiciones de las dos consultas y exige
+      `n.created >= from` y `n.created <= to` en ambas: filtrar la página en PHP
+      pasaría los criterios de arriba y rompería `pagination` en silencio.
+- [x] El recurso **no contiene** `checkdate(`, ni `$_GET['date_from']`, ni
+      `$_GET['date_to']`: el parseo es el compartido. Un guard estructural falla
+      el día que alguien lo copie dentro del fichero.
+
 **Rendimiento**
 
 - [x] Una petición ejecuta **tres** consultas de listado, con 1 solicitud y con
@@ -430,6 +511,11 @@ ninguna ruta cambie de comportamiento, y el 4 es el que enciende el endpoint.
 | Filtro por categoría | **`?category_id`, valor único, estricto: `422 invalid_field` si está mal formado; lista vacía si el tid no existe** | Laxo como el resto del query string; o `404` cuando el término no existe | Petición explícita del usuario, resuelta copiando `myapi_provider_list()` (SPEC 83) **al pie de la letra**, porque es el mismo nombre de parámetro en el mismo dominio: que `?category_id=abc` diera `422` en `/providers` y lista completa en `/service-requests` obligaría al cliente a recordar cuál es cuál. La distinción entre «mal formado» y «no existe» es la de SPEC 83 y es la correcta: un `abc` es un error de programación del cliente y debe verse; un tid que no existe es una pregunta legítima cuya respuesta honesta es «ninguna», y un `404` diría que el endpoint no existe, no la categoría. |
 | Dónde se aplica el filtro de categoría | **En `base_query()`**, sobre el `INNER JOIN` que ya está ahí | En `fetch()`, junto a los `LEFT JOIN` de presentación | El filtro decide **qué filas existen**, así que tiene que verlo también el conteo: aplicado solo en la página, `pagination.total` describiría el listado completo y las filas una categoría, que es la incoherencia que `myapi_provider_count()` documenta como criterio de aceptación propio. Mover el `INNER JOIN` a la base no cuesta una consulta más: la categoría ya se unía para poder pintarla. |
 | Alcance del spec | **Solo el listado** | Añadir de paso el detalle, o la creación | La creación necesita decidir permisos, validación vivienda ↔ condominio (deuda anotada por SPEC 86), estado inicial `open` vs `direct` y quién puede elegir proveedor: son cuatro decisiones en cuatro dominios, y `CLAUDE.md` pide partir antes que amontonar. El listado se puede entregar y probar entero por su cuenta. |
+| Qué fecha se filtra **(ampliación)** | **`node.created`**, cuándo se pidió el servicio | `field_desired_start`, cuándo se quiere el trabajo; o un parámetro que dejara elegir la columna | Es la columna por la que el listado **ya ordena** (`?sort`), y filtrar por la misma que se ordena es la única combinación que se lee coherente: el residente acota «lo que pedí esta semana» sobre el mismo eje en el que ve la lista. `desired_start` responde otra pregunta, es opcional en la práctica y se almacena como texto datetime, no como timestamp — mezclarlas en un mismo par de parámetros habría obligado a decidir en silencio qué pasa con las solicitudes sin fecha deseada. Un parámetro para elegir columna es contrato de más para un filtro que nadie ha pedido dos veces. |
+| Dónde vive el parseo de las fechas **(ampliación)** | **`myapi_parse_date_range_param()`**, el helper compartido de `includes/myapi.request.inc` | Una función propia en el recurso, como tienen claims, payments, bulletins y receipts | Regla 3 de `CLAUDE.md`: esas cuatro copias son deuda, no precedente a seguir. La quinta habría resucitado además el bug que SPEC 73 arregló en el helper compartido —`"2026-08-06\n"` pasaba el patrón con el salto de línea dentro— sin que nadie se enterara, porque cada copia lo arregla por su cuenta o no lo arregla. Lo que sí es específico de este endpoint —la conversión a timestamp— vive aquí, y solo eso. |
+| Granularidad de los extremos **(ampliación)** | **Día, inclusivo por los dos lados**: `from` a las `00:00:00` y `to` a las `23:59:59` locales | Comparar `YYYY-MM-DD` contra la medianoche cruda; o aceptar un ISO-8601 con hora | `created` guarda un **instante** y el parámetro nombra un **día**: alguien tiene que resolver esa diferencia, y hacerlo en el endpoint es hacerlo una vez en vez de en cada cliente. Con la medianoche pelada, `?date_to=hoy` perdería todo lo pedido después de las 00:00 de hoy —la tarde entera— sin ningún error que lo explicara, que es justo el fallo que `myapi_bulletin_parse_date_range()` documenta sobre esta misma columna. Aceptar hora es otro contrato y ningún cliente lo pidió; el ISO con hora hoy se **descarta** como valor mal formado, en silencio, como cualquier otro. |
+| Validación de las fechas **(ampliación)** | **Laxa**: lo mal formado se ignora, el rango invertido se descarta entero | `422 invalid_field`, como `?category_id` | El idioma del query string de este endpoint y del módulo entero: el `422` se reserva para los cuerpos de escritura. Y la coherencia que manda es la del **mismo parámetro entre endpoints hermanos**, el criterio que ya decidió lo de `?category_id`: `date_from` y `date_to` son laxos en bulletins, claims, payments, expenses y receipts, así que serlo aquí es lo que evita que el cliente tenga que recordar cuál es cuál. Descartar el rango invertido entero —en vez de responder el conjunto vacío que describe literalmente— es la misma regla compartida: quien intercambia dos selectores de fecha recupera su listado, no una pantalla en blanco. |
+| Nombres de los parámetros **(ampliación)** | **`date_from` / `date_to`** | `created_from` / `created_to`, más explícitos sobre la columna | Los cinco listados que ya filtran por fecha usan estos dos nombres, y ninguno nombra su columna en el parámetro aunque cada uno filtre una distinta —la de recepción en claims, la de pago en payments, `created` en bulletins—. Un nombre distinto aquí obligaría al cliente Flutter a llevar una excepción por endpoint. Qué fecha se filtra es cosa de la documentación, y `docs/service-request.md` lo dice en su primera línea. |
 
 ---
 
@@ -446,3 +532,6 @@ ninguna ruta cambie de comportamiento, y el 4 es el que enciende el endpoint.
 | **La descripción viaja en crudo.** Si alguien cambia el formato de texto de la instancia de `plain_text` a uno que permita HTML, el listado empieza a servir marcado sin escapar. | El mismo riesgo que ya corre `GET /api/v1/claims` con este mismo campo compartido, y por eso la respuesta es la misma en los dos sitios: cambiarla aquí sola habría hecho que el mismo dato viajara de dos formas. `docs/service-request.md` deja escrito que el contrato depende del formato `plain_text` de la instancia. |
 | **Dos idiomas de validación en el mismo query string.** `?category_id=abc` responde `422` y `?status=abc` no; quien lea solo este endpoint puede tomarlo por una incoherencia y «arreglarla» igualando los dos. | Está escrito como decisión, no como accidente, y `docs/service-request.md` marca `category_id` como el único estricto en su tabla de parámetros. La razón no es el parámetro sino su gemelo: `GET /api/v1/providers` ya lo trata así, y la coherencia que importa es la del **mismo parámetro entre endpoints hermanos**, no la de parámetros distintos dentro de uno. Un test fija los dos comportamientos, de modo que igualarlos rompe la suite. |
 | **La `?status` inválida se traga en silencio.** Un cliente que escriba mal la clave verá la lista completa y creerá que el filtro funcionó. | Es el idioma del módulo y una decisión tomada, no un descuido. Lo que sí se fija es que la validación lee `myapi_services_request_statuses()` y no una lista escrita a mano: cuando el catálogo gane un séptimo estado, el filtro lo acepta sin tocar el recurso. Un test recorre las claves del catálogo y falla si alguna aparece tecleada en el fichero. |
+| **El día lo define el timezone del sitio, no el del cliente (ampliación).** `created` es un epoch UTC y los extremos se resuelven con `strtotime()`, es decir en la zona del sitio: un cliente en otra zona puede ver una solicitud de la medianoche caer en el día de al lado. | Aceptado y es la única lectura coherente posible: el listado ya **pinta** `created` con `format_date()` en esa misma zona, así que filtro y fecha mostrada dicen lo mismo, que es lo que el usuario compara. Resolver el día en la zona del cliente exigiría que la enviara en cada petición —un parámetro más, y el mismo problema desplazado a quien no lo mande—. Es además lo que ya hace `GET /api/v1/bulletins` sobre esta misma columna. |
+| **Alguien añade más adelante `?desired_start_from` y los dos rangos se confunden (ampliación).** Dos pares de fechas en un mismo query string, y ningún nombre dice cuál filtra qué. | El día que llegue, ese spec renombra o documenta; hoy `docs/service-request.md` abre la sección diciendo qué fecha se filtra y cuál no, y el docblock de `myapi_service_request_parse_created_range()` deja escrito por qué es `created` y no `desired_start`. Anotado aquí para que la decisión no se tome dos veces. |
+| **`!empty()` en vez de `!== NULL` en las condiciones del rango (ampliación).** `0` es un timestamp legal —el epoch—, y `!empty()` descartaría en silencio un extremo de `1970-01-01` en vez de filtrar por él. | El código usa `!== NULL` y lleva el comentario con esta razón justo encima, precisamente porque las condiciones vecinas (`?status`, `?category_id`) sí usan `!empty()` y la simetría invita a igualarlas. Es un caso imposible en producción y trivial de introducir al refactorizar, que es exactamente el perfil de lo que se anota. |

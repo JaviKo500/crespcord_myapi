@@ -65,9 +65,11 @@ A reader with no requests gets `200` with an empty list and `total: 0`, never a
 | `sort` | `asc` \| `desc` | `desc` | Direction of the creation date. Only the exact lowercase values count: `DESC`, `arriba` or an empty value fall back to `desc` — no `422`. |
 | `status` | one or more catalogue keys, comma-separated | *(no filter)* | `?status=open,offered` filters by both. An unknown key inside the list is **dropped in silence**: `?status=open,inventado` filters by `open` alone, and `?status=inventado` filters by nothing at all. No `422`. |
 | `category_id` | positive integer (`tid`) | *(no filter)* | Narrows the listing to the requests of that category. **The only parameter of this endpoint that can answer `422`** — see below. |
+| `date_from` | ISO date `YYYY-MM-DD` | *(no filter)* | Lower bound on the **creation date**, inclusive of the whole day. Anything that is not a real calendar date is **dropped in silence** — no `422`. |
+| `date_to` | ISO date `YYYY-MM-DD` | *(no filter)* | Upper bound on the **creation date**, inclusive of the whole day. Same lax validation. |
 
-The two filters compose with `AND`, and `pagination` describes the result of the
-two together.
+The filters compose with `AND`, and `pagination` describes the result of all of
+them together.
 
 ### `category_id`: the one parameter that can be a `422`
 
@@ -111,6 +113,44 @@ The six keys of `field_request_status`, in lifecycle order:
 The filter validates against `myapi_services_request_statuses()`, never against
 a list written into the resource, so the day the catalogue gains a seventh
 status the filter accepts it with no code change here.
+
+### `date_from` / `date_to`: the range is over `created`
+
+The date filtered is **`created`, the one the listing already orders by** — when
+the resident asked for the service — and **never `desired_start`**, when they
+want the work done. Those are two different questions, and filtering by the
+column the client sorts by is the only combination that reads consistently. A
+range over `desired_start` would be another pair of parameters and another spec.
+
+Both bounds are **inclusive of the whole day** in the site's timezone:
+`?date_from=2026-08-18&date_to=2026-08-18` returns everything created that day,
+from `00:00:00` to `23:59:59` — a request asked for at half past eight in the
+evening is **not** dropped. `created` is stored as an instant, `date_from` names
+a day, and the endpoint resolves the difference rather than making the client do
+it.
+
+The bounds are independent — `?date_from` alone is open-ended forward,
+`?date_to` alone open-ended backward — and each is validated on its own:
+`?date_from=2026-13-05&date_to=2026-08-18` still filters by the valid twin.
+
+**The validation is lax, like everything here except `category_id`:**
+
+- `?date_from=abc`, `2026-13-05`, `2026-02-30`, `18-08-2026`, `2026-8-6`,
+  `2026-08-06 10:00:00`, `?date_from=` (empty) or `?date_from[]=…` → the bound
+  is **ignored**, `200`, no `422`.
+- `?date_from=2026-08-20&date_to=2026-08-10` (**inverted**) → the **whole
+  range** is dropped and the listing answers as if no dates had been sent. A
+  client that swaps two date pickers gets its listing back, not a blank screen.
+- A valid range that matches nothing → `200` with `service_requests: []` and
+  `total: 0`.
+
+Same parameter names and the same lax rules as
+[`/api/v1/bulletins`](bulletin.md), [`/api/v1/claims`](claim.md),
+[`/api/v1/payments`](payment.md) and [`/api/v1/expenses`](expense.md); the
+validation itself is the shared `myapi_parse_date_range_param()`, so this
+endpoint has no date parsing of its own. What changes from one listing to the
+next is only **which** date is filtered: the reception date in claims, the
+payment date in payments, and here the creation date — like bulletins.
 
 **Success response (200)**
 ```json

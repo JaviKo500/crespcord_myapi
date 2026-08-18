@@ -84,7 +84,7 @@ class ServiceRequestListEndpointTest extends TestCase {
   }
 
   private function clearQueryString() {
-    unset($_GET['page'], $_GET['limit'], $_GET['sort'], $_GET['status'], $_GET['category_id']);
+    unset($_GET['page'], $_GET['limit'], $_GET['sort'], $_GET['status'], $_GET['category_id'], $_GET['date_from'], $_GET['date_to']);
   }
 
   /* -------------------------------------------------------------------------
@@ -219,6 +219,48 @@ class ServiceRequestListEndpointTest extends TestCase {
     for ($i = 0; $i < $count; $i++) {
       $requests[] = $this->request(100 + $i, 'Solicitud ' . $i, [
         'created' => (string) (self::CREATED - $i),
+      ]);
+    }
+
+    return $requests;
+  }
+
+  /**
+   * The site-local midnight of the fixture day, shifted by whole days.
+   *
+   * Every date fixture is built from this and never from a literal timestamp,
+   * so the suite says the same thing in any site timezone — which is the whole
+   * point of the filter: n.created holds an INSTANT, and '?date_from' names a
+   * DAY. The shift is a relative offset and not `+ 86400 * $n` because the
+   * second form lands on 23:00 or 01:00 across a DST change.
+   */
+  private function dayStart($offset_days = 0) {
+    return strtotime(date('Y-m-d', self::CREATED) . ' 00:00:00 ' . sprintf('%+d days', $offset_days));
+  }
+
+  /**
+   * The last second of that same day, 23:59:59 site-local.
+   */
+  private function dayEnd($offset_days = 0) {
+    return strtotime($this->day($offset_days) . ' 23:59:59');
+  }
+
+  /**
+   * That day as the client writes it in the query string: 'YYYY-MM-DD'.
+   */
+  private function day($offset_days = 0) {
+    return date('Y-m-d', $this->dayStart($offset_days));
+  }
+
+  /**
+   * One request per day offset, nid and creation instant derived from it, so a
+   * range case reads as "yesterday, today, tomorrow" instead of as arithmetic.
+   */
+  private function requestsOnDays(array $offsets) {
+    $requests = [];
+    foreach ($offsets as $offset) {
+      $requests[] = $this->request(200 + $offset, 'Solicitud ' . $offset, [
+        'created' => (string) ($this->dayStart($offset) + 3600),
       ]);
     }
 
@@ -1139,6 +1181,225 @@ class ServiceRequestListEndpointTest extends TestCase {
     $this->assertSame(200, $lax['status']);
     $this->assertSame([128], $this->ids($lax));
     $this->assertSame(422, $strict['status']);
+  }
+
+  /* -------------------------------------------------------------------------
+   * The query string: '?date_from' / '?date_to', the range over n.created.
+   *
+   * THE COLUMN IS THE ONE '?sort' ALREADY ORDERS BY, and the bounds are DAYS
+   * against an INSTANT — which is where every case below lives: the day named
+   * by '?date_to' has to be included whole, or a resident filtering by today
+   * loses everything they asked for after midnight.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * With both bounds, only the requests created inside the range come back —
+   * and `total` counts the filtered set, not the whole listing.
+   */
+  public function testTheDateRangeNarrowsBothTheListAndTheTotal() {
+    $_GET['date_from'] = $this->day(0);
+    $_GET['date_to'] = $this->day(0);
+
+    $result = $this->listing($this->requestsOnDays([-1, 0, 1]));
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame([200], $this->ids($result));
+    $this->assertSame(1, $this->pagination($result)['total']);
+    $this->assertSame(1, $this->pagination($result)['total_pages']);
+  }
+
+  /**
+   * BOTH BOUNDS ARE INCLUSIVE OF THE WHOLE DAY, and this is the case the
+   * conversion to timestamps exists for: a request created at 00:00:00 and one
+   * created at 23:59:59 of the same day both survive '?date_from=D&date_to=D',
+   * while the second before and the second after do not. Comparing the day
+   * strings against a bare midnight would drop the 23:59:59 one — the whole
+   * afternoon of the last day — with no error to explain it.
+   */
+  public function testEachBoundIsInclusiveOfTheWholeDay() {
+    $requests = [
+      $this->request(128, 'Primer segundo del día', ['created' => (string) $this->dayStart(0)]),
+      $this->request(127, 'Último segundo del día', ['created' => (string) $this->dayEnd(0)]),
+      $this->request(126, 'Un segundo antes', ['created' => (string) $this->dayEnd(-1)]),
+      $this->request(125, 'Un segundo después', ['created' => (string) $this->dayStart(1)]),
+    ];
+
+    $_GET['date_from'] = $this->day(0);
+    $_GET['date_to'] = $this->day(0);
+
+    $result = $this->listing($requests);
+
+    $this->assertSame([127, 128], $this->ids($result));
+    $this->assertSame(2, $this->pagination($result)['total']);
+  }
+
+  /**
+   * The bounds are independent: '?date_from' alone is open-ended forward.
+   */
+  public function testDateFromAloneIsOpenEndedForward() {
+    $_GET['date_from'] = $this->day(0);
+
+    $result = $this->listing($this->requestsOnDays([-1, 0, 1]));
+
+    $this->assertSame([201, 200], $this->ids($result));
+    $this->assertSame(2, $this->pagination($result)['total']);
+  }
+
+  /**
+   * And '?date_to' alone is open-ended backward.
+   */
+  public function testDateToAloneIsOpenEndedBackward() {
+    $_GET['date_to'] = $this->day(0);
+
+    $result = $this->listing($this->requestsOnDays([-1, 0, 1]));
+
+    $this->assertSame([200, 199], $this->ids($result));
+    $this->assertSame(2, $this->pagination($result)['total']);
+  }
+
+  /**
+   * An inverted range (from > to) drops the WHOLE filter instead of answering
+   * the empty set it literally describes — the shared parser's rule, and the
+   * same one bulletins, payments and claims already follow. A client that swaps
+   * two date pickers gets its listing back, not a blank screen.
+   */
+  public function testAnInvertedRangeDropsTheWholeFilter() {
+    $_GET['date_from'] = $this->day(1);
+    $_GET['date_to'] = $this->day(-1);
+
+    $result = $this->listing($this->requestsOnDays([-1, 0, 1]));
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame([201, 200, 199], $this->ids($result));
+    $this->assertSame(3, $this->pagination($result)['total']);
+  }
+
+  /**
+   * A malformed bound is dropped in silence, never a 422 — the lax idiom of
+   * every parameter of this endpoint except '?category_id'. The list is not
+   * decorative: '2026-13-05' and '2026-02-30' pass the pattern and are not
+   * dates (checkdate() has the last word), the trailing newline is the SPEC 73
+   * bug, the empty string is a present-and-broken value, and the array is the
+   * one that would be a PHP warning without the is_string() guard.
+   */
+  public function testAMalformedDateBoundIsIgnoredSilently() {
+    $values = ['abc', '2026-13-05', '2026-02-30', '', '18-08-2026', '2026-8-6', "2026-08-06\n", ['2026-08-06'], '2026-08-06 10:00:00'];
+
+    foreach ($values as $value) {
+      foreach (['date_from', 'date_to'] as $param) {
+        $this->authenticate();
+        $this->seed($this->requestsOnDays([-1, 0, 1]));
+        $this->clearQueryString();
+        $_GET[$param] = $value;
+
+        $result = $this->dispatch();
+
+        $label = $param . '=' . var_export($value, TRUE);
+        $this->assertSame(200, $result['status'], $label);
+        $this->assertSame([201, 200, 199], $this->ids($result), $label);
+        $this->assertSame(3, $this->pagination($result)['total'], $label);
+      }
+    }
+  }
+
+  /**
+   * A valid bound beside a malformed one still filters: the two are validated
+   * one by one, so '?date_from=2026-13-05&date_to=D' is "everything up to D"
+   * and not "no filter at all". Only the INVERTED case drops both.
+   */
+  public function testAMalformedBoundDoesNotDropItsValidTwin() {
+    $_GET['date_from'] = '2026-13-05';
+    $_GET['date_to'] = $this->day(0);
+
+    $result = $this->listing($this->requestsOnDays([-1, 0, 1]));
+
+    $this->assertSame([200, 199], $this->ids($result));
+    $this->assertSame(2, $this->pagination($result)['total']);
+  }
+
+  /**
+   * The range composes with the other two filters with AND, and `pagination`
+   * describes the result of the three together.
+   */
+  public function testTheDateRangeComposesWithTheOtherFilters() {
+    $requests = [
+      $this->request(128, 'Plomería abierta de hoy', [
+        'fcat.field_category_tid'        => '12',
+        'frs.field_request_status_value' => MYAPI_SERVICES_REQUEST_STATUS_OPEN,
+        'created'                        => (string) ($this->dayStart(0) + 3600),
+      ]),
+      $this->request(127, 'Plomería abierta de ayer', [
+        'fcat.field_category_tid'        => '12',
+        'frs.field_request_status_value' => MYAPI_SERVICES_REQUEST_STATUS_OPEN,
+        'created'                        => (string) ($this->dayStart(-1) + 3600),
+      ]),
+      $this->request(126, 'Plomería cerrada de hoy', [
+        'fcat.field_category_tid'        => '12',
+        'frs.field_request_status_value' => MYAPI_SERVICES_REQUEST_STATUS_CLOSED,
+        'created'                        => (string) ($this->dayStart(0) + 7200),
+      ]),
+      $this->request(125, 'Cerrajería abierta de hoy', [
+        'fcat.field_category_tid'        => '14',
+        'frs.field_request_status_value' => MYAPI_SERVICES_REQUEST_STATUS_OPEN,
+        'created'                        => (string) ($this->dayStart(0) + 10800),
+      ]),
+    ];
+
+    $_GET['category_id'] = '12';
+    $_GET['status'] = 'open';
+    $_GET['date_from'] = $this->day(0);
+    $_GET['date_to'] = $this->day(0);
+
+    $result = $this->listing($requests);
+
+    $this->assertSame([128], $this->ids($result));
+    $this->assertSame(1, $this->pagination($result)['total']);
+  }
+
+  /**
+   * THE RANGE IS FILTERED IN THE DATABASE, IN BOTH QUERIES. The structural half
+   * of the cases above: the count and the page carry the same two conditions on
+   * n.created, which is what makes `total` describe the rows the pages return
+   * instead of the whole listing. Filtering the page in PHP would pass the
+   * assertions on the items and quietly break the pagination block.
+   */
+  public function testBothQueriesCarryTheRangeAsSqlConditionsOnCreated() {
+    $_GET['date_from'] = $this->day(0);
+    $_GET['date_to'] = $this->day(0);
+
+    $this->listing($this->requestsOnDays([-1, 0, 1]));
+
+    $queries = myapi_test_db_queries();
+
+    foreach ([1 => 'count', 2 => 'page'] as $index => $label) {
+      $created = [];
+      foreach ($queries[$index]['conditions'] as $condition) {
+        if ($condition['field'] === 'n.created') {
+          $created[$condition['operator']] = $condition['value'];
+        }
+      }
+
+      $this->assertSame([
+        '>=' => $this->dayStart(0),
+        '<=' => $this->dayEnd(0),
+      ], $created, $label);
+    }
+  }
+
+  /**
+   * The parsing is NOT written in this resource: the ISO validation and the
+   * inverted-range rule live in myapi_parse_date_range_param() (SPEC 73), and a
+   * fourth copy of that regular expression here would be the duplication Regla
+   * 3 de CLAUDE.md forbids — and would resurrect the newline bug the shared one
+   * fixed. This guard fails the day someone re-implements it in the resource.
+   */
+  public function testTheDateParsingIsTheSharedHelperAndNotACopy() {
+    $code = $this->codeWithoutComments();
+
+    $this->assertStringContainsString('myapi_parse_date_range_param()', $code);
+    $this->assertStringNotContainsString('checkdate(', $code);
+    $this->assertStringNotContainsString("\$_GET['date_from']", $code);
+    $this->assertStringNotContainsString("\$_GET['date_to']", $code);
   }
 
   /* -------------------------------------------------------------------------

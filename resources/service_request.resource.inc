@@ -137,7 +137,7 @@ function myapi_service_request_dispatch() {
  * query is not tagged.
  *
  * THE PARSING IS LAX EVERYWHERE EXCEPT ONE PARAMETER. An invalid page, limit,
- * sort or status falls back to its default in silence, never a 422: a listing
+ * sort, status or date bound falls back to its default in silence, never a 422: a listing
  * that breaks the whole screen because '?page=abc' arrived is punishing the
  * client for a decorative parameter, and the 422 is reserved for write bodies,
  * where a bad value corrupts something. The single exception is '?category_id',
@@ -181,11 +181,17 @@ function myapi_service_request_list() {
     ? $_GET['sort']
     : 'desc';
 
-  // 4. The filters, both optional and composing with AND. '?status' is
-  // validated against the catalogue and never against a list written here.
+  // 4. The filters, all optional and composing with AND. '?status' is
+  // validated against the catalogue and never against a list written here, and
+  // the date range goes through the shared parser rather than a fourth copy of
+  // it — see myapi_service_request_parse_created_range().
+  $created = myapi_service_request_parse_created_range();
+
   $filters = [
-    'status'      => myapi_service_request_parse_status(),
-    'category_id' => $category_id,
+    'status'       => myapi_service_request_parse_status(),
+    'category_id'  => $category_id,
+    'created_from' => $created['from'],
+    'created_to'   => $created['to'],
   ];
 
   // 5. Count first: the pagination block describes the FILTERED set, not the
@@ -306,6 +312,47 @@ function myapi_service_request_parse_category_id() {
   return (int) $raw;
 }
 
+/**
+ * Reads '?date_from' / '?date_to' into a range of n.created timestamps, or
+ * NULLs for no filter.
+ *
+ * THE PARSING IS NOT WRITTEN HERE. myapi_parse_date_range_param()
+ * (includes/myapi.request.inc) is the one place this module reads that pair: it
+ * keeps a bound only when it is a real ISO 'YYYY-MM-DD' calendar date, drops
+ * anything else in silence, and drops the WHOLE range when the two bounds
+ * arrive inverted (from > to). No 422 ever, exactly like '?page', '?limit',
+ * '?sort' and '?status' here. Expenses and the condominium summary already
+ * share it; a copy of the validation in this file would be the duplication
+ * Regla 3 de CLAUDE.md forbids, and the SPEC 73 bug it fixed — "2026-08-06\n"
+ * passing the pattern with the newline still in it — would come back with it.
+ *
+ * WHAT THIS FUNCTION ADDS IS THE COLUMN'S TYPE, and that is its whole reason to
+ * exist. Claims, payments and receipts compare against a datetime TEXT column,
+ * so they pass the ISO string into the SQL as it arrives; the filter here is on
+ * n.created, an integer Unix timestamp, so each bound becomes the instant that
+ * makes the DAY inclusive — the lower one the site-local 00:00:00 of date_from,
+ * the upper one the site-local 23:59:59 of date_to. '?date_to=2026-08-18' with
+ * a bare midnight would drop everything asked for later that same day, which is
+ * the mistake myapi_bulletin_parse_date_range() documents; this is the same
+ * conversion, over the same column, for the same reason.
+ *
+ * THE COLUMN IS n.created — when the request was ASKED FOR — and never
+ * field_desired_start, when the resident wants the work done. Two different
+ * questions: '?sort' already orders by the first one, and a range over the
+ * column the client sorts by is the only combination that reads consistently.
+ * A filter on desired_start is another parameter and another spec.
+ *
+ * @return array  ['from' => int|NULL, 'to' => int|NULL] Unix timestamps.
+ */
+function myapi_service_request_parse_created_range() {
+  $range = myapi_parse_date_range_param();
+
+  return [
+    'from' => $range['from'] !== NULL ? strtotime($range['from'] . ' 00:00:00') : NULL,
+    'to'   => $range['to'] !== NULL ? strtotime($range['to'] . ' 23:59:59') : NULL,
+  ];
+}
+
 /* ---------------------------------------------------------------------------
  * Queries.
  *
@@ -334,7 +381,7 @@ function myapi_service_request_parse_category_id() {
  * THE FRONTIER BETWEEN THIS FUNCTION AND myapi_service_request_fetch() IS
  * EXACT, and it is what makes `pagination.total` describe the rows the pages
  * return: everything that decides WHICH ROWS EXIST lives here — the bundle,
- * n.status, the requester, the category joins and the two filters — and
+ * n.status, the requester, the category joins and every filter — and
  * everything that only adds COLUMNS lives in the fetch. It is the rule
  * myapi_provider_count() already writes down.
  *
@@ -381,8 +428,11 @@ function myapi_service_request_parse_category_id() {
  *                       the listing always passes a uid, and its behaviour is
  *                       byte for byte what it was.
  * @param array $filters  ['status' => array|NULL (list of status keys),
- *                        'category_id' => int|NULL]. Both optional; NULL means
- *                        no filter on that column, and they compose with AND.
+ *                        'category_id' => int|NULL,
+ *                        'created_from' => int|NULL, 'created_to' => int|NULL
+ *                        (Unix timestamps compared against n.created)]. All
+ *                        optional; NULL means no filter on that column, and
+ *                        they compose with AND.
  *
  * @return SelectQuery  The query, with these aliases already in place:
  *                      n (node), fr (requester), fcat (category field),
@@ -420,6 +470,24 @@ function myapi_service_request_base_query($uid, array $filters = []) {
 
   if (!empty($filters['category_id'])) {
     $query->condition('fcat.field_category_tid', $filters['category_id']);
+  }
+
+  // The creation date, on the node's own column: it adds NO table, and being a
+  // column of `n` it cannot multiply a row either. Each bound is already the
+  // instant that makes its day inclusive — the conversion lives in
+  // myapi_service_request_parse_created_range(), so this file compares numbers
+  // and never parses a date. The two are independent: '?date_from' alone is a
+  // half-open range, and so is '?date_to' alone.
+  //
+  // The test is `!== NULL` and not !empty(), unlike the filters above: 0 is a
+  // legal timestamp (the epoch), and !empty() would silently drop a bound of
+  // 1970-01-01 instead of filtering by it.
+  if (isset($filters['created_from']) && $filters['created_from'] !== NULL) {
+    $query->condition('n.created', $filters['created_from'], '>=');
+  }
+
+  if (isset($filters['created_to']) && $filters['created_to'] !== NULL) {
+    $query->condition('n.created', $filters['created_to'], '<=');
   }
 
   return $query;
