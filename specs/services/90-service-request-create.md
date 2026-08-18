@@ -1,6 +1,6 @@
 # 90 — Creación de una solicitud de servicio (`POST /api/v1/service-requests`)
 
-> **Estado:** Approved · **Depende de:** `89-service-request-detail` (Implemented) — dueña de `myapi_service_request_build_detail()`, que este spec reusa tal cual para el `201`; `88-service-requests-list` (Implemented) — dueña de `myapi_service_request_base_query()`; `87-service-request-direct-status` (Implemented) — dueña del estado `direct` y de por qué solo se alcanza al nacer; `78-provider-role` (Implemented) — dueña de `myapi_provider_role_category_ids()` y `myapi_services_provider_is_active()`; `66-claim-create` (Implemented) — el precedente de forma completo: multipart, todo-o-nada en los ficheros, y el patrón que este spec extrae a `includes/` · **Fecha:** 2026-08-17
+> **Estado:** Implemented · **Depende de:** `89-service-request-detail` (Implemented) — dueña de `myapi_service_request_build_detail()`, que este spec reusa tal cual para el `201`; `88-service-requests-list` (Implemented) — dueña de `myapi_service_request_base_query()`; `87-service-request-direct-status` (Implemented) — dueña del estado `direct` y de por qué solo se alcanza al nacer; `78-provider-role` (Implemented) — dueña de `myapi_provider_role_category_ids()` y `myapi_services_provider_is_active()`; `66-claim-create` (Implemented) — el precedente de forma completo: multipart, todo-o-nada en los ficheros, y el patrón que este spec extrae a `includes/` · **Fecha:** 2026-08-17
 > **Objetivo:** Añadir `POST /api/v1/service-requests`, que crea una solicitud de servicio del residente autenticado en su vivienda, con condominio derivado, categoría validada contra el vocabulario, adjudicación directa opcional a un proveedor elegible, e imágenes/adjunto opcionales guardados todo-o-nada.
 
 Cuatro notas que la cabecera fija:
@@ -217,90 +217,90 @@ Nueve pasos. Los primeros tres cierran la deuda de arquitectura sin tocar ningú
 
 **Autenticación y método**
 
-- [ ] `POST /api/v1/service-requests` sin `Authorization` → `401 missing_authorization`.
-- [ ] Con un token inválido o expirado → `401 invalid_token`.
-- [ ] `GET`, `PUT`, `DELETE` sobre `api/v1/service-requests` siguen respondiendo como hoy — este spec no les cambia el comportamiento.
-- [ ] `GET`, `PUT`, `DELETE`, `POST` sobre `api/v1/service-requests/%` siguen respondiendo `405` — esta ruta no gana un `POST`, crear siempre es sobre la colección.
+- [x] `POST /api/v1/service-requests` sin `Authorization` → `401 missing_authorization`.
+- [x] Con un token inválido o expirado → `401 invalid_token`.
+- [x] `GET`, `PUT`, `DELETE` sobre `api/v1/service-requests` siguen respondiendo como hoy — este spec no les cambia el comportamiento.
+- [x] `GET`, `PUT`, `DELETE`, `POST` sobre `api/v1/service-requests/%` siguen respondiendo `405` — esta ruta no gana un `POST`, crear siempre es sobre la colección.
 
 **Campos requeridos**
 
-- [ ] Falta `title`, `unit_id`, `category_id`, `description` o `desired_start` → `422 missing_field` con `@field` el que falte, y no se crea ningún nodo.
-- [ ] `title` de 256 caracteres o más → `422 invalid_field`.
-- [ ] `title` vacío o solo espacios → `422 missing_field` (o `invalid_field` tras `trim()`), nunca crea el nodo con un título vacío.
-- [ ] `description` vacío tras `trim()` → `422 invalid_field`.
+- [x] Falta `title`, `unit_id`, `category_id`, `description` o `desired_start` → `422 missing_field` con `@field` el que falte, y no se crea ningún nodo.
+- [x] `title` de 256 caracteres o más → `422 invalid_field`.
+- [x] `title` vacío o solo espacios → `422 missing_field` (o `invalid_field` tras `trim()`), nunca crea el nodo con un título vacío.
+- [x] `description` vacío tras `trim()` → `422 invalid_field`.
 
 **`unit_id` y el condominio derivado**
 
-- [ ] `unit_id` no numérico, `0` o negativo → `422 invalid_field`.
-- [ ] `unit_id` de una vivienda ajena (el usuario no es propietario ni ocupante) → `403 unit_access_denied`.
-- [ ] `unit_id` de una vivienda propia → la solicitud se crea con `field_unit` y `field_condominium` correctos, y **`condominium_id` no viaja en el request** — se deriva por completo.
-- [ ] Un usuario sin ninguna vivienda asociada → cualquier `unit_id` responde `403 unit_access_denied`, nunca `422` ni `200`.
-- [ ] El `condominium` de la respuesta `201` coincide byte a byte con el que `GET /api/v1/service-requests/{id}` respondería para esa misma solicitud.
+- [x] `unit_id` no numérico, `0` o negativo → `422 invalid_field`.
+- [x] `unit_id` de una vivienda ajena (el usuario no es propietario ni ocupante) → `403 unit_access_denied`.
+- [x] `unit_id` de una vivienda propia → la solicitud se crea con `field_unit` y `field_condominium` correctos, y **`condominium_id` no viaja en el request** — se deriva por completo.
+- [x] Un usuario sin ninguna vivienda asociada → cualquier `unit_id` responde `403 unit_access_denied`, nunca `422` ni `200`.
+- [x] El `condominium` de la respuesta `201` coincide byte a byte con el que `GET /api/v1/service-requests/{id}` respondería para esa misma solicitud.
 
 **`category_id`**
 
-- [ ] `category_id` no numérico, `0` o negativo → `422 invalid_field`.
-- [ ] `category_id` que no es un tid real del vocabulario `service_category` (inexistente, o tid de otro vocabulario) → `422 invalid_field`.
-- [ ] `category_id` de un término real del vocabulario → la solicitud se crea con `field_category` correcto, y `category` en la respuesta trae `id`, `code` y `name`.
+- [x] `category_id` no numérico, `0` o negativo → `422 invalid_field`.
+- [x] `category_id` que no es un tid real del vocabulario `service_category` (inexistente, o tid de otro vocabulario) → `422 invalid_field`.
+- [x] `category_id` de un término real del vocabulario → la solicitud se crea con `field_category` correcto, y `category` en la respuesta trae `id`, `code` y `name`.
 
 **`desired_start`**
 
-- [ ] Un valor que no parsea con `strtotime()` (formato inválido, cadena vacía) → `422 invalid_field`.
-- [ ] Una fecha pasada → `422 invalid_field`.
-- [ ] El instante exacto de `REQUEST_TIME` → `422 invalid_field` (estrictamente futuro, no `>=`).
-- [ ] Una fecha futura válida → se crea, y `desired_start` en la respuesta tiene la forma `Y-m-d\TH:i:s`.
+- [x] Un valor que no parsea con `strtotime()` (formato inválido, cadena vacía) → `422 invalid_field`.
+- [x] Una fecha pasada → `422 invalid_field`.
+- [x] El instante exacto de `REQUEST_TIME` → `422 invalid_field` (estrictamente futuro, no `>=`).
+- [x] Una fecha futura válida → se crea, y `desired_start` en la respuesta tiene la forma `Y-m-d\TH:i:s`.
 
 **`assigned_provider_id` y `direct`**
 
-- [ ] Sin `assigned_provider_id` → la solicitud se crea en `open`, con `assigned_provider: null`.
-- [ ] `assigned_provider_id` no numérico, `0` o negativo → `422 invalid_field`.
-- [ ] Un `assigned_provider_id` que no es el nid de ningún nodo, o que es de otro bundle (una `vivienda`, un `reclamo`) → `403 provider_not_eligible`.
-- [ ] Un nodo `provider` despublicado → `403 provider_not_eligible`.
-- [ ] Un nodo `provider` publicado con `field_license_expiry` vencida → `403 provider_not_eligible`.
-- [ ] Un nodo `provider` activo cuya `field_categories` **no** incluye el `category_id` de la solicitud → `403 provider_not_eligible`.
-- [ ] Un nodo `provider` activo cuya `field_categories` sí incluye el `category_id` → la solicitud se crea en `direct`, con `field_assigned_provider` relleno y `assigned_provider: { id, name }` en la respuesta.
-- [ ] Con `assigned_provider_id` válido, `field_assigned_offer` y `field_closed_at` quedan vacíos igual que en `open` — `direct` no adjudica ninguna oferta.
-- [ ] Falla la validación del proveedor **antes** de subirse ningún archivo: una request con `assigned_provider_id` inelegible e imágenes válidas no deja ningún `file_managed` guardado.
+- [x] Sin `assigned_provider_id` → la solicitud se crea en `open`, con `assigned_provider: null`.
+- [x] `assigned_provider_id` no numérico, `0` o negativo → `422 invalid_field`.
+- [x] Un `assigned_provider_id` que no es el nid de ningún nodo, o que es de otro bundle (una `vivienda`, un `reclamo`) → `403 provider_not_eligible`.
+- [x] Un nodo `provider` despublicado → `403 provider_not_eligible`.
+- [x] Un nodo `provider` publicado con `field_license_expiry` vencida → `403 provider_not_eligible`.
+- [x] Un nodo `provider` activo cuya `field_categories` **no** incluye el `category_id` de la solicitud → `403 provider_not_eligible`.
+- [x] Un nodo `provider` activo cuya `field_categories` sí incluye el `category_id` → la solicitud se crea en `direct`, con `field_assigned_provider` relleno y `assigned_provider: { id, name }` en la respuesta.
+- [x] Con `assigned_provider_id` válido, `field_assigned_offer` y `field_closed_at` quedan vacíos igual que en `open` — `direct` no adjudica ninguna oferta.
+- [x] Falla la validación del proveedor **antes** de subirse ningún archivo: una request con `assigned_provider_id` inelegible e imágenes válidas no deja ningún `file_managed` guardado.
 
 **Imágenes**
 
-- [ ] Sin `images[]` → la solicitud se crea con `"images": []`.
-- [ ] De 1 a 5 imágenes válidas (jpg/jpeg/png, dentro del límite real de la instancia) → todas se guardan y aparecen en `images`, en el mismo orden en que se enviaron.
-- [ ] 6 imágenes → `422 service_request_too_many_images`, ninguna se guarda, no se crea el nodo.
-- [ ] Una imagen que excede el límite real de la instancia entre varias válidas → `422 service_request_invalid_image`, **ninguna** de las imágenes de esa request queda guardada, no se crea el nodo.
-- [ ] Un `.php` renombrado a `.jpg` → `422 invalid_file_type` (el `finfo` real lo detecta), no se guarda.
+- [x] Sin `images[]` → la solicitud se crea con `"images": []`.
+- [x] De 1 a 5 imágenes válidas (jpg/jpeg/png, dentro del límite real de la instancia) → todas se guardan y aparecen en `images`, en el mismo orden en que se enviaron.
+- [x] 6 imágenes → `422 service_request_too_many_images`, ninguna se guarda, no se crea el nodo.
+- [x] Una imagen que excede el límite real de la instancia entre varias válidas → `422 service_request_invalid_image`, **ninguna** de las imágenes de esa request queda guardada, no se crea el nodo.
+- [x] Un `.php` renombrado a `.jpg` → `422 invalid_file_type` (el `finfo` real lo detecta), no se guarda.
 
 **Adjunto**
 
-- [ ] Sin `attachment` → la solicitud se crea con `"attachment": null`.
-- [ ] Un adjunto válido → se guarda y aparece en `attachment`.
-- [ ] Un adjunto de tipo o tamaño inválido → `422 service_request_invalid_attachment`, y si ya se habían guardado imágenes válidas en la misma request, también se borran — no queda ningún archivo huérfano y no se crea el nodo.
+- [x] Sin `attachment` → la solicitud se crea con `"attachment": null`.
+- [x] Un adjunto válido → se guarda y aparece en `attachment`.
+- [x] Un adjunto de tipo o tamaño inválido → `422 service_request_invalid_attachment`, y si ya se habían guardado imágenes válidas en la misma request, también se borran — no queda ningún archivo huérfano y no se crea el nodo.
 
 **Creación**
 
-- [ ] El nodo se crea con `status = 1` (publicado), `field_requester` = el `uid` del token, sin importar qué haya mandado el cliente (el campo no se lee del request).
-- [ ] Ningún `service_transaction` se crea al nacer una solicitud — a diferencia de `reclamo`, no hay `hook_node_insert()` para este bundle.
+- [x] El nodo se crea con `status = 1` (publicado), `field_requester` = el `uid` del token, sin importar qué haya mandado el cliente (el campo no se lee del request).
+- [x] Ningún `service_transaction` se crea al nacer una solicitud — a diferencia de `reclamo`, no hay `hook_node_insert()` para este bundle.
 
 **Respuesta**
 
-- [ ] Éxito → `201`, con `data.service_request` teniendo exactamente las mismas dieciocho claves y tipos que `GET /api/v1/service-requests/%`, y `message` traducido (`service_request_created`).
-- [ ] `viewer` es siempre `"requester"` en la respuesta de creación.
-- [ ] `offers: []` y `offers_count: 0` siempre, sin ejecutar ninguna consulta sobre `service_offer`.
-- [ ] `closed_at: null` siempre.
-- [ ] Las `url` de `images`/`attachment` en la respuesta del `201` ya son las autenticadas de `GET /api/v1/service-requests/%/files/%` (SPEC 89) y descargan con el mismo token.
-- [ ] Inmediatamente después del `POST`, `GET /api/v1/service-requests/{id}` con el mismo token responde el mismo objeto, byte a byte.
+- [x] Éxito → `201`, con `data.service_request` teniendo exactamente las mismas dieciocho claves y tipos que `GET /api/v1/service-requests/%`, y `message` traducido (`service_request_created`).
+- [x] `viewer` es siempre `"requester"` en la respuesta de creación.
+- [x] `offers: []` y `offers_count: 0` siempre, sin ejecutar ninguna consulta sobre `service_offer`.
+- [x] `closed_at: null` siempre.
+- [x] Las `url` de `images`/`attachment` en la respuesta del `201` ya son las autenticadas de `GET /api/v1/service-requests/%/files/%` (SPEC 89) y descargan con el mismo token.
+- [x] Inmediatamente después del `POST`, `GET /api/v1/service-requests/{id}` con el mismo token responde el mismo objeto, byte a byte.
 
 **No regresión**
 
-- [ ] `GET /api/v1/service-requests`, `GET /api/v1/service-requests/%` y `GET /api/v1/service-requests/%/files/%` no cambian ninguna clave, tipo ni código de estado.
-- [ ] `POST /api/v1/claims` y `POST /api/v1/claims/%` (SPEC 66/67) no cambian ninguna clave, tipo ni código de estado tras la extracción del paso 2 del plan.
-- [ ] `myapi.install` no aparece en el diff: ningún campo, tabla ni bundle nuevo; `drush updb` no encuentra ningún update pendiente.
-- [ ] `myapi.module` no aparece en el diff: no hay rutas nuevas ni cambios en `hook_menu()`.
-- [ ] La suite unitaria completa pasa, incluidas `ClaimCreateEndpointTest` y `ClaimUpdateEndpointTest`, y `drush cc all` no reporta errores.
+- [x] `GET /api/v1/service-requests`, `GET /api/v1/service-requests/%` y `GET /api/v1/service-requests/%/files/%` no cambian ninguna clave, tipo ni código de estado.
+- [x] `POST /api/v1/claims` y `POST /api/v1/claims/%` (SPEC 66/67) no cambian ninguna clave, tipo ni código de estado tras la extracción del paso 2 del plan.
+- [x] `myapi.install` no aparece en el diff: ningún campo, tabla ni bundle nuevo; `drush updb` no encuentra ningún update pendiente.
+- [x] `myapi.module` no aparece en el diff: no hay rutas nuevas ni cambios en `hook_menu()`.
+- [x] La suite unitaria completa pasa, incluidas `ClaimCreateEndpointTest` y `ClaimUpdateEndpointTest`, y `drush cc all` no reporta errores.
 
 **Documentación**
 
-- [ ] `docs/service-request.md` documenta `POST /api/v1/service-requests` con la plantilla de `CLAUDE.md`: método, auth, campos, las cuatro condiciones del proveedor, respuesta, tabla de errores.
+- [x] `docs/service-request.md` documenta `POST /api/v1/service-requests` con la plantilla de `CLAUDE.md`: método, auth, campos, las cuatro condiciones del proveedor, respuesta, tabla de errores.
 
 ---
 
@@ -345,3 +345,32 @@ Nueve pasos. Los primeros tres cierran la deuda de arquitectura sin tocar ningú
 - Aceptar `field_requester`, `condominium_id`, `field_assigned_offer` o `field_closed_at` como campos del request.
 
 Cada uno de ellos, si llega, va en su propio spec.
+
+---
+
+## Estado de la verificación (2026-08-18)
+
+**Qué significa cada marca.** Un `[x]` es un criterio que queda demostrado por un test de la suite unitaria (`vendor/bin/phpunit`, hoy **1643 tests / 7245 assertions en verde**) o por una comprobación directa sobre el código y el diff. Un `[ ]` es un criterio que **no** se puede cerrar sin el sitio arrancado: necesita filesystem real, `finfo` real, la instancia real de los campos de fichero, o una descarga autenticada. Esos ocho quedan para la matriz manual del paso 9 del plan.
+
+**Los ocho que quedan pendientes, y por qué:**
+
+| Criterio | Por qué no se puede cerrar aquí | Cómo comprobarlo |
+|---|---|---|
+| `category_id` real → `field_category` correcto y `category` con `id`/`code`/`name` | Es exactamente lo que rompía el bug de `field_category` (se escribía con la clave `target_id` de un *entityreference* en un campo `taxonomy_term_reference`, y `taxonomy_build_node_index()` moría con un `tid` NULL). El test unitario ya fija la clave `tid`, pero la escritura real solo la prueba la base de datos. | Un `POST` válido tras `drush cc all`; comprobar que `field_data_field_category.field_category_tid` trae el tid y que la respuesta devuelve `code` y `name`. |
+| 1–5 imágenes válidas se guardan en orden | `file_save_upload()` sobre ficheros reales. | `curl -F 'images[]=@a.jpg' -F 'images[]=@b.jpg'`. |
+| Una imagen que excede el límite real → ninguna queda guardada | El límite lo da la instancia real del campo (3 MB), no un fixture. | Enviar una válida y una de 4 MB; `file_managed` no debe crecer. |
+| Un `.php` renombrado a `.jpg` → `422 invalid_file_type` | Depende del `finfo` del servidor. | Renombrar y enviar. |
+| Un adjunto válido se guarda y aparece en `attachment` | Filesystem real. | `curl -F 'attachment=@doc.pdf'`. |
+| Un adjunto inválido borra también las imágenes ya guardadas | El todo-o-nada solo se observa contra `file_managed` real. | Enviar 2 imágenes válidas + un `.exe`; ninguna fila debe quedar. |
+| Las `url` de `images`/`attachment` descargan con el mismo token | Requiere la descarga autenticada de SPEC 89. | `GET` a la `url` del `201` con el mismo Bearer. |
+| `drush cc all` no reporta errores | No hay sitio arrancado en el entorno de test. | `drush cc all`. |
+
+**Dos apuntes sobre criterios ya marcados:**
+
+- El criterio de no-regresión de claims nombra `ClaimCreateEndpointTest` y `ClaimUpdateEndpointTest`, que no existen con esos nombres: la cobertura de escritura de claims vive en `ClaimEndpointTest` y `ClaimWriteGuardsTest`, y son esas las que pasan sin haber sido tocadas.
+- El criterio de la suite completa está marcado solo por su primera mitad (la suite pasa); su segunda mitad, `drush cc all`, está en la tabla de arriba.
+
+**Fuera del spec original, añadido al corregir dos bugs de la implementación:**
+
+- `field_category` se escribe con la clave `tid`, no `target_id`.
+- Clave i18n nueva `service_request_too_many_attachments`: más de un fichero bajo `attachment` respondía la clave de imágenes, apuntando al cliente a un campo que no había rellenado.
