@@ -848,6 +848,27 @@ class ServiceRequestCreateEndpointTest extends TestCase {
     $this->assertSame([], myapi_test_node_saves());
   }
 
+  /**
+   * MORE THAN ONE ATTACHMENT ANSWERS THE ATTACHMENT'S OWN KEY, not the
+   * images one. 'attachment' is a single-file input, but nothing stops a
+   * client from sending it as 'attachment[]' with two files, and PHP hands
+   * that over in the same parallel-array shape as images[]. Answering
+   * 'service_request_too_many_images' there — as this endpoint did at first —
+   * pointed the client at a field it had not even filled.
+   */
+  public function testMoreThanOneAttachmentAnswersTheAttachmentKey() {
+    $this->seed([$this->requestRow()]);
+    $this->authenticate();
+    $this->validPost();
+    $_FILES['attachment'] = $this->fakeFiles(2);
+
+    $result = $this->create();
+
+    $this->assertSame(422, $result['status']);
+    $this->assertSame('service_request_too_many_attachments', $result['json']['error_code']);
+    $this->assertSame([], myapi_test_node_saves());
+  }
+
   /* -------------------------------------------------------------------------
    * POST /api/v1/service-requests — the node it builds.
    * ---------------------------------------------------------------------- */
@@ -863,6 +884,14 @@ class ServiceRequestCreateEndpointTest extends TestCase {
     $this->assertSame('Solicitud de servicio creada correctamente.', $result['json']['message']);
     $this->assertSame(self::NID, $result['json']['data']['service_request']['id']);
 
+    // No images[] and no attachment were sent, so the two file keys answer
+    // their documented empty shapes — a list and a null, never the other way
+    // around.
+    $this->assertSame([], $result['json']['data']['service_request']['images']);
+    $this->assertNull($result['json']['data']['service_request']['attachment']);
+    $this->assertFalse(isset(myapi_test_node_saves()[0]->field_images));
+    $this->assertFalse(isset(myapi_test_node_saves()[0]->field_attachment));
+
     $saves = myapi_test_node_saves();
     $this->assertCount(1, $saves);
     $node = $saves[0];
@@ -873,7 +902,12 @@ class ServiceRequestCreateEndpointTest extends TestCase {
     $this->assertSame('Fuga en el calentador', $node->title);
     $this->assertSame(self::UNIT, $node->field_unit[LANGUAGE_NONE][0]['target_id']);
     $this->assertSame(self::CONDO, $node->field_condominium[LANGUAGE_NONE][0]['target_id']);
-    $this->assertSame(self::CATEGORY, $node->field_category[LANGUAGE_NONE][0]['target_id']);
+    // 'tid', not 'target_id': field_category is a taxonomy_term_reference, and
+    // writing the entityreference key instead left the term unset — core's
+    // taxonomy_build_node_index() then tried to INSERT a NULL tid into
+    // {taxonomy_index} and node_save() died with an integrity violation.
+    $this->assertArrayNotHasKey('target_id', $node->field_category[LANGUAGE_NONE][0]);
+    $this->assertSame(self::CATEGORY, $node->field_category[LANGUAGE_NONE][0]['tid']);
     $this->assertSame('El calentador del baño principal gotea desde el lunes.', $node->field_description[LANGUAGE_NONE][0]['value']);
     $this->assertSame(MYAPI_SERVICES_REQUEST_STATUS_OPEN, $node->field_request_status[LANGUAGE_NONE][0]['value']);
   }
