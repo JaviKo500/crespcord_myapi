@@ -780,7 +780,7 @@ rejected for its provider never leaves an orphaned upload behind.
 |--------|--------|------------|
 | Extensions | `jpg`, `jpeg`, `png` | `pdf`, `doc`, `docx`, `xls`, `xlsx` |
 | Size | ≤ 3 MB each (inherited from the field instance, same limit `field_images`/`field_attachment` have carried since SPEC 77) | ≤ 3 MB |
-| Count | Up to 5. A 6th file → `422 service_request_too_many_images`, none saved. | At most 1 — `attachment` is not an array field. |
+| Count | Up to 5. A 6th file → `422 service_request_too_many_images`, none saved. | At most 1. Sending the input as `attachment[]` with two files → `422 service_request_too_many_attachments`, none saved. |
 | Real MIME | Checked with `finfo`, derived from the field's own allowed extensions. Mismatch (e.g. a `.php` renamed to `.jpg`) → `422 invalid_file_type`. | Same check → `422 invalid_file_type`. |
 | Rejected extension/size | `422 service_request_invalid_image` | `422 service_request_invalid_attachment` |
 | Storage | Saved as **permanent** managed files under the field's configured `private://` directory, each with a `file_usage` row tied to the node. | Same. |
@@ -863,6 +863,7 @@ A request with a valid `assigned_provider_id` answers the same shape with
 | 422 | `service_request_too_many_images` | More than 5 files in `images[]`. Nothing is saved. |
 | 422 | `service_request_invalid_image` | An image fails extension or size validation. All-or-nothing: any images already saved in the same request are deleted too. |
 | 422 | `service_request_invalid_attachment` | The attachment fails extension or size validation. All-or-nothing: any images already saved in the same request are deleted too. |
+| 422 | `service_request_too_many_attachments` | More than one file sent under `attachment`. Nothing is saved, and any images already saved in the same request are deleted too. |
 | 422 | `invalid_file_type` | An image's or the attachment's real MIME (checked with `finfo`) does not match its extension. |
 | 500 | `server_error` | `unit_id`'s own unit has no `field_condominio` row to derive a condominium from — a data inconsistency, not a client mistake. Logged with `watchdog()`. |
 
