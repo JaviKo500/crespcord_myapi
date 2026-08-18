@@ -1924,7 +1924,12 @@ function myapi_service_request_build_node($uid, $title, $unit_id, $condominium_i
 
   $node->field_unit[LANGUAGE_NONE][0]['target_id'] = $unit_id;
   $node->field_condominium[LANGUAGE_NONE][0]['target_id'] = $condominium_id;
-  $node->field_category[LANGUAGE_NONE][0]['target_id'] = $category_id;
+  // field_category is a taxonomy_term_reference, NOT an entityreference: its
+  // storage column is 'tid' (field_category_tid, the very column every read
+  // path of this resource joins on), so the item key must be 'tid' too.
+  // Writing 'target_id' here leaves the term unset and makes core's own
+  // taxonomy_build_node_index() insert a NULL tid into {taxonomy_index}.
+  $node->field_category[LANGUAGE_NONE][0]['tid'] = $category_id;
   $node->field_requester[LANGUAGE_NONE][0]['target_id'] = $uid;
   $node->field_description[LANGUAGE_NONE][0]['value'] = $description;
   $node->field_desired_start[LANGUAGE_NONE][0]['value'] = $desired_start;
@@ -2107,9 +2112,12 @@ function myapi_service_request_create() {
     'service_request_too_many_images'
   );
 
-  // 10. attachment: at most 1 (field_attachment is not an array input, so
-  // $_FILES can never carry more than one). On failure, the images already
-  // saved in step 9 are deleted too — see $also_delete.
+  // 10. attachment: at most 1. A client CAN still send the input as
+  // 'attachment[]' with several files, which PHP hands over in the same
+  // parallel-array shape as images[], so the count is enforced here with its
+  // OWN key: answering the images key for an attachment problem told the
+  // client to look at the wrong field. On failure, the images already saved
+  // in step 9 are deleted too — see $also_delete.
   $attachment_file = NULL;
   $attachment_saved = myapi_node_files_save(
     'field_attachment',
@@ -2117,7 +2125,7 @@ function myapi_service_request_create() {
     isset($_FILES['attachment']) ? $_FILES['attachment'] : [],
     1,
     'service_request_invalid_attachment',
-    'service_request_too_many_images',
+    'service_request_too_many_attachments',
     $image_files
   );
   if (!empty($attachment_saved)) {

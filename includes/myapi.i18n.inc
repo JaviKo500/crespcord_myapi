@@ -166,6 +166,7 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'service_request_too_many_images'    => 'Maximum 5 images per service request.',
       'service_request_invalid_image'      => 'Invalid image. Allowed: JPG, JPEG or PNG up to 3 MB.',
       'service_request_invalid_attachment' => 'Invalid attachment. Allowed: PDF, DOC, DOCX, XLS or XLSX up to 3 MB.',
+      'service_request_too_many_attachments' => 'Only one attachment per service request.',
       'provider_not_eligible'              => 'The selected provider cannot receive this request.',
     ],
     'es' => [
@@ -254,6 +255,7 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'service_request_too_many_images'    => 'Máximo 5 imágenes por solicitud.',
       'service_request_invalid_image'      => 'Imagen inválida. Permitidos: JPG, JPEG o PNG hasta 3 MB.',
       'service_request_invalid_attachment' => 'Adjunto inválido. Permitidos: PDF, DOC, DOCX, XLS o XLSX hasta 3 MB.',
+      'service_request_too_many_attachments' => 'Solo se permite un adjunto por solicitud.',
       'provider_not_eligible'              => 'El proveedor seleccionado no puede recibir esta solicitud.',
     ],
   ];
