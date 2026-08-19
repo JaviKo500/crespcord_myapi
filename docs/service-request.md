@@ -1130,26 +1130,260 @@ curl -i -X POST https://host/api/v1/service-requests \
 
 ---
 
+## PUT /api/v1/service-requests/{id}/cancel
+
+Cancels a service request. The resident who filed it leaves it in `cancelled`,
+one timeline entry is written, and **every live offer on it is rejected**.
+
+This is the first write this module does on a request that already exists, and
+the first status transition of the marketplace with an endpoint of its own.
+`cancelled` is **terminal**: there is no way back from it, here or anywhere
+else.
+
+**Only the requester cancels.** Not the rest of the unit, unlike a payment: a
+service request is signed by one person and the household does not inherit the
+right to pull it. Not the assigned provider — *"I quit this job"* is another
+action, with another actor and probably another target status. Not a building
+administrator through this API either: they already cancel from the back office,
+with a form and a mandatory comment.
+
+**Not idempotent, on purpose.** A second call on an already-cancelled request
+answers `409`, not `200`: it tells the resident their action did nothing, which
+is the truth, and it is what stops a duplicate entry from landing on the
+timeline.
+
+Out of scope of this endpoint: **closing** a request (`closed`, with or without
+a rating), **awarding** an offer, **creating** offers, **reopening** a cancelled
+request, notifying the providers whose offers were rejected, and cancellation by
+the provider. Each of these, if it arrives, is its own spec.
+
+**Authentication:** required (Bearer access token)
+
+**Headers**
+| Header | Value |
+|--------|-------|
+| Authorization | Bearer `<access_token>` |
+| Content-Type | `application/json` — only if a body is sent |
+
+**Request body — optional**
+```json
+{ "reason": "Ya resolví el problema por mi cuenta." }
+```
+
+| Field | Required | Type | Rule |
+|-------|----------|------|------|
+| `reason` | no | string | Up to **255 characters**, measured with `drupal_strlen()` and not `strlen()`, so 255 accented ones fit. Trimmed before storing. |
+
+**No body at all, no `reason` key, `""` and whitespace-only all mean "no
+reason", and none of them is an error.** The reason is optional by design:
+demanding it would put friction on the only exit the resident has. When it is
+absent the transaction's comment falls back to `El residente canceló la
+solicitud.` — no transaction of this module is ever born without one.
+
+`reason` **present but not a string** (a number, an array, `null`) *is* an
+error: the client meant to send a reason and sent something that is not one.
+
+### Which statuses admit a cancellation
+
+| From | Result |
+|------|--------|
+| `open` | `200` |
+| `direct` | `200` |
+| `offered` | `200` |
+| `assigned` | `200` |
+| `closed` | `409 service_request_not_cancellable` |
+| `cancelled` | `409 service_request_not_cancellable` |
+| empty, or a value outside the catalogue | `409 service_request_not_cancellable` |
+
+That table is **not written in the endpoint**: it is the transition graph of
+the module (`myapi_services_request_transitions()`), asked one question —
+*"does this status lead to `cancelled`?"*. A status the endpoint does not
+recognise answers *no*, which is why a corrupt `field_request_status` is a `409`
+and never a `500`: *"I do not know what state this is in"* reads as *"I do not
+cancel it"*.
+
+### What it writes, in this order
+
+1. **The request.** `field_request_status` becomes `cancelled`, and **nothing
+   else changes**: `field_assigned_offer` and `field_assigned_provider` keep the
+   values they had — a cancellation with no trace of who the job had been
+   awarded to is one nobody can audit — and so do the title, the unit, the
+   category, the description, the images and the attachment. The node **stays
+   published**: cancelling neither unpublishes nor deletes.
+2. **The transaction.** One `service_transaction` pointing at the request, with
+   `field_request_status = cancelled`, `field_status_date` set to the instant of
+   the call with the seconds pinned to `00`, `uid` of the resident who
+   cancelled, and `field_comment` holding **the resident's own words verbatim**
+   — no prefix, no label — or the automatic fallback. Its title is generated,
+   like every other one: `Solicitud #412 · Cancelada · 19/08/2026 14:30 · …`.
+3. **The offers.** Every **published** offer of that request in `sent` or
+   `selected` becomes `rejected`. Offers in `withdrawn` are left alone — that is
+   the provider's own retreat, and overwriting it would erase who walked away by
+   themselves — and so are those already in `rejected`, which is terminal.
+   Offers of *other* requests are never touched, not even from the same
+   provider.
+
+The order matters: the request is saved **first**, so the back office's
+status sync sees the two statuses already equal and does not save it a second
+time. A cancellation writes the request exactly once.
+
+> **The three writes are not one atomic transaction.** If saving an offer fails
+> halfway through step 3, the request is already `cancelled` with its entry
+> written and some offers are still live. That is accepted: the first thing
+> written is the status, which is what closes the door, and a live offer on a
+> `cancelled` request is inconsistent but harmless — nothing can award it,
+> because `cancelled` is terminal.
+
+**Success response (200)**
+
+`data.service_request` is **the same nineteen-key object**
+[`GET /api/v1/service-requests/{id}`](#get-apiv1service-requestsid) returns —
+same loaders, same serialiser, nothing shaped by hand here — plus
+`offers_rejected` as a **sibling** key. There is deliberately **no
+`data.transaction`**: the cancellation entry is already the last of
+`transactions`, and serving it twice would make the app choose which copy is
+the real one.
+
+Everything is read **after** the three writes, so `status` comes back
+`cancelled`, the live offers come back already `rejected`, and the cancellation
+is the last entry of the timeline. `viewer` is always `"requester"` — nobody
+else can reach a `200` here — and `offers` therefore travels **untrimmed**.
+
+```json
+{
+  "success": true,
+  "data": {
+    "service_request": {
+      "id": 412,
+      "title": "Fuga en el calentador",
+      "description": "El calentador del baño principal gotea desde el lunes.",
+      "status": "cancelled",
+      "category": { "id": 12, "code": "plumbing", "name": "Plomería" },
+      "unit": { "id": 55, "name": "A-301" },
+      "offers_count": 4,
+      "assigned_offer": { "id": 52, "status": "rejected" },
+      "assigned_provider": { "id": 9, "name": "Plomería Ruiz" },
+      "created": "2026-08-17T10:05:00",
+      "desired_start": "2026-08-20T08:00:00",
+      "viewer": "requester",
+      "requester": { "id": 42, "name": "Ana Pérez" },
+      "condominium": { "id": 7, "name": "Torres del Este" },
+      "images": [],
+      "attachment": null,
+      "closed_at": null,
+      "offers": [
+        { "id": 51, "status": "rejected", "...": "..." },
+        { "id": 52, "status": "rejected", "...": "..." },
+        { "id": 53, "status": "rejected", "...": "..." },
+        { "id": 54, "status": "withdrawn", "...": "..." }
+      ],
+      "transactions": [
+        { "id": 512, "status": "open", "...": "..." },
+        {
+          "id": 987,
+          "status": "cancelled",
+          "status_date": "2026-08-19T14:30:00",
+          "comment": "Ya resolví el problema por mi cuenta.",
+          "created": "2026-08-19T14:30:00"
+        }
+      ]
+    },
+    "offers_rejected": 2
+  },
+  "message": "Solicitud cancelada correctamente."
+}
+```
+
+See [the detail](#get-apiv1service-requestsid) for what every one of the
+nineteen keys means and how it is typed — this endpoint adds no key and changes
+no format.
+
+`offers_rejected` is the number of offers that **actually changed status** in
+this call — `0` when the request had none live. It sits outside
+`service_request` so that object stays byte-identical to the detail's and the
+app can swap it into its state with no special case. It is also the one thing
+the app cannot deduce from what it just received: `offers` says which offers are
+rejected **now**, not which ones **this call** rejected — one already rejected
+beforehand looks exactly the same.
+
+**Cost:** six queries after the writes. They are what buys the app a full
+repaint — status, offers and timeline at once — with no second round trip, and
+they are why this response can never disagree with what a `GET` would say.
+
+> **Degraded body (rare).** The detail is built with three `INNER JOIN`s, one of
+> them to the category's taxonomy term. A request whose category term was
+> deleted cannot be built — such a request is **already** invisible through
+> `GET /api/v1/service-requests/{id}` and through the listing, for the same
+> joins, so it cannot have been opened; a stale id in the app can still reach
+> this endpoint. In that case **the cancellation is still applied and still
+> answers `200`**, but `service_request` carries only `id` and `status`, and the
+> inconsistency is logged with `watchdog()`. The app tells the two shapes apart
+> by `viewer`, which only the full object has. Answering `500` there would lie
+> about an operation that succeeded and would push the client into a retry that
+> gets `409`.
+
+**Possible errors**
+| Code | `error_code` | When |
+|------|--------------|------|
+| 405 | `method_not_allowed` | Any method other than `PUT`. Answered **before** the token is read and without the request having to exist. |
+| 401 | `missing_authorization` / `invalid_token` | `Authorization` header absent or not a `Bearer <token>`; or the token is invalid, revoked, expired, or its user is missing/blocked. |
+| 404 | `service_request_not_found` | `{id}` is not a positive integer, or names a request that does not exist, is unpublished, or is not of bundle `service_request` (an offer's or a transaction's nid). The four cases are told apart by nothing. |
+| 403 | `service_request_forbidden` | The request exists, but whoever is asking is not its `field_requester` — including a provider with a live offer on it, and a user who is only the node's `uid`. Nothing is written. |
+| 409 | `service_request_not_cancellable` | The current status does not lead to `cancelled` — see the table above. Nothing is written. |
+| 422 | `invalid_field` / `field_too_long` | `reason` is present with a type other than string, or longer than 255 characters. `@field` is `reason`. Nothing is written. |
+
+`404` and `403` mean different things here, the same criterion the detail uses:
+the request exists and its nid is not a secret, so the `403` tells the client
+something actionable instead of pretending it is not there.
+
+**The checks run in this order:** `{id}` → token → the request exists → **it is
+yours** → **its status admits it** → the body. A malformed `reason` on someone
+else's request answers `403`, never `422`: access is resolved first, and a body
+with garbage in it never masks an access or a status error.
+
+See [i18n.md](i18n.md) for the translated `error`/`message` text.
+
+**Example (with a reason):**
+```bash
+curl -i -X PUT https://host/api/v1/service-requests/412/cancel \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"reason":"Ya resolví el problema por mi cuenta."}'
+```
+
+**Example (no reason, no body):**
+```bash
+curl -i -X PUT https://host/api/v1/service-requests/412/cancel \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+---
+
 ## What is still not here
 
 Written down so it is not looked for in this document:
 
-- **Every write except creation.** Editing, cancelling, closing, awarding,
+- **Every write except creation and cancellation.** Editing, closing, awarding,
   offering, uploading or deleting files **on a request that already exists**.
   All `405` — see [`POST /api/v1/service-requests`](#post-apiv1service-requests)
-  for the one write this module does.
+  and
+  [`PUT /api/v1/service-requests/{id}/cancel`](#put-apiv1service-requestsidcancel)
+  for the two writes this module does. In particular there is still no
+  **closing**: `cancelled` is one of the two terminal statuses and now has a
+  door; `closed` is the other and has none.
 - **Offers as a resource of their own** — creating them, withdrawing them,
   `GET /api/v1/offers/{id}`. Here they are only **read**, inside one request.
 - **The chat.** `field_firebase_path`, `field_chat_opened_at` and
   `field_last_message_at` do not travel: who opens the thread and when the path
   is generated is another spec, and a key served today is a contract that spec
   could no longer change.
-- **Writing to the timeline.** It is **read** since SPEC 93, in the detail and
-  in the `201` — see [the timeline](#the-timeline-transactions). What does not
-  exist is any way to write one from the API: no
+- **Writing to the timeline directly.** It is **read** since SPEC 93, in the
+  detail and in the `201` — see [the timeline](#the-timeline-transactions) — and
+  the cancellation now **writes** one, as the side effect of a transition. What
+  does not exist is any way to write an entry *as such*: no
   `POST /api/v1/service-requests/{id}/transactions`, no commenting, no changing
-  status. Each transition will create its own entry in its own spec, next to the
-  rest of its effects.
+  status by hand. Each remaining transition will create its own entry in its own
+  spec, next to the rest of its effects.
 - **Files hanging from a transaction.** `service_transaction` has no
   `field_images` and no `field_attachment`, so its entries carry five keys and
   not the seven a claim's do. Adding them is an installer, a file-ownership rule
@@ -1159,6 +1393,13 @@ Written down so it is not looked for in this document:
   exactly the same eleven keys as before.
 - **Ratings.** Neither served nor required.
 - **The provider's listing** — *the requests I may attend*.
+- **Validation of the transition graph everywhere else.** The cancellation
+  checks it on **its own route** and nowhere else: the back office still writes
+  any status onto any request without asking the graph, and so will any future
+  endpoint until the spec that closes that door arrives.
+- **Notifications on cancellation.** Neither the providers whose offers were
+  rejected nor the assigned provider are told anything: the marketplace has no
+  notifier at all yet.
 - **`?include=`, `ETag`, conditional caching.** The detail always answers whole.
 - **Rate limiting or deduplication on creation.** A double tap or a retried
   request creates two requests; no endpoint of this module is idempotent except
