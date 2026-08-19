@@ -463,6 +463,37 @@ function myapi_menu() {
     'file'             => 'includes/myapi.claim_transaction_admin.inc',
   ];
 
+  // Service transaction creation page (SPEC 94). Same shape and same reasons
+  // as the claims route just above: HTML for an operator, not the JSON
+  // envelope, and MENU_CALLBACK because it is only ever reached from the
+  // 'Crear transacción' link of the timeline fieldset on node/%nid/edit of a
+  // 'service_request'.
+  $items['node/%node/service-transaction/add'] = [
+    'title'            => 'Crear transacción',
+    'page callback'    => 'myapi_service_transaction_add_page_callback',
+    'page arguments'   => [1],
+    'access callback'  => 'myapi_service_transaction_add_access',
+    'access arguments' => [1],
+    'type'             => MENU_CALLBACK,
+    'file'             => 'includes/myapi.service_transaction_admin.inc',
+  ];
+
+  // Service transaction deletion confirmation (SPEC 94). The first node
+  // deletion this module offers, and it gets a route of its own rather than
+  // core's node/%node/delete because that one leaves the operator on the front
+  // page instead of back on the request. Two %node wildcards: the request the
+  // operator came from and the transaction to delete — the access callback
+  // checks the second really belongs to the first.
+  $items['node/%node/service-transaction/%node/delete'] = [
+    'title'            => 'Borrar transacción',
+    'page callback'    => 'myapi_service_transaction_delete_page_callback',
+    'page arguments'   => [1, 3],
+    'access callback'  => 'myapi_service_transaction_delete_access',
+    'access arguments' => [1, 3],
+    'type'             => MENU_CALLBACK,
+    'file'             => 'includes/myapi.service_transaction_admin.inc',
+  ];
+
   return $items;
 }
 
@@ -676,6 +707,85 @@ function myapi_claim_transaction_add_access($node) {
 }
 
 /**
+ * Access callback of node/%node/service-transaction/add (SPEC 94).
+ *
+ * The exact same shape as myapi_claim_transaction_add_access() just above, and
+ * for the same reasons: a per-NODE check that defers entirely to
+ * node_access(), which already handles the 'bypass node access' superuser
+ * shortcut and whatever hook_node_access() implementations are in play. No
+ * permission is invented here and none is granted anywhere by SPEC 94 — the
+ * operator is 'administrator' / 'backend' and nobody else.
+ *
+ * FALSE for any node that is not a 'service_request': the route is
+ * node/%node/service-transaction/add for ANY node id, and this closes it for
+ * every other content type.
+ *
+ * The include is loaded for its constants, the same way myapi_node_access()
+ * does it: myapi.module never hardcodes a bundle name that
+ * includes/myapi.services_common.inc already owns.
+ *
+ * @param object $node
+ *   The node loaded from the %node wildcard.
+ *
+ * @return bool
+ *   TRUE when the current user may open the creation page for this request.
+ */
+function myapi_service_transaction_add_access($node) {
+  module_load_include('inc', 'myapi', 'includes/myapi.services_common');
+
+  if (!is_object($node) || empty($node->type) || $node->type !== MYAPI_SERVICES_REQUEST_TYPE) {
+    return FALSE;
+  }
+
+  return node_access('update', $node) && node_access('create', MYAPI_SERVICES_TRANSACTION_TYPE);
+}
+
+/**
+ * Access callback of node/%node/service-transaction/%node/delete (SPEC 94).
+ *
+ * Four conditions, and the third one is the whole point of this function
+ * existing instead of reusing the one above:
+ *
+ *   1. the first node is a 'service_request';
+ *   2. the second is a 'service_transaction';
+ *   3. THAT TRANSACTION BELONGS TO THAT REQUEST. Without this line the route
+ *      deletes any transaction on the site by hanging it off a request the
+ *      current user happens to be able to edit;
+ *   4. the user may update the request AND delete the transaction.
+ *
+ * node_access('delete', ...) is consulted PURE: SPEC 94 grants
+ * 'delete any service_transaction content' to nobody, so whoever the site has
+ * not given it to gets a 403 here and an empty cell in the timeline.
+ *
+ * The two includes are loaded for the same reason as in the callback above —
+ * the bundle constants and the field reader belong to them, not to this file.
+ *
+ * @param object $request_node
+ *   The node loaded from the first %node wildcard.
+ * @param object $transaction_node
+ *   The node loaded from the second one.
+ *
+ * @return bool
+ *   TRUE when the current user may open the deletion confirmation.
+ */
+function myapi_service_transaction_delete_access($request_node, $transaction_node) {
+  module_load_include('inc', 'myapi', 'includes/myapi.services_common');
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+
+  if (!is_object($request_node) || empty($request_node->type) || $request_node->type !== MYAPI_SERVICES_REQUEST_TYPE) {
+    return FALSE;
+  }
+  if (!is_object($transaction_node) || empty($transaction_node->type) || $transaction_node->type !== MYAPI_SERVICES_TRANSACTION_TYPE) {
+    return FALSE;
+  }
+  if ((int) myapi_building_admin_field_target_id($transaction_node, 'field_request') !== (int) $request_node->nid) {
+    return FALSE;
+  }
+
+  return node_access('update', $request_node) && node_access('delete', $transaction_node);
+}
+
+/**
  * Implements hook_mail().
  *
  * Glue only: loads the mail include and delegates the formatting. The
@@ -816,11 +926,19 @@ function myapi_node_presave($node) {
  *   single implementation, which is why resources/service_request.resource.inc
  *   carries no line about transactions. No notifier follows it — the
  *   marketplace has none yet.
- *   There is deliberately NO 'service_transaction' branch in this hook: the
- *   direction is request -> transaction and only that, so inserting the
- *   transaction fires this hook again, matches nothing, and stops. A future
- *   spec adding such a branch must not re-save the request from it, or the
- *   cascade becomes infinite.
+ * - 'service_transaction' (SPEC 94): delegates to
+ *   myapi_service_transaction_sync_request_status()
+ *   (includes/myapi.service_transaction_admin.inc), which rewrites the parent
+ *   request's field_request_status when it differs from the transaction's own.
+ *   The equivalent of the 'claim_transaction' branch below, added by SPEC 94
+ *   after SPEC 92 had deliberately left it out — see that function's docblock
+ *   for why the decision was reverted.
+ *   It cannot cascade: the automatic initial transaction of the branch above
+ *   is born with the request's OWN status, so the sync returns before saving
+ *   anything, and creating a request still writes exactly two nodes. The
+ *   re-save it does perform on a real status change is an UPDATE of a
+ *   'service_request', which myapi_node_update() has no branch for. Whoever
+ *   adds one must keep that property, or the cascade becomes infinite.
  * - 'claim_transaction': delegates to
  *   myapi_claim_transaction_sync_claim_status() (SPEC 57, same include),
  *   which syncs the parent claim's field_status when it differs. Covers
@@ -857,6 +975,11 @@ function myapi_node_insert($node) {
   if ($node->type === 'service_request') {
     module_load_include('inc', 'myapi', 'includes/myapi.service_transaction');
     myapi_service_transaction_create_initial($node);
+    return;
+  }
+  if ($node->type === 'service_transaction') {
+    module_load_include('inc', 'myapi', 'includes/myapi.service_transaction_admin');
+    myapi_service_transaction_sync_request_status($node);
     return;
   }
   if ($node->type === 'claim_transaction') {
@@ -903,6 +1026,13 @@ function myapi_node_insert($node) {
  *   existing transaction's field_status (node/%nid/edit, the native form)
  *   syncs the claim exactly like creating one does. It deliberately does NOT
  *   notify: SPEC 68 covers the creation of a transaction and not its edition.
+ * - 'service_transaction' (SPEC 94): delegates to
+ *   myapi_service_transaction_sync_request_status()
+ *   (includes/myapi.service_transaction_admin.inc) — the same function
+ *   myapi_node_insert()'s 'service_transaction' branch calls, so editing an
+ *   existing transaction's field_request_status from the native
+ *   node/%nid/edit syncs the request exactly like creating one does. There is
+ *   no notifier to skip here: the marketplace has none yet.
  * - 'reclamo' (SPEC 68): delegates to myapi_claim_is_publication_transition() /
  *   myapi_claim_notify_published() in includes/myapi.claim_notification.inc,
  *   notifying the neighbours of the condominium — requester excluded — the one
@@ -942,6 +1072,11 @@ function myapi_node_update($node) {
   if ($node->type === 'claim_transaction') {
     module_load_include('inc', 'myapi', 'includes/myapi.claim_transaction_admin');
     myapi_claim_transaction_sync_claim_status($node);
+    return;
+  }
+  if ($node->type === 'service_transaction') {
+    module_load_include('inc', 'myapi', 'includes/myapi.service_transaction_admin');
+    myapi_service_transaction_sync_request_status($node);
     return;
   }
   if ($node->type === 'reclamo') {
@@ -1249,6 +1384,38 @@ function myapi_form_reclamo_node_form_alter(&$form, &$form_state, $form_id) {
 function myapi_form_claim_transaction_node_form_alter(&$form, &$form_state, $form_id) {
   module_load_include('inc', 'myapi', 'includes/myapi.claim_transaction_admin');
   myapi_claim_transaction_transaction_form_alter($form, $form_state);
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter() for the 'service_request' node form
+ * (SPEC 94).
+ *
+ * Glue only, same criterion as the two claims alters just above: the include
+ * is loaded and the actual work — disabling field_request_status in edit mode
+ * and appending the transactions timeline fieldset — is delegated entirely to
+ * includes/myapi.service_transaction_admin.inc.
+ *
+ * The '_admin' include, not includes/myapi.service_transaction.inc: that one
+ * stays what SPEC 92 made it, the automatic initial transaction and the
+ * autogenerated title, with nothing in it that renders a screen.
+ */
+function myapi_form_service_request_node_form_alter(&$form, &$form_state, $form_id) {
+  module_load_include('inc', 'myapi', 'includes/myapi.service_transaction_admin');
+  myapi_service_transaction_request_form_alter($form, $form_state);
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter() for the 'service_transaction' node form
+ * (SPEC 94).
+ *
+ * Glue only, same criterion as the three alters above: the include is loaded
+ * and the actual work — locking field_request in edit mode and redirecting
+ * back to the request after saving — is delegated entirely to
+ * includes/myapi.service_transaction_admin.inc.
+ */
+function myapi_form_service_transaction_node_form_alter(&$form, &$form_state, $form_id) {
+  module_load_include('inc', 'myapi', 'includes/myapi.service_transaction_admin');
+  myapi_service_transaction_transaction_form_alter($form, $form_state);
 }
 
 /**

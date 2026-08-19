@@ -15,10 +15,15 @@
  * is the first thing that ever writes into them. It creates no field, no
  * instance, no bundle and no table.
  *
- * There is NO administration page here — no route, no form, no timeline table
- * — which is why the file carries no '_admin' suffix, unlike its counterpart
- * includes/myapi.claim_transaction_admin.inc. Exposing the timeline, in the
- * back office or in the API, is another spec, exactly as it was for claims.
+ * There is no administration page HERE — no route, no form, no timeline table
+ * — which is why this file carries no '_admin' suffix. That screen exists
+ * since SPEC 94 and lives in includes/myapi.service_transaction_admin.inc,
+ * next to this file and named after the same distinction that separates
+ * includes/myapi.claim_transaction_admin.inc from the rest: everything behind
+ * node/%nid/edit of a request, its two routes and its status sync is over
+ * there; what runs inside every node_save() of the site is here. The API half
+ * of the timeline is SPEC 93, in resources/service_request.resource.inc, with
+ * a query of its own.
  *
  * Deliberate divergences from claims, all three recorded in SPEC 92's
  * decision table and none of them cosmetic — which is also why no common
@@ -28,12 +33,19 @@
  *     because that catalogue lives in code and no administrator can rewrite
  *     it mid-sentence from the UI (claims' allowed_values are editable, hence
  *     the opposite choice there);
- *   - there is NO reverse sync transaction -> request. Saving a transaction
- *     with a different status does not rewrite the request's own, unlike
- *     myapi_claim_transaction_sync_claim_status(): the request status HAS a
- *     transition graph (myapi_services_request_transitions()) and nobody
- *     validates it yet, so the sync would let anyone put a request into an
- *     impossible state from node/add/service_transaction;
+ *   - there was NO reverse sync transaction -> request, and SPEC 94 reverted
+ *     that: myapi_service_transaction_sync_request_status()
+ *     (includes/myapi.service_transaction_admin.inc) now rewrites the
+ *     request's field_request_status from the transaction's, like
+ *     myapi_claim_transaction_sync_claim_status() always did for claims. The
+ *     reason given here for leaving it out — the request status HAS a
+ *     transition graph, myapi_services_request_transitions(), and nobody
+ *     validates it — is still true, and still a pending spec; what changed is
+ *     the conclusion drawn from it. Requiring the graph only in the back
+ *     office would make that door stricter than api/v1, which does not
+ *     validate it either, and two doors with different rules is worse than two
+ *     doors equally permissive. Whichever spec validates transitions has to
+ *     cover both at once;
  *   - there is NO transient notification flag, because the marketplace has no
  *     notifier to silence.
  *
@@ -292,11 +304,17 @@ function myapi_service_transaction_set_title($node) {
  * yet, so there would be nothing to silence. Whichever spec writes the
  * notifications decides then whether this transaction stays quiet.
  *
- * No reverse sync either: nothing here re-saves the request. The direction is
- * request -> transaction and only that, so there is no cascade — and there
- * cannot be one from the insert of the transaction itself, since
- * myapi_node_insert() has no 'service_transaction' branch. A future spec adding
- * one must keep that property.
+ * Nothing HERE re-saves the request, and there is still no cascade — but the
+ * reason is no longer that myapi_node_insert() has no 'service_transaction'
+ * branch. SPEC 94 added one, delegating to
+ * myapi_service_transaction_sync_request_status(). What keeps it from looping
+ * is that the transaction created below is born copying the status the request
+ * ALREADY has, so that sync compares the two, finds them equal and returns
+ * before saving anything: creating a request still writes exactly two nodes.
+ * The second barrier is that the re-save the sync does perform on a real
+ * status change is an UPDATE of a 'service_request', and myapi_node_update()
+ * has no 'service_request' branch. Both properties have to be kept by whoever
+ * touches either hook.
  *
  * Only ever called from hook_node_insert(), never hook_node_update(): editing
  * an existing request must not create a second initial transaction. Each
