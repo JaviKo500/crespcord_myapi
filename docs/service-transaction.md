@@ -148,18 +148,19 @@ Four explicit non-behaviours, each one a spec of its own if it is ever wanted:
   `hook_node_insert()` is implemented, never `hook_node_update()`. Each status
   transition (offering, assigning, closing, cancelling) will create its own
   transaction in its own spec, next to the rest of its effects.
-- **It does not sync backwards.** Saving a `service_transaction` with a
-  different status does **not** rewrite its request's `field_request_status`,
-  unlike `myapi_claim_transaction_sync_claim_status()` in claims. The request
-  status has a transition graph (`myapi_services_request_transitions()`) and
-  nobody validates it yet, so that sync would let anyone put a request into an
-  impossible state from `node/add/service_transaction`. It comes in when the
-  validator does.
-- **It is not exposed in the API.** The timeline is written to the database and
-  read nowhere: no `transactions` key in `GET /api/v1/service-requests`, in
-  `GET /api/v1/service-requests/%`, or in the `201` of
-  `POST /api/v1/service-requests`. Those three responses are byte for byte what
-  they were. Exposing it is another spec, exactly as it was for claims.
+- ~~**It does not sync backwards.**~~ **Superseded by SPEC 94.** Saving a
+  `service_transaction` with a different status now **does** rewrite its
+  request's `field_request_status`, through
+  `myapi_service_transaction_sync_request_status()`
+  (`includes/myapi.service_transaction_admin.inc`). The reason given here for
+  leaving it out — the transition graph `myapi_services_request_transitions()`
+  exists and nobody validates it — is still true and still a pending spec;
+  what changed is the conclusion drawn from it. See
+  [`service-transaction-timeline.md`](service-transaction-timeline.md).
+- ~~**It is not exposed in the API.**~~ **Superseded by SPEC 93.**
+  `GET /api/v1/service-requests/{id}` serves the timeline under a
+  `transactions` key, in ascending order. The listing and the `201` of
+  `POST /api/v1/service-requests` are still byte for byte what they were.
 - **It does not notify.** No email, no push, no notification row. The
   marketplace has no notifier at all yet, which is also why there is no
   transient skip flag here — there is nothing to silence.
@@ -170,9 +171,13 @@ Two more, worth writing down:
   hook only runs on an `INSERT`, and an invented row would carry an
   acknowledgement nobody ever issued, next to a status that is the *current*
   one and not the one it was born with.
-- **No back-office timeline table.** There is no page listing a request's
-  transactions and no "Crear transacción" button, unlike claims (SPEC 57). The
-  operator sees them in `/admin/content` like any other node.
+- ~~**No back-office timeline table.**~~ **Superseded by SPEC 94.**
+  `node/%nid/edit` of a request now carries a timeline fieldset with a "Crear
+  transacción" link and per-row "Editar" / "Borrar" actions, and the request's
+  own `field_request_status` is read-only there. All of it lives in
+  `includes/myapi.service_transaction_admin.inc` and is documented in
+  [`service-transaction-timeline.md`](service-transaction-timeline.md); this
+  file and its behaviour are unchanged by it.
 
 ---
 
@@ -219,3 +224,14 @@ unit-tested — they are Field API plus the database, which `tests/unit` avoids 
 but three guards read `myapi.module` as text and fail if either hook branch
 disappears, or if a `service_transaction` branch ever appears in
 `hook_node_insert()`.
+
+---
+
+## Related documentation
+
+- [`service-transaction-timeline.md`](service-transaction-timeline.md) — the
+  back-office timeline of a request's transactions: the two routes, the
+  creation form, the status sync, the deletion rule and who sees each link
+  (SPEC 94).
+- [`service-request.md`](service-request.md) — the `api/v1` endpoints, including
+  the `transactions` key of the detail (SPEC 93).
