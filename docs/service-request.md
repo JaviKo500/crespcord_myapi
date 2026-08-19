@@ -475,8 +475,9 @@ listing of the module.
 ## GET /api/v1/service-requests/{id}
 
 Returns **one** service request in full: the eleven keys of the listing plus the
-requester, the condominium, the images, the attachment, `closed_at` and the
-offers one by one.
+requester, the condominium, the images, the attachment, `closed_at`, the offers
+one by one and the **timeline** — its `service_transaction` entries in
+chronological order.
 
 `unit` is one of the listing's eleven since SPEC 91 — the detail no longer
 resolves it on its own, it **overwrites** it for the provider (see below), and
@@ -494,10 +495,10 @@ This is the **first endpoint of the module whose response depends on who asks**.
 | Reader | Who they are | What they get |
 |--------|--------------|---------------|
 | **The requester** | `field_requester = uid` | The whole request, every offer, the unit included. |
-| **The provider** | Operates a `provider` node that either already bid on this request, or is active and of its category while the request is still unawarded | The same eighteen keys, with `unit: null` and `offers` trimmed to their own. |
+| **The provider** | Operates a `provider` node that either already bid on this request, or is active and of its category while the request is still unawarded | The same nineteen keys, with `unit: null` and `offers` trimmed to their own. |
 | Anybody else | — | `403 forbidden` |
 
-**The keys are always the same eighteen, for both readers.** None appears and
+**The keys are always the same nineteen, for both readers.** None appears and
 none disappears; what changes is the content of three:
 
 | Key | Requester | Provider |
@@ -508,6 +509,7 @@ none disappears; what changes is the content of three:
 | `offers_count` | the total | **the total, the same** — they know how many they compete against, not who nor for how much |
 | `requester` | `{id, name}` | `{id, name}`, the same |
 | `condominium` | `{id, name}` | the same |
+| `transactions` | **the whole timeline** | **the same whole timeline**, comments included — see below |
 | `images` / `attachment` | downloadable | downloadable, same URLs |
 | everything else | | the same |
 
@@ -643,6 +645,15 @@ query**, not even the token's: the shape of the URL is wrong whoever is asking.
           "status": "sent",
           "created": "2026-08-15T11:03:17"
         }
+      ],
+      "transactions": [
+        {
+          "id": 512,
+          "status": "open",
+          "status_date": "2026-08-14T09:12:00",
+          "comment": "Hemos recibido su solicitud. Los proveedores de la categoría podrán enviarle ofertas y se le notificará cualquier novedad.",
+          "created": "2026-08-14T09:12:33"
+        }
       ]
     }
   }
@@ -655,7 +666,7 @@ query**, not even the token's: the shape of the URL is wrong whoever is asking.
 
 ### The keys the detail adds
 
-Seven, on top of the listing's eleven. `unit` is **not** among them any more: it
+Eight, on top of the listing's eleven. `unit` is **not** among them any more: it
 is the listing's, and the only one of the eleven the detail changes — see the
 trim above.
 
@@ -668,6 +679,7 @@ trim above.
 | `attachment` | `field_attachment` → `file_managed` | **Yes** | `{id, url, filename}` or `null`. Cardinality 1. |
 | `closed_at` | `field_closed_at` | **Yes** | `Y-m-d\TH:i:s`, `null` while the request is not closed. |
 | `offers` | `service_offer` via `field_request` | No | **Always an array**, empty when there are none — every `direct` request among them. |
+| `transactions` | `service_transaction` via `field_request` | No | **Always an array**, empty when there are none. The timeline, oldest first — see below. |
 
 ¹ Required on the bundle; the `LEFT JOIN`s leave them `NULL` if somebody deleted
 the row by hand, and the serialiser answers `null` instead of breaking.
@@ -698,12 +710,74 @@ two reads of the same screen.
 **Offers are not paginated.** They all travel. A request receives units of
 offers, not hundreds.
 
+### The timeline (`transactions`)
+
+The request's `service_transaction` entries: what happened to it and when. Every
+request created since SPEC 92 is born with one — the acknowledgement, carrying
+the status it was created with — and each future transition (offering,
+awarding, closing, cancelling) will add its own. See
+[service-transaction.md](service-transaction.md) for who writes them.
+
+**Each transaction:**
+
+| Key | Source | Nullable | Notes |
+|-----|--------|:--------:|-------|
+| `id` | the transaction's `nid` | No | JSON integer. |
+| `status` | `field_request_status` | **Yes**¹ | The **raw catalogue key** — `open`, `direct`, `offered`, `assigned`, `closed`, `cancelled` — exactly like the request's own `status`. No translated label: the catalogue is the client's. |
+| `status_date` | `field_status_date` | **Yes**¹ | `Y-m-d\TH:i:s`. **The stored value with a `T` in it, with no timezone conversion** — see the note below. |
+| `comment` | `field_comment` | **Yes** | Plain text, with its line breaks, no `format`. `null` — never `""` — when the entry carries no comment. |
+| `created` | `node.created` | No | `Y-m-d\TH:i:s`, in the site's timezone. |
+
+¹ Required on the bundle; the `LEFT JOIN`s answer `null` if somebody deleted the
+field row by hand, and the entry stays in the timeline instead of vanishing from
+it.
+
+**Five keys, not the seven a claim's transaction has.** There is no `images` and
+no `attachment`: `service_transaction` has no instance of either field and never
+had one. Serving them as a fixed `[]` and `null` would be two keys that always
+lie, and a key that can never hold content teaches the client to trust a hole.
+The day the fields exist, the keys can appear; taking them away afterwards would
+not be possible.
+
+**`status_date` is not converted, and that is deliberate.** `field_status_date`
+was created with `tz_handling = 'none'`: what is stored is a **naive local
+time**, not a UTC instant. Running it through a timezone conversion would shift
+it by the server's zone and answer an hour nobody wrote. `created` **is** a real
+timestamp and **is** converted — two date columns, two rules, on purpose. It is
+the same distinction `reception_date` and `created` make in
+[claim.md](claim.md).
+
+**Order:** `status_date` ascending, tie-broken by `id` ascending. It is a
+timeline, read oldest first. The tie-break is not decoration — two entries of
+the same minute, which happen when an operator registers two changes in a row,
+would otherwise come out in whatever order the database chose.
+
+**Both readers get the whole timeline**, comments included. The provider of the
+category is not trimmed here: the comments that exist today are addressed to the
+resident, and there is no field marking an entry as internal. The day there are
+internal notes, what that will need is a field that distinguishes them.
+
+**Unpublished entries do not appear.** Unpublishing a `service_transaction` from
+the back office removes it from the app — that is what unpublishing means — and
+the resident is left with a timeline that has a gap nobody explains. Worth
+knowing before pressing the button.
+
+**Requests created before SPEC 92 answer `"transactions": []`,** and no row is
+invented for them: there is **no backfill**. A made-up entry would carry an
+acknowledgement nobody issued and the request's *current* status rather than the
+one it was born with. The app must treat the empty array as a normal state,
+exactly as it treats `offers: []`.
+
+**Transactions are not paginated and cannot be filtered.** They all travel,
+always — no `?page`, no `?limit`. A request receives units of transactions.
+
 **Notes**
-- The detail costs **five content queries**, fixed — the request row, the
-  requester's name, the images, `offers_count`, and the offers — plus the token
-  lookup. None of them grows with the number of images or of offers. A provider
-  reader adds the role questions of `includes/myapi.provider_role.inc`, all
-  statically cached.
+- The detail costs **six content queries**, fixed — the request row, the
+  requester's name, the images, `offers_count`, the offers, and the timeline —
+  plus the token lookup. None of them grows with the number of images, of offers
+  or of transactions: a request with twenty entries costs exactly what one with a
+  single entry costs. A provider reader adds the role questions of
+  `includes/myapi.provider_role.inc`, all statically cached.
 - `offers_count` comes from the **aggregate query**, never from
   `count(offers)`: the provider gets a trimmed list and the full total.
 - The ten first keys are **byte for byte** what `GET /api/v1/service-requests`
@@ -835,11 +909,12 @@ award the request **directly**, with no bidding round, to a provider eligible
 for the request's category — the request is then born in `direct` instead of
 `open`.
 
-The response is the **same eighteen-key object**
+The response is the **same nineteen-key object**
 [`GET /api/v1/service-requests/{id}`](#get-apiv1service-requestsid) returns,
 `viewer` fixed to `"requester"` (the creator is always the requester),
 `offers: []` and `offers_count: 0` (nothing can have offered on a node that did
-not exist a moment ago), `closed_at: null`.
+not exist a moment ago), `closed_at: null` — and `transactions` holding the
+initial entry, which **does** already exist.
 
 Out of scope of this endpoint: editing, cancelling, closing or awarding a
 request already created; offering on a request; any notification on creation;
@@ -955,9 +1030,13 @@ the valid files attached.
 | `field_assigned_offer` | Always empty. |
 | `field_closed_at` | Always empty. |
 
-**No `service_transaction` is created.** Unlike `reclamo`, `service_request` has
-no `hook_node_insert()` branch reacting to its own creation — nothing here
-writes one, on purpose.
+**An initial `service_transaction` IS created** — since SPEC 92, and not by this
+endpoint: the `node_save()` fires `hook_node_insert()`, whose `service_request`
+branch writes the first entry of the timeline copying the status the request was
+just born with. It covers this endpoint, `node/add/service_request` and any
+future path with one implementation, which is why not a single line of this
+endpoint mentions transactions. See
+[service-transaction.md](service-transaction.md).
 
 **Success response (201)**
 
@@ -986,7 +1065,16 @@ writes one, on purpose.
       ],
       "attachment": null,
       "closed_at": null,
-      "offers": []
+      "offers": [],
+      "transactions": [
+        {
+          "id": 512,
+          "status": "open",
+          "status_date": "2026-08-17T10:05:00",
+          "comment": "Hemos recibido su solicitud. Los proveedores de la categoría podrán enviarle ofertas y se le notificará cualquier novedad.",
+          "created": "2026-08-17T10:05:00"
+        }
+      ]
     }
   },
   "message": "Solicitud de servicio creada correctamente."
@@ -994,7 +1082,15 @@ writes one, on purpose.
 ```
 
 A request with a valid `assigned_provider_id` answers the same shape with
-`"status": "direct"` and `assigned_provider` already filled in.
+`"status": "direct"` and `assigned_provider` already filled in — and its initial
+transaction carries `"status": "direct"` with the acknowledgement that matches.
+
+**The `201` carries the timeline populated**, with the entry that was written
+inside the very same `node_save()`. It is **byte for byte** what an immediate
+`GET /api/v1/service-requests/{id}` answers for that request: the two responses
+share the serialiser *and* the loader. `offers` and `offers_count` are the
+opposite case — they are known to be empty at that instant, so they are set in
+code and never queried.
 
 **Possible errors**
 | Code | `error_code` | When |
@@ -1048,9 +1144,19 @@ Written down so it is not looked for in this document:
   `field_last_message_at` do not travel: who opens the thread and when the path
   is generated is another spec, and a key served today is a contract that spec
   could no longer change.
-- **The timeline.** `service_transaction` exists since SPEC 77 and is not
-  served, and creating a request generates none — unlike `reclamo`, this bundle
-  has no `hook_node_insert()` reacting to its own birth.
+- **Writing to the timeline.** It is **read** since SPEC 93, in the detail and
+  in the `201` — see [the timeline](#the-timeline-transactions). What does not
+  exist is any way to write one from the API: no
+  `POST /api/v1/service-requests/{id}/transactions`, no commenting, no changing
+  status. Each transition will create its own entry in its own spec, next to the
+  rest of its effects.
+- **Files hanging from a transaction.** `service_transaction` has no
+  `field_images` and no `field_attachment`, so its entries carry five keys and
+  not the seven a claim's do. Adding them is an installer, a file-ownership rule
+  and a download endpoint — another spec.
+- **`?include=transactions` in the listing.** The timeline is served in the
+  detail and in the `201`, nowhere else. `GET /api/v1/service-requests` answers
+  exactly the same eleven keys as before.
 - **Ratings.** Neither served nor required.
 - **The provider's listing** — *the requests I may attend*.
 - **`?include=`, `ETag`, conditional caching.** The detail always answers whole.
