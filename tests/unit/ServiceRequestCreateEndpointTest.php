@@ -150,6 +150,30 @@ class ServiceRequestCreateEndpointTest extends TestCase {
   }
 
   /**
+   * One 'service_transaction' of the created request, as the timeline query
+   * delivers it (SPEC 93).
+   *
+   * Seeded into the `node` table, which is that query's base table, next to the
+   * request itself and told apart from it by `type` — the very condition under
+   * test. node_save() is a recorder here, so hook_node_insert() writes nothing:
+   * the entry SPEC 92 would have created is seeded by hand.
+   */
+  private function transactionRow($nid, $status_date, array $overrides = []) {
+    return $overrides + [
+      'n.nid'                          => (string) $nid,
+      'nid'                            => (string) $nid,
+      'type'                           => MYAPI_SERVICES_TRANSACTION_TYPE,
+      // The node's published flag, not the transaction's status.
+      'status'                         => '1',
+      'created'                        => (string) REQUEST_TIME,
+      'fr.field_request_target_id'     => (string) self::NID,
+      'frs.field_request_status_value' => MYAPI_SERVICES_REQUEST_STATUS_OPEN,
+      'status_date'                    => $status_date,
+      'comment'                        => 'Hemos recibido su solicitud.',
+    ];
+  }
+
+  /**
    * A 'provider' node, one 'node' fixture row per category — the fixture
    * engine never resolves a join, so this is what a real one-row-per-category
    * LEFT JOIN to field_categories becomes here (see the class docblock).
@@ -982,10 +1006,10 @@ class ServiceRequestCreateEndpointTest extends TestCase {
 
   /* -------------------------------------------------------------------------
    * POST /api/v1/service-requests — the 201 response shape (SPEC 89's own
-   * eighteen keys, reused).
+   * keys, reused; the nineteenth is SPEC 93's timeline).
    * ---------------------------------------------------------------------- */
 
-  public function testTheResponseHasExactlyEighteenKeys() {
+  public function testTheResponseHasExactlyNineteenKeys() {
     $this->seed([$this->requestRow()]);
     $this->authenticate();
     $this->validPost();
@@ -996,10 +1020,57 @@ class ServiceRequestCreateEndpointTest extends TestCase {
       'id', 'title', 'description', 'status', 'category', 'unit',
       'offers_count', 'assigned_offer', 'assigned_provider', 'created',
       'desired_start', 'viewer', 'requester', 'condominium', 'images',
-      'attachment', 'closed_at', 'offers',
+      'attachment', 'closed_at', 'offers', 'transactions',
     ];
-    $this->assertCount(18, $keys, 'the fixture list itself must be complete');
+    $this->assertCount(19, $keys, 'the fixture list itself must be complete');
     $this->assertSame($keys, array_keys($result['json']['data']['service_request']));
+  }
+
+  /**
+   * THE 201 CARRIES THE TIMELINE POPULATED (SPEC 93), not an empty list.
+   *
+   * The initial transaction of SPEC 92 already exists at this instant — the
+   * node_save() this endpoint performs fires hook_node_insert(), which writes
+   * it — so answering `transactions: []` here would be serving a datum that is
+   * false, and omitting the key would break SPEC 89's promise that the 201 and
+   * GET /% are the same object.
+   *
+   * It is the one difference with `offers` and `offers_count`, which ARE put
+   * directly in code as [] and 0: those two are known to be empty, this one is
+   * known NOT to be, so it is queried and never assumed.
+   */
+  public function testThe201CarriesTheInitialTransaction() {
+    $this->seed([$this->requestRow(), $this->transactionRow(512, '2026-08-19 14:30:00')]);
+    $this->authenticate();
+    $this->validPost();
+
+    $result = $this->create();
+
+    $this->assertSame([
+      [
+        'id'          => 512,
+        'status'      => MYAPI_SERVICES_REQUEST_STATUS_OPEN,
+        'status_date' => '2026-08-19T14:30:00',
+        'comment'     => 'Hemos recibido su solicitud.',
+        'created'     => format_date(REQUEST_TIME, 'custom', 'Y-m-d\TH:i:s'),
+      ],
+    ], $result['json']['data']['service_request']['transactions']);
+  }
+
+  /**
+   * A request whose timeline is empty still answers the key, as a list. It is
+   * the shape a request born before SPEC 92 has forever: no backfill invents a
+   * row for it.
+   */
+  public function testThe201AnswersAnEmptyTimelineAsAList() {
+    $this->seed([$this->requestRow()]);
+    $this->authenticate();
+    $this->validPost();
+
+    $result = $this->create();
+
+    $this->assertSame([], $result['json']['data']['service_request']['transactions']);
+    $this->assertStringContainsString('"transactions":[]', $result['output']);
   }
 
   public function testViewerIsAlwaysRequester() {
@@ -1044,9 +1115,15 @@ class ServiceRequestCreateEndpointTest extends TestCase {
    * same token answers the SAME object — both re-fetch the same pre-seeded
    * row through the same serialiser, so this is the module's own guarantee
    * that the two responses cannot drift apart, made concrete.
+   *
+   * The fixture seeds a transaction (SPEC 93) so the comparison covers the
+   * timeline too and is not vacuously true on an empty list: `transactions` is
+   * the one collection the 201 QUERIES instead of assuming, through the same
+   * loader the detail calls, and this is what pins that the entry the creator
+   * receives is byte for byte the entry they will read back.
    */
   public function testResponseMatchesAnImmediateGetOfTheSameRequest() {
-    $this->seed([$this->requestRow()]);
+    $this->seed([$this->requestRow(), $this->transactionRow(512, '2026-08-19 14:30:00')]);
     $this->authenticate();
     $this->validPost();
     $createResult = $this->create();
@@ -1062,5 +1139,8 @@ class ServiceRequestCreateEndpointTest extends TestCase {
       $createResult['json']['data']['service_request'],
       $getResult['json']['data']['service_request']
     );
+    // Not an empty list on both sides: the comparison above has to be about
+    // something.
+    $this->assertCount(1, $createResult['json']['data']['service_request']['transactions']);
   }
 }

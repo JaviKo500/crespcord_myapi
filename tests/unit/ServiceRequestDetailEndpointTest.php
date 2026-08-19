@@ -222,6 +222,66 @@ class ServiceRequestDetailEndpointTest extends TestCase {
   }
 
   /**
+   * One 'service_transaction' of the request, as the timeline query delivers
+   * it (SPEC 93).
+   *
+   * SEEDED INTO THE `node` TABLE, not into a field table: the timeline query is
+   * the one read path of this resource whose BASE table is node — the bundle
+   * condition is the first thing it says — and the fixture table is always the
+   * base one. The request itself lives in that same table and is told apart by
+   * exactly what tells them apart in SQL: `type`. That is not an accident of
+   * the fixture, it is the guard under test.
+   *
+   * Qualified where an alias collides, bare where it does not, the same rule
+   * the offer fixture follows: `status` alone is the node's published flag, so
+   * the transaction's own status travels as 'frs.field_request_status_value';
+   * `status_date`, `comment` and `created` collide with nothing and travel
+   * under the alias the query gives them. 'n.nid' is seeded next to 'nid'
+   * because the query projects it as `id` off the qualified source.
+   *
+   * @param int    $nid          The transaction node.
+   * @param string $status_date  field_status_date as stored: 'Y-m-d H:i:s',
+   *                             naive local time, no zone.
+   */
+  private function transaction($nid, $status_date, array $overrides = []) {
+    return $overrides + [
+      'n.nid'                          => (string) $nid,
+      'nid'                            => (string) $nid,
+      'type'                           => MYAPI_SERVICES_TRANSACTION_TYPE,
+      // The node's published flag, not the transaction's status.
+      'status'                         => '1',
+      'created'                        => (string) self::CREATED,
+      'fr.field_request_target_id'     => (string) self::NID,
+      'frs.field_request_status_value' => MYAPI_SERVICES_REQUEST_STATUS_OPEN,
+      'status_date'                    => $status_date,
+      'comment'                        => 'Hemos recibido su solicitud.',
+    ];
+  }
+
+  /**
+   * The recorded queries that are the timeline's, recognised by the very
+   * condition that makes the timeline correct: the bundle.
+   *
+   * Counting queries over the `node` table would not do — the detail reads
+   * that table for the request itself, and a provider's read reads it again
+   * for the provider node.
+   */
+  private function timelineQueries() {
+    return array_values(array_filter(myapi_test_db_queries(), function ($query) {
+      if ($query['table'] !== 'node') {
+        return FALSE;
+      }
+      foreach ($query['conditions'] as $condition) {
+        if ($condition['field'] === 'n.type' && $condition['value'] === MYAPI_SERVICES_TRANSACTION_TYPE) {
+          return TRUE;
+        }
+      }
+
+      return FALSE;
+    }));
+  }
+
+  /**
    * One row of field_data_field_images, joined to its file_managed row.
    */
   private function image($fid, $filename, $delta, $nid = self::NID) {
@@ -295,6 +355,11 @@ class ServiceRequestDetailEndpointTest extends TestCase {
   private function providerNode($nid = self::PROVIDER_NID, $status = '1', $expiry = NULL) {
     return [
       'nid'            => (string) $nid,
+      // The bundle, which no query of the provider_role include reads — it
+      // filters by nid — but which the timeline query DOES: the fixture engine
+      // skips a condition over a column the row does not carry, so a provider
+      // node with no `type` would walk into `transactions` (SPEC 93).
+      'type'           => MYAPI_SERVICES_PROVIDER_TYPE,
       'status'         => $status,
       'license_expiry' => $expiry === NULL ? (string) (REQUEST_TIME + 86400) : $expiry,
     ];
@@ -563,6 +628,9 @@ class ServiceRequestDetailEndpointTest extends TestCase {
           'created'  => format_date(self::CREATED + 10, 'custom', 'Y-m-d\TH:i:s'),
         ],
       ],
+      // Empty here on purpose: this fixture seeds no transaction, and the key
+      // is present anyway. The timeline has its own section below.
+      'transactions' => [],
     ];
 
     $this->assertSame($expected, $this->item($result));
@@ -570,20 +638,21 @@ class ServiceRequestDetailEndpointTest extends TestCase {
 
   /**
    * The object under 'service_request' is an OBJECT and never a list, and it
-   * carries exactly the eighteen documented keys IN ORDER — the listing's ten
-   * and then the eight the detail adds. Nothing appears or disappears with the
-   * data: a request with nothing filled in answers the same eighteen.
+   * carries exactly the nineteen documented keys IN ORDER — the listing's
+   * eleven and then the eight the detail adds. Nothing appears or disappears
+   * with the data: a request with nothing filled in answers the same nineteen.
    *
    * (SPEC 89's prose says "seventeen" in two places and then enumerates eight
-   * new keys next to the listing's ten; the enumeration is the unambiguous
-   * half, and this is what the code answers.)
+   * new keys next to the listing's ten; SPEC 93 counts "eighteen" from that
+   * same prose and adds exactly one, `transactions`. The enumeration is the
+   * unambiguous half in both cases, and this is what the code answers.)
    */
-  public function testTheEighteenKeysAreAlwaysThereAndInOrder() {
+  public function testTheNineteenKeysAreAlwaysThereAndInOrder() {
     $keys = [
       'id', 'title', 'description', 'status', 'category', 'unit',
       'offers_count', 'assigned_offer', 'assigned_provider', 'created',
       'desired_start', 'viewer', 'requester', 'condominium', 'images',
-      'attachment', 'closed_at', 'offers',
+      'attachment', 'closed_at', 'offers', 'transactions',
     ];
 
     $full = $this->detailFor(self::UID, [
@@ -1316,6 +1385,296 @@ class ServiceRequestDetailEndpointTest extends TestCase {
   }
 
   /* -------------------------------------------------------------------------
+   * The timeline (SPEC 93).
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * A transaction travels with EXACTLY FIVE KEYS, in order, and with the types
+   * the doc promises: `id` an int, `status` the raw catalogue key, the two
+   * dates as strings, `comment` as stored.
+   *
+   * NEITHER `images` NOR `attachment` APPEARS, and that is the point of the
+   * assertion on the key list rather than on the values: 'service_transaction'
+   * has no instance of either field — it never had — so serving them as a fixed
+   * `[]` and `null` would be two keys that always lie. A key that can never
+   * have content teaches the client to trust a hole.
+   */
+  public function testATransactionTravelsWithExactlyItsFiveKeys() {
+    $result = $this->detailFor(self::UID, [
+      'node' => [
+        $this->request(),
+        $this->transaction(512, '2026-08-19 14:30:00'),
+      ],
+    ]);
+
+    $item = $this->item($result);
+    $this->assertCount(1, $item['transactions']);
+
+    $this->assertSame(
+      ['id', 'status', 'status_date', 'comment', 'created'],
+      array_keys($item['transactions'][0])
+    );
+
+    $this->assertSame([
+      'id'          => 512,
+      'status'      => MYAPI_SERVICES_REQUEST_STATUS_OPEN,
+      'status_date' => '2026-08-19T14:30:00',
+      'comment'     => 'Hemos recibido su solicitud.',
+      'created'     => format_date(self::CREATED, 'custom', 'Y-m-d\TH:i:s'),
+    ], $item['transactions'][0]);
+
+    $this->assertIsInt($item['transactions'][0]['id'], 'an int, not the string the column holds');
+  }
+
+  /**
+   * `status` IS THE RAW CATALOGUE KEY, whichever it is, and never a translated
+   * label. The listing and the detail already serve `status` raw; serving the
+   * label here and not there would make the client ask which of the two
+   * sources to read.
+   */
+  public function testTheStatusTravelsRaw() {
+    foreach (array_keys(myapi_services_request_statuses()) as $status) {
+      $result = $this->detailFor(self::UID, [
+        'node' => [
+          $this->request(),
+          $this->transaction(512, '2026-08-19 14:30:00', ['frs.field_request_status_value' => $status]),
+        ],
+      ]);
+
+      $this->assertSame($status, $this->item($result)['transactions'][0]['status'], $status);
+    }
+  }
+
+  /**
+   * status_date IS THE STORED VALUE WITH A 'T' IN IT, with no timezone
+   * conversion whatsoever — the site's zone does not move it by one hour.
+   *
+   * field_status_date is the same field shared with 'claim_transaction' and was
+   * created with tz_handling = 'none' (SPEC 55): what is stored is a naive local
+   * time. Running it through strtotime() would shift it by the server's zone and
+   * answer an hour nobody typed, which is the bug SPEC 58 already paid for once.
+   *
+   * `created` IS a real timestamp and does go through format_date(), which is
+   * why the two are asserted together: two columns, two rules, on purpose.
+   */
+  public function testStatusDateIsNotConvertedAndCreatedIs() {
+    $original = date_default_timezone_get();
+
+    foreach (['UTC', 'America/Guayaquil', 'Asia/Tokyo'] as $zone) {
+      date_default_timezone_set($zone);
+
+      $result = $this->detailFor(self::UID, [
+        'node' => [
+          $this->request(),
+          $this->transaction(512, '2026-08-19 14:30:00'),
+        ],
+      ]);
+
+      $transaction = $this->item($result)['transactions'][0];
+      $this->assertSame('2026-08-19T14:30:00', $transaction['status_date'], $zone);
+      $this->assertSame(
+        format_date(self::CREATED, 'custom', 'Y-m-d\TH:i:s'),
+        $transaction['created'],
+        $zone
+      );
+    }
+
+    date_default_timezone_set($original);
+  }
+
+  /**
+   * A transaction with no comment answers NULL and never "": the field row does
+   * not exist, and an empty string would say "somebody wrote nothing" where the
+   * truth is "nobody wrote".
+   */
+  public function testACommentlessTransactionAnswersNull() {
+    $result = $this->detailFor(self::UID, [
+      'node' => [
+        $this->request(),
+        $this->transaction(512, '2026-08-19 14:30:00', ['comment' => NULL]),
+      ],
+    ]);
+
+    $this->assertNull($this->item($result)['transactions'][0]['comment']);
+  }
+
+  /**
+   * THE ORDER IS THE TIMELINE'S: oldest first, and two transactions of the very
+   * same minute — which happen, when an operator registers two changes in a row
+   * — come out by ascending id and not in whatever order the fixture was
+   * written in.
+   */
+  public function testTheOrderIsChronologicalAndTiesBreakByAscendingId() {
+    $result = $this->detailFor(self::UID, [
+      'node' => [
+        $this->request(),
+        // Written newest-first and with the tie deliberately inverted.
+        $this->transaction(514, '2026-08-20 09:00:00'),
+        $this->transaction(513, '2026-08-19 14:30:00'),
+        $this->transaction(512, '2026-08-19 14:30:00'),
+      ],
+    ]);
+
+    $this->assertSame([512, 513, 514], array_column($this->item($result)['transactions'], 'id'));
+  }
+
+  /**
+   * An UNPUBLISHED transaction does not appear. Unpublishing one from the back
+   * office is what makes it disappear from the app — that is what unpublishing
+   * means — and the timeline is left with a gap nobody explains, which is
+   * written down in docs/service-request.md for whoever presses the button.
+   */
+  public function testAnUnpublishedTransactionDoesNotAppear() {
+    $result = $this->detailFor(self::UID, [
+      'node' => [
+        $this->request(),
+        $this->transaction(512, '2026-08-19 14:30:00'),
+        $this->transaction(513, '2026-08-19 15:00:00', ['status' => '0']),
+      ],
+    ]);
+
+    $this->assertSame([512], array_column($this->item($result)['transactions'], 'id'));
+  }
+
+  /**
+   * THE GUARD OF THE WHOLE KEY: an OFFER of the same request does not appear in
+   * `transactions`.
+   *
+   * field_request is SHARED by 'service_offer' and 'service_transaction' since
+   * SPEC 77, so a query that forgets `n.type` lists the request's offers as if
+   * they were timeline entries — each with status, status_date and comment at
+   * null, which reads like a broken transaction and not like a wrong query. It
+   * is the same risk SPEC 92 wrote down for the opposite direction
+   * (offers_count counting transactions), checked here from this side.
+   */
+  public function testAnOfferOfTheSameRequestIsNotATransaction() {
+    $result = $this->detailFor(self::UID, [
+      'node' => [
+        $this->request(),
+        $this->transaction(512, '2026-08-19 14:30:00'),
+        // An offer node pointing at the very same request, seeded into the same
+        // table the timeline query reads.
+        $this->transaction(600, '2026-08-19 16:00:00', ['type' => MYAPI_SERVICES_OFFER_TYPE]),
+      ],
+      'field_data_field_request' => [$this->offer(600, self::CREATED, self::PROVIDER_NID)],
+    ]);
+
+    $item = $this->item($result);
+    $this->assertSame([512], array_column($item['transactions'], 'id'));
+    // And it is still an offer, counted and listed as one.
+    $this->assertSame([600], array_column($item['offers'], 'id'));
+    $this->assertSame(1, $item['offers_count']);
+  }
+
+  /**
+   * A transaction of ANOTHER request does not appear, however published and
+   * however well-formed it is.
+   */
+  public function testATransactionOfAnotherRequestDoesNotAppear() {
+    $result = $this->detailFor(self::UID, [
+      'node' => [
+        $this->request(),
+        $this->transaction(512, '2026-08-19 14:30:00'),
+        $this->transaction(513, '2026-08-19 15:00:00', ['fr.field_request_target_id' => '999']),
+      ],
+    ]);
+
+    $this->assertSame([512], array_column($this->item($result)['transactions'], 'id'));
+  }
+
+  /**
+   * A request with no transaction at all — every request born before SPEC 92 —
+   * answers an EMPTY ARRAY. Never null, never an absent key, and no row is
+   * invented for it: there is no backfill, because a made-up entry would carry
+   * an acknowledgement nobody issued and the CURRENT status rather than the one
+   * the request was born with.
+   */
+  public function testARequestWithNoTransactionsAnswersAnEmptyArray() {
+    $result = $this->detailFor(self::UID);
+
+    $item = $this->item($result);
+    $this->assertArrayHasKey('transactions', $item);
+    $this->assertSame([], $item['transactions']);
+    $this->assertStringContainsString('"transactions":[]', $result['output'], 'a list, not an object');
+  }
+
+  /**
+   * BOTH READERS GET THE SAME TIMELINE, entire and with the same comments. The
+   * provider of the category is not trimmed here: the comments that exist today
+   * are written by SPEC 92 and are addressed to the resident, and cutting them
+   * back would be inventing a confidentiality rule no field marks.
+   */
+  public function testBothReadersGetTheSameTimeline() {
+    $tables = $this->providerScenario([], [], [self::CATEGORY]);
+    $tables['node'][] = $this->transaction(512, '2026-08-19 14:30:00');
+    $tables['node'][] = $this->transaction(513, '2026-08-19 15:00:00', ['comment' => 'Un proveedor le envió una oferta.']);
+
+    $this->authenticate();
+    $this->seed($tables, self::PROVIDER_UID);
+    $provider = $this->item($this->dispatch());
+
+    $this->authenticate();
+    $this->seed($tables, self::UID);
+    $requester = $this->item($this->dispatch());
+
+    $this->assertSame('provider', $provider['viewer']);
+    $this->assertSame('requester', $requester['viewer']);
+    $this->assertSame($requester['transactions'], $provider['transactions']);
+    $this->assertSame([512, 513], array_column($provider['transactions'], 'id'));
+  }
+
+  /**
+   * A reader who fits no rule of myapi_service_request_viewer() gets their 403
+   * WITHOUT the timeline query ever running: the load sits after the access
+   * check, so a refused read pays for nothing it will not be shown.
+   */
+  public function testAForbiddenReaderNeverRunsTheTimelineQuery() {
+    $this->authenticate();
+    $this->seed(['node' => [
+      $this->request(),
+      $this->transaction(512, '2026-08-19 14:30:00'),
+    ]], self::STRANGER_UID);
+
+    $result = $this->dispatch();
+
+    $this->assertSame(403, $result['status']);
+    $this->assertSame([], $this->timelineQueries());
+  }
+
+  /**
+   * ONE QUERY, WHATEVER THE NUMBER OF TRANSACTIONS: a request with twenty costs
+   * the same as one with a single one, and the same as one with none. There is
+   * no per-transaction read because there is nothing to load apart — no images,
+   * no attachment — which is exactly what forces a second query in claims.
+   */
+  public function testTheTimelineCostsOneQueryWhateverItsLength() {
+    foreach ([0, 1, 20] as $count) {
+      $nodes = [$this->request()];
+      for ($i = 0; $i < $count; $i++) {
+        $nodes[] = $this->transaction(512 + $i, '2026-08-19 14:30:0' . ($i % 10));
+      }
+
+      $this->detailFor(self::UID, ['node' => $nodes]);
+
+      $this->assertCount(1, $this->timelineQueries(), $count . ' transactions');
+      $this->assertCount($count, $this->item($this->dispatch())['transactions'], $count . ' transactions');
+    }
+  }
+
+  /**
+   * The loader refuses an impossible nid BEFORE any query, the same guard every
+   * read path of this module opens with: hook_node_insert() and the back office
+   * can call it with whatever the caller has.
+   */
+  public function testTheLoaderRefusesAnImpossibleNidWithoutAnyQuery() {
+    foreach ([0, -1, '', 'abc', NULL, []] as $nid) {
+      myapi_test_db_seed(['node' => [$this->transaction(512, '2026-08-19 14:30:00')]]);
+
+      $this->assertSame([], myapi_service_request_load_transactions($nid), var_export($nid, TRUE));
+      $this->assertSame([], myapi_test_db_queries(), var_export($nid, TRUE));
+    }
+  }
+  /* -------------------------------------------------------------------------
    * The files.
    * ---------------------------------------------------------------------- */
 
@@ -1631,8 +1990,11 @@ class ServiceRequestDetailEndpointTest extends TestCase {
    * ---------------------------------------------------------------------- */
 
   /**
-   * FIVE CONTENT QUERIES, plus the token's — with one image and one offer, and
+   * SIX CONTENT QUERIES, plus the token's — with one image and one offer, and
    * with twenty of each. Nothing grows with the number of rows.
+   *
+   * The sixth is the timeline (SPEC 93), and it reads the `node` table for the
+   * second time: once for the request itself, once for its transactions.
    */
   public function testTheQueryBudgetDoesNotGrowWithTheData() {
     foreach ([1, 20] as $count) {
@@ -1657,6 +2019,7 @@ class ServiceRequestDetailEndpointTest extends TestCase {
         'field_data_field_images',
         'field_data_field_request',
         'field_data_field_request',
+        'node',
       ], $tables, $count . ' rows of each');
     }
   }
