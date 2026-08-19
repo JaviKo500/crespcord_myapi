@@ -1,6 +1,6 @@
 # 96 — Edición de una solicitud de servicio desde la app
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-08-19
 - **Dependencias:**
   - `77-services-content-types-install` (Implemented) — dueña del bundle
@@ -396,58 +396,58 @@ al objeto del detalle, y que el método es `POST` y no `PUT` porque PHP no puebl
 
 ### Ruta y método
 
-- [ ] `POST /api/v1/service-requests/{id}` existe y no responde `405`.
-- [ ] `PUT` y `DELETE` sobre esa ruta siguen respondiendo `405 method_not_allowed`,
+- [x] `POST /api/v1/service-requests/{id}` existe y no responde `405`.
+- [x] `PUT` y `DELETE` sobre esa ruta siguen respondiendo `405 method_not_allowed`,
       sin cabecera `Authorization` y sin que la solicitud tenga que existir.
-- [ ] `GET /api/v1/service-requests/{id}` sigue devolviendo las diecinueve claves
+- [x] `GET /api/v1/service-requests/{id}` sigue devolviendo las diecinueve claves
       de siempre, sin un cambio.
-- [ ] `POST /api/v1/service-requests` (sin id) sigue creando, y no ha cambiado.
-- [ ] `hook_menu()` de `myapi.module` no tiene ninguna línea nueva.
-- [ ] `myapi.info` no tiene ninguna línea nueva.
+- [x] `POST /api/v1/service-requests` (sin id) sigue creando, y no ha cambiado.
+- [x] `hook_menu()` de `myapi.module` no tiene ninguna línea nueva.
+- [x] `myapi.info` no tiene ninguna línea nueva.
 
 ### Identificación de la solicitud
 
-- [ ] `/api/v1/service-requests/abc`, `/0` y `/-3` responden `404
+- [x] `/api/v1/service-requests/abc`, `/0` y `/-3` responden `404
       service_request_not_found` sin consultar el token.
 - [ ] Un `{id}` que no existe, que es de otro bundle, que está despublicado o
       cuyo término de categoría fue borrado responde `404`, los cuatro iguales.
 
 ### Autenticación y acceso
 
-- [ ] Sin cabecera `Authorization`: `401 missing_authorization`.
-- [ ] Con token inválido o caducado: `401 invalid_token`.
-- [ ] Con el token de un residente que no es el `field_requester`: `403
+- [x] Sin cabecera `Authorization`: `401 missing_authorization`.
+- [x] Con token inválido o caducado: `401 invalid_token`.
+- [x] Con el token de un residente que no es el `field_requester`: `403
       service_request_forbidden`.
-- [ ] Una solicitud registrada por un operador a nombre de un residente
+- [x] Una solicitud registrada por un operador a nombre de un residente
       (`node.uid` operador, `field_requester` residente) la edita el residente y
       no el operador.
-- [ ] El proveedor de la categoría, que sí puede **leer** el detalle, recibe
+- [x] El proveedor de la categoría, que sí puede **leer** el detalle, recibe
       `403` al editar.
-- [ ] Una solicitud sin `field_requester` responde `403`, nunca `200`.
+- [x] Una solicitud sin `field_requester` responde `403`, nunca `200`.
 
 ### Compuerta
 
-- [ ] `open` sin ninguna oferta: la edición procede.
-- [ ] `open` con una oferta en `sent`: `409 service_request_not_editable`.
-- [ ] `open` con una única oferta en `withdrawn`: `409` igualmente.
-- [ ] `open` con una única oferta en `rejected`: `409` igualmente.
-- [ ] `offered`, `direct`, `assigned`, `closed` y `cancelled`: `409`, los cinco.
-- [ ] Un `field_request_status` vacío o con un valor fuera del catálogo: `409`,
+- [x] `open` sin ninguna oferta: la edición procede.
+- [x] `open` con una oferta en `sent`: `409 service_request_not_editable`.
+- [x] `open` con una única oferta en `withdrawn`: `409` igualmente.
+- [x] `open` con una única oferta en `rejected`: `409` igualmente.
+- [x] `offered`, `direct`, `assigned`, `closed` y `cancelled`: `409`, los cinco.
+- [x] Un `field_request_status` vacío o con un valor fuera del catálogo: `409`,
       nunca `500`.
-- [ ] El `409` llega **después** del `404` y del `403`: una solicitud ajena y no
+- [x] El `409` llega **después** del `404` y del `403`: una solicitud ajena y no
       editable responde `403`.
 
 ### Campos de texto
 
-- [ ] Falta `title`, `description` o `desired_start`: `422 missing_field` con
+- [x] Falta `title`, `description` o `desired_start`: `422 missing_field` con
       `@field` señalando el que falta.
-- [ ] `title` de 256 caracteres: `422 invalid_field` con `@field: title`.
-- [ ] `title` de 255 caracteres: aceptado.
+- [x] `title` de 256 caracteres: `422 invalid_field` con `@field: title`.
+- [x] `title` de 255 caracteres: aceptado.
 - [ ] `description` de solo espacios: `422 invalid_field`.
-- [ ] `desired_start` que `strtotime()` no parsea: `422 invalid_field`.
-- [ ] `desired_start` en el pasado: `422 invalid_field`, aunque sea el valor que
+- [x] `desired_start` que `strtotime()` no parsea: `422 invalid_field`.
+- [x] `desired_start` en el pasado: `422 invalid_field`, aunque sea el valor que
       la solicitud tiene guardado ahora mismo.
-- [ ] Los tres campos se guardan tal cual llegan, ya trimados por
+- [x] Los tres campos se guardan tal cual llegan, ya trimados por
       `myapi_request_post_field()`; los saltos de línea de `description` se
       conservan.
 
@@ -458,20 +458,20 @@ al objeto del detalle, y que el método es `POST` y no `PUT` porque PHP no puebl
 - [ ] `remove_image_ids[]` con un fid de la propia solicitud: la imagen
       desaparece de la respuesta, del `GET` posterior, de `file_managed` y del
       disco.
-- [ ] `remove_image_ids[]` con un fid de otra solicitud, de un reclamo o
+- [x] `remove_image_ids[]` con un fid de otra solicitud, de un reclamo o
       inexistente: `422 invalid_field` con `@field: remove_image_ids`, y ni un
       solo fichero tocado.
-- [ ] `remove_image_ids[]` con `abc`, `0` o `-1`: el mismo `422`.
-- [ ] Un fid repetido en `remove_image_ids[]` se trata una sola vez y no es un
+- [x] `remove_image_ids[]` con `abc`, `0` o `-1`: el mismo `422`.
+- [x] Un fid repetido en `remove_image_ids[]` se trata una sola vez y no es un
       error.
-- [ ] Solicitud con 5 imágenes: subir una más sin borrar ninguna responde
+- [x] Solicitud con 5 imágenes: subir una más sin borrar ninguna responde
       `422 service_request_too_many_images`.
 - [ ] Solicitud con 5 imágenes: borrar tres y subir tres en la misma petición
       funciona y deja 5.
 - [ ] Una imagen de tipo o tamaño no permitido responde
       `422 service_request_invalid_image` y **ninguna** de las imágenes de esa
       misma petición queda guardada.
-- [ ] Se pueden borrar todas las imágenes: una solicitud sin ninguna es válida.
+- [x] Se pueden borrar todas las imágenes: una solicitud sin ninguna es válida.
 
 ### Adjunto
 
@@ -481,69 +481,69 @@ al objeto del detalle, y que el método es `POST` y no `PUT` porque PHP no puebl
       trae `attachment: null`.
 - [ ] `remove_attachment=1` **con** `attachment` nuevo: la bandera se ignora y
       queda el fichero nuevo.
-- [ ] Sin `attachment` y sin `remove_attachment`: el adjunto que hubiera se queda
+- [x] Sin `attachment` y sin `remove_attachment`: el adjunto que hubiera se queda
       exactamente como estaba.
 - [ ] Un adjunto inválido responde `422 service_request_invalid_attachment` y
       las imágenes que la misma petición acababa de guardar se borran con él.
 
 ### Efecto sobre la solicitud
 
-- [ ] `field_request_status` sigue en `open` después de la edición.
-- [ ] `field_category`, `field_unit`, `field_condominium`, `field_requester`,
+- [x] `field_request_status` sigue en `open` después de la edición.
+- [x] `field_category`, `field_unit`, `field_condominium`, `field_requester`,
       `field_assigned_provider`, `field_assigned_offer` y `field_closed_at`
       valen después lo mismo que valían antes.
-- [ ] `node.uid` no cambia: editar no se apropia de la solicitud.
-- [ ] El nodo sigue publicado.
+- [x] `node.uid` no cambia: editar no se apropia de la solicitud.
+- [x] El nodo sigue publicado.
 - [ ] `{node}.changed` sí cambia — es el `node_save()`, y es correcto.
-- [ ] El timeline no gana ninguna entrada: `transactions` del `GET` posterior
+- [x] El timeline no gana ninguna entrada: `transactions` del `GET` posterior
       tiene exactamente los mismos elementos que antes de editar.
-- [ ] No se envía ninguna notificación ni ningún correo.
-- [ ] Dos ediciones seguidas funcionan las dos: esto no es idempotente ni lo
+- [x] No se envía ninguna notificación ni ningún correo.
+- [x] Dos ediciones seguidas funcionan las dos: esto no es idempotente ni lo
       necesita.
 
 ### Respuesta
 
-- [ ] `200` con `success: true` y `message` traducido de
+- [x] `200` con `success: true` y `message` traducido de
       `service_request_updated`.
-- [ ] El objeto `service_request` trae **dieciséis** claves, en el orden
+- [x] El objeto `service_request` trae **dieciséis** claves, en el orden
       documentado.
-- [ ] No trae `offers`, ni `offers_count`, ni `transactions`.
-- [ ] Las dieciséis que trae valen byte a byte lo mismo que las mismas dieciséis
+- [x] No trae `offers`, ni `offers_count`, ni `transactions`.
+- [x] Las dieciséis que trae valen byte a byte lo mismo que las mismas dieciséis
       del `GET /api/v1/service-requests/{id}` ejecutado justo después.
-- [ ] `viewer` vale `"requester"`.
-- [ ] `images` es siempre un array, vacío cuando no hay ninguna, nunca `null`.
-- [ ] `attachment` es `null` cuando no hay, y no `{fid: null}`.
+- [x] `viewer` vale `"requester"`.
+- [x] `images` es siempre un array, vacío cuando no hay ninguna, nunca `null`.
+- [x] `attachment` es `null` cuando no hay, y no `{fid: null}`.
 
 ### El reclamo, intacto
 
-- [ ] `POST /api/v1/claims/{id}` con `remove_image_ids[]` sigue borrando la
+- [x] `POST /api/v1/claims/{id}` con `remove_image_ids[]` sigue borrando la
       imagen y devolviendo el mismo objeto que antes del paso 2.
-- [ ] Los mismos códigos de error, con los mismos `@field`.
-- [ ] `resources/claim.resource.inc` ya no define
+- [x] Los mismos códigos de error, con los mismos `@field`.
+- [x] `resources/claim.resource.inc` ya no define
       `myapi_claim_node_file_fids()`, `myapi_claim_update_parse_removals()` ni
       `myapi_claim_update_delete_files()`, y ninguna otra línea del módulo las
       nombra.
-- [ ] Los tests unitarios del reclamo pasan sin haber sido modificados.
+- [x] Los tests unitarios del reclamo pasan sin haber sido modificados.
 
 ### Tests unitarios — `tests/unit/ServiceRequestUpdateTest.php`
 
-- [ ] Cubre la compuerta en los ocho casos de estado y en los tres de ofertas.
-- [ ] Cubre el cálculo del cupo, incluido el caso en que las eliminaciones
+- [x] Cubre la compuerta en los ocho casos de estado y en los tres de ofertas.
+- [x] Cubre el cálculo del cupo, incluido el caso en que las eliminaciones
       superan a las imágenes existentes y `max_nuevas` se topa en 0.
 - [ ] Cubre la lista final de `field_images`: supervivientes en su orden de
       delta, nuevas al final, y reindexado sin huecos.
-- [ ] Cubre que `remove_attachment` se ignora cuando llega un `attachment`.
-- [ ] Cubre que la respuesta tiene las dieciséis claves y no las tres ausentes.
-- [ ] La suite entera pasa.
+- [x] Cubre que `remove_attachment` se ignora cuando llega un `attachment`.
+- [x] Cubre que la respuesta tiene las dieciséis claves y no las tres ausentes.
+- [x] La suite entera pasa.
 
 ### Documentación
 
-- [ ] `docs/service-request.md` tiene la sección del endpoint, con la plantilla
+- [x] `docs/service-request.md` tiene la sección del endpoint, con la plantilla
       de `CLAUDE.md`.
-- [ ] Dice que la respuesta no trae `offers`, `offers_count` ni `transactions`,
+- [x] Dice que la respuesta no trae `offers`, `offers_count` ni `transactions`,
       y que por eso no sustituye al objeto del detalle.
-- [ ] Dice por qué es `POST` y no `PUT`.
-- [ ] La tabla de errores lista los siete códigos HTTP que el endpoint puede
+- [x] Dice por qué es `POST` y no `PUT`.
+- [x] La tabla de errores lista los siete códigos HTTP que el endpoint puede
       devolver.
 
 ---
