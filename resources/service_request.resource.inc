@@ -2531,3 +2531,418 @@ function myapi_service_request_create() {
     'service_request_created'
   );
 }
+
+/**
+ * Dispatcher for /api/v1/service-requests/%/cancel (SPEC 95).
+ *
+ * PUT and nothing else — the third '/cancel' route of the module, after
+ * api/v1/reservations/%/cancel and api/v1/payments/%/cancel, and the same
+ * single-method shape as both.
+ *
+ * THE METHOD IS CHECKED BEFORE THE TOKEN, like every other dispatcher here: a
+ * GET on this path is answered 405 with no Authorization header and without
+ * the request having to exist, because the answer is about the VERB and not
+ * about what is behind it.
+ *
+ * @param mixed $nid  The route's wildcard, raw.
+ */
+function myapi_service_request_cancel_dispatch($nid) {
+  if (myapi_request_method() === 'PUT') {
+    myapi_service_request_cancel($nid);
+  }
+  else {
+    myapi_error('method_not_allowed', 405);
+  }
+}
+
+/**
+ * PUT /api/v1/service-requests/% /cancel — the resident cancels (SPEC 95).
+ *
+ * The first WRITE this resource does on an existing request, and the first
+ * status transition of the marketplace that has an endpoint. Seven numbered
+ * steps below, in the order SPEC 90 fixed for this file: nid, token, load,
+ * ownership, status, body, and only then the writes.
+ *
+ * WHO MAY CANCEL: THE field_requester, EXACTLY. Not node->uid — the same
+ * column SPEC 89 made authoritative for reading, for the same reason: a request
+ * an operator registered on a resident's behalf belongs to the resident. Not
+ * the rest of the unit either, unlike a payment (SPEC 23): a service request is
+ * signed by one person and the household does not inherit the right to pull it.
+ * The assigned provider never cancels — "I quit this job" is another action,
+ * with another actor and probably another target status — and the operator
+ * already cancels from the back office (SPEC 94), with a form and a mandatory
+ * comment.
+ *
+ * WHICH STATUSES ADMIT IT IS NOT WRITTEN HERE. The question is asked to
+ * myapi_services_transition_allowed() (includes/myapi.services_common.inc,
+ * SPEC 77), which owns the graph. Copying the four cancellable keys into this
+ * file would create a second truth that drifts the day somebody adds a status.
+ * That function answers FALSE for an unknown or empty value by design, so a
+ * corrupt field_request_status is a 409 and never a 500: "I do not know what
+ * state this is in" reads as "I do not cancel it".
+ *
+ * 404 AND 403 MEAN DIFFERENT THINGS, same criterion as the detail (SPEC 89):
+ * the request exists and its nid is not a secret, so the 403 tells the client
+ * something actionable instead of pretending it is not there. The body is
+ * validated AFTER both, so a request with garbage in it never masks an access
+ * or a status error.
+ *
+ * THE ORDER OF THE THREE WRITES IS LORE, NOT STYLE. The request goes first, the
+ * transaction second, the offers third:
+ *
+ *   - Request first, so myapi_service_transaction_sync_request_status()
+ *     (includes/myapi.service_transaction_admin.inc, SPEC 94), which fires on
+ *     hook_node_insert() of the transaction, compares the two statuses, finds
+ *     them equal and returns WITHOUT saving the request a second time. Whoever
+ *     touches either of the two has to keep that property — the same warning
+ *     myapi_service_transaction_create_initial() already carries.
+ *   - The main effect is written in plain sight in this endpoint, not hidden in
+ *     a hook. Creating only the transaction and letting the sync write the
+ *     status would save one line and make the cancellation stop cancelling, in
+ *     silence, the day somebody edits that sync.
+ *   - Offers last, and NOT atomically: see
+ *     myapi_service_request_reject_live_offers().
+ *
+ * field_assigned_offer AND field_assigned_provider ARE KEPT, even when the
+ * offer they point at is now 'rejected'. A cancellation with no trace of who
+ * the job had been awarded to is a cancellation nobody can audit.
+ *
+ * NOT IDEMPOTENT, on purpose. A second call answers 409 rather than 200: it
+ * tells the resident their action did nothing, which is the truth, and it is
+ * what stops a duplicate transaction from landing on the timeline.
+ *
+ * THE 200 ANSWERS THE WHOLE DETAIL, not a minimal acknowledgement: the same
+ * nineteen-key object GET /api/v1/service-requests/% serves, built by the same
+ * loaders and the same serialiser, plus offers_rejected as a sibling key. Six
+ * queries, spent so the app can repaint the screen it is already on — status,
+ * offers and timeline at once — without a second round trip, and so this
+ * response can never disagree with what a GET would say.
+ *
+ * @param mixed $nid  The route's wildcard, raw.
+ */
+function myapi_service_request_cancel($nid) {
+  // 1. The nid, before anything else. Same guard as the detail: ctype_digit()
+  // over the string form rejects 'abc', '-3', '1.5' and '' alike, and the > 0
+  // then rejects '0'. Costs no query, not even the token's.
+  if (!is_scalar($nid) || !ctype_digit((string) $nid) || (int) $nid <= 0) {
+    myapi_error('service_request_not_found', 404);
+  }
+  $nid = (int) $nid;
+
+  // 2. Authentication. Answers 401 missing_authorization / invalid_token on its
+  // own and never returns on failure.
+  $token = myapi_auth_require_access_token();
+  $uid = (int) $token->uid;
+
+  // 3. The request itself. node_load() and not a joined query, unlike every
+  // read of this file: what comes next SAVES this node, and a write needs the
+  // whole entity with its fields, not four columns. FALSE, the wrong bundle and
+  // the unpublished one are told apart from each other by nothing — all three
+  // are "no such request".
+  //
+  // myapi.building_admin is loaded here and not at the top of the file: it is
+  // needed by this path only, and the reads of this resource must not pay for
+  // it. Same reason the file route loads myapi.service_request_files.
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+
+  $node = node_load($nid);
+  if (!$node || $node->type !== MYAPI_SERVICES_REQUEST_TYPE || (int) $node->status !== 1) {
+    myapi_error('service_request_not_found', 404);
+  }
+
+  // 4. WHO IS ASKING. field_requester, never $node->uid — see the docblock.
+  // A request with no requester at all resolves to NULL and is a 403: nobody
+  // owns it, so nobody may cancel it.
+  $requester_id = myapi_building_admin_field_target_id($node, 'field_requester');
+  if ($requester_id === NULL || (int) $requester_id !== $uid) {
+    myapi_error('service_request_forbidden', 403);
+  }
+
+  // 5. The graph, asked and not transcribed. An empty or unknown status lands
+  // here too, as a 409.
+  $status = myapi_building_admin_field_value($node, 'field_request_status');
+  if (!myapi_services_transition_allowed($status, MYAPI_SERVICES_REQUEST_STATUS_CANCELLED)) {
+    myapi_error('service_request_not_cancellable', 409);
+  }
+
+  // 6. The optional reason, AFTER the 403 and the 409. Absent body, absent key
+  // and whitespace-only all mean "no reason" and are not errors.
+  $reason = myapi_service_request_validate_cancel_reason(myapi_request_body());
+  if (!$reason['ok']) {
+    myapi_error($reason['error_code'], 422, $reason['replacements']);
+  }
+
+  // 7. The three writes, in the order the docblock defends.
+  //
+  // 7a. The request. Its status and nothing else: the assignment fields, the
+  // unit, the category, the description and the files stay exactly as they
+  // were, and the node stays published — cancelling neither unpublishes nor
+  // deletes.
+  $node->field_request_status[LANGUAGE_NONE][0]['value'] = MYAPI_SERVICES_REQUEST_STATUS_CANCELLED;
+  node_save($node);
+
+  // 7b. The transaction. The four fields of SPEC 92, written the same way; the
+  // title is NOT set here — myapi_service_transaction_set_title() puts it in
+  // from hook_node_presave(), inside the node_save() below.
+  $transaction = (object) [
+    'type' => MYAPI_SERVICES_TRANSACTION_TYPE,
+    // The resident who cancelled, which is who is behind the token.
+    'uid' => $uid,
+    'status' => 1,
+  ];
+  node_object_prepare($transaction);
+
+  $transaction->field_request[LANGUAGE_NONE][0]['target_id'] = $node->nid;
+  $transaction->field_request_status[LANGUAGE_NONE][0]['value'] = MYAPI_SERVICES_REQUEST_STATUS_CANCELLED;
+  // 'Y-m-d H:i:00': the real instant with the seconds pinned, not that day at
+  // midnight. The field is 'datetime' and not 'datestamp' (SPEC 77), so a
+  // string is written and not a timestamp.
+  $transaction->field_status_date[LANGUAGE_NONE][0]['value'] = date('Y-m-d H:i:00');
+  // Only 'value', no 'format': stored raw and escaped by whoever renders it.
+  $transaction->field_comment[LANGUAGE_NONE][0]['value'] = myapi_service_request_cancel_comment($reason['value']);
+
+  node_save($transaction);
+
+  // 7c. The offers. Last, and the only step that can leave the data half
+  // written — see the function's own docblock for why that is accepted.
+  $offers_rejected = myapi_service_request_reject_live_offers($node->nid);
+
+  // 8. The answer: THE SAME NINETEEN-KEY OBJECT the detail serves, rebuilt from
+  // the database AFTER the three writes, reusing SPEC 89's own loaders and
+  // serialiser — the same decision, and the same shape, as the 201 of SPEC 90.
+  // Six queries, and they are the price of the app never having to re-request
+  // the screen it is already on: status, offers and timeline all come back in
+  // one piece, consistent with each other, and the response cannot drift from
+  // what a GET would answer because it IS what a GET answers.
+  //
+  // `viewer` is always 'requester': step 4 proved whoever got here is the
+  // field_requester, and nobody else reaches this line.
+  $row = myapi_service_request_detail_row($node->nid);
+
+  // THE ONE THING THAT CAN FAIL AFTER THE WRITES, AND IT MUST NOT FATAL.
+  // myapi_service_request_detail_row() INNER JOINs field_requester (guaranteed
+  // by step 4), field_category AND taxonomy_term_data — so a request whose
+  // category term was deleted resolves to FALSE. Such a request is ALREADY
+  // invisible through GET /api/v1/service-requests/% and through the listing,
+  // for the same joins, so the resident cannot have opened it; a stale id in
+  // the app can still reach here.
+  //
+  // The cancellation is already written at this point and it is CORRECT, so
+  // the truthful answer is 200. What cannot be built is the detail, so the
+  // body degrades to the two keys that are known without a query, and the
+  // inconsistency is logged instead of swallowed. The app tells the two shapes
+  // apart by `viewer`, which only the full object carries. A 500 here would lie
+  // about an operation that succeeded and would send the client into a retry
+  // that answers 409.
+  if (!$row) {
+    watchdog(
+      'myapi',
+      'Service request @nid was cancelled but its detail could not be built: its category term is missing. The response was degraded.',
+      ['@nid' => $node->nid],
+      WATCHDOG_ERROR
+    );
+
+    myapi_respond(
+      [
+        'service_request' => [
+          'id' => (int) $node->nid,
+          'status' => MYAPI_SERVICES_REQUEST_STATUS_CANCELLED,
+        ],
+        'offers_rejected' => $offers_rejected,
+      ],
+      200,
+      'service_request_cancelled'
+    );
+  }
+
+  $row->requester_name = NULL;
+  $names = myapi_user_display_names([$uid]);
+  if (isset($names[$uid])) {
+    $row->requester_name = $names[$uid];
+  }
+
+  $images = myapi_service_request_load_images($node->nid);
+
+  // The requester's answer is EVERY offer, so the trim is the empty list — the
+  // same argument the detail passes for this reader. They all come back with
+  // the statuses step 7c just wrote.
+  $offers = array_map(
+    'myapi_service_request_build_offer',
+    myapi_service_request_load_offers($node->nid, [])
+  );
+
+  $offer_counts = myapi_service_request_offer_counts_by_nid([$node->nid]);
+  $offers_count = isset($offer_counts[$node->nid]) ? $offer_counts[$node->nid] : 0;
+
+  // The timeline, with the cancellation entry already the last of it. This is
+  // why the response carries no separate 'transaction' key: it would be the
+  // same object twice.
+  $transactions = myapi_service_request_load_transactions($node->nid);
+
+  // offers_rejected is a SIBLING of service_request and not a twentieth key of
+  // it, so the object under 'service_request' stays byte-identical to the
+  // detail's and the app can swap it in with no special case. It is also the
+  // one thing the app cannot deduce from what it just received: `offers` shows
+  // which offers are rejected NOW, not which ones THIS call rejected — an
+  // offer already rejected before the cancellation looks exactly the same.
+  myapi_respond(
+    [
+      'service_request' => myapi_service_request_build_detail(
+        $row,
+        'requester',
+        $images,
+        $offers,
+        $offers_count,
+        $transactions
+      ),
+      'offers_rejected' => $offers_rejected,
+    ],
+    200,
+    'service_request_cancelled'
+  );
+}
+
+/**
+ * Validates the optional 'reason' of a cancellation request (SPEC 95).
+ *
+ * Pure: takes the already-decoded body and returns a verdict, never touching
+ * HTTP output nor the node, so the caller decides when to abort. Absent body,
+ * absent key and whitespace-only text all resolve to "no reason" without an
+ * error — the reason is optional by design, and answering 422 to a resident
+ * who cancelled without explaining would put friction on the only exit the app
+ * gives them.
+ *
+ * Length is measured with drupal_strlen() (characters) and not strlen()
+ * (bytes): 255 is the same limit reservations and payments use, and a resident
+ * writing in Spanish would see 255 accented characters rejected for nothing.
+ *
+ * This is deliberately NOT myapi_reservation_validate_cancel_reason() nor a
+ * shared helper parameterised by the key name: the body key ('reason' here,
+ * 'cancel_reason' there) and the @field name that travels in the 422 are
+ * different, and the indirection would save twelve lines of which eleven are
+ * the return contract.
+ *
+ * @param mixed $body  Decoded request body, or NULL when there was none.
+ *
+ * @return array  ['ok' => TRUE, 'value' => string|NULL] when accepted, or
+ *                ['ok' => FALSE, 'error_code' => '...', 'replacements' => [...]]
+ *                when it must answer 422.
+ */
+function myapi_service_request_validate_cancel_reason($body) {
+  if (!is_array($body) || !array_key_exists('reason', $body)) {
+    return ['ok' => TRUE, 'value' => NULL];
+  }
+
+  // Present but not a string (array, number, boolean, NULL): the client sent
+  // the key on purpose with the wrong type, so this one IS an error.
+  if (!is_string($body['reason'])) {
+    return ['ok' => FALSE, 'error_code' => 'invalid_field', 'replacements' => ['@field' => 'reason']];
+  }
+
+  $value = trim($body['reason']);
+  if ($value === '') {
+    return ['ok' => TRUE, 'value' => NULL];
+  }
+  if (drupal_strlen($value) > 255) {
+    return ['ok' => FALSE, 'error_code' => 'field_too_long', 'replacements' => ['@field' => 'reason']];
+  }
+
+  return ['ok' => TRUE, 'value' => $value];
+}
+
+/**
+ * Builds the field_comment of the cancellation transaction (SPEC 95).
+ *
+ * The resident's own words ARE the comment: when a reason came in, it is
+ * returned untouched, with no label and no prefix, because the timeline of
+ * SPEC 93 already says who wrote the entry and what status it carries. When
+ * none came in, an automatic fallback takes its place — SPEC 92 established
+ * that no transaction is ever born without a comment, and this function is
+ * what keeps that promise without demanding anything from the user. It never
+ * returns an empty string.
+ *
+ * check_plain() is NOT applied: field_comment is stored raw and escaped by
+ * whoever renders it, exactly as in SPEC 92.
+ *
+ * @param string|NULL $reason  The validated reason, or NULL when there is none.
+ *
+ * @return string  The comment to store, never empty.
+ */
+function myapi_service_request_cancel_comment($reason) {
+  if (is_string($reason) && $reason !== '') {
+    return $reason;
+  }
+
+  return t('El residente canceló la solicitud.');
+}
+
+/**
+ * Rejects every live offer of a cancelled request (SPEC 95).
+ *
+ * A request that is dead must not leave providers working on it, and that is
+ * the whole reason this spec exists. 'sent' and 'selected' are the two statuses
+ * that mean "still in play", so those are the two this rewrites to 'rejected'.
+ * 'withdrawn' and 'rejected' are left alone: the first is the provider's own
+ * retreat and overwriting it would erase who walked away by themselves, and the
+ * second is already terminal.
+ *
+ * `no.type = MYAPI_SERVICES_OFFER_TYPE` IS NOT DECORATION. field_request is
+ * SHARED with 'service_transaction' (SPEC 77), so without the bundle condition
+ * this would pick up the request's own timeline entries and try to write an
+ * offer status onto them. The INNER JOIN to field_data_field_offer_status is
+ * deliberate too: an offer with no status row has nothing to rewrite.
+ *
+ * WHY node_load()/node_save() PER OFFER AND NOT ONE db_update(). A direct
+ * UPDATE on field_data_field_offer_status would be one query instead of N, and
+ * it would leave the revision table and the entity cache lying. The number of
+ * offers a request can hold is small and bounded, so the correct write wins
+ * over the cheap one.
+ *
+ * NOT ATOMIC, ON PURPOSE. The caller writes the request's status FIRST, so a
+ * failure halfway through this loop leaves live offers pointing at a request
+ * that is already 'cancelled' — inconsistent but harmless, because 'cancelled'
+ * is terminal in the graph and no flow can award them. No explicit database
+ * transaction is opened: node_save() with the Field API and its hooks inside
+ * one is a known source of lock-ups in Drupal 7.
+ *
+ * @param mixed $nid  The cancelled request's nid.
+ *
+ * @return int  How many offers actually changed status. 0 when the nid is not
+ *              a positive integer and 0 when there was nothing live.
+ */
+function myapi_service_request_reject_live_offers($nid) {
+  if (!is_scalar($nid) || !ctype_digit((string) $nid) || (int) $nid <= 0) {
+    return 0;
+  }
+  $nid = (int) $nid;
+
+  $query = db_select('field_data_field_request', 'fq');
+  $query->condition('fq.entity_type', 'node');
+  $query->condition('fq.deleted', 0);
+  $query->condition('fq.field_request_target_id', $nid);
+
+  $query->innerJoin('node', 'no', 'no.nid = fq.entity_id');
+  $query->condition('no.type', MYAPI_SERVICES_OFFER_TYPE);
+  $query->condition('no.status', 1);
+
+  $query->innerJoin('field_data_field_offer_status', 'fos', "fos.entity_id = no.nid AND fos.entity_type = 'node' AND fos.deleted = 0");
+  $query->condition('fos.field_offer_status_value', ['sent', 'selected'], 'IN');
+
+  $query->addField('no', 'nid', 'nid');
+
+  $offer_nids = $query->execute()->fetchCol();
+
+  $rejected = 0;
+  foreach ($offer_nids as $offer_nid) {
+    $offer = node_load($offer_nid);
+    if (!$offer) {
+      continue;
+    }
+
+    $offer->field_offer_status[LANGUAGE_NONE][0]['value'] = 'rejected';
+    node_save($offer);
+    $rejected++;
+  }
+
+  return $rejected;
+}
