@@ -481,13 +481,24 @@ class ServiceRequestDetailEndpointTest extends TestCase {
 
   /**
    * Everything that is not GET is 405 on BOTH routes, and the method is checked
-   * BEFORE the token and before any query: a POST with a valid token is still
-   * 405, and one with no token at all is 405 too — never 401. Every write is
-   * out of SPEC 89.
+   * BEFORE the token and before any query: a PUT with a valid token is still
+   * 405, and one with no token at all is 405 too — never 401.
+   *
+   * POST ON THE DETAIL ROUTE IS THE ONE EXCEPTION, AND ONLY SINCE SPEC 96,
+   * which made it the edit endpoint (myapi_service_request_update()) — POST and
+   * not PUT because PHP fills neither $_POST nor $_FILES on a PUT and an edit
+   * carries files. It is asserted by the test right below instead of here. On
+   * the FILE route POST is still 405, like every other verb: that route only
+   * ever serves a download.
    */
   public function testEveryMethodOtherThanGetIs405OnBothRoutes() {
-    foreach (['POST', 'PUT', 'DELETE', 'PATCH'] as $method) {
-      foreach (['detail', 'file'] as $route) {
+    $methods = [
+      'detail' => ['PUT', 'DELETE', 'PATCH'],
+      'file'   => ['POST', 'PUT', 'DELETE', 'PATCH'],
+    ];
+
+    foreach ($methods as $route => $route_methods) {
+      foreach ($route_methods as $method) {
         $this->seed(['node' => [$this->request()]], self::UID);
         $_SERVER['REQUEST_METHOD'] = $method;
 
@@ -501,6 +512,25 @@ class ServiceRequestDetailEndpointTest extends TestCase {
         $this->assertSame([], myapi_test_db_queries(), $label . ' costs no query');
       }
     }
+  }
+
+  /**
+   * POST on the detail route is NOT 405 any more (SPEC 96): it reaches
+   * myapi_service_request_update(), which authenticates like every write. With
+   * no Authorization header that is a 401 and not a 405, which is what tells
+   * the two apart from the outside — the read tests of this class care that the
+   * verb stopped being rejected, not what the edit then does with it.
+   */
+  public function testPostOnTheDetailRouteIsNoLongerRejectedByTheMethod() {
+    $this->seed(['node' => [$this->request()]], self::UID);
+    $_SERVER['REQUEST_METHOD'] = 'POST';
+    unset($_SERVER['HTTP_AUTHORIZATION']);
+
+    $result = $this->dispatch();
+
+    $this->assertNotSame(405, $result['status']);
+    $this->assertSame(401, $result['status']);
+    $this->assertSame('missing_authorization', $result['json']['error_code']);
   }
 
   /**
@@ -2131,13 +2161,17 @@ class ServiceRequestDetailEndpointTest extends TestCase {
    * load, and every other function in the file is still forbidden. Adding a
    * third name to that list is a decision, not a fix — the reason a reader must
    * never load is that the detail's query budget is flat by construction, and
-   * the test right above this one is what measures it.
+   * the test right above this one is what measures it. SPEC 96 took that
+   * decision once more, for the edit, on exactly the same grounds: it saves the
+   * node it loads, and overwriting five fields with db_update() would leave the
+   * revision table and the entity cache lying.
    */
   public function testNoReadPathCallsNodeLoad() {
-    // The cancellation writes: they load what they are about to save.
+    // The writes: they load what they are about to save.
     $allowed = [
       'myapi_service_request_cancel',
       'myapi_service_request_reject_live_offers',
+      'myapi_service_request_update',
     ];
 
     $checked = 0;
