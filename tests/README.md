@@ -248,6 +248,33 @@ said (the spec now carries an erratum; `docs/bank.md` was always right),
 `strcasecmp()` sorts accented initials after every ASCII name, and the ordering
 is applied over the already-escaped text.
 
+Since SPEC 94, `tests/unit/ServiceTransactionAdminTest.php` covers the pure
+half of the marketplace's back-office timeline
+(`includes/myapi.service_transaction_admin.inc`): the author cell, the six
+cells of a table row, the `AAAA-MM-DD HH:MM` validator, the two FAPI walks
+(`field_request_status` to `#disabled` on the request's form,
+`field_request`'s nested `target_id` on the transaction's) and the redirect
+back to the request. Three of its cases are guards rather than checks of
+today's output — the status date must never be passed through `strtotime()`
+(the field is `tz_handling = 'none'`, so a conversion would shift a naive local
+time), every delta of every langcode must be locked and not just the first, and
+the redirect handler must be appended last. Same split as everywhere else here:
+the timeline query, the two link builders, the status sync, the two submit
+handlers that save or delete and the two access callbacks stay out — they are
+`db_select()`, `node_load()`, `node_save()` and `node_access()` — and the class
+docblock names them one by one rather than omitting them in silence. The two
+link builders are still *reached*, because the table builder calls them, so the
+`node_access()` fixture is left answering `TRUE` by default and one case pins
+the empty cell a denied delete produces.
+
+That spec also **rewrote a guard instead of deleting it**:
+`ServiceTransactionTest::testNodeInsertHasNoServiceTransactionBranch()` existed
+to make adding that branch a deliberate, visible act (SPEC 92). SPEC 94 added
+it, the guard fired, and it now pins the branch *and* the only function it may
+delegate to — plus a second one asserting `myapi_node_update()` still has no
+`'service_request'` branch, which is the half the status sync actually depends
+on to not loop. This file needed **no new stub** in `bootstrap.php`.
+
 **Run one class in isolation** when you touch this layer —
 `vendor/bin/phpunit --filter FloodTest`. Every class here passes alone as well
 as in the suite, which is what keeps the globals the stubs read
@@ -486,8 +513,10 @@ followed by `node tests/e2e/password-reset-roundtrip.js`.
 ## Scope note
 
 `tests/integration/` and `tests/e2e/` cover `auth` only. `tests/unit/` covers
-`auth`, the shared helpers, the reservation and claim logic, and — since
-SPEC 74 — the whole `units` endpoint. The pattern here (three layers,
+`auth`, the shared helpers, the reservation and claim logic, since SPEC 74 the
+whole `units` endpoint, and — across the services specs — the marketplace: its
+endpoints and, since SPEC 94, the pure half of its back-office timeline. No
+back-office screen has integration or e2e coverage in any domain. The pattern here (three layers,
 `myapi_test` companion module for integration, Postman + Node for e2e) is meant
 to be replicated for the remaining resources (`receipt`, `extra_fee`, `payment`,
 `expense`) in future specs — see `specs/auth/21-auth-testing.md`, "Fuera de este

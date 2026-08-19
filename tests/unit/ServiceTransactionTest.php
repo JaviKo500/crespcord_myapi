@@ -410,14 +410,36 @@ class ServiceTransactionTest extends TestCase {
   }
 
   /**
-   * SPEC 92 keeps the direction request -> transaction and only that. A
-   * 'service_transaction' branch in hook_node_INSERT() would be the first half
-   * of a cascade; this guard makes adding one a deliberate, visible act.
+   * SPEC 92 kept the direction request -> transaction and only that, and
+   * guarded it here by asserting hook_node_INSERT() had no
+   * 'service_transaction' branch at all — so that adding one would be a
+   * deliberate, visible act. SPEC 94 added it, this guard fired, and it is
+   * rewritten rather than deleted: what it now pins is the branch AND the
+   * function it may delegate to.
+   *
+   * A branch that called anything else — creating another transaction, saving
+   * the request unconditionally — is exactly the cascade the original guard
+   * existed to catch.
    */
-  public function testNodeInsertHasNoServiceTransactionBranch() {
+  public function testNodeInsertDelegatesTheServiceTransactionBranchToTheSync() {
     $insert = $this->functionSource('myapi_node_insert');
 
-    $this->assertStringNotContainsString("'service_transaction'", $insert);
+    $this->assertStringContainsString("if (\$node->type === 'service_transaction') {", $insert);
+    $this->assertStringContainsString('myapi_service_transaction_sync_request_status($node);', $insert);
+    $this->assertStringNotContainsString('myapi_service_transaction_create_initial($node);', substr($insert, strpos($insert, "'service_transaction'")));
+  }
+
+  /**
+   * The OTHER half of the anti-cascade invariant, and the half SPEC 94's sync
+   * actually depends on: myapi_node_update() must have no 'service_request'
+   * branch. The sync re-saves the request on a real status change, and that
+   * save fires hook_node_update(); a branch there that touched transactions
+   * would close the loop the original guard was written to prevent.
+   */
+  public function testNodeUpdateHasNoServiceRequestBranch() {
+    $update = $this->functionSource('myapi_node_update');
+
+    $this->assertStringNotContainsString("if (\$node->type === 'service_request') {", $update);
   }
 
   /**
