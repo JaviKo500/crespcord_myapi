@@ -993,10 +993,10 @@ class ServiceRequestCreateEndpointTest extends TestCase {
     $result = $this->create();
 
     $keys = [
-      'id', 'title', 'description', 'status', 'category', 'offers_count',
-      'assigned_offer', 'assigned_provider', 'created', 'desired_start',
-      'viewer', 'requester', 'unit', 'condominium', 'images', 'attachment',
-      'closed_at', 'offers',
+      'id', 'title', 'description', 'status', 'category', 'unit',
+      'offers_count', 'assigned_offer', 'assigned_provider', 'created',
+      'desired_start', 'viewer', 'requester', 'condominium', 'images',
+      'attachment', 'closed_at', 'offers',
     ];
     $this->assertCount(18, $keys, 'the fixture list itself must be complete');
     $this->assertSame($keys, array_keys($result['json']['data']['service_request']));

@@ -84,7 +84,7 @@ class ServiceRequestListEndpointTest extends TestCase {
   }
 
   private function clearQueryString() {
-    unset($_GET['page'], $_GET['limit'], $_GET['sort'], $_GET['status'], $_GET['category_id'], $_GET['date_from'], $_GET['date_to']);
+    unset($_GET['page'], $_GET['limit'], $_GET['sort'], $_GET['status'], $_GET['category_id'], $_GET['unit_id'], $_GET['date_from'], $_GET['date_to']);
   }
 
   /* -------------------------------------------------------------------------
@@ -128,6 +128,14 @@ class ServiceRequestListEndpointTest extends TestCase {
       'fcat.field_category_tid'        => '12',
       'category_code'                  => 'plumbing',
       'category_name'                  => 'Plomería',
+      // The unit, seeded TWICE and for two different readers — the same shape
+      // the category above has. 'fu.field_unit_target_id' is the raw column the
+      // '?unit_id' filter compares against; 'unit_id' is what the chain of
+      // LEFT JOINs through the 'vivienda' node projects, and the two can
+      // legitimately disagree — see the case that unpublishes the unit.
+      'fu.field_unit_target_id'        => '55',
+      'unit_id'                        => '55',
+      'unit_name'                      => 'A-301',
       'frs.field_request_status_value' => MYAPI_SERVICES_REQUEST_STATUS_OPEN,
       'description'                    => 'El calentador gotea.',
       'desired_start'                  => (string) (self::CREATED + 86400),
@@ -513,6 +521,7 @@ class ServiceRequestListEndpointTest extends TestCase {
             'description'       => 'El calentador del baño principal gotea desde el lunes.',
             'status'            => 'assigned',
             'category'          => ['id' => 12, 'code' => 'plumbing', 'name' => 'Plomería'],
+            'unit'              => ['id' => 55, 'name' => 'A-301'],
             'offers_count'      => 3,
             'assigned_offer'    => ['id' => 45, 'status' => 'selected'],
             'assigned_provider' => ['id' => 7, 'name' => 'Plomería Rivas'],
@@ -525,6 +534,7 @@ class ServiceRequestListEndpointTest extends TestCase {
             'description'       => 'La puerta de servicio no cierra.',
             'status'            => 'open',
             'category'          => ['id' => 14, 'code' => 'locksmith', 'name' => 'Cerrajería'],
+            'unit'              => ['id' => 55, 'name' => 'A-301'],
             'offers_count'      => 0,
             'assigned_offer'    => NULL,
             'assigned_provider' => NULL,
@@ -538,11 +548,16 @@ class ServiceRequestListEndpointTest extends TestCase {
   }
 
   /**
-   * Every item carries EXACTLY the ten documented keys, in the documented order
-   * — the assertion that catches a column leaking into the listing — and `data`
-   * carries only the two it should.
+   * Every item carries EXACTLY the eleven documented keys, in the documented
+   * order — the assertion that catches a column leaking into the listing — and
+   * `data` carries only the two it should.
+   *
+   * They were ten until SPEC 91 added `unit`, and its POSITION is pinned here
+   * on purpose: it sits beside `category` because the two answer what and where
+   * the request is, and because GET /api/v1/service-requests/% merges this very
+   * item first — moving it here moves it there.
    */
-  public function testEveryItemHasExactlyTenKeysInOrder() {
+  public function testEveryItemHasExactlyElevenKeysInOrder() {
     $result = $this->listing([
       $this->request(128, 'Con adjudicación', [
         'assigned_offer_id'      => '45',
@@ -560,6 +575,7 @@ class ServiceRequestListEndpointTest extends TestCase {
         'description',
         'status',
         'category',
+        'unit',
         'offers_count',
         'assigned_offer',
         'assigned_provider',
@@ -567,6 +583,7 @@ class ServiceRequestListEndpointTest extends TestCase {
         'desired_start',
       ], array_keys($item));
       $this->assertSame(['id', 'code', 'name'], array_keys($item['category']));
+      $this->assertSame(['id', 'name'], array_keys($item['unit']));
     }
 
     $this->assertSame(['service_requests', 'pagination'], array_keys($result['json']['data']));
@@ -645,6 +662,69 @@ class ServiceRequestListEndpointTest extends TestCase {
     $this->assertSame(12, $item['category']['id']);
     $this->assertSame(1, $this->pagination($result)['total']);
     $this->assertStringNotContainsString('"code":null', $result['output']);
+  }
+
+  /**
+   * The unit travels as {id, name} beside the category, with the id as a JSON
+   * integer — the key SPEC 91 added so that '?unit_id' has something to filter
+   * that the client can also paint.
+   */
+  public function testTheUnitTravelsAsAnObjectBesideTheCategory() {
+    $result = $this->listing([$this->request(128, 'Fuga')]);
+
+    $item = $this->items($result)[0];
+    $this->assertSame(['id' => 55, 'name' => 'A-301'], $item['unit']);
+    $this->assertIsInt($item['unit']['id']);
+    $this->assertStringContainsString('"unit":{"id":55,"name":"A-301"}', $result['output']);
+  }
+
+  /**
+   * unit.name is field_nombre_vivienda and NOT the 'vivienda' node title: the
+   * title is an internal label, and the field is the name the resident knows
+   * their flat by — the same value GET /api/v1/units and the detail answer.
+   */
+  public function testTheUnitNameIsTheFieldAndNotTheNodeTitle() {
+    $this->assertStringContainsString(
+      'field_data_field_nombre_vivienda',
+      $this->codeWithoutComments(),
+      'the unit name is read from its own field'
+    );
+
+    $result = $this->listing([$this->request(128, 'Fuga', ['unit_name' => 'A-301'])]);
+
+    $this->assertSame('A-301', $this->items($result)[0]['unit']['name']);
+  }
+
+  /**
+   * A WHOLE null and never {id: null, name: null}, in the two cases that
+   * produce it — a request older than the SPEC 86 requirement, with no field
+   * row at all, and a reference whose 'vivienda' was deleted or unpublished —
+   * and THE REQUEST KEEPS ITS PLACE IN THE LISTING in both. Same criterion as
+   * the broken award: losing a request of your own because of a reference the
+   * resident cannot even see is the worst failure a read endpoint can have.
+   */
+  public function testARequestWithNoResolvableUnitAnswersAWholeNullAndStaysListed() {
+    $result = $this->listing([
+      // Never had a unit: no field row, so neither column resolves.
+      $this->request(128, 'Antigua', [
+        'fu.field_unit_target_id' => NULL,
+        'unit_id'                 => NULL,
+        'unit_name'               => NULL,
+      ]),
+      // Has one, but the 'vivienda' node is gone or unpublished: the raw
+      // target_id is still there and only the joined node fails to resolve.
+      $this->request(127, 'Vivienda despublicada', [
+        'unit_id'   => NULL,
+        'unit_name' => NULL,
+      ]),
+    ]);
+
+    $this->assertSame([128, 127], $this->ids($result));
+    $this->assertSame(2, $this->pagination($result)['total']);
+    foreach ($this->items($result) as $item) {
+      $this->assertNull($item['unit'], $item['title']);
+    }
+    $this->assertStringContainsString('"unit":null', $result['output']);
   }
 
   /**
@@ -1184,6 +1264,246 @@ class ServiceRequestListEndpointTest extends TestCase {
   }
 
   /* -------------------------------------------------------------------------
+   * The query string: '?unit_id', the resident's own flat (SPEC 91).
+   *
+   * STRICT LIKE '?category_id' AND FOR THE SAME KIND OF REASON — its twin, not
+   * itself: POST /api/v1/service-requests already answers 422 for a malformed
+   * `unit_id`, and the app sends here the very value it created a request with.
+   * What it never answers is a 403: the scope is already field_requester = uid,
+   * so somebody else's unit can only intersect it in the empty set.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * With a nid, only the requests of that unit come back — and `total` counts
+   * the filtered set, not the whole listing.
+   */
+  public function testTheUnitFilterNarrowsBothTheListAndTheTotal() {
+    $requests = [
+      $this->request(128, 'Fuga', [
+        'fu.field_unit_target_id' => '55',
+        'unit_id'                 => '55',
+        'created'                 => (string) self::CREATED,
+      ]),
+      $this->request(127, 'Cerradura', [
+        'fu.field_unit_target_id' => '56',
+        'unit_id'                 => '56',
+        'unit_name'               => 'B-102',
+        'created'                 => (string) (self::CREATED - 10),
+      ]),
+      $this->request(126, 'Grifo', [
+        'fu.field_unit_target_id' => '55',
+        'unit_id'                 => '55',
+        'created'                 => (string) (self::CREATED - 20),
+      ]),
+    ];
+
+    $_GET['unit_id'] = '55';
+
+    $result = $this->listing($requests);
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame([128, 126], $this->ids($result));
+    $this->assertSame(2, $this->pagination($result)['total']);
+  }
+
+  /**
+   * THE FILTER READS THE RAW target_id AND NEVER THE JOINED NODE, which is what
+   * keeps a request whose 'vivienda' was unpublished inside the answer of
+   * '?unit_id=<that vivienda>'. It is still a request OF that unit; only its
+   * name cannot be painted, and `unit: null` says exactly that.
+   *
+   * Filtering on nu.nid instead would drop it — the resident would ask for the
+   * requests of their flat and get an empty screen because an operator
+   * unpublished a node they have never heard of.
+   */
+  public function testTheFilterKeepsARequestWhoseUnitNodeNoLongerResolves() {
+    $_GET['unit_id'] = '55';
+
+    $result = $this->listing([
+      $this->request(128, 'Vivienda despublicada', [
+        'unit_id'   => NULL,
+        'unit_name' => NULL,
+      ]),
+    ]);
+
+    $this->assertSame([128], $this->ids($result));
+    $this->assertSame(1, $this->pagination($result)['total']);
+    $this->assertNull($this->items($result)[0]['unit']);
+  }
+
+  /**
+   * A well-formed nid that no request of the reader carries — another
+   * resident's flat, a unit they moved out of, a node that no longer exists —
+   * answers 200 with an empty list and total 0. NOT a 403 and NOT a 404: the
+   * scope already caps the answer at the reader's own requests, so there is
+   * nothing to protect and nothing to confirm to whoever probed.
+   */
+  public function testAForeignOrUnknownUnitIdIsAnEmptyListAndNeverA403() {
+    $_GET['unit_id'] = '999999';
+
+    $result = $this->listing([$this->request(128, 'Fuga')]);
+
+    $this->assertSame(200, $result['status']);
+    $this->assertTrue($result['json']['success']);
+    $this->assertSame([], $this->items($result));
+    $this->assertSame(0, $this->pagination($result)['total']);
+    $this->assertSame(0, $this->pagination($result)['total_pages']);
+  }
+
+  /**
+   * Every malformed unit_id is a 422 invalid_field naming the parameter — the
+   * same list of values '?category_id' refuses, because both go through the
+   * same parser. The empty string is in it on purpose: '?unit_id=' is a
+   * present-and-broken value, not an absent one.
+   */
+  public function testAMalformedUnitIdIs422InvalidField() {
+    foreach (['abc', '0', '-3', '', '1.5', ' 1', '+1', 'null', ['55']] as $value) {
+      $this->authenticate();
+      $this->seed([$this->request(128, 'Fuga')]);
+      $_GET['unit_id'] = $value;
+
+      $result = $this->dispatch();
+
+      $this->assertSame(422, $result['status'], var_export($value, TRUE));
+      $this->assertFalse($result['json']['success'], var_export($value, TRUE));
+      $this->assertSame('invalid_field', $result['json']['error_code'], var_export($value, TRUE));
+      $this->assertStringContainsString('unit_id', $result['json']['error'], var_export($value, TRUE));
+    }
+  }
+
+  /**
+   * The 422 is answered BEFORE any listing query, exactly like '?category_id':
+   * a malformed filter costs the token lookup and nothing else.
+   */
+  public function testTheMalformedUnitFilterCostsNoListingQuery() {
+    $this->authenticate();
+    $this->seed([$this->request(128, 'Fuga')]);
+    $_GET['unit_id'] = 'abc';
+
+    $this->dispatch();
+
+    $this->assertSame(['my_api_tokens'], $this->queriedTables());
+  }
+
+  /**
+   * Both strict parameters are parsed before the count, so a request carrying
+   * one valid and one broken never runs a listing query either — and the 422
+   * names the broken one.
+   */
+  public function testABrokenUnitIdIs422EvenBesideAValidCategoryId() {
+    $this->authenticate();
+    $this->seed([$this->request(128, 'Fuga')]);
+    $_GET['category_id'] = '12';
+    $_GET['unit_id'] = 'abc';
+
+    $result = $this->dispatch();
+
+    $this->assertSame(422, $result['status']);
+    $this->assertStringContainsString('unit_id', $result['json']['error']);
+    $this->assertSame(['my_api_tokens'], $this->queriedTables());
+  }
+
+  /**
+   * '?unit_id' composes with AND with every other filter, and `pagination`
+   * describes the result of all of them together.
+   */
+  public function testTheUnitFilterComposesWithTheOthers() {
+    $requests = [
+      $this->request(128, 'Plomería abierta en A-301', [
+        'fu.field_unit_target_id'        => '55',
+        'unit_id'                        => '55',
+        'fcat.field_category_tid'        => '12',
+        'frs.field_request_status_value' => MYAPI_SERVICES_REQUEST_STATUS_OPEN,
+        'created'                        => (string) ($this->dayStart(0) + 3600),
+      ]),
+      $this->request(127, 'Plomería abierta en B-102', [
+        'fu.field_unit_target_id'        => '56',
+        'unit_id'                        => '56',
+        'fcat.field_category_tid'        => '12',
+        'frs.field_request_status_value' => MYAPI_SERVICES_REQUEST_STATUS_OPEN,
+        'created'                        => (string) ($this->dayStart(0) + 3500),
+      ]),
+      $this->request(126, 'Plomería cerrada en A-301', [
+        'fu.field_unit_target_id'        => '55',
+        'unit_id'                        => '55',
+        'fcat.field_category_tid'        => '12',
+        'frs.field_request_status_value' => MYAPI_SERVICES_REQUEST_STATUS_CLOSED,
+        'created'                        => (string) ($this->dayStart(0) + 3400),
+      ]),
+      $this->request(125, 'Cerrajería abierta en A-301', [
+        'fu.field_unit_target_id'        => '55',
+        'unit_id'                        => '55',
+        'fcat.field_category_tid'        => '14',
+        'frs.field_request_status_value' => MYAPI_SERVICES_REQUEST_STATUS_OPEN,
+        'created'                        => (string) ($this->dayStart(0) + 3300),
+      ]),
+      $this->request(124, 'Plomería abierta en A-301, ayer', [
+        'fu.field_unit_target_id'        => '55',
+        'unit_id'                        => '55',
+        'fcat.field_category_tid'        => '12',
+        'frs.field_request_status_value' => MYAPI_SERVICES_REQUEST_STATUS_OPEN,
+        'created'                        => (string) ($this->dayStart(-1) + 3600),
+      ]),
+    ];
+
+    $_GET['unit_id'] = '55';
+    $_GET['category_id'] = '12';
+    $_GET['status'] = 'open';
+    $_GET['date_from'] = $this->day(0);
+    $_GET['date_to'] = $this->day(0);
+
+    $result = $this->listing($requests);
+
+    $this->assertSame([128], $this->ids($result));
+    $this->assertSame(1, $this->pagination($result)['total']);
+    $this->assertSame(1, $this->pagination($result)['total_pages']);
+  }
+
+  /**
+   * BOTH QUERIES carry the filter, and both carry it as a condition on the RAW
+   * column — the shape assertion behind "the count describes the rows the page
+   * returns" for this filter too.
+   */
+  public function testBothQueriesCarryTheUnitFilterOnTheRawColumn() {
+    $_GET['unit_id'] = '55';
+    $this->listing([$this->request(128, 'Fuga')]);
+
+    foreach ([1, 2] as $index) {
+      $query = myapi_test_db_queries()[$index];
+
+      $conditions = [];
+      foreach ($query['conditions'] as $condition) {
+        $conditions[$condition['field']] = $condition['value'];
+      }
+
+      $this->assertArrayHasKey('fu.field_unit_target_id', $conditions, 'query ' . $index);
+      $this->assertSame(55, $conditions['fu.field_unit_target_id'], 'query ' . $index);
+      $this->assertArrayNotHasKey('nu.nid', $conditions, 'query ' . $index);
+    }
+  }
+
+  /**
+   * Without the parameter nothing is narrowed and NO condition on the unit
+   * reaches the SQL — the join is still there, because the response paints the
+   * unit anyway, and that is precisely what must not turn into a filter.
+   */
+  public function testWithoutTheParameterNoUnitConditionIsAdded() {
+    $this->listing([
+      $this->request(128, 'A-301'),
+      $this->request(127, 'B-102', [
+        'fu.field_unit_target_id' => '56',
+        'unit_id'                 => '56',
+        'unit_name'               => 'B-102',
+      ]),
+    ]);
+
+    foreach ([1, 2] as $index) {
+      $fields = array_column(myapi_test_db_queries()[$index]['conditions'], 'field');
+      $this->assertNotContains('fu.field_unit_target_id', $fields, 'query ' . $index);
+    }
+  }
+
+  /* -------------------------------------------------------------------------
    * The query string: '?date_from' / '?date_to', the range over n.created.
    *
    * THE COLUMN IS THE ONE '?sort' ALREADY ORDERS BY, and the bounds are DAYS
@@ -1608,10 +1928,15 @@ class ServiceRequestListEndpointTest extends TestCase {
   }
 
   /**
-   * The count query carries the scope and the category joins — everything that
-   * decides WHICH ROWS EXIST — and does NOT drag the presentation joins along:
-   * they add columns, never rows. That frontier is what makes `total` describe
-   * exactly the rows the pages return.
+   * The count query carries the scope and every table a FILTER reads —
+   * everything that decides WHICH ROWS EXIST — and does NOT drag the
+   * presentation joins along: they add columns, never rows. That frontier is
+   * what makes `total` describe exactly the rows the pages return.
+   *
+   * field_data_field_unit is in this list and the 'vivienda' node is NOT: the
+   * '?unit_id' filter compares the raw target_id, so the count resolves no node
+   * to answer the same number — which is exactly why the filter reads that
+   * column and not nu.nid.
    */
   public function testTheCountQueryCarriesTheScopeButNotThePresentationJoins() {
     $this->listing([$this->request(128, 'Fuga')]);
@@ -1624,6 +1949,7 @@ class ServiceRequestListEndpointTest extends TestCase {
       'field_data_field_category'       => 'INNER',
       'taxonomy_term_data'              => 'INNER',
       'field_data_field_request_status' => 'LEFT',
+      'field_data_field_unit'           => 'LEFT',
     ], array_combine(
       array_column($count['joins'], 'table'),
       array_column($count['joins'], 'type')
@@ -1660,9 +1986,17 @@ class ServiceRequestListEndpointTest extends TestCase {
       'field_data_field_category fcat'         => 'INNER',
       'taxonomy_term_data td'                  => 'INNER',
       'field_data_field_request_status frs'    => 'LEFT',
+      // The unit reference is LEFT although a filter reads it, and the reason
+      // is not the filter: field_unit became required on a bundle that already
+      // had rows and nothing backfilled them, so an INNER JOIN would drop a
+      // pre-SPEC-86 request from its own owner's listing with no message.
+      'field_data_field_unit fu'               => 'LEFT',
       // The category CODE is LEFT even though its two term joins are INNER: a
       // term with no field_category_code answers code "" and keeps its request.
       'field_data_field_category_code cc'      => 'LEFT',
+      // The unit's second hop, added by the page and never by the count.
+      'node nu'                                => 'LEFT',
+      'field_data_field_nombre_vivienda fnv'   => 'LEFT',
       'field_data_field_description fd'        => 'LEFT',
       'field_data_field_desired_start fds'     => 'LEFT',
       'field_data_field_assigned_offer fao'    => 'LEFT',

@@ -525,6 +525,7 @@ class ServiceRequestDetailEndpointTest extends TestCase {
       'description'       => "El calentador gotea.\nDesde el lunes.",
       'status'            => 'open',
       'category'          => ['id' => 12, 'code' => 'plumbing', 'name' => 'Plomería'],
+      'unit'              => ['id' => 55, 'name' => 'A-301'],
       'offers_count'      => 2,
       'assigned_offer'    => NULL,
       'assigned_provider' => NULL,
@@ -532,7 +533,6 @@ class ServiceRequestDetailEndpointTest extends TestCase {
       'desired_start'     => format_date(self::CREATED + 86400, 'custom', 'Y-m-d\TH:i:s'),
       'viewer'            => 'requester',
       'requester'         => ['id' => 42, 'name' => 'Ana Pérez'],
-      'unit'              => ['id' => 55, 'name' => 'A-301'],
       'condominium'       => ['id' => 7, 'name' => 'Torres del Este'],
       'images'            => [[
         'id'       => 91,
@@ -580,10 +580,10 @@ class ServiceRequestDetailEndpointTest extends TestCase {
    */
   public function testTheEighteenKeysAreAlwaysThereAndInOrder() {
     $keys = [
-      'id', 'title', 'description', 'status', 'category', 'offers_count',
-      'assigned_offer', 'assigned_provider', 'created', 'desired_start',
-      'viewer', 'requester', 'unit', 'condominium', 'images', 'attachment',
-      'closed_at', 'offers',
+      'id', 'title', 'description', 'status', 'category', 'unit',
+      'offers_count', 'assigned_offer', 'assigned_provider', 'created',
+      'desired_start', 'viewer', 'requester', 'condominium', 'images',
+      'attachment', 'closed_at', 'offers',
     ];
 
     $full = $this->detailFor(self::UID, [
@@ -608,12 +608,16 @@ class ServiceRequestDetailEndpointTest extends TestCase {
   }
 
   /**
-   * THE TEN FIRST KEYS ARE BYTE FOR BYTE THE LISTING'S, for the same request.
-   * Not "equivalent": the detail calls myapi_service_request_build_item(), so
-   * the assertion compares the detail's own output with the listing's own
-   * output over the same fixture.
+   * THE ELEVEN FIRST KEYS ARE BYTE FOR BYTE THE LISTING'S, for the same
+   * request. Not "equivalent": the detail calls
+   * myapi_service_request_build_item(), so the assertion compares the detail's
+   * own output with the listing's own output over the same fixture.
+   *
+   * They were ten until SPEC 91 moved `unit` into the shared serialiser. The
+   * slice below is what pins that the two endpoints answer that key with the
+   * same bytes — the reason the detail no longer resolves it on its own.
    */
-  public function testTheTenFirstKeysAreTheListingsByteForByte() {
+  public function testTheElevenFirstKeysAreTheListingsByteForByte() {
     $tables = [
       'node'                     => [$this->request()],
       'field_data_field_request' => [$this->offer(46, self::CREATED, self::PROVIDER_NID)],
@@ -628,7 +632,7 @@ class ServiceRequestDetailEndpointTest extends TestCase {
     $listing = myapi_test_capture('myapi_service_request_dispatch');
     $listed = $listing['json']['data']['service_requests'][0];
 
-    $this->assertSame($listed, array_slice($detail, 0, 10, TRUE));
+    $this->assertSame($listed, array_slice($detail, 0, 11, TRUE));
   }
 
   /**

@@ -2,7 +2,7 @@
 
 /**
  * @file
- * Service request resource for the myapi module (SPECS 88, 89 and 90).
+ * Service request resource for the myapi module (SPECS 88, 89, 90 and 91).
  *
  * Four routes, authenticated throughout:
  *
@@ -13,7 +13,7 @@
  *     server-side, an optional direct award to an eligible provider, and
  *     optional images/attachment saved all-or-nothing (SPEC 90).
  *   - GET /api/v1/service-requests/% — the detail of one request: the listing's
- *     ten keys plus the unit, the condominium, the requester, the images, the
+ *     eleven keys plus the condominium, the requester, the images, the
  *     attachment, closed_at and the offers (SPEC 89).
  *   - GET /api/v1/service-requests/%/files/% — the bytes of one image or of the
  *     attachment, both private:// since SPEC 77 (SPEC 89).
@@ -60,7 +60,7 @@
  *
  * Like the other read resources of this module, the queries read the
  * field_data_* tables directly instead of going through node_load(): the
- * listing answers ten keys per request, and node_load() of twenty of them would
+ * listing answers eleven keys per request, and node_load() of twenty would
  * fire the entity load hooks and drag a dozen fields along for them. The usual
  * trade-off, documented in docs/service-request.md: the queries assume the
  * current field storage.
@@ -140,11 +140,10 @@ function myapi_service_request_dispatch() {
  * sort, status or date bound falls back to its default in silence, never a 422: a listing
  * that breaks the whole screen because '?page=abc' arrived is punishing the
  * client for a decorative parameter, and the 422 is reserved for write bodies,
- * where a bad value corrupts something. The single exception is '?category_id',
- * which answers 422 for the reason written in
- * myapi_service_request_parse_category_id() — and it is checked FIRST, before
- * the pagination and before the count, so a malformed request costs no query at
- * all.
+ * where a bad value corrupts something. The two exceptions are '?category_id'
+ * and '?unit_id', which answer 422 for the reasons written in their own
+ * parsers — and both are checked FIRST, before the pagination and before the
+ * count, so a malformed request costs no query at all.
  *
  * Exactly THREE listing queries reach the database per request — count, page,
  * offer counts — plus the one the token costs. None of them grows with the
@@ -157,9 +156,10 @@ function myapi_service_request_list() {
   $token = myapi_auth_require_access_token();
   $uid = (int) $token->uid;
 
-  // 2. The only parameter that can be WRONG rather than merely unknown, and it
-  // goes before everything else on purpose: a 422 must not cost a query.
+  // 2. The only two parameters that can be WRONG rather than merely unknown,
+  // and they go before everything else on purpose: a 422 must not cost a query.
   $category_id = myapi_service_request_parse_category_id();
+  $unit_id = myapi_service_request_parse_unit_id();
 
   // 3. Pagination and sort. Same idiom as claims and payments: garbage falls
   // back to the default, and '-1' means "everything on one page" (SPEC 15).
@@ -184,12 +184,14 @@ function myapi_service_request_list() {
   // 4. The filters, all optional and composing with AND. '?status' is
   // validated against the catalogue and never against a list written here, and
   // the date range goes through the shared parser rather than a fourth copy of
-  // it — see myapi_service_request_parse_created_range().
+  // it — see myapi_service_request_parse_created_range(). '?unit_id' is already
+  // parsed above, with '?category_id', because both can answer 422.
   $created = myapi_service_request_parse_created_range();
 
   $filters = [
     'status'       => myapi_service_request_parse_status(),
     'category_id'  => $category_id,
+    'unit_id'      => $unit_id,
     'created_from' => $created['from'],
     'created_to'   => $created['to'],
   ];
@@ -290,9 +292,10 @@ function myapi_service_request_parse_status() {
  * thing, and a 404 would say the endpoint does not exist rather than the
  * category.
  *
- * is_scalar() comes FIRST, so '?category_id[]=1' answers 422 without ever
- * reaching a string cast of an array. Same guard, in the same order, as
- * myapi_provider_list().
+ * The three malformations it refuses, and the order it checks them in, live in
+ * myapi_service_request_parse_id_param(): '?unit_id' (SPEC 91) is strict for a
+ * reason of its own but refuses exactly the same values, and one parser serves
+ * both.
  *
  * Never returns on a bad value: myapi_error() prints and exits.
  *
@@ -300,13 +303,72 @@ function myapi_service_request_parse_status() {
  *   The tid to narrow by, or NULL when the parameter is absent.
  */
 function myapi_service_request_parse_category_id() {
-  if (!isset($_GET['category_id'])) {
+  return myapi_service_request_parse_id_param('category_id');
+}
+
+/**
+ * Reads '?unit_id' into a 'vivienda' nid, or NULL for no filter (SPEC 91).
+ *
+ * THE SECOND STRICT PARAMETER OF THIS ENDPOINT, and strict for the same KIND of
+ * reason '?category_id' is — its twin, not itself. POST /api/v1/service-requests
+ * already answers 422 invalid_field for a malformed `unit_id` (SPEC 90), and
+ * the app sends here the very value it just created a request with: a listing
+ * that swallowed a broken id and answered the WHOLE list would tell the client
+ * its unit selector works while it does not, and the resident would read
+ * somebody's else request under the heading of their flat.
+ *
+ * A UNIT THAT IS NOT YOURS IS NOT AN ERROR, AND THAT IS THE WHOLE ASYMMETRY
+ * WITH THE CREATION. The POST answers 403 unit_access_denied for a foreign unit
+ * because it would WRITE on it; this filter only narrows a set that is already
+ * scoped to field_requester = uid, so a foreign unit can intersect it in the
+ * empty set and nowhere else. A 403 here would do the opposite of protecting
+ * something: it would confirm to whoever probed that the unit exists, and it
+ * would cost a query to say what an empty list says for free. Same criterion
+ * as '?category_id' with a tid no request carries.
+ *
+ * Never returns on a bad value: myapi_error() prints and exits.
+ *
+ * @return int|NULL
+ *   The 'vivienda' nid to narrow by, or NULL when the parameter is absent.
+ */
+function myapi_service_request_parse_unit_id() {
+  return myapi_service_request_parse_id_param('unit_id');
+}
+
+/**
+ * The strict parser BOTH '?category_id' and '?unit_id' are made of (SPEC 91).
+ *
+ * ONE FUNCTION AND NOT TWO COPIES. The two parameters refuse the same three
+ * malformations — a non-scalar, a non-digit string, a zero or negative — and
+ * answer the same 422 invalid_field naming themselves; what differs between
+ * them is only the REASON each one is strict, and that is written in the
+ * wrapper that carries its name. Regla 3 de CLAUDE.md applied inside a file
+ * rather than between two of them.
+ *
+ * is_scalar() COMES FIRST, so '?category_id[]=1' answers 422 without ever
+ * reaching a string cast of an array — a PHP notice in the middle of a JSON
+ * body is not an answer. Same guard, in the same order, as myapi_provider_list().
+ *
+ * The empty string is a malformation and not an absence: '?unit_id=' is a
+ * present-and-broken value, and ctype_digit('') is FALSE, which is what makes
+ * it a 422 rather than a silent "no filter".
+ *
+ * @param string $name
+ *   The query-string parameter to read, which is also the '@field' the error
+ *   message names. Always a literal at the call site — never a value that
+ *   reached this file from the request.
+ *
+ * @return int|NULL
+ *   The positive integer, or NULL when the parameter is absent.
+ */
+function myapi_service_request_parse_id_param($name) {
+  if (!isset($_GET[$name])) {
     return NULL;
   }
 
-  $raw = $_GET['category_id'];
+  $raw = $_GET[$name];
   if (!is_scalar($raw) || !ctype_digit((string) $raw) || (int) $raw <= 0) {
-    myapi_error('invalid_field', 422, ['@field' => 'category_id']);
+    myapi_error('invalid_field', 422, ['@field' => $name]);
   }
 
   return (int) $raw;
@@ -402,6 +464,23 @@ function myapi_service_request_parse_created_range() {
  * the IN excludes it on its own, which is the right reading of "show me the
  * open ones".
  *
+ * field_unit is LEFT-joined for that same reason and one more of its own
+ * (SPEC 91). The field is REQUIRED on the bundle since SPEC 86, so in a healthy
+ * site an INNER JOIN would list the same rows — but the requirement was added
+ * to a bundle that already existed, with no backfill, so a request loaded from
+ * the back office before that day can have no field row at all, and an INNER
+ * JOIN would make it disappear from its owner's listing with no message. It is
+ * the failure the category join accepts on purpose and this one does not: a
+ * request with no unit is still actionable, one with no category is not.
+ *
+ * THE FILTER COMPARES THE RAW target_id AND NEVER A JOINED 'vivienda' NODE.
+ * That is what keeps the count query at three join tables — resolving the node
+ * would drag it in too — and it is also the right answer: a request whose unit
+ * was unpublished is still a request OF that unit, so '?unit_id' keeps it and
+ * the page answers unit: null, exactly what a broken award already does. The
+ * two halves are independent on purpose, and the fetch is where the node is
+ * resolved.
+ *
  * THE QUERY DELIBERATELY CARRIES NO ->addTag('node_access'). See the @file
  * docblock: the tag would run myapi_provider_role_alter_node_query() over this
  * query, and a resident who also holds the 'proveedor' role would stop seeing
@@ -428,7 +507,8 @@ function myapi_service_request_parse_created_range() {
  *                       the listing always passes a uid, and its behaviour is
  *                       byte for byte what it was.
  * @param array $filters  ['status' => array|NULL (list of status keys),
- *                        'category_id' => int|NULL,
+ *                        'category_id' => int|NULL, 'unit_id' => int|NULL
+ *                        ('vivienda' nid, compared against the RAW target_id),
  *                        'created_from' => int|NULL, 'created_to' => int|NULL
  *                        (Unix timestamps compared against n.created)]. All
  *                        optional; NULL means no filter on that column, and
@@ -436,7 +516,7 @@ function myapi_service_request_parse_created_range() {
  *
  * @return SelectQuery  The query, with these aliases already in place:
  *                      n (node), fr (requester), fcat (category field),
- *                      td (taxonomy term), frs (status).
+ *                      td (taxonomy term), frs (status), fu (unit field).
  */
 function myapi_service_request_base_query($uid, array $filters = []) {
   $query = db_select('node', 'n')
@@ -461,6 +541,12 @@ function myapi_service_request_base_query($uid, array $filters = []) {
   // LEFT: joined here because the filter reads it, projected by the fetch.
   $query->leftJoin('field_data_field_request_status', 'frs', "frs.entity_id = n.nid AND frs.entity_type = 'node' AND frs.deleted = 0");
 
+  // The unit, same case as the status above: the '?unit_id' filter reads this
+  // table, so it belongs to the shared base and not to the fetch — and it is
+  // LEFT for the reason the docblock spells out. The detail also reads it from
+  // here, and resolves the 'vivienda' node on top of this same alias.
+  $query->leftJoin('field_data_field_unit', 'fu', "fu.entity_id = n.nid AND fu.entity_type = 'node' AND fu.deleted = 0");
+
   // '?status' arrives as a LIST, so the condition is always an IN — with one
   // element for the single-value form, which MySQL resolves exactly like the
   // '=' it replaces. Same shape as myapi_claim_base_query().
@@ -470,6 +556,12 @@ function myapi_service_request_base_query($uid, array $filters = []) {
 
   if (!empty($filters['category_id'])) {
     $query->condition('fcat.field_category_tid', $filters['category_id']);
+  }
+
+  // The RAW target_id — see the docblock. It adds no table either: the join is
+  // already above, because the response paints the unit anyway.
+  if (!empty($filters['unit_id'])) {
+    $query->condition('fu.field_unit_target_id', $filters['unit_id']);
   }
 
   // The creation date, on the node's own column: it adds NO table, and being a
@@ -523,8 +615,8 @@ function myapi_service_request_count($uid, array $filters = []) {
  *
  * Starts from the same myapi_service_request_base_query() the count uses — so
  * the page is always a slice of the counted set — and adds ONLY what projects
- * columns: the term name and code, the description, the desired start, and the
- * awarded offer and provider.
+ * columns: the term name and code, the unit's node and name, the description,
+ * the desired start, and the awarded offer and provider.
  *
  * EVERY JOIN ADDED HERE IS LEFT AND NEVER INNER, and the awarded pair is the
  * reason the rule exists: nothing validates today that field_assigned_offer
@@ -556,7 +648,7 @@ function myapi_service_request_count($uid, array $filters = []) {
  *                         unpaginated" (SPEC 15).
  * @param string $sort     'asc' or 'desc' on the creation date.
  *
- * @return array  Rows carrying the thirteen aliases
+ * @return array  Rows carrying the fifteen aliases
  *                myapi_service_request_build_item() reads.
  */
 function myapi_service_request_fetch($uid, array $filters, $page, $limit, $sort) {
@@ -576,6 +668,22 @@ function myapi_service_request_fetch($uid, array $filters, $page, $limit, $sort)
   $query->addField('td', 'name', 'category_name');
   $query->leftJoin('field_data_field_category_code', 'cc', "cc.entity_id = td.tid AND cc.entity_type = 'taxonomy_term' AND cc.deleted = 0");
   $query->addField('cc', 'field_category_code_value', 'category_code');
+
+  // The unit (SPEC 91). The reference itself is in the base query — the filter
+  // reads it — so what the page adds is the second hop: the 'vivienda' node and
+  // the name field hanging off it. Byte for byte the two joins the detail
+  // makes, and for the same reasons: the node join carries the bundle, so a
+  // reference to something else can never paint its name here, and it carries
+  // status = 1, so an unpublished unit answers null instead of a name nobody
+  // can open. The id projected is nu.nid and NOT fu.field_unit_target_id, which
+  // is what makes a broken reference answer unit: null rather than an id the
+  // client cannot resolve — the same rule the awarded offer follows, and the
+  // reason '?unit_id' filters on the raw column while the response paints this
+  // one.
+  $query->leftJoin('node', 'nu', "nu.nid = fu.field_unit_target_id AND nu.type = 'vivienda' AND nu.status = 1");
+  $query->addField('nu', 'nid', 'unit_id');
+  $query->leftJoin('field_data_field_nombre_vivienda', 'fnv', "fnv.entity_id = nu.nid AND fnv.entity_type = 'node' AND fnv.deleted = 0");
+  $query->addField('fnv', 'field_nombre_vivienda_value', 'unit_name');
 
   $query->addField('frs', 'field_request_status_value', 'status');
 
@@ -689,11 +797,18 @@ function myapi_service_request_offer_counts_by_nid(array $nids) {
 /**
  * Shapes one request row into the item of the listing (SPEC 88).
  *
- * ALWAYS THE SAME TEN KEYS, IN THIS ORDER — id, title, description, status,
- * category, offers_count, assigned_offer, assigned_provider, created,
+ * ALWAYS THE SAME ELEVEN KEYS, IN THIS ORDER — id, title, description, status,
+ * category, unit, offers_count, assigned_offer, assigned_provider, created,
  * desired_start — because that order is the one drupal_json_encode() prints and
  * the one docs/service-request.md shows. No key is ever added or dropped by the
- * data: a request with no offers and no award answers all ten just the same.
+ * data: a request with no offers and no award answers all eleven just the same.
+ *
+ * `unit` SITS BESIDE `category` AND NOT AT THE END (SPEC 91). The two answer
+ * the same question — WHAT the request is and WHERE it is — while
+ * offers_count, assigned_offer and assigned_provider are the market's state and
+ * stay contiguous. The position matters twice: it is the order the JSON is
+ * printed in, and the detail merges this item first, so `unit` reached the
+ * detail's response through here too and moved with it.
  *
  * PURE: no database, no node_load(), no $_GET. Everything it needs arrives in
  * $row and $offer_counts, which is what lets a test exercise every shape of
@@ -743,19 +858,31 @@ function myapi_service_request_offer_counts_by_nid(array $nids) {
  * @param object $row
  *   One row of myapi_service_request_fetch(), carrying the aliases `nid`,
  *   `title`, `description`, `status`, `category_id`, `category_code`,
- *   `category_name`, `assigned_offer_id`, `assigned_offer_status`,
- *   `assigned_provider_id`, `assigned_provider_name`, `created` and
- *   `desired_start`.
+ *   `category_name`, `unit_id`, `unit_name`, `assigned_offer_id`,
+ *   `assigned_offer_status`, `assigned_provider_id`, `assigned_provider_name`,
+ *   `created` and `desired_start`.
  * @param array $offer_counts
  *   The map myapi_service_request_offer_counts_by_nid() returns for the WHOLE
  *   page, keyed by nid. Passed in and not looked up: resolving it here would
  *   mean one query per request, and the whole page is meant to cost three.
  *
  * @return array
- *   The ten keys above, in that order.
+ *   The eleven keys above, in that order.
  */
 function myapi_service_request_build_item($row, array $offer_counts) {
   $nid = (int) $row->nid;
+
+  // Resolved from the JOINED 'vivienda' node, never from the field's raw
+  // target_id, and for the same reason the award below is: a reference to a
+  // unit that was deleted or unpublished leaves this NULL instead of handing
+  // the client an id it cannot open. See myapi_service_request_fetch().
+  $unit = NULL;
+  if (isset($row->unit_id) && $row->unit_id !== '') {
+    $unit = [
+      'id'   => (int) $row->unit_id,
+      'name' => isset($row->unit_name) ? $row->unit_name : NULL,
+    ];
+  }
 
   // The offer is resolved from the JOINED node, never from the field's raw
   // target_id: a field row pointing at an offer that was deleted or unpublished
@@ -796,6 +923,17 @@ function myapi_service_request_build_item($row, array $offer_counts) {
       'code' => isset($row->category_code) ? $row->category_code : '',
       'name' => isset($row->category_name) ? $row->category_name : '',
     ],
+    // The unit the service goes to (SPEC 91). A WHOLE null, never {id: null,
+    // name: null}: "this request has no unit I can paint" is one answer and not
+    // two half-answers, the same shape assigned_offer and assigned_provider
+    // already use above. It is null in exactly two cases — a request older than
+    // the SPEC 86 requirement, and a reference whose 'vivienda' was deleted or
+    // unpublished — and the request keeps its place in the listing in both.
+    //
+    // `name` is field_nombre_vivienda and NOT the node title: the title is an
+    // internal label and the field is the name the resident knows their flat
+    // by, which is what GET /api/v1/units answers as `name` too.
+    'unit'        => $unit,
     // (int) of a missing entry is 0, which is exactly the answer wanted: the
     // fallback is the rule, not a coincidence to be tidied away later.
     'offers_count'      => isset($offer_counts[$nid]) ? (int) $offer_counts[$nid] : 0,
@@ -814,7 +952,7 @@ function myapi_service_request_build_item($row, array $offer_counts) {
 /* ---------------------------------------------------------------------------
  * The detail — GET /api/v1/service-requests/% (SPEC 89).
  *
- * The listing above answers ten keys about many requests; this half answers
+ * The listing above answers eleven keys about many requests; this half answers
  * eighteen about one, and — for the first time in this module — answers them
  * DIFFERENTLY DEPENDING ON WHO ASKS. Two readers reach it: the resident who
  * created the request, and a provider of its category who may still bid on it.
@@ -1192,10 +1330,12 @@ function myapi_service_request_detail_row($nid) {
   $query->leftJoin('field_data_field_closed_at', 'fca', "fca.entity_id = n.nid AND fca.entity_type = 'node' AND fca.deleted = 0");
   $query->addField('fca', 'field_closed_at_value', 'closed_at');
 
-  // The unit (SPEC 86). Two LEFT hops: the reference, then the name field of
-  // the 'vivienda' it points at. The node join carries the bundle so a
-  // reference to something else can never paint its name here.
-  $query->leftJoin('field_data_field_unit', 'fu', "fu.entity_id = n.nid AND fu.entity_type = 'node' AND fu.deleted = 0");
+  // The unit (SPEC 86). The reference itself comes from the base query since
+  // SPEC 91 — the listing's '?unit_id' filter reads it there — so what is left
+  // here is the second hop: the 'vivienda' node and its name field. The node
+  // join carries the bundle so a reference to something else can never paint
+  // its name here. Joining field_data_field_unit again would not be wrong, it
+  // would be a second alias for a table already in the query.
   $query->leftJoin('node', 'nu', "nu.nid = fu.field_unit_target_id AND nu.type = 'vivienda' AND nu.status = 1");
   $query->addField('nu', 'nid', 'unit_id');
   $query->leftJoin('field_data_field_nombre_vivienda', 'fnv', "fnv.entity_id = nu.nid AND fnv.entity_type = 'node' AND fnv.deleted = 0");
@@ -1488,7 +1628,8 @@ function myapi_service_request_build_offer($row) {
  * before reading it is a client that will forget to. (The spec's prose says
  * "seventeen" in a couple of places and then lists eight new keys next to the
  * listing's ten; the enumeration is the part that is unambiguous, and this is
- * it.)
+ * it. Since SPEC 91 the arithmetic reads differently and the total does not
+ * move: `unit` became the listing's eleventh key, so the detail adds seven.)
  *
  * THE PROVIDER'S TRIM LIVES HERE AND NOWHERE ELSE, and it is exactly two keys:
  *
@@ -1502,6 +1643,12 @@ function myapi_service_request_build_offer($row) {
  *            category, the description, the photos, the desired date and the
  *            condominium; the flat number adds nothing to that decision and does
  *            say where a specific person lives, to anyone of the category.
+ *            Since SPEC 91 this key arrives ALREADY BUILT from
+ *            myapi_service_request_build_item() — the listing answers it too —
+ *            so what happens here is an OVERWRITE and no longer a second
+ *            resolution of the same two columns. It is the one key of the
+ *            listing the detail touches, and the resolving rule stays in one
+ *            place.
  *
  * Everything else the provider receives whole, `requester {id, name}` and
  * `condominium` included, and `offers_count` is the FULL count and not the size
@@ -1520,10 +1667,10 @@ function myapi_service_request_build_offer($row) {
  * PURE: no database, no node_load(), no $_GET. Every input arrives resolved.
  *
  * @param object $row
- *   The row of myapi_service_request_detail_row(), carrying the thirteen aliases
- *   myapi_service_request_build_item() reads plus `requester_uid`,
- *   `requester_name` (written onto the row by the caller after
- *   myapi_user_display_names()), `unit_id`, `unit_name`, `condominium_id`,
+ *   The row of myapi_service_request_detail_row(), carrying the fifteen aliases
+ *   myapi_service_request_build_item() reads — `unit_id` and `unit_name` among
+ *   them since SPEC 91 — plus `requester_uid`, `requester_name` (written onto
+ *   the row by the caller after myapi_user_display_names()), `condominium_id`,
  *   `condominium_name`, `attachment_fid`, `attachment_filename` and
  *   `closed_at`.
  * @param string $viewer
@@ -1543,9 +1690,16 @@ function myapi_service_request_build_offer($row) {
 function myapi_service_request_build_detail($row, $viewer, array $images, array $offers, $offers_count) {
   $nid = (int) $row->nid;
 
-  // The ten keys of the listing, from the listing's own serialiser. The count
-  // is handed over as the one-entry map that function expects.
+  // The eleven keys of the listing, from the listing's own serialiser. The
+  // count is handed over as the one-entry map that function expects.
   $item = myapi_service_request_build_item($row, [$nid => (int) $offers_count]);
+
+  // Half of the provider's trim, and the only key of the listing this function
+  // overwrites instead of adding — see the docblock. NULL here is a DECISION
+  // and not a missing datum, which is what `viewer` below makes readable.
+  if ($viewer === 'provider') {
+    $item['unit'] = NULL;
+  }
 
   // Required on the bundle, but LEFT-joined: a field row deleted by hand
   // answers null rather than a PHP notice in the middle of the response.
@@ -1554,19 +1708,6 @@ function myapi_service_request_build_detail($row, $viewer, array $images, array 
     $requester = [
       'id'   => (int) $row->requester_uid,
       'name' => isset($row->requester_name) ? $row->requester_name : NULL,
-    ];
-  }
-
-  // The whole trim, both halves of it. NULL for the provider is a decision, not
-  // a missing datum — which is what `viewer` above makes readable.
-  $unit = NULL;
-  if ($viewer !== 'provider' && isset($row->unit_id) && $row->unit_id !== '') {
-    $unit = [
-      'id' => (int) $row->unit_id,
-      // field_nombre_vivienda, NOT the 'vivienda' node title: the title is an
-      // internal label and the name the resident knows their unit by is the
-      // field — the same value GET /api/v1/units answers as `name`.
-      'name' => isset($row->unit_name) ? $row->unit_name : NULL,
     ];
   }
 
@@ -1581,7 +1722,6 @@ function myapi_service_request_build_detail($row, $viewer, array $images, array 
   return array_merge($item, [
     'viewer'      => $viewer,
     'requester'   => $requester,
-    'unit'        => $unit,
     'condominium' => $condominium,
     // Always an array, never null: "no photos" is an empty list, and a client
     // that can iterate has nothing to branch on.
