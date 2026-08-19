@@ -1,8 +1,9 @@
 ## GET /api/v1/service-requests
 
 Returns the service requests **the authenticated resident created** — a
-paginated list with the status, the category, the number of offers received and,
-when there is one, the awarded offer and the awarded provider.
+paginated list with the status, the category, the unit the service goes to, the
+number of offers received and, when there is one, the awarded offer and the
+awarded provider.
 
 Reads the requester's own requests. `PUT` and `DELETE` answer `405` on this
 route; `POST` **creates** one — see
@@ -14,8 +15,8 @@ built by SPEC 77, 86 and 87 without one. Three more routes live in this same
 document:
 
 - [`GET /api/v1/service-requests/{id}`](#get-apiv1service-requestsid) — the
-  **detail**: everything this listing answers, plus the unit, the condominium,
-  the requester, the images, the attachment, `closed_at` and the offers one by
+  **detail**: everything this listing answers, plus the condominium, the
+  requester, the images, the attachment, `closed_at` and the offers one by
   one. It is also the first endpoint of the module whose answer **depends on who
   asks** (SPEC 89).
 - [`GET /api/v1/service-requests/{id}/files/{fid}`](#get-apiv1service-requestsidfilesfid)
@@ -64,14 +65,15 @@ A reader with no requests gets `200` with an empty list and `total: 0`, never a
 | `limit` | integer 1–50, or `-1` | `20` | Items per page. Above 50 it is **cut to 50**. **`-1` means "everything on one page"** and forces `page: 1` (SPEC 15). Any other invalid value falls back to `20`. |
 | `sort` | `asc` \| `desc` | `desc` | Direction of the creation date. Only the exact lowercase values count: `DESC`, `arriba` or an empty value fall back to `desc` — no `422`. |
 | `status` | one or more catalogue keys, comma-separated | *(no filter)* | `?status=open,offered` filters by both. An unknown key inside the list is **dropped in silence**: `?status=open,inventado` filters by `open` alone, and `?status=inventado` filters by nothing at all. No `422`. |
-| `category_id` | positive integer (`tid`) | *(no filter)* | Narrows the listing to the requests of that category. **The only parameter of this endpoint that can answer `422`** — see below. |
+| `category_id` | positive integer (`tid`) | *(no filter)* | Narrows the listing to the requests of that category. One of the **two** parameters of this endpoint that can answer `422` — see below. |
+| `unit_id` | positive integer (`nid`) | *(no filter)* | Narrows the listing to the requests of that unit. The other parameter that can answer `422` — see below. A unit that is not yours is **not** an error: it answers an empty list. |
 | `date_from` | ISO date `YYYY-MM-DD` | *(no filter)* | Lower bound on the **creation date**, inclusive of the whole day. Anything that is not a real calendar date is **dropped in silence** — no `422`. |
 | `date_to` | ISO date `YYYY-MM-DD` | *(no filter)* | Upper bound on the **creation date**, inclusive of the whole day. Same lax validation. |
 
 The filters compose with `AND`, and `pagination` describes the result of all of
 them together.
 
-### `category_id`: the one parameter that can be a `422`
+### `category_id` and `unit_id`: the two parameters that can be a `422`
 
 Two idioms of validation live side by side in this query string, and that is a
 decision rather than an oversight: `?category_id=abc` answers `422` while
@@ -96,6 +98,44 @@ endpoint filters, it does not validate the catalogue. A `404` would say that the
 endpoint does not exist, not the category.
 
 The `id` to send is the one `/api/v1/service-categories` returns.
+
+`?unit_id` is strict for the same **kind** of reason, and again it is its twin
+rather than itself: [`POST /api/v1/service-requests`](#post-apiv1service-requests)
+already answers `422 invalid_field` for a malformed `unit_id`, and the app sends
+here the very value it just created a request with. A listing that swallowed a
+broken id and answered the **whole** list would tell the client its unit
+selector works while it does not — and the resident would read somebody else's
+request under the heading of their own flat.
+
+Both go through the same parser, so they refuse the same values:
+
+- `?unit_id=abc`, `-3`, `0`, `?unit_id=` (empty) and `?unit_id[]=55` →
+  **`422 invalid_field`** naming `unit_id`, answered **before any listing query
+  runs**.
+- `?unit_id=<a nid that is not yours>`, `<one you moved out of>`, `<one that
+  does not exist>` → **`200` with `service_requests: []` and `total: 0`**.
+
+### `unit_id`: a foreign unit is an empty list, never a `403`
+
+**This is the one asymmetry with the creation, and it is deliberate.**
+`POST /api/v1/service-requests` answers `403 unit_access_denied` for a unit the
+resident does not own or occupy, because it would **write** something on it. The
+filter writes nothing: the scope of this endpoint is already
+`field_requester = uid`, so a unit that is not yours can only intersect your own
+requests in the empty set.
+
+A `403` here would do the opposite of protecting anything — it would confirm to
+whoever probed that the unit exists — and it would cost a query to say what an
+empty list already says. Same criterion as a `category_id` no request carries.
+
+**The filter compares the raw reference and never the joined `vivienda` node.**
+A request whose unit was unpublished or deleted is still a request **of** that
+unit, so `?unit_id=<it>` keeps it and the item answers `unit: null`. Filtering
+on the resolved node instead would empty the resident's screen because of a node
+they have never heard of.
+
+The `id` to send is the one `/api/v1/units` returns, and the same one the app
+sent as `unit_id` when it created the request.
 
 ### `status`: the keys are the catalogue's
 
@@ -164,6 +204,7 @@ payment date in payments, and here the creation date — like bulletins.
         "description": "El calentador del baño principal gotea desde el lunes.\nEmpeoró el martes.",
         "status": "assigned",
         "category": { "id": 12, "code": "plumbing", "name": "Plomería" },
+        "unit": { "id": 55, "name": "A-301" },
         "offers_count": 3,
         "assigned_offer": { "id": 45, "status": "selected" },
         "assigned_provider": { "id": 7, "name": "Plomería Rivas" },
@@ -176,6 +217,7 @@ payment date in payments, and here the creation date — like bulletins.
         "description": "Ya hablé con ellos, vienen el sábado.",
         "status": "direct",
         "category": { "id": 15, "code": "painting", "name": "Pintura" },
+        "unit": { "id": 56, "name": "B-102" },
         "offers_count": 0,
         "assigned_offer": null,
         "assigned_provider": { "id": 7, "name": "Plomería Rivas" },
@@ -192,7 +234,7 @@ payment date in payments, and here the creation date — like bulletins.
 nothing else. `service_requests` is always a JSON array, even with one element
 or none.
 
-Each element contains exactly these **10 keys, always all 10, in this order**:
+Each element contains exactly these **11 keys, always all 11, in this order**:
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -201,15 +243,21 @@ Each element contains exactly these **10 keys, always all 10, in this order**:
 | `description` | string | `field_description`, **as stored**: the line breaks the resident typed are preserved. See [The description travels raw](#the-description-travels-raw). |
 | `status` | string | One of the six catalogue keys above, in English and **with no label beside it**. |
 | `category` | object | `{ "id": int, "code": string, "name": string }`, exactly three keys. Never `null` — see [The category is required](#the-category-is-required). `code` is `field_category_code`, the stable identifier `/api/v1/service-categories` answers for the same term, and `""` when the term has none — see [The category code](#the-category-code). |
+| `unit` | object \| **null** | `{ "id": int, "name": string }` or **a whole `null`**, never `{id: null, name: null}`. The unit the service goes to. `name` is `field_nombre_vivienda`, **not** the `vivienda` node title — see [The unit](#the-unit). |
 | `offers_count` | int | Offers received. **`0`** when there are none, never `null` and never absent. See below. |
 | `assigned_offer` | object \| **null** | `{ "id": int, "status": string }` or `null`. `status` is a key of the **offer** catalogue: `sent`, `selected`, `rejected`, `withdrawn`. |
 | `assigned_provider` | object \| **null** | `{ "id": int, "name": string }` or `null`. |
 | `created` | string | `Y-m-d\TH:i:s`, site timezone — identical to `created` in `/api/v1/claims`. |
 | `desired_start` | string | `field_desired_start`, same format. A real timestamp, not a naive stored string like `reception_date` in claims. |
 
-`id`, `category.id`, `offers_count`, `assigned_offer.id` and
+`id`, `category.id`, `unit.id`, `offers_count`, `assigned_offer.id` and
 `assigned_provider.id` all travel as **JSON integers**, never as the strings the
 database answers.
+
+`unit` sits **beside `category`** and not at the end: the two answer what the
+request is and where it is, while `offers_count` and the two `assigned_*` keys
+are the market's state and stay contiguous. The same order reaches the detail,
+which merges this very item.
 
 ### The award is two sibling keys, not one object
 
@@ -309,6 +357,30 @@ WHERE fc.entity_type = 'node' AND fc.deleted = 0 AND td.tid IS NULL;
 The fix is to reassign the category. Preventing it at the root belongs to the
 spec that allows **deleting** categories.
 
+### The unit
+
+`unit` is the flat the service goes to — `field_unit`, required on the bundle
+since SPEC 86 and written by the creation endpoint from the resident's own units.
+
+`name` is **`field_nombre_vivienda`**, not the `vivienda` node title: the title
+is an internal label and the field is the name the resident knows their flat by
+— the same value `/api/v1/units` and the detail answer as `name`.
+
+**It is a whole `null` in two cases, and the request stays listed in both:**
+
+- **A request older than the requirement.** `field_unit` was made required on a
+  bundle that already had rows, with no backfill, so a request loaded from the
+  back office before that day can carry no unit at all. The join is `LEFT`
+  precisely for this: an `INNER` one would make that request vanish from its own
+  owner's listing with no message.
+- **A reference that no longer resolves** — the `vivienda` was deleted or
+  unpublished. Same rule the awarded offer and provider follow.
+
+The second case is the one where `?unit_id` and `unit` disagree on purpose: the
+filter keeps the request (the raw reference still points at that unit) and the
+item answers `unit: null` (there is no node to name). That is the honest pair of
+answers, and it is why the two read different columns.
+
 ### The category code
 
 `category.code` is `field_category_code`, **the same value
@@ -350,7 +422,7 @@ ordered by.
 
 | Key | Meaning |
 |-----|---------|
-| `total` | Size of the **already filtered** set — with `?category_id` or `?status`, that subset, not the whole listing. |
+| `total` | Size of the **already filtered** set — with `?category_id`, `?unit_id` or `?status`, that subset, not the whole listing. |
 | `page` | The page that was served, echoed back (the value asked for, even beyond the last page). |
 | `limit` | Items per page actually applied, after the clamp. `-1` travels back as `-1`. |
 | `total_pages` | `ceil(total / limit)`, and **`0`** when `total` is `0` — not `1`. With `limit=-1` it is `1`, or `0` when there is nothing. |
@@ -376,7 +448,12 @@ listing of the module.
   as claims and reservations, so the app's existing mapping applies. The labels
   of `myapi_services_request_statuses()` are back-office text and never travel.
 - `?category_id` accepts **one** value, not a list. `?category_id=3,7` is a
-  `422`, same as in `/api/v1/providers`.
+  `422`, same as in `/api/v1/providers`. `?unit_id` is the same: one value, and
+  `?unit_id=55,56` is a `422`.
+- **`?unit_id` costs no extra query.** The reference table is joined by the
+  shared base query — the count and the page both use it — and the filter is one
+  more condition on it. The three listing queries of this endpoint are still
+  three, with or without the parameter.
 - The request costs **three listing queries** whatever the page size — the
   count, the page, and the offers of that whole page — plus the token lookup.
   None of them grows with the number of rows.
@@ -391,15 +468,19 @@ listing of the module.
 | 401  | `missing_authorization` | `Authorization` header is absent or does not match the `Bearer <token>` pattern. |
 | 401  | `invalid_token` | Access token not found in the database, already revoked, expired, or the associated user does not exist or is blocked (`status = 0`). |
 | 405  | `method_not_allowed` | Any method other than `GET` or `POST` (`PUT`, `DELETE`, …). Answered **before** authentication: a `PUT` with no token is `405`, not `401`. `POST` no longer answers `405` here since SPEC 90 — see [`POST /api/v1/service-requests`](#post-apiv1service-requests). |
-| 422  | `invalid_field` | `category_id` is present and is not a positive integer (`abc`, `-3`, `0`, empty, an array). The message names the field. It is the **only** `422` a `GET` on this endpoint can answer. |
+| 422  | `invalid_field` | `category_id` or `unit_id` is present and is not a positive integer (`abc`, `-3`, `0`, empty, an array). The message names the field. They are the **only** `422`s a `GET` on this endpoint can answer, and both are checked before any listing query runs. |
 
 ---
 
 ## GET /api/v1/service-requests/{id}
 
-Returns **one** service request in full: the ten keys of the listing plus the
-requester, the unit, the condominium, the images, the attachment, `closed_at`
-and the offers one by one.
+Returns **one** service request in full: the eleven keys of the listing plus the
+requester, the condominium, the images, the attachment, `closed_at` and the
+offers one by one.
+
+`unit` is one of the listing's eleven since SPEC 91 — the detail no longer
+resolves it on its own, it **overwrites** it for the provider (see below), and
+it therefore travels in the listing's position, right after `category`.
 
 Read-only. `POST`, `PUT` and `DELETE` answer `405`, before the token and before
 any query.
@@ -530,6 +611,7 @@ query**, not even the token's: the shape of the URL is wrong whoever is asking.
       "description": "El calentador del baño principal gotea desde el lunes.",
       "status": "offered",
       "category": { "id": 12, "code": "plumbing", "name": "Plomería" },
+      "unit": { "id": 55, "name": "A-301" },
       "offers_count": 2,
       "assigned_offer": null,
       "assigned_provider": null,
@@ -538,7 +620,6 @@ query**, not even the token's: the shape of the URL is wrong whoever is asking.
 
       "viewer": "requester",
       "requester": { "id": 42, "name": "Ana Pérez" },
-      "unit": { "id": 55, "name": "A-301" },
       "condominium": { "id": 7, "name": "Torres del Este" },
       "images": [
         { "id": 91, "url": "https://.../api/v1/service-requests/128/files/91", "filename": "fuga.jpg" }
@@ -574,11 +655,14 @@ query**, not even the token's: the shape of the URL is wrong whoever is asking.
 
 ### The keys the detail adds
 
+Seven, on top of the listing's eleven. `unit` is **not** among them any more: it
+is the listing's, and the only one of the eleven the detail changes — see the
+trim above.
+
 | Key | Source | Nullable | Notes |
 |-----|--------|:--------:|-------|
 | `viewer` | the access rule | No | `"requester"` or `"provider"`. Never `null`: a reader with no role already got a `403`. |
 | `requester` | `field_requester` → `users` | No¹ | `{id, name}`. The name is `field_nombre + field_apellidos`, or `users.name` when **either** is missing — never a hybrid. The same rule `/api/v1/units` uses, shared in `includes/myapi.user.inc`. |
-| `unit` | `field_unit` → `field_nombre_vivienda` | **Yes** | `{id, name}`, or `null` entirely for the provider. `name` is `field_nombre_vivienda`, **not** the `vivienda` node title. |
 | `condominium` | `field_condominium` → `node.title` | No¹ | `{id, name}`. Here the name **is** the node title, unlike the unit. |
 | `images` | `field_images` → `file_managed` | No | **Always an array**, empty when there are none. `{id, url, filename}` each, in the `delta` order the operator uploaded them. |
 | `attachment` | `field_attachment` → `file_managed` | **Yes** | `{id, url, filename}` or `null`. Cardinality 1. |
@@ -887,6 +971,7 @@ writes one, on purpose.
       "description": "El calentador del baño principal gotea desde el lunes.",
       "status": "open",
       "category": { "id": 12, "code": "plumbing", "name": "Plomería" },
+      "unit": { "id": 55, "name": "A-301" },
       "offers_count": 0,
       "assigned_offer": null,
       "assigned_provider": null,
@@ -895,7 +980,6 @@ writes one, on purpose.
 
       "viewer": "requester",
       "requester": { "id": 42, "name": "Ana Pérez" },
-      "unit": { "id": 55, "name": "A-301" },
       "condominium": { "id": 7, "name": "Torres del Este" },
       "images": [
         { "id": 210, "url": "https://.../api/v1/service-requests/145/files/210", "filename": "fuga.jpg" }
