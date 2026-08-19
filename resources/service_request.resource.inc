@@ -1021,8 +1021,8 @@ function myapi_service_request_item_dispatch($nid) {
  * offers" is useful to a provider, and the nid is not a secret — they reached
  * it from a listing that handed it to them.
  *
- * FIVE CONTENT QUERIES, FIXED, plus the one the token costs. None of them grows
- * with the number of images or of offers:
+ * SIX CONTENT QUERIES, FIXED, plus the one the token costs. None of them grows
+ * with the number of images, of offers or of transactions:
  *
  *   1. the request row, with unit, condominium, category, status, award and
  *      attachment                       — myapi_service_request_detail_row()
@@ -1030,6 +1030,7 @@ function myapi_service_request_item_dispatch($nid) {
  *   3. the images, in delta order       — myapi_service_request_load_images()
  *   4. offers_count                     — myapi_service_request_offer_counts_by_nid()
  *   5. the offers, with their provider  — myapi_service_request_load_offers()
+ *   6. the timeline (SPEC 93)           — myapi_service_request_load_transactions()
  *
  * A provider reader adds the provider_role questions on top — which providers
  * they operate, their categories, whether any is active, whether one already
@@ -1103,10 +1104,18 @@ function myapi_service_request_detail($nid) {
     myapi_service_request_load_offers($nid, $provider_ids)
   );
 
+  // The timeline (SPEC 93). NOT TRIMMED BY READER: the provider of the
+  // category receives it whole, comments included, the same as the requester.
+  // The comments that exist today are written by SPEC 92 and are addressed to
+  // the resident; cutting them back "just in case" would be inventing a
+  // confidentiality rule no field marks and nobody can consult. It runs AFTER
+  // the 403 above, so a reader who fits no rule never pays for this query.
+  $transactions = myapi_service_request_load_transactions($nid);
+
   // 7. Respond 200 (read-only endpoint, no message_key). One object under
   // 'service_request', never a list.
   myapi_respond([
-    'service_request' => myapi_service_request_build_detail($row, $viewer, $images, $offers, $offers_count),
+    'service_request' => myapi_service_request_build_detail($row, $viewer, $images, $offers, $offers_count, $transactions),
   ], 200);
 }
 
@@ -1516,6 +1525,107 @@ function myapi_service_request_load_offers($nid, array $provider_ids) {
 }
 
 /**
+ * Loads the timeline of one request: its published transactions (SPEC 93).
+ *
+ * ONE QUERY, and the only one this key ever costs. The five values of every
+ * entry come out of the four joins below, and there is nothing to load apart
+ * afterwards — no images, no attachment — which is exactly what forces a
+ * second query in myapi_claim_load_transactions(). A request with twenty
+ * transactions costs the same as one with a single one.
+ *
+ * TAKES A nid AND NOT AN ARRAY, unlike its counterpart in claims. That one
+ * loads a whole page of claims and therefore needs the IN (...) and the map
+ * keyed by claim_id; here there is one request, and copying the signature
+ * would bring an array of one element and an ungrouping nobody uses.
+ *
+ * n.type = 'service_transaction' IS MANDATORY, NOT DECORATION. field_request
+ * is SHARED with 'service_offer' (SPEC 77), so without the bundle condition
+ * the timeline would list the request's offers as if they were transactions —
+ * each one with status, status_date and comment at NULL, which reads like a
+ * broken transaction and not like a wrong query. It is the same rule SPEC 92
+ * wrote for the opposite direction (offers_count counting transactions),
+ * applied from this side.
+ *
+ * n.status = 1: published only. A transaction unpublished from the back office
+ * disappears from the app, which is what unpublishing means.
+ *
+ * THE THREE FIELD JOINS ARE LEFT EVEN THOUGH TWO OF THE FIELDS ARE REQUIRED.
+ * A field required at instance level can still end up without a row if someone
+ * deletes it by hand; with INNER the whole transaction would vanish from the
+ * timeline instead of coming out with a NULL, which is visible and
+ * diagnosable. Same criterion myapi_service_request_detail_row() already
+ * applies to requester_uid.
+ *
+ * ORDER: field_status_date_value ASC, n.nid ASC. It is a timeline, read from
+ * the oldest to the newest. The tie-break by ascending nid makes two
+ * transactions of the same minute — and there are, when an operator registers
+ * two changes in a row — come out in the order they were created and not in
+ * the one MySQL decides. A literal copy of the claims order.
+ *
+ * NOT TAGGED WITH node_access, inherited from SPEC 88/89: access was already
+ * decided by myapi_service_request_viewer() over the request, and the
+ * transaction has no access of its own.
+ *
+ * status_date DOES NOT GO THROUGH strtotime(), AND THAT IS NOT A DETAIL.
+ * field_status_date is the very same field shared with 'claim_transaction'
+ * (SPEC 77), created with tz_handling = 'none' in SPEC 55: what is stored is a
+ * naive local time, not a UTC instant. Converting it would shift it by the
+ * server's zone and answer an hour nobody wrote — the bug SPEC 58 already paid
+ * for once. created IS a real timestamp, and that is why it does go through
+ * format_date(): two columns, two rules, on purpose.
+ *
+ * @param mixed $nid  The request nid.
+ *
+ * @return array  A list of transactions, already ordered and already shaped
+ *                into their five keys — id, status, status_date, comment,
+ *                created — or [] when there is none.
+ */
+function myapi_service_request_load_transactions($nid) {
+  if (!is_scalar($nid) || (int) $nid <= 0) {
+    return [];
+  }
+
+  $query = db_select('node', 'n');
+  $query->condition('n.type', MYAPI_SERVICES_TRANSACTION_TYPE);
+  $query->condition('n.status', 1);
+  $query->addField('n', 'nid', 'id');
+  $query->addField('n', 'created', 'created');
+
+  $query->innerJoin('field_data_field_request', 'fr', "fr.entity_id = n.nid AND fr.entity_type = 'node' AND fr.deleted = 0");
+  $query->condition('fr.field_request_target_id', (int) $nid);
+
+  $query->leftJoin('field_data_field_request_status', 'frs', "frs.entity_id = n.nid AND frs.entity_type = 'node' AND frs.deleted = 0");
+  $query->addField('frs', 'field_request_status_value', 'status');
+
+  $query->leftJoin('field_data_field_status_date', 'fsd', "fsd.entity_id = n.nid AND fsd.entity_type = 'node' AND fsd.deleted = 0");
+  $query->addField('fsd', 'field_status_date_value', 'status_date');
+
+  $query->leftJoin('field_data_field_comment', 'fcm', "fcm.entity_id = n.nid AND fcm.entity_type = 'node' AND fcm.deleted = 0");
+  $query->addField('fcm', 'field_comment_value', 'comment');
+
+  $query->orderBy('fsd.field_status_date_value', 'ASC');
+  $query->orderBy('n.nid', 'ASC');
+
+  $transactions = [];
+  foreach ($query->execute()->fetchAll() as $row) {
+    $transactions[] = [
+      'id'          => (int) $row->id,
+      // The raw catalogue key — 'open', 'direct', 'assigned'… — exactly like
+      // the status the listing and the detail already serve. No label: serving
+      // the translation in one place and not in the other two would force the
+      // client to know which of the two sources to use.
+      'status'      => $row->status,
+      // The stored value with a 'T' in it. See the note above: no strtotime().
+      'status_date' => $row->status_date === NULL ? NULL : str_replace(' ', 'T', $row->status_date),
+      'comment'     => $row->comment,
+      'created'     => format_date((int) $row->created, 'custom', 'Y-m-d\TH:i:s'),
+    ];
+  }
+
+  return $transactions;
+}
+
+/**
  * Shapes one private file into {id, url, filename}, or NULL (SPEC 89).
  *
  * A copy of myapi_claim_build_file() in shape and in reasoning, pointed at this
@@ -1622,14 +1732,17 @@ function myapi_service_request_build_offer($row) {
  * answers for that request" an acceptance criterion this file cannot break by
  * accident, and it is why SPEC 88's response does not change by a single key.
  *
- * EIGHTEEN KEYS, ALWAYS, FOR BOTH READERS. Nothing appears and nothing
+ * NINETEEN KEYS, ALWAYS, FOR BOTH READERS. Nothing appears and nothing
  * disappears with the data or with who is asking: a null is an answer, an absent
  * key is a question, and a client that has to test for the existence of a key
  * before reading it is a client that will forget to. (The spec's prose says
  * "seventeen" in a couple of places and then lists eight new keys next to the
  * listing's ten; the enumeration is the part that is unambiguous, and this is
  * it. Since SPEC 91 the arithmetic reads differently and the total does not
- * move: `unit` became the listing's eleventh key, so the detail adds seven.)
+ * move: `unit` became the listing's eleventh key, so the detail adds seven.
+ * SPEC 93 counts "seventeen to eighteen" from that same prose and adds exactly
+ * one key, `transactions`; the enumeration below is again the unambiguous
+ * part, and it is eleven plus eight.)
  *
  * THE PROVIDER'S TRIM LIVES HERE AND NOWHERE ELSE, and it is exactly two keys:
  *
@@ -1684,10 +1797,14 @@ function myapi_service_request_build_offer($row) {
  * @param mixed $offers_count
  *   The TOTAL number of published offers of the request, from
  *   myapi_service_request_offer_counts_by_nid().
+ * @param array $transactions
+ *   The timeline, from myapi_service_request_load_transactions(): already
+ *   ordered and already shaped into its five keys. Always an array, empty for
+ *   a request born before SPEC 92.
  *
- * @return array  The eighteen keys, in order.
+ * @return array  The nineteen keys, in order.
  */
-function myapi_service_request_build_detail($row, $viewer, array $images, array $offers, $offers_count) {
+function myapi_service_request_build_detail($row, $viewer, array $images, array $offers, $offers_count, array $transactions) {
   $nid = (int) $row->nid;
 
   // The eleven keys of the listing, from the listing's own serialiser. The
@@ -1738,6 +1855,12 @@ function myapi_service_request_build_detail($row, $viewer, array $images, array 
       ? format_date((int) $row->closed_at, 'custom', 'Y-m-d\TH:i:s')
       : NULL,
     'offers'      => array_values($offers),
+    // Always an array too, and for the same reason as `images`: a request born
+    // before SPEC 92 has no timeline, and [] says that without the client
+    // having to test whether the key is there. No backfill invents a row for
+    // it — the app treats the empty list as a normal state, exactly as it
+    // treats `offers: []`.
+    'transactions' => array_values($transactions),
   ]);
 }
 
@@ -2213,12 +2336,17 @@ function myapi_service_request_build_node($uid, $title, $unit_id, $condominium_i
  * mentions transactions. It is also why nothing here needs to change if that
  * behaviour ever does.
  *
- * That timeline is written to the database and NOT exposed: the 201 below gains
- * no `transactions` key, and neither do the list or the detail. Exposing it is
- * another spec, exactly as it was for claims.
+ * SINCE SPEC 93 THAT TIMELINE IS ALSO SERVED, and the 201 below carries it
+ * populated: the initial transaction already exists at this instant, written
+ * inside the very node_save() above, so answering `transactions: []` here would
+ * be serving a datum that is false — and omitting the key would break SPEC 89's
+ * promise that the 201 and GET /% are the same object. It is the one difference
+ * with `offers` and `offers_count` below: those two are known to be empty, this
+ * one is known NOT to be, so it is queried and not assumed.
  *
  * The 201 response reuses myapi_service_request_detail_row() +
  * myapi_user_display_names() + myapi_service_request_load_images() +
+ * myapi_service_request_load_transactions() +
  * myapi_service_request_build_detail() — the very same functions
  * GET /api/v1/service-requests/% uses, with `viewer` fixed to 'requester' (the
  * creator is always the requester), so the two responses can never drift
@@ -2376,10 +2504,11 @@ function myapi_service_request_create() {
     file_usage_add($attachment_file, 'myapi', 'node', $node->nid);
   }
 
-  // 13. Respond 201 with the same eighteen-key shape as
+  // 13. Respond 201 with the same nineteen-key shape as
   // GET /api/v1/service-requests/%, reusing SPEC 89's own serialiser. `viewer`
   // is always 'requester' here: the creator IS the requester. `offers` and
-  // `offers_count` are put directly as `[]` and `0` — see the docblock.
+  // `offers_count` are put directly as `[]` and `0`, while `transactions` IS
+  // queried — see the docblock.
   $row = myapi_service_request_detail_row($node->nid);
 
   $row->requester_name = NULL;
@@ -2390,8 +2519,14 @@ function myapi_service_request_create() {
 
   $images = myapi_service_request_load_images($node->nid);
 
+  // The timeline of a node that is one node_save() old: exactly the one entry
+  // hook_node_insert() just wrote (SPEC 92). The same loader the detail calls,
+  // so the element this 201 returns and the one an immediate GET returns are
+  // the same object and cannot drift.
+  $transactions = myapi_service_request_load_transactions($node->nid);
+
   myapi_respond(
-    ['service_request' => myapi_service_request_build_detail($row, 'requester', $images, [], 0)],
+    ['service_request' => myapi_service_request_build_detail($row, 'requester', $images, [], 0, $transactions)],
     201,
     'service_request_created'
   );
