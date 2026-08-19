@@ -62,3 +62,4 @@ files[] = includes/myapi.provider_query.inc
 files[] = includes/myapi.service_request_files.inc
 files[] = includes/myapi.node_files.inc
 files[] = resources/service_request.resource.inc
+files[] = includes/myapi.service_transaction.inc

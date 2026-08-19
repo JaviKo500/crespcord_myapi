@@ -761,6 +761,13 @@ function myapi_mail($key, &$message, $params) {
  *   Covers every creation and edition path of a transaction at once — the
  *   module's own creation page, the automatic initial transaction, and both
  *   native node forms.
+ * - 'service_transaction': delegates to myapi_service_transaction_set_title()
+ *   (includes/myapi.service_transaction.inc, SPEC 92), the exact same job the
+ *   branch above does for the other bundle, and for the same reasons. Written
+ *   BEFORE the creator branch of myapi_node_insert() below, so no automatic
+ *   transaction can ever be born titleless — not even in an intermediate
+ *   commit. It reads the request, its status, the status date and the comment;
+ *   it writes nothing but $node->title.
  */
 function myapi_node_presave($node) {
   if ($node->type === 'pagos') {
@@ -773,6 +780,10 @@ function myapi_node_presave($node) {
   if ($node->type === 'claim_transaction') {
     module_load_include('inc', 'myapi', 'includes/myapi.claim_transaction_admin');
     myapi_claim_transaction_set_title($node);
+  }
+  if ($node->type === 'service_transaction') {
+    module_load_include('inc', 'myapi', 'includes/myapi.service_transaction');
+    myapi_service_transaction_set_title($node);
   }
 }
 
@@ -795,6 +806,21 @@ function myapi_node_presave($node) {
  *   failure of the notifier can never keep that transaction from being created.
  *   The second argument is the transient origin flag, which is what tells the
  *   two creation paths apart — see myapi_claim_is_creation_from_api().
+ * - 'service_request' (SPEC 92): delegates to
+ *   myapi_service_transaction_create_initial()
+ *   (includes/myapi.service_transaction.inc), which creates the request's
+ *   automatic initial transaction — one 'service_transaction' copying the
+ *   status the request was born with. The equivalent of the 'reclamo' branch
+ *   above, and here for the same reason: the hook covers node/add/
+ *   service_request, POST /api/v1/service-requests and any future path with a
+ *   single implementation, which is why resources/service_request.resource.inc
+ *   carries no line about transactions. No notifier follows it — the
+ *   marketplace has none yet.
+ *   There is deliberately NO 'service_transaction' branch in this hook: the
+ *   direction is request -> transaction and only that, so inserting the
+ *   transaction fires this hook again, matches nothing, and stops. A future
+ *   spec adding such a branch must not re-save the request from it, or the
+ *   cascade becomes infinite.
  * - 'claim_transaction': delegates to
  *   myapi_claim_transaction_sync_claim_status() (SPEC 57, same include),
  *   which syncs the parent claim's field_status when it differs. Covers
@@ -826,6 +852,11 @@ function myapi_node_insert($node) {
     myapi_claim_transaction_create_initial($node);
     module_load_include('inc', 'myapi', 'includes/myapi.claim_notification');
     myapi_claim_notify_created($node, myapi_claim_is_creation_from_api($node));
+    return;
+  }
+  if ($node->type === 'service_request') {
+    module_load_include('inc', 'myapi', 'includes/myapi.service_transaction');
+    myapi_service_transaction_create_initial($node);
     return;
   }
   if ($node->type === 'claim_transaction') {

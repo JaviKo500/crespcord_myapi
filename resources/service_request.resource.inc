@@ -2201,9 +2201,21 @@ function myapi_service_request_build_node($uid, $title, $unit_id, $condominium_i
  * field_requester, field_condominium, field_assigned_offer and field_closed_at
  * are NEVER read from the request: see myapi_service_request_build_node().
  *
- * NO service_transaction IS CREATED. Unlike 'reclamo', this bundle has no
- * hook_node_insert() branch that reacts to a new request — nothing here fires
- * one, on purpose (out of scope by the spec's own decision).
+ * A service_transaction IS created, and not from here (SPEC 92). The node_save()
+ * this function already performs fires hook_node_insert(), whose
+ * 'service_request' branch (myapi.module) delegates to
+ * myapi_service_transaction_create_initial()
+ * (includes/myapi.service_transaction.inc), which writes the first entry of the
+ * request's timeline copying the status it was just born with — 'open' or
+ * 'direct'. Exactly like 'reclamo', and for the same reason: the hook covers
+ * this endpoint, node/add/service_request and any future path with one
+ * implementation, which is why not a single executable line of this function
+ * mentions transactions. It is also why nothing here needs to change if that
+ * behaviour ever does.
+ *
+ * That timeline is written to the database and NOT exposed: the 201 below gains
+ * no `transactions` key, and neither do the list or the detail. Exposing it is
+ * another spec, exactly as it was for claims.
  *
  * The 201 response reuses myapi_service_request_detail_row() +
  * myapi_user_display_names() + myapi_service_request_load_images() +
