@@ -1,6 +1,6 @@
 # 93 — La línea de tiempo en el detalle de una solicitud de servicio
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-08-19
 - **Dependencias:**
   - `89-service-request-detail` (Implemented) — dueña de
@@ -276,60 +276,60 @@ incompleto (`CLAUDE.md`).
 
 ### La respuesta
 
-- [ ] `GET /api/v1/service-requests/{id}` incluye la clave `transactions`.
-- [ ] La clave está **siempre**: una solicitud sin transacciones responde
+- [x] `GET /api/v1/service-requests/{id}` incluye la clave `transactions`.
+- [x] La clave está **siempre**: una solicitud sin transacciones responde
       `"transactions": []`, nunca `null` y nunca ausente.
-- [ ] Cada transacción trae **exactamente cinco claves**: `id`, `status`,
+- [x] Cada transacción trae **exactamente cinco claves**: `id`, `status`,
       `status_date`, `comment`, `created`. No aparecen `images` ni `attachment`.
-- [ ] `id` es un entero, no una cadena.
-- [ ] `status` es la clave cruda del catálogo (`"open"`, `"direct"`,
+- [x] `id` es un entero, no una cadena.
+- [x] `status` es la clave cruda del catálogo (`"open"`, `"direct"`,
       `"assigned"`…), sin etiqueta traducida.
-- [ ] `status_date` sale como `2026-08-19T14:30:00` — el valor almacenado con
+- [x] `status_date` sale como `2026-08-19T14:30:00` — el valor almacenado con
       una `T`, sin desplazamiento de zona horaria.
-- [ ] `created` sale como `Y-m-dTH:i:s` en la zona del sitio.
-- [ ] `comment` es `null`, no `""`, cuando la transacción no lleva comentario.
-- [ ] Ninguna otra clave del detalle cambia de valor, de tipo ni de posición.
+- [x] `created` sale como `Y-m-dTH:i:s` en la zona del sitio.
+- [x] `comment` es `null`, no `""`, cuando la transacción no lleva comentario.
+- [x] Ninguna otra clave del detalle cambia de valor, de tipo ni de posición.
 
 ### El orden y el filtro
 
-- [ ] Dos transacciones con `status_date` distinto salen de la más antigua a la
+- [x] Dos transacciones con `status_date` distinto salen de la más antigua a la
       más reciente.
-- [ ] Dos transacciones con el **mismo** `status_date` salen ordenadas por `id`
+- [x] Dos transacciones con el **mismo** `status_date` salen ordenadas por `id`
       ascendente.
-- [ ] Una transacción despublicada (`node.status = 0`) no aparece.
-- [ ] Una **oferta** (`service_offer`) de la misma solicitud, que comparte
+- [x] Una transacción despublicada (`node.status = 0`) no aparece.
+- [x] Una **oferta** (`service_offer`) de la misma solicitud, que comparte
       `field_request`, **no** aparece en `transactions`.
-- [ ] Una transacción de **otra** solicitud no aparece.
+- [x] Una transacción de **otra** solicitud no aparece.
 
 ### Los dos lectores
 
-- [ ] El solicitante recibe la línea de tiempo entera.
-- [ ] El proveedor con acceso al detalle recibe **la misma** línea de tiempo,
+- [x] El solicitante recibe la línea de tiempo entera.
+- [x] El proveedor con acceso al detalle recibe **la misma** línea de tiempo,
       con los mismos elementos y los mismos comentarios.
-- [ ] Quien no encaja en ninguna regla de `myapi_service_request_viewer()` sigue
+- [x] Quien no encaja en ninguna regla de `myapi_service_request_viewer()` sigue
       recibiendo `403`, sin la clave y sin haber ejecutado la consulta nueva.
-- [ ] Una solicitud inexistente o despublicada sigue respondiendo `404`.
+- [x] Una solicitud inexistente o despublicada sigue respondiendo `404`.
 
 ### El `POST`
 
-- [ ] El `201` de `POST /api/v1/service-requests` devuelve `transactions` con la
+- [x] El `201` de `POST /api/v1/service-requests` devuelve `transactions` con la
       transacción inicial de SPEC 92 dentro.
-- [ ] Ese elemento es **byte a byte** el mismo que devuelve un `GET
+- [x] Ese elemento es **byte a byte** el mismo que devuelve un `GET
       /api/v1/service-requests/{id}` inmediato sobre la solicitud recién creada.
 
 ### Lo que no se toca
 
-- [ ] `GET /api/v1/service-requests` (listado) responde exactamente las mismas
+- [x] `GET /api/v1/service-requests` (listado) responde exactamente las mismas
       claves que antes; `?include=transactions` no existe y se ignora.
-- [ ] `GET /api/v1/service-requests/{id}/files/{fid}` responde igual que antes.
-- [ ] `myapi.install`, `myapi.module` y `myapi.info` no tienen ni una línea
+- [x] `GET /api/v1/service-requests/{id}/files/{fid}` responde igual que antes.
+- [x] `myapi.install`, `myapi.module` y `myapi.info` no tienen ni una línea
       modificada.
-- [ ] La feature funciona sin ejecutar `drush updb` ni `drush cc all`.
+- [x] La feature funciona sin ejecutar `drush updb` ni `drush cc all`.
 
 ### Coste
 
-- [ ] El detalle ejecuta **una** consulta más que antes, no una por transacción.
-- [ ] Una solicitud con veinte transacciones cuesta las mismas consultas que una
+- [x] El detalle ejecuta **una** consulta más que antes, no una por transacción.
+- [x] Una solicitud con veinte transacciones cuesta las mismas consultas que una
       con una.
 
 ---
