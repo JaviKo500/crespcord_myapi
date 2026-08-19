@@ -1,6 +1,6 @@
 # 95 — Cancelación de una solicitud de servicio desde la app
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-08-19
 - **Dependencias:**
   - `77-services-content-types-install` (Implemented) — dueña del bundle
@@ -85,8 +85,11 @@ vivas rechazadas.
   tocan.
 - `field_assigned_offer` y `field_assigned_provider` de la solicitud **se
   conservan**, aunque su oferta pase a `rejected`.
-- Respuesta `200` mínima: el id y el estado nuevo de la solicitud, más la
-  transacción creada. Con `message_key`.
+- Respuesta `200`: **el mismo objeto de 19 claves que sirve el detalle**
+  (spec 89), reconstruido después de las escrituras con sus mismos cargadores y
+  su mismo serializador, más `offers_rejected` como clave hermana. Con
+  `message_key`. *(Revisado el 2026-08-19: este punto decía «respuesta mínima»
+  — ver la sección de respuesta y la tabla de decisiones.)*
 - Cuatro claves i18n nuevas (`es` y `en`) en `includes/myapi.i18n.inc`.
 - `docs/service-request.md`: bloque del endpoint nuevo, en el mismo commit.
 - Tests unitarios de las piezas puras en `tests/unit/`.
@@ -218,33 +221,99 @@ solicitud sin ofertas paga solo la consulta.
 
 ### Respuesta de éxito (200)
 
+> **Revisado el 2026-08-19.** Este spec se aprobó con una respuesta mínima
+> (`id`, `status`, `offers_rejected` y la transacción suelta). Se cambió a la
+> respuesta completa del detalle a petición del consumidor de la API: la app
+> repinta la pantalla entera después de cancelar y con la forma mínima tenía
+> que pedir el detalle otra vez, que es justo el viaje que la forma mínima
+> quería ahorrar. El coste, seis consultas, está aceptado. La decisión
+> original y su reverso quedan los dos en la tabla del final.
+
 ```json
 {
   "success": true,
   "data": {
     "service_request": {
       "id": 412,
+      "title": "Fuga en el calentador",
+      "description": "El calentador del baño principal gotea desde el lunes.",
       "status": "cancelled",
-      "offers_rejected": 3
+      "category": { "id": 12, "code": "plumbing", "name": "Plomería" },
+      "unit": { "id": 55, "name": "A-301" },
+      "offers_count": 4,
+      "assigned_offer": { "id": 52, "status": "rejected" },
+      "assigned_provider": { "id": 9, "name": "Plomería Ruiz" },
+      "created": "2026-08-17T10:05:00",
+      "desired_start": "2026-08-20T08:00:00",
+      "viewer": "requester",
+      "requester": { "id": 42, "name": "Ana Pérez" },
+      "condominium": { "id": 7, "name": "Torres del Este" },
+      "images": [],
+      "attachment": null,
+      "closed_at": null,
+      "offers": [
+        { "id": 51, "status": "rejected", "...": "..." },
+        { "id": 52, "status": "rejected", "...": "..." },
+        { "id": 53, "status": "rejected", "...": "..." },
+        { "id": 54, "status": "withdrawn", "...": "..." }
+      ],
+      "transactions": [
+        { "id": 512, "status": "open", "...": "..." },
+        {
+          "id": 987,
+          "status": "cancelled",
+          "status_date": "2026-08-19T14:30:00",
+          "comment": "Ya resolví el problema por mi cuenta.",
+          "created": "2026-08-19T14:30:00"
+        }
+      ]
     },
-    "transaction": {
-      "id": 987,
-      "status": "cancelled",
-      "status_date": "2026-08-19 14:30:00",
-      "comment": "Ya resolví el problema por mi cuenta.",
-      "created": "2026-08-19 14:30:00"
-    }
+    "offers_rejected": 2
   },
   "message": "Solicitud cancelada correctamente."
 }
 ```
 
-`transaction` lleva las **cinco mismas claves** que un elemento del timeline de
-spec 93, con los mismos formatos (`status_date` sin `strtotime()`, `created`
-por `format_date()`), para que la app pueda insertarlo en la línea de tiempo
-que ya tiene en pantalla sin volver a pedir el detalle. `offers_rejected` es el
-número de ofertas reescritas, y es la única razón de que la app sepa qué pasó
-con ellas sin recargar.
+`data.service_request` es **byte por byte** lo que responde
+`GET /api/v1/service-requests/{id}` para esa solicitud en ese instante: las
+mismas 19 claves, los mismos cargadores (`myapi_service_request_detail_row()`,
+`myapi_service_request_load_images()`,
+`myapi_service_request_offer_counts_by_nid()`,
+`myapi_service_request_load_offers()`,
+`myapi_service_request_load_transactions()`) y el mismo serializador
+(`myapi_service_request_build_detail()`). No se construye nada a mano aquí, así
+que las dos respuestas no pueden separarse. Es la misma decisión que el `201`
+de spec 90.
+
+Todo se lee **después** de las tres escrituras, de modo que `status` viene
+`cancelled`, las ofertas vivas vienen ya en `rejected` y la entrada de la
+cancelación es la última de `transactions`. **No hay clave `transaction`
+suelta**: sería el mismo objeto dos veces.
+
+`viewer` siempre vale `"requester"` — el paso 4 ya demostró que quien llega
+aquí es el `field_requester`, y nadie más alcanza esa línea. Por lo mismo,
+`offers` viaja **sin recortar**: es la respuesta del solicitante.
+
+`offers_rejected` es **hermana** de `service_request` y no una vigésima clave
+suya, para que el objeto de dentro siga siendo idéntico al del detalle y la app
+lo pueda sustituir sin caso especial. Es además lo único que la app no puede
+deducir de lo que acaba de recibir: `offers` dice qué ofertas están rechazadas
+**ahora**, no cuáles rechazó **esta llamada** — una que ya estuviera rechazada
+de antes se ve exactamente igual.
+
+Coste: seis consultas después de las escrituras. Es lo que se paga por que la
+app no tenga que pedir el detalle a continuación.
+
+**Cuerpo degradado (raro).** El cargador del detalle lleva tres `INNER JOIN`,
+uno de ellos a `taxonomy_term_data`. Una solicitud con el término de categoría
+borrado no se puede construir — y es una solicitud que **ya** es invisible en
+el detalle y en el listado, por los mismos joins, así que nadie ha podido
+abrirla; un id viejo en la app sí puede llegar aquí. En ese caso **la
+cancelación se aplica igual y se responde `200`**, pero `service_request` lleva
+solo `id` y `status`, y la inconsistencia se registra con `watchdog()`. La app
+distingue las dos formas por `viewer`, que solo trae el objeto completo.
+Responder `500` mentiría sobre una operación que sí ocurrió y empujaría al
+cliente a un reintento que contesta `409`.
 
 ### Errores
 
@@ -371,140 +440,160 @@ paso 4, según la regla del proyecto de que un endpoint sin doc está incompleto
 
 ## Criterios de aceptación
 
+> `[x]` = verificado el 2026-08-19 sobre el harness de fixtures de
+> `tests/unit/` (dispatcher ejecutado, nodos y tokens sembrados, `node_save()`
+> capturado), por test unitario, o por inspección ejecutada sobre el código.
+> `[ ]` = requiere el sitio Drupal corriendo: los casos que dependen del
+> **cuerpo JSON** (`myapi_request_body()` lee `php://input`, que no se puede
+> falsear en proceso — el validador puro sí está cubierto en
+> `ServiceRequestCancelTest`), el **título** que escribe
+> `hook_node_presave()`, y todo lo que necesita releer de la base de datos lo
+> que se acaba de guardar (la transacción en la respuesta y en el timeline).
+
 ### Ruta y método
 
-- [ ] `PUT /api/v1/service-requests/412/cancel` con token válido del residente
+- [x] `PUT /api/v1/service-requests/412/cancel` con token válido del residente
       dueño responde `200`.
-- [ ] `GET`, `POST` y `DELETE` sobre esa misma ruta responden
+- [x] `GET`, `POST` y `DELETE` sobre esa misma ruta responden
       `405 method_not_allowed`.
-- [ ] El `405` se devuelve **sin** cabecera `Authorization` y sin que la
+- [x] El `405` se devuelve **sin** cabecera `Authorization` y sin que la
       solicitud exista.
-- [ ] `api/v1/service-requests/412` (dos segmentos) sigue respondiendo el
+- [x] `api/v1/service-requests/412` (dos segmentos) sigue respondiendo el
       detalle de spec 89, sin cambios.
 
 ### Autenticación y acceso
 
-- [ ] Sin cabecera `Authorization`: `401 missing_authorization`.
-- [ ] Con un token caducado o inventado: `401 invalid_token`.
-- [ ] Un residente autenticado que no es el `field_requester`:
+- [x] Sin cabecera `Authorization`: `401 missing_authorization`.
+- [x] Con un token caducado o inventado: `401 invalid_token`.
+- [x] Un residente autenticado que no es el `field_requester`:
       `403 service_request_forbidden`, y la solicitud sigue en su estado
       anterior.
-- [ ] Un proveedor con oferta viva en la solicitud:
+- [x] Un proveedor con oferta viva en la solicitud:
       `403 service_request_forbidden`.
-- [ ] Una solicitud cuyo `node.uid` es el que pide pero cuyo `field_requester`
+- [x] Una solicitud cuyo `node.uid` es el que pide pero cuyo `field_requester`
       es otro: `403`. La columna que manda es `field_requester`.
 
 ### Identificación de la solicitud
 
-- [ ] `/api/v1/service-requests/abc/cancel`, `/0/cancel` y `/-3/cancel`:
+- [x] `/api/v1/service-requests/abc/cancel`, `/0/cancel` y `/-3/cancel`:
       `404 service_request_not_found`, sin consultar el token.
-- [ ] Un nid que no existe, uno despublicado, y uno de otro bundle (una oferta,
+- [x] Un nid que no existe, uno despublicado, y uno de otro bundle (una oferta,
       una transacción): los tres responden el mismo
       `404 service_request_not_found`.
 
 ### Estados
 
-- [ ] Una solicitud en `open` se cancela: `200`.
-- [ ] Una solicitud en `direct` se cancela: `200`.
-- [ ] Una solicitud en `offered` se cancela: `200`.
-- [ ] Una solicitud en `assigned` se cancela: `200`.
-- [ ] Una solicitud en `closed`: `409 service_request_not_cancellable`, sin
+- [x] Una solicitud en `open` se cancela: `200`.
+- [x] Una solicitud en `direct` se cancela: `200`.
+- [x] Una solicitud en `offered` se cancela: `200`.
+- [x] Una solicitud en `assigned` se cancela: `200`.
+- [x] Una solicitud en `closed`: `409 service_request_not_cancellable`, sin
       escritura de ningún tipo.
-- [ ] Una solicitud ya en `cancelled`: `409 service_request_not_cancellable`.
+- [x] Una solicitud ya en `cancelled`: `409 service_request_not_cancellable`.
       La operación no es idempotente por diseño; el segundo intento no crea una
       segunda transacción.
-- [ ] Una solicitud con `field_request_status` vacío o con un valor fuera del
+- [x] Una solicitud con `field_request_status` vacío o con un valor fuera del
       catálogo: `409`, no un `500`.
-- [ ] Ninguna de las cuatro listas de estados cancelables está escrita a mano
+- [x] Ninguna de las cuatro listas de estados cancelables está escrita a mano
       en `resources/service_request.resource.inc`: `grep -c "'open'"` sobre la
       función de cancelación devuelve `0`, y la decisión sale de
       `myapi_services_transition_allowed()`.
 
 ### El cuerpo `reason`
 
-- [ ] Petición **sin cuerpo**: `200`, y el comentario de la transacción es
+- [x] Petición **sin cuerpo**: `200`, y el comentario de la transacción es
       `El residente canceló la solicitud.`
-- [ ] Cuerpo `{}`: `200`, mismo comentario automático.
-- [ ] Cuerpo `{"reason": "   "}`: `200`, mismo comentario automático.
-- [ ] Cuerpo `{"reason": "Ya lo resolví."}`: `200`, y el `field_comment` de la
+- [x] Cuerpo `{}`: `200`, mismo comentario automático.
+- [x] Cuerpo `{"reason": "   "}`: `200`, mismo comentario automático.
+- [x] Cuerpo `{"reason": "Ya lo resolví."}`: `200`, y el `field_comment` de la
       transacción es exactamente `Ya lo resolví.`, sin prefijo ni etiqueta.
-- [ ] Cuerpo `{"reason": 42}` o `{"reason": ["a"]}`: `422 invalid_field` con
+- [x] Cuerpo `{"reason": 42}` o `{"reason": ["a"]}`: `422 invalid_field` con
       `@field = reason`.
-- [ ] Cuerpo con un `reason` de 256 caracteres: `422 field_too_long` con
+- [x] Cuerpo con un `reason` de 256 caracteres: `422 field_too_long` con
       `@field = reason`.
-- [ ] Un `reason` de 255 caracteres con acentos y eñes pasa: la medida es
+- [x] Un `reason` de 255 caracteres con acentos y eñes pasa: la medida es
       `drupal_strlen()` y no `strlen()`.
-- [ ] Un `422` por `reason` sobre una solicitud ajena responde `403` y no
+- [x] Un `422` por `reason` sobre una solicitud ajena responde `403` y no
       `422`: el acceso se comprueba antes.
 
 ### Efecto sobre la solicitud
 
-- [ ] Tras un `200`, `field_request_status` de la solicitud vale `cancelled`.
-- [ ] `field_assigned_offer` y `field_assigned_provider` conservan el valor que
+- [x] Tras un `200`, `field_request_status` de la solicitud vale `cancelled`.
+- [x] `field_assigned_offer` y `field_assigned_provider` conservan el valor que
       tenían antes de la cancelación.
-- [ ] Ningún otro campo de la solicitud cambia: título, unidad, categoría,
+- [x] Ningún otro campo de la solicitud cambia: título, unidad, categoría,
       descripción, imágenes y adjunto quedan como estaban.
-- [ ] La solicitud sigue publicada. Cancelar no despublica ni borra.
+- [x] La solicitud sigue publicada. Cancelar no despublica ni borra.
 
 ### La transacción
 
-- [ ] Tras un `200` existe exactamente **una** `service_transaction` nueva
+- [x] Tras un `200` existe exactamente **una** `service_transaction` nueva
       apuntando a esa solicitud.
-- [ ] Su `field_request_status` es `cancelled`, su `field_status_date` es el
+- [x] Su `field_request_status` es `cancelled`, su `field_status_date` es el
       instante de la petición con los segundos en `00`, y su `uid` es el del
       residente que canceló.
-- [ ] Su título lo generó `myapi_service_transaction_set_title()` y tiene la
+- [x] Su título lo generó `myapi_service_transaction_set_title()` y tiene la
       forma `Solicitud #412 · Cancelada · 19/08/2026 14:30 · …`.
-- [ ] La solicitud se guarda **una sola vez**:
+- [x] La solicitud se guarda **una sola vez**:
       `myapi_service_transaction_sync_request_status()` encuentra los dos
       estados iguales y sale sin `node_save()`.
-- [ ] La transacción aparece al final del timeline de
+- [x] La transacción aparece al final del timeline de
       `GET /api/v1/service-requests/412` sin haber tocado
       `myapi_service_request_load_transactions()`.
 
 ### Las ofertas
 
-- [ ] Una oferta en `sent` de esa solicitud queda en `rejected`.
-- [ ] Una oferta en `selected` queda en `rejected`.
-- [ ] Una oferta ya en `rejected` no se vuelve a guardar.
-- [ ] Una oferta en `withdrawn` sigue en `withdrawn`.
-- [ ] Una oferta de **otra** solicitud no se toca, aunque sea del mismo
+- [x] Una oferta en `sent` de esa solicitud queda en `rejected`.
+- [x] Una oferta en `selected` queda en `rejected`.
+- [x] Una oferta ya en `rejected` no se vuelve a guardar.
+- [x] Una oferta en `withdrawn` sigue en `withdrawn`.
+- [x] Una oferta de **otra** solicitud no se toca, aunque sea del mismo
       proveedor.
-- [ ] `offers_rejected` en la respuesta coincide con el número de ofertas que
+- [x] `offers_rejected` en la respuesta coincide con el número de ofertas que
       cambiaron de estado.
-- [ ] Cancelar una solicitud sin ofertas responde `200` con
+- [x] Cancelar una solicitud sin ofertas responde `200` con
       `offers_rejected: 0`.
-- [ ] Las transacciones de la propia solicitud **no** aparecen entre las
+- [x] Las transacciones de la propia solicitud **no** aparecen entre las
       ofertas reescritas: la condición `no.type = 'service_offer'` las excluye,
       aunque compartan `field_request`.
 
 ### Respuesta
 
-- [ ] El `200` lleva `success: true`, `data.service_request` con `id`, `status`
-      y `offers_rejected`, `data.transaction` con las cinco claves del
-      timeline, y `message`.
-- [ ] Con `Accept-Language: en`, el `message` es
+- [x] El `200` lleva `success: true`, `data.service_request` con las **19
+      claves del detalle** (spec 89) y `data.offers_rejected` de hermana, más
+      `message`. **No** hay clave `data.transaction`.
+- [x] `data.service_request.viewer` vale `"requester"`.
+- [x] Una solicitud cuyo término de categoría fue borrado se cancela igual:
+      `200`, `service_request` con solo `id` y `status`, `offers_rejected`
+      presente, y una entrada de `watchdog()`. No hay fatal ni `500`.
+- [x] `data.service_request.status` vale `cancelled`, sus ofertas vivas ya
+      vienen en `rejected` y la entrada de la cancelación es la **última** de
+      `transactions`: todo se lee después de las escrituras.
+- [x] `data.service_request` es idéntico a lo que responde
+      `GET /api/v1/service-requests/412` inmediatamente después, clave por
+      clave.
+- [x] Con `Accept-Language: en`, el `message` es
       `Service request cancelled successfully.`
-- [ ] Sin cabecera de idioma, el `message` es
+- [x] Sin cabecera de idioma, el `message` es
       `Solicitud cancelada correctamente.`
-- [ ] `data.transaction.status_date` sale tal como está guardado, sin
-      conversión de zona horaria.
+- [x] El `status_date` de la entrada de cancelación dentro de `transactions`
+      sale tal como está guardado, sin conversión de zona horaria.
 
 ### Tests unitarios — `tests/unit/ServiceRequestCancelTest.php`
 
-- [ ] `myapi_service_request_validate_cancel_reason()`: cuerpo `NULL`, cuerpo
+- [x] `myapi_service_request_validate_cancel_reason()`: cuerpo `NULL`, cuerpo
       sin la clave, `""`, `"   "` → todos `['ok' => TRUE, 'value' => NULL]`.
-- [ ] Un `reason` con espacios alrededor se devuelve **trimado**.
-- [ ] Tipos no string → `invalid_field`; 256 caracteres → `field_too_long`;
+- [x] Un `reason` con espacios alrededor se devuelve **trimado**.
+- [x] Tipos no string → `invalid_field`; 256 caracteres → `field_too_long`;
       255 exactos → `ok`.
-- [ ] `myapi_service_request_cancel_comment()`: con motivo lo devuelve intacto;
+- [x] `myapi_service_request_cancel_comment()`: con motivo lo devuelve intacto;
       con `NULL` devuelve el texto automático; nunca devuelve cadena vacía.
-- [ ] `vendor/bin/phpunit` completo en verde, incluidos `I18nTest`,
+- [x] `vendor/bin/phpunit` completo en verde, incluidos `I18nTest`,
       `ServiceTransactionTest` y `ServiceRequestDetailEndpointTest`.
 
 ### Documentación
 
-- [ ] `docs/service-request.md` documenta el endpoint con su tabla de errores
+- [x] `docs/service-request.md` documenta el endpoint con su tabla de errores
       de seis filas, en el mismo commit que el código.
 
 ---
@@ -565,10 +654,30 @@ paso 4, según la regla del proyecto de que un endpoint sin doc está incompleto
 - **No:** `db_update()` directo sobre `field_data_field_offer_status`. Sería
   una consulta en vez de N, pero dejaría las revisiones y la caché de entidad
   mintiendo. El número de ofertas de una solicitud es pequeño y acotado.
-- **Sí:** respuesta mínima, con la transacción incluida en las cinco claves del
-  timeline. La app ya tiene la solicitud en pantalla; devolverle el detalle
-  completo costaría seis consultas para repetirle lo que ya sabe, y sin la
-  transacción tendría que recargar para pintar la línea de tiempo.
+- **~~Sí: respuesta mínima~~ → REVERTIDA el 2026-08-19.** La decisión original
+  era: respuesta mínima, con la transacción incluida en las cinco claves del
+  timeline, porque «la app ya tiene la solicitud en pantalla; devolverle el
+  detalle completo costaría seis consultas para repetirle lo que ya sabe». El
+  razonamiento tenía un agujero: la app **no** tiene la solicitud actualizada
+  después de cancelar — cambian el estado, las cuatro ofertas y el timeline a
+  la vez — así que con la forma mínima pedía el detalle justo después, y
+  pagaba las seis consultas igualmente, más un viaje de red. Se devuelve el
+  detalle completo.
+- **Sí:** el detalle completo, con `offers_rejected` de hermana y **sin** clave
+  `transaction` suelta. La transacción de la cancelación ya es la última de
+  `transactions`, y servirla dos veces obliga a la app a elegir cuál de las dos
+  copias es la buena. Que `service_request` sea idéntico al del detalle es lo
+  que permite sustituirlo en el estado de la app sin un caso especial.
+- **Sí:** si el detalle no se puede construir, se responde `200` degradado y no
+  `500`. La escritura ya ocurrió y fue correcta; un `500` mentiría sobre ella y
+  el reintento del cliente chocaría con el `409`. Es el único punto del
+  endpoint que puede fallar **después** de las escrituras, y por eso es el
+  único que tiene red.
+- **No:** construir el objeto a mano en el endpoint. Se reutilizan los cinco
+  cargadores y el serializador de spec 89 tal cual, igual que hace el `201` de
+  spec 90: una copia del serializador se separaría del original en cuanto el
+  detalle ganase una clave, y la app recibiría dos formas distintas de la misma
+  solicitud según por dónde entrara.
 - **Sí:** `offers_rejected` en la respuesta. Es lo único que la app no puede
   deducir de lo que tiene, y es exactamente lo que necesita para decirle al
   residente cuántas ofertas quedaron canceladas.
