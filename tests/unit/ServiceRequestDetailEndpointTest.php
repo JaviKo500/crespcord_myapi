@@ -446,6 +446,35 @@ class ServiceRequestDetailEndpointTest extends TestCase {
     return $code;
   }
 
+  /**
+   * The resource file split into one entry per top-level function, comments
+   * already stripped. Lets a structural guard say "no READ path does X" instead
+   * of "this file never says X", which is what SPEC 95 forced apart: the write
+   * paths it added legitimately load entities, and the read paths still must
+   * not.
+   *
+   * @return array  Function name => its source, from its signature to the one
+   *                before it.
+   */
+  private function functionBodies() {
+    $code = $this->codeWithoutComments();
+    $parts = preg_split(
+      '/^function\s+([a-z0-9_]+)\s*\(/mi',
+      $code,
+      -1,
+      PREG_SPLIT_DELIM_CAPTURE
+    );
+
+    $bodies = [];
+    // $parts[0] is whatever precedes the first function; the rest come in
+    // (name, body) pairs.
+    for ($i = 1; $i < count($parts); $i += 2) {
+      $bodies[$parts[$i]] = $parts[$i + 1];
+    }
+
+    return $bodies;
+  }
+
   /* -------------------------------------------------------------------------
    * Method routing, the nid, and authentication.
    * ---------------------------------------------------------------------- */
@@ -2089,12 +2118,41 @@ class ServiceRequestDetailEndpointTest extends TestCase {
   }
 
   /**
-   * No function of this resource calls node_load(), inside a loop or anywhere
+   * NO READ PATH OF THIS RESOURCE CALLS node_load(), inside a loop or anywhere
    * else: every read is a query with joins, which is what keeps the budget
    * above flat.
+   *
+   * This guard was written (SPEC 89) when the file was read-only, and said
+   * plainly "this file never says node_load". SPEC 95 added the first WRITE
+   * path — the cancellation — and a write legitimately loads the entity it is
+   * about to save: rewriting field_offer_status with a direct db_update() would
+   * be one query instead of N and would leave the revision table and the entity
+   * cache lying. So the ban now names the two functions that are allowed to
+   * load, and every other function in the file is still forbidden. Adding a
+   * third name to that list is a decision, not a fix — the reason a reader must
+   * never load is that the detail's query budget is flat by construction, and
+   * the test right above this one is what measures it.
    */
-  public function testTheResourceNeverCallsNodeLoad() {
-    $this->assertStringNotContainsString('node_load', $this->codeWithoutComments());
+  public function testNoReadPathCallsNodeLoad() {
+    // The cancellation writes: they load what they are about to save.
+    $allowed = [
+      'myapi_service_request_cancel',
+      'myapi_service_request_reject_live_offers',
+    ];
+
+    $checked = 0;
+    foreach ($this->functionBodies() as $name => $body) {
+      if (in_array($name, $allowed, TRUE)) {
+        continue;
+      }
+
+      $this->assertStringNotContainsString('node_load', $body, $name . '() must not call node_load()');
+      $checked++;
+    }
+
+    // Sanity: the splitter actually found the file's functions. A regex that
+    // silently matched nothing would make the loop above pass on an empty set.
+    $this->assertGreaterThan(20, $checked, 'the resource was split into functions');
   }
 
 }
