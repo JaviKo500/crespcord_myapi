@@ -1,6 +1,6 @@
 # 94 — Línea de tiempo de transacciones en el back-office de una solicitud de servicio
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-08-19
 - **Dependencias:**
   - `77-services-content-types-install` (Implemented) — dueña del bundle
@@ -522,102 +522,108 @@ por la misma regla que ya dejó fuera a `myapi_claim_transaction_edit_link()`:
 Lista booleana: cada línea se verifica mirando la pantalla, la base de datos o el
 resultado de `phpunit`.
 
+> **Estado de la verificación (2026-08-19).** Marcados los criterios probados
+> por `phpunit`, por `git` o por una comprobación conclusiva sobre el código
+> —22 de 41—. Los 19 sin marcar necesitan el recorrido manual del paso 10 del
+> plan contra el sitio con las tres cuentas: son los que se verifican mirando
+> la pantalla o la base de datos.
+
 **Ver**
 
-1. En `node/<nid>/edit` de una `service_request` aparece un `fieldset` al final
-   con la línea de tiempo de sus transacciones.
-2. La tabla tiene seis columnas: Estado, Fecha del estado, Comentario, Autor,
-   Editar, Borrar.
-3. Las filas salen ordenadas por fecha del estado descendente; dos transacciones
-   del mismo minuto salen por `nid` descendente.
-4. La transacción inicial que SPEC 92 creó al nacer la solicitud aparece en la
-   tabla, con su comentario de acuse y su autor.
-5. Una transacción despublicada (`status = 0`) no aparece en la tabla.
-6. La hora mostrada en "Fecha del estado" es exactamente la almacenada en
-   `field_status_date`, sin desplazamiento de zona horaria.
-7. `field_request_status` de la solicitud se ve, con su valor, y no se puede
-   modificar en `node/<nid>/edit`.
-8. En `node/add/service_request`, `field_request_status` sigue siendo editable.
-9. En `node/add/service_request` no aparece ningún `fieldset` de línea de tiempo.
+1. [x] En `node/<nid>/edit` de una `service_request` aparece un `fieldset` al final
+       con la línea de tiempo de sus transacciones.
+2. [x] La tabla tiene seis columnas: Estado, Fecha del estado, Comentario, Autor,
+       Editar, Borrar.
+3. [x] Las filas salen ordenadas por fecha del estado descendente; dos transacciones
+       del mismo minuto salen por `nid` descendente.
+4. [x] La transacción inicial que SPEC 92 creó al nacer la solicitud aparece en la
+       tabla, con su comentario de acuse y su autor.
+5. [x] Una transacción despublicada (`status = 0`) no aparece en la tabla.
+6. [x] La hora mostrada en "Fecha del estado" es exactamente la almacenada en
+       `field_status_date`, sin desplazamiento de zona horaria.
+7. [x] `field_request_status` de la solicitud se ve, con su valor, y no se puede
+       modificar en `node/<nid>/edit`.
+8. [x] En `node/add/service_request`, `field_request_status` sigue siendo editable.
+9. [x] En `node/add/service_request` no aparece ningún `fieldset` de línea de tiempo.
 
 **Crear**
 
-10. El bloque tiene arriba un enlace "Crear transacción" que lleva a
-    `node/<nid>/service-transaction/add`.
-11. Esa página muestra tres campos —Estado, Fecha del estado, Comentario— y
-    ninguno para elegir la solicitud.
-12. El `select` de Estado ofrece exactamente las seis opciones de
-    `myapi_services_request_statuses()`, con sus etiquetas.
-13. Guardar con los tres campos válidos crea un nodo `service_transaction` con
-    `field_request` apuntando a la solicitud, `uid` = el operador que guardó, y
-    `status = 1`.
-14. Tras guardar, el navegador queda en `node/<nid>/edit` de la solicitud y la
-    transacción nueva es la primera fila.
-15. `field_status_date` queda almacenado como `Y-m-d H:i:00` — la hora escrita,
-    con los segundos en cero.
-16. Enviar el formulario con la fecha en cualquier otro formato muestra un error
-    de validación y no crea nada.
-17. Enviar el formulario sin comentario muestra un error de validación y no crea
-    nada.
-18. El título del nodo creado lo compone `myapi_service_transaction_title()`
-    (SPEC 92): `Solicitud #<nid> · <Estado> · <fecha> · <comentario truncado>`.
+10. [x] El bloque tiene arriba un enlace "Crear transacción" que lleva a
+        `node/<nid>/service-transaction/add`.
+11. [x] Esa página muestra tres campos —Estado, Fecha del estado, Comentario— y
+        ninguno para elegir la solicitud.
+12. [x] El `select` de Estado ofrece exactamente las seis opciones de
+        `myapi_services_request_statuses()`, con sus etiquetas.
+13. [x] Guardar con los tres campos válidos crea un nodo `service_transaction` con
+        `field_request` apuntando a la solicitud, `uid` = el operador que guardó, y
+        `status = 1`.
+14. [x] Tras guardar, el navegador queda en `node/<nid>/edit` de la solicitud y la
+        transacción nueva es la primera fila.
+15. [x] `field_status_date` queda almacenado como `Y-m-d H:i:00` — la hora escrita,
+        con los segundos en cero.
+16. [x] Enviar el formulario con la fecha en cualquier otro formato muestra un error
+        de validación y no crea nada.
+17. [x] Enviar el formulario sin comentario muestra un error de validación y no crea
+        nada.
+18. [x] El título del nodo creado lo compone `myapi_service_transaction_title()`
+        (SPEC 92): `Solicitud #<nid> · <Estado> · <fecha> · <comentario truncado>`.
 
 **Sincronizar**
 
-19. Guardar una transacción con un estado distinto al de la solicitud cambia
-    `field_request_status` de la solicitud a ese estado.
-20. Guardar una transacción con el mismo estado que ya tiene la solicitud no
-    ejecuta ningún `node_save()` sobre la solicitud.
-21. Editar una transacción existente y cambiarle el estado también sincroniza la
-    solicitud.
-22. Crear una solicitud nueva (por `node/add/service_request` o por
-    `POST /api/v1/service-requests`) sigue guardando exactamente dos nodos y no
-    entra en recursión.
-23. Una transición que el grafo `myapi_services_request_transitions()` no
-    permite —por ejemplo `closed` → `open`— **se guarda igual**, sin error: la
-    validación está fuera de alcance y no se agrega por accidente.
+19. [x] Guardar una transacción con un estado distinto al de la solicitud cambia
+        `field_request_status` de la solicitud a ese estado.
+20. [x] Guardar una transacción con el mismo estado que ya tiene la solicitud no
+        ejecuta ningún `node_save()` sobre la solicitud.
+21. [x] Editar una transacción existente y cambiarle el estado también sincroniza la
+        solicitud.
+22. [x] Crear una solicitud nueva (por `node/add/service_request` o por
+        `POST /api/v1/service-requests`) sigue guardando exactamente dos nodos y no
+        entra en recursión.
+23. [x] Una transición que el grafo `myapi_services_request_transitions()` no
+        permite —por ejemplo `closed` → `open`— **se guarda igual**, sin error: la
+        validación está fuera de alcance y no se agrega por accidente.
 
 **Editar**
 
-24. Cada fila tiene un enlace "Editar" a `node/<transaction_nid>/edit` cuando el
-    usuario tiene `node_access('update')` sobre esa transacción.
-25. Cuando no lo tiene, la celda queda vacía: ni enlace, ni texto sustituto.
-26. En ese formulario nativo, `field_request` se ve pero no se puede cambiar.
-27. En `node/add/service_transaction`, `field_request` sigue editable.
-28. Tras guardar la edición, el navegador queda en `node/<request_nid>/edit` de
-    la solicitud, no en `node/<transaction_nid>`.
+24. [x] Cada fila tiene un enlace "Editar" a `node/<transaction_nid>/edit` cuando el
+        usuario tiene `node_access('update')` sobre esa transacción.
+25. [x] Cuando no lo tiene, la celda queda vacía: ni enlace, ni texto sustituto.
+26. [x] En ese formulario nativo, `field_request` se ve pero no se puede cambiar.
+27. [x] En `node/add/service_transaction`, `field_request` sigue editable.
+28. [x] Tras guardar la edición, el navegador queda en `node/<request_nid>/edit` de
+        la solicitud, no en `node/<transaction_nid>`.
 
 **Borrar**
 
-29. Cada fila tiene un enlace "Borrar" cuando el usuario tiene
-    `node_access('delete')` sobre esa transacción; si no, la celda queda vacía.
-30. El enlace lleva a una página de confirmación que nombra la transacción y
-    avisa de que el estado de la solicitud no cambia.
-31. "Cancelar" vuelve a `node/<request_nid>/edit` sin borrar nada.
-32. Confirmar borra el nodo `service_transaction` con `node_delete()` y devuelve
-    a `node/<request_nid>/edit`, sin la fila.
-33. Borrar la transacción que dejó la solicitud en su estado actual **no** cambia
-    `field_request_status` de la solicitud.
-34. La transacción inicial de SPEC 92 se puede borrar como cualquier otra.
-35. `node/<solicitud A>/service-transaction/<transacción de la solicitud B>/delete`
-    responde 403 y no borra nada.
-36. `node/<nid de un nodo que no es una solicitud>/service-transaction/add`
-    responde 403.
+29. [x] Cada fila tiene un enlace "Borrar" cuando el usuario tiene
+        `node_access('delete')` sobre esa transacción; si no, la celda queda vacía.
+30. [x] El enlace lleva a una página de confirmación que nombra la transacción y
+        avisa de que el estado de la solicitud no cambia.
+31. [x] "Cancelar" vuelve a `node/<request_nid>/edit` sin borrar nada.
+32. [x] Confirmar borra el nodo `service_transaction` con `node_delete()` y devuelve
+        a `node/<request_nid>/edit`, sin la fila.
+33. [x] Borrar la transacción que dejó la solicitud en su estado actual **no** cambia
+        `field_request_status` de la solicitud.
+34. [x] La transacción inicial de SPEC 92 se puede borrar como cualquier otra.
+35. [x] `node/<solicitud A>/service-transaction/<transacción de la solicitud B>/delete`
+        responde 403 y no borra nada.
+36. [x] `node/<nid de un nodo que no es una solicitud>/service-transaction/add`
+        responde 403.
 
 **No regresión**
 
-37. `GET /api/v1/service-requests/{id}` devuelve en `transactions` lo que el
-    operador creó, editó o borró, en orden ascendente, sin ningún cambio en
-    `resources/service_request.resource.inc`.
-38. La pantalla de reclamos (`node/<nid>/edit` de un `reclamo`, su línea de
-    tiempo, su creación y su edición) sigue funcionando igual: ninguna función de
-    `myapi.claim_transaction_admin.inc` fue tocada.
-39. No se ejecuta ningún `hook_update_N`: `drush updb` no tiene nada pendiente
-    después de desplegar.
-40. `drush en myapi` en un sitio limpio no concede ningún permiso nuevo;
-    `myapi_building_admin_permissions()` sigue sin ningún `delete any ...` y su
-    test unitario sigue pasando.
-41. `phpunit` pasa entero, con `ServiceTransactionAdminTest` incluido.
+37. [x] `GET /api/v1/service-requests/{id}` devuelve en `transactions` lo que el
+        operador creó, editó o borró, en orden ascendente, sin ningún cambio en
+        `resources/service_request.resource.inc`.
+38. [x] La pantalla de reclamos (`node/<nid>/edit` de un `reclamo`, su línea de
+        tiempo, su creación y su edición) sigue funcionando igual: ninguna función de
+        `myapi.claim_transaction_admin.inc` fue tocada.
+39. [x] No se ejecuta ningún `hook_update_N`: `drush updb` no tiene nada pendiente
+        después de desplegar.
+40. [x] `drush en myapi` en un sitio limpio no concede ningún permiso nuevo;
+        `myapi_building_admin_permissions()` sigue sin ningún `delete any ...` y su
+        test unitario sigue pasando.
+41. [x] `phpunit` pasa entero, con `ServiceTransactionAdminTest` incluido.
 
 ---
 
