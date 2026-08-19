@@ -7,8 +7,11 @@ awarded provider.
 
 Reads the requester's own requests. `PUT` and `DELETE` answer `405` on this
 route; `POST` **creates** one — see
-[`POST /api/v1/service-requests`](#post-apiv1service-requests) below. Editing,
-cancelling, closing, awarding and offering are still not here.
+[`POST /api/v1/service-requests`](#post-apiv1service-requests) below. Editing a
+request that already exists is a `POST` on the **item** route
+([`POST /api/v1/service-requests/{id}`](#post-apiv1service-requestsid)) and
+cancelling has a route of its own; closing, awarding and offering are still not
+here.
 
 This is the **first route** of the `service_request` bundle, whose schema was
 built by SPEC 77, 86 and 87 without one. Three more routes live in this same
@@ -483,8 +486,9 @@ chronological order.
 resolves it on its own, it **overwrites** it for the provider (see below), and
 it therefore travels in the listing's position, right after `category`.
 
-Read-only. `POST`, `PUT` and `DELETE` answer `405`, before the token and before
-any query.
+`GET` is read-only. `PUT` and `DELETE` answer `405`, before the token and before
+any query; `POST` on this same route **edits** the request since SPEC 96 — see
+[`POST /api/v1/service-requests/{id}`](#post-apiv1service-requestsid).
 
 **Authentication:** required (Bearer access token)
 
@@ -798,7 +802,7 @@ always — no `?page`, no `?limit`. A request receives units of transactions.
 | 401  | `invalid_token` | Token unknown, revoked, expired, or its user is missing or blocked. |
 | 403  | `forbidden` | The request exists and the reader is neither its requester nor a provider who may still bid on it. |
 | 404  | `not_found` | No such request (missing, unpublished, another bundle, orphan category), **or** an `{id}` that is not a positive integer — the latter without any query. |
-| 405  | `method_not_allowed` | Any method other than `GET`. Answered before the token and before any query. |
+| 405  | `method_not_allowed` | `PUT`, `DELETE` or `PATCH`. Answered before the token and before any query. `POST` no longer answers `405` here since SPEC 96 — it edits the request. |
 
 ---
 
@@ -917,7 +921,8 @@ not exist a moment ago), `closed_at: null` — and `transactions` holding the
 initial entry, which **does** already exist.
 
 Out of scope of this endpoint: editing, cancelling, closing or awarding a
-request already created; offering on a request; any notification on creation;
+request already created — the first two have routes of their own, the other two
+do not exist yet; offering on a request; any notification on creation;
 restricting a `direct` request's visibility to the provider it names — a
 provider not of the chosen category still cannot see it, but one of the same
 category the resident did **not** pick still can, exactly like every other
@@ -1099,7 +1104,7 @@ code and never queried.
 | 401 | `invalid_token` | Access token invalid, revoked, expired, or its user is missing/blocked. |
 | 403 | `unit_access_denied` | `unit_id` is a positive integer the resident does not own or occupy, or the resident has no unit at all. Nothing is created. |
 | 403 | `provider_not_eligible` | `assigned_provider_id` was sent and fails any of the four conditions above. Nothing is created, and nothing already uploaded in the request is saved — the provider is validated before any file. |
-| 405 | `method_not_allowed` | Any method other than `GET` or `POST` on `/api/v1/service-requests`; or **any** method on `/api/v1/service-requests/{id}` — creation is always on the collection, never on an item. |
+| 405 | `method_not_allowed` | Any method other than `GET` or `POST` on `/api/v1/service-requests`. **Creation is always on the collection**: a `POST` on `/api/v1/service-requests/{id}` does not create, it **edits** that request (SPEC 96), and `PUT`/`DELETE` on the item answer `405`. |
 | 422 | `missing_field` | A required field is absent or empty (`@field` names it): `title`, `unit_id`, `category_id`, `description`, or `desired_start`. |
 | 422 | `invalid_field` | `title` over 255 chars; `unit_id` or `category_id` or `assigned_provider_id` not a positive integer; `category_id` not a real term of the vocabulary; `description` empty after `trim()`; `desired_start` unparseable or not strictly in the future. |
 | 422 | `service_request_too_many_images` | More than 5 files in `images[]`. Nothing is saved. |
@@ -1126,6 +1131,295 @@ curl -i -X POST https://host/api/v1/service-requests \
   -F 'desired_start=2026-08-19 08:00' \
   -F 'assigned_provider_id=7' \
   -F 'images[]=@fuga.jpg'
+```
+
+---
+
+## POST /api/v1/service-requests/{id}
+
+Lets the resident **correct their own service request**: the title, the
+description, the desired date, the images and the attachment. Nothing else, and
+only while the request is still `open` and **nobody has offered on it yet**.
+
+The request is `multipart/form-data` (text fields plus files), not JSON — same
+contract as the creation and as
+[`POST /api/v1/claims/{id}`](claim.md#post-apiv1claimsid). This is a
+**replacement and not a patch**: the three text fields travel on **every** call,
+and a missing one is `422 missing_field` and never "leave it as it was".
+Everything the request does not name is preserved untouched, because the endpoint
+loads the node and overwrites only the fields the body carries.
+
+> **The response does NOT carry `offers`, `offers_count` nor `transactions`.**
+> It answers **sixteen** keys — the detail's nineteen minus those three — so
+> **it does not replace the object of
+> [`GET /api/v1/service-requests/{id}`](#get-apiv1service-requestsid)**. The app
+> cannot swap the detail it has on screen for what this call returns: it has to
+> **merge** the sixteen keys onto the object it already holds. See
+> [The sixteen keys](#the-sixteen-keys-and-the-three-that-are-missing) below.
+
+Out of scope of this endpoint, each of them its own spec if it ever arrives:
+changing the `category_id` (it changes which providers see the request — that is
+another request, not a correction) or the `unit_id` and with it the condominium
+(same argument, and stronger: the condominium is the whole visibility scope);
+`assigned_provider_id` (a request with a provider is in `direct`, and `direct` is
+not editable, so there is no case to attend); **reordering** the images; editing
+from the provider, the operator or the building admin (the back office already
+edits with Drupal's native form); editing in any state other than `open` with
+zero offers; leaving any **trace** of the edit — no timeline entry, no
+notification, no history of what changed; and any **concurrency control**
+(`If-Unmodified-Since`, an `updated_at` in the body, or any other optimistic
+lock): two simultaneous edits by the same resident, and the last one wins.
+
+### Why `POST` on an item and not `PUT`
+
+`PUT` is the semantically obvious verb and it is deliberately not used. **PHP
+populates neither `$_POST` nor `$_FILES` on a `PUT`**: the `multipart/form-data`
+body would arrive raw through `php://input` and the module would have to carry a
+hand-written MIME parser — real code and real risk in a Drupal 7 install with no
+security support, bought with nothing but a verb. There are files here, so the
+decision is made by the language and not by taste. It is the same decision, for
+the same reason, that `POST /api/v1/claims/{id}` took first; the reasoning is
+written out in [claim.md](claim.md#why-post-on-an-item-and-not-put).
+
+`PATCH` was not used either: no route of this module uses it, and introducing a
+new idiom for one endpoint is a cost with no return. A route of its own
+(`/{id}/edit`, in the style of `/{id}/cancel`) was also dropped: `cancel` has one
+because it is a **named action** on a resource, while an edit is the writing of
+the resource itself, and the item route already names it.
+
+`PUT` and `DELETE` on this route still answer `405`. `DELETE` in particular is
+**not** a synonym of the cancellation: a request is cancelled, never deleted, and
+hiding that behind the verb would lose the timeline entry the cancellation
+writes.
+
+**Authentication:** required (Bearer access token) — and the caller must be the
+request's `field_requester`.
+
+**Headers**
+| Header | Value |
+|--------|-------|
+| Authorization | Bearer `<access_token>` |
+| Content-Type | `multipart/form-data` |
+
+**Request body (form-data fields)**
+| Field | Required | Type | Rule |
+|-------|----------|------|------|
+| `title` | **yes** | string | Non-empty after `trim()`, ≤ 255 chars (`node.title` is `varchar(255)`). Over the limit → `422 invalid_field`. |
+| `description` | **yes** | string | Non-empty after `trim()`. No maximum (`text_long`). |
+| `desired_start` | **yes** | string `Y-m-d H:i` | Must parse with `strtotime()` into an instant **strictly later** than the server's clock at the moment of the request — the same second is rejected too. This applies **even to the value the request already has stored**: a date that has since passed cannot be saved again, which is correct, since the resident is being asked when they now want the job done. |
+| `images[]` | no | file[] | New images, **added** to the ones already there. See the quota below. |
+| `remove_image_ids[]` | no | int[] (repeated) | Each value a positive integer **and** a `fid` the request references **right now**. Anything else → `422 invalid_field` with `@field: remove_image_ids`. A repeated `fid` is treated once and is not an error. |
+| `attachment` | no | file | **Replaces** whatever attachment there was. At most 1. |
+| `remove_attachment` | no | string | `1` or `true` (case-insensitive) empties the attachment. **Ignored** when a new `attachment` comes in the same request — see below. |
+
+`category_id`, `unit_id`, `condominium_id`, `assigned_provider_id`,
+`assigned_offer_id`, `status` and `closed_at` are **not fields of this request**:
+none is ever read from the body, and there is no such input to send. The
+corresponding node fields — `field_category`, `field_unit`,
+`field_condominium`, `field_requester`, `field_request_status`,
+`field_assigned_provider`, `field_assigned_offer` and `field_closed_at` — come
+out of an edit valuing exactly what they valued before, and so do `node.uid` and
+`node.created`: **editing does not take ownership of the request**.
+
+### Who may edit, and when
+
+**Who: the `field_requester`, exactly.** Not `node.uid` — the same column the
+detail and the cancellation already make authoritative, for the same reason: a
+request an operator filed on a resident's behalf belongs to the **resident**, and
+the operator is only the technical author. Not the rest of the unit either: a
+service request is signed by one person. The **assigned provider**, who may
+*read* the detail, gets `403` here; the **building admin** edits from the back
+office with the native form.
+
+**When: `open`, and with zero offers.** Both conditions, and both have to hold:
+
+| # | Condition | Why |
+|---|-----------|-----|
+| 1 | `field_request_status` is exactly `open` | A comparison against the literal, not a question to the transition graph: editing moves no status, so there is no transition to consult — and a corrupt or empty status is not `open`, which is what makes it a `409` and never a `500`. |
+| 2 | The request has **zero** published offers | Before anybody has invested work in reading and pricing the statement of the job, changing it harms nobody; afterwards it does. |
+
+**Any** published offer counts, whatever its status — `withdrawn` and `rejected`
+included. A provider who read the statement and bid on it must not find it
+changed, and having later withdrawn or been rejected does not un-read it.
+
+> **The second condition is not redundant with the first**, however much the
+> graph suggests it is. The graph says the first offer moves `open → offered`,
+> but nothing executes that today: `hook_node_insert()` and `hook_node_update()`
+> have no `service_offer` branch, so an offer created from the back office leaves
+> the request in `open` with offers hanging off it. This condition covers that
+> hole, and the day the offers endpoint exists and syncs the status it will
+> simply stop being the one that fires.
+
+Both failures answer the **same** `409 service_request_not_editable`. For the
+resident the outcome is identical — they cannot edit — and two codes would force
+the app to keep two messages for one screen.
+
+### Images: the quota is what survives the removals
+
+`field_images` holds 5. What decides how many new ones fit is what is left
+**after** the removals:
+
+```
+kept     = count(current fids) − count(remove_image_ids)
+max_new  = max(0, 5 − kept)
+```
+
+So a request that deletes three and uploads three is valid; one that uploads six
+without deleting anything is not. Over the quota → `422
+service_request_too_many_images`, and **nothing** is saved.
+
+The surviving images keep their current **delta order** and the new ones go at
+the **end**; the list is reindexed without holes. Reordering is not possible —
+it needs the client to send the whole order and the server to validate it
+against what is there, which is another contract. Every image may be removed: a
+request with no photos is valid.
+
+`remove_image_ids[]` is validated **against what the request references right
+now**, before a single file touches the disk. A `fid` of another request, of a
+claim, or of nothing at all fails the same way — `422 invalid_field` — which is
+what stops a stray id from becoming a way to probe other people's files.
+
+### The attachment: replaced, emptied, or left alone
+
+`field_attachment` has cardinality 1, so there are exactly three outcomes:
+
+| The request carries | Result |
+|---------------------|--------|
+| A new `attachment` | It **replaces** the previous one, which is deleted from `file_managed` and from disk. |
+| `remove_attachment=1` (or `true`) and no `attachment` | The field is emptied and the file deleted. |
+| Neither | The attachment stays **exactly** as it was. |
+
+**`remove_attachment` is ignored when a new `attachment` arrives in the same
+request.** Uploading one already replaces the previous file, so the outcome with
+and without the flag is identical; a `422` would reject a request whose meaning
+is unambiguous. Any value other than `1`/`true` leaves the attachment alone —
+`yes` is not a synonym.
+
+### All-or-nothing on files, and the deletions come last
+
+Any image or attachment that fails validation aborts the whole request: every
+file already saved **in that same request** is deleted before the error
+response, and the node is **not** saved — the request keeps its text and its
+original files. There is no partial edit with only the valid files attached.
+
+The files that **left** the request — the removed images and the attachment that
+was replaced or dropped — are deleted for real (`file_usage_delete()` +
+`file_delete()`, since they live in `private://` and nothing else points at
+them) **after** the `node_save()`, never before. That order is what guarantees
+no file the node still references is ever destroyed. A `fid` that no longer
+loads is skipped in silence: the goal state is already true.
+
+**No database transaction**, the same decision the cancellation and the claim
+took: a `node_save()` with the Field API and its hooks inside an explicit
+transaction is a known source of deadlocks in Drupal 7. The only step that can
+be left half done is that final deletion, and its consequence is a dead file on
+disk that nothing references any more.
+
+### The edit leaves no trace
+
+**No timeline entry.** `hook_node_update()` has no `service_request` branch, so
+the `node_save()` of an edit creates no `service_transaction`: `transactions` in
+a later `GET` holds exactly the same elements as before. That is a decision, not
+an omission — the timeline records **status changes**, and an edit is not one.
+
+**No notification and no email** to anybody, and `field_request_status` stays in
+`open`. What does change is `{node}.changed`, which is the `node_save()` doing
+its job.
+
+The endpoint is **not idempotent and does not need to be**: two edits in a row
+both succeed, and the second simply writes what it was given.
+
+### The sixteen keys, and the three that are missing
+
+The `200` answers the detail's object **minus `offers`, `offers_count` and
+`transactions`**. The gate has just proved there is no offer and the timeline is
+where it was, so the response neither queries nor repeats them:
+
+```
+id · title · description · status · category · unit · assigned_offer ·
+assigned_provider · created · desired_start · viewer · requester ·
+condominium · images · attachment · closed_at
+```
+
+The sixteen come out of the **same serialiser** that serves the `GET`, so they
+cannot drift from it: they are byte for byte what an immediate
+`GET /api/v1/service-requests/{id}` answers for those same keys. `viewer` is
+always `"requester"` — the access check proved whoever got here is the
+`field_requester` — and `status` is always `"open"`, because editing does not
+move the status. `images` is always an array, empty when there are none and
+never `null`; `attachment` is `null` when there is none, never `{fid: null}`.
+
+**Success response (200)**
+
+```json
+{
+  "success": true,
+  "data": {
+    "service_request": {
+      "id": 145,
+      "title": "Fuga en el calentador del baño principal",
+      "description": "Sigue goteando, y ahora también por la tubería de abajo.",
+      "status": "open",
+      "category": { "id": 12, "code": "plumbing", "name": "Plomería" },
+      "unit": { "id": 55, "name": "A-301" },
+      "assigned_offer": null,
+      "assigned_provider": null,
+      "created": "2026-08-17T10:05:00",
+      "desired_start": "2026-08-21T08:00:00",
+      "viewer": "requester",
+      "requester": { "id": 42, "name": "Ana Pérez" },
+      "condominium": { "id": 7, "name": "Torres del Este" },
+      "images": [
+        { "id": 211, "url": "https://.../api/v1/service-requests/145/files/211", "filename": "tuberia.jpg" }
+      ],
+      "attachment": null,
+      "closed_at": null
+    }
+  },
+  "message": "Solicitud actualizada correctamente."
+}
+```
+
+**Possible errors**
+| Code | `error_code` | When |
+|------|--------------|------|
+| 405 | `method_not_allowed` | `PUT`, `DELETE` or `PATCH` on this route. Answered **before** the token and before any query, so it needs neither an `Authorization` header nor the request to exist. |
+| 404 | `service_request_not_found` | `{id}` is not a positive integer (answered with **no query at all**, not even the token's); or the request does not exist, is of another bundle, is unpublished, or its category term was deleted. The four are indistinguishable on purpose. |
+| 401 | `missing_authorization` | `Authorization` header absent or not a `Bearer <token>`. |
+| 401 | `invalid_token` | Access token invalid, revoked, expired, or its user is missing/blocked. |
+| 403 | `service_request_forbidden` | The request exists and the caller is not its `field_requester`. Includes the assigned provider — who may *read* it — and the building admin. A request whose `field_requester` is empty answers `403` too: nobody owns it, so nobody edits it. |
+| 409 | `service_request_not_editable` | The status is not `open`, or it is `open` and the request already has at least one offer. |
+| 422 | `missing_field` | `title`, `description` or `desired_start` absent or empty after `trim()`. `@field` names which. |
+| 422 | `invalid_field` | `title` over 255 chars; `desired_start` unparseable or not strictly in the future; `remove_image_ids[]` carrying a value that is not a positive integer or a `fid` the request does not reference. `@field` names which. |
+| 422 | `service_request_invalid_image` | An image fails extension or size validation. All-or-nothing: nothing is saved. |
+| 422 | `service_request_too_many_images` | More images sent than the quota above allows. Nothing is saved. |
+| 422 | `service_request_invalid_attachment` | The attachment fails extension or size validation. Any images already saved in the same request are deleted with it. |
+| 422 | `service_request_too_many_attachments` | More than one file sent under `attachment`. Same cleanup. |
+| 422 | `invalid_file_type` | An image's or the attachment's real MIME (checked with `finfo`) does not match its extension. |
+
+**Six error codes and the `200`, and no other status is reachable.** There is no
+`500` on this route: nothing here derives a value that could be missing, and the
+`404` is resolved **before** anything is written, so an unserialisable request is
+turned away instead of being edited and then answered with a degraded body.
+
+The checks run in this order, and every one of them aborts before anything is
+written or saved to disk: **`{id}` → token → the request → who is asking → the
+gate → the text fields → `remove_image_ids[]` → the files**. So a request that
+is somebody else's **and** not editable answers `403` and not `409`, and a
+request with garbage in its body answers the access or status error first. See
+[i18n.md](i18n.md) for the translated `error`/`message` text.
+
+**Example (new title and description, one image added, one removed, attachment
+dropped):**
+```bash
+curl -i -X POST https://host/api/v1/service-requests/145 \
+  -H 'Authorization: Bearer <access_token>' \
+  -F 'title=Fuga en el calentador del baño principal' \
+  -F 'description=Sigue goteando, y ahora también por la tubería de abajo.' \
+  -F 'desired_start=2026-08-21 08:00' \
+  -F 'images[]=@tuberia.jpg' \
+  -F 'remove_image_ids[]=210' \
+  -F 'remove_attachment=1'
 ```
 
 ---
@@ -1363,14 +1657,22 @@ curl -i -X PUT https://host/api/v1/service-requests/412/cancel \
 
 Written down so it is not looked for in this document:
 
-- **Every write except creation and cancellation.** Editing, closing, awarding,
-  offering, uploading or deleting files **on a request that already exists**.
-  All `405` — see [`POST /api/v1/service-requests`](#post-apiv1service-requests)
-  and
+- **Every write except creation, editing and cancellation.** Closing, awarding
+  and offering **on a request that already exists**. All `405` — see
+  [`POST /api/v1/service-requests`](#post-apiv1service-requests),
+  [`POST /api/v1/service-requests/{id}`](#post-apiv1service-requestsid) and
   [`PUT /api/v1/service-requests/{id}/cancel`](#put-apiv1service-requestsidcancel)
-  for the two writes this module does. In particular there is still no
+  for the three writes this module does. In particular there is still no
   **closing**: `cancelled` is one of the two terminal statuses and now has a
   door; `closed` is the other and has none.
+- **Editing anything but the five fields the edit names**, and editing at all
+  once the request has left `open` or has received its first offer. The
+  category, the unit, the assigned provider and the order of the images are not
+  editable through the API — see
+  [`POST /api/v1/service-requests/{id}`](#post-apiv1service-requestsid).
+- **Any trace of an edit.** No timeline entry, no notification, no history of
+  what changed, and no concurrency control: two simultaneous edits, and the last
+  one wins.
 - **Offers as a resource of their own** — creating them, withdrawing them,
   `GET /api/v1/offers/{id}`. Here they are only **read**, inside one request.
 - **The chat.** `field_firebase_path`, `field_chat_opened_at` and

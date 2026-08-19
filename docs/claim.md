@@ -515,8 +515,10 @@ and dropped: `PUT` with a JSON body leaves the files out and needs a second spec
 of file-only endpoints, and `POST` + `_method=PUT` is this same request with one
 more parameter to document.
 
-This is the only `POST`-on-an-item route of the module. It is a decision, not an
-oversight.
+It was the first `POST`-on-an-item route of the module and it is a decision, not
+an oversight; `POST /api/v1/service-requests/{id}` (SPEC 96) took the same one
+afterwards, for the same reason — see
+[service-request.md](service-request.md#why-post-on-an-item-and-not-put).
 
 **Authentication:** required (Bearer access token) — and the caller must be the
 claim's `field_requester`.
