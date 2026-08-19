@@ -24,6 +24,17 @@
  * resources/claim.resource.inc keeps calling these under their new names; it
  * carries no wrapper of the old ones, since nothing else called them by that
  * name.
+ *
+ * SPEC 96 repeats that same procedure with the three update-side helpers below,
+ * moved here from resources/claim.resource.inc where SPEC 67 wrote them under
+ * their old 'claim' names: reading a file field's current fids, validating which
+ * of them a request asks to remove, and deleting the ones the node no longer
+ * references. Renamed from 'claim' to 'node' and, again, with a single literal
+ * promoted to a parameter — the 'remove_image_ids' input name that the parser
+ * used to carry hardcoded, now passed by every caller so a resource naming that
+ * input differently can reuse the same validation. No other line of logic
+ * changed, and there are no wrappers of the old names, which no line of this
+ * module mentions any more.
  */
 
 /**
@@ -216,4 +227,124 @@ function myapi_node_files_save($field_name, $bundle, array $files, $max_count, $
   }
 
   return $saved;
+}
+
+/**
+ * Reads the fids currently stored in a file field of a loaded node.
+ *
+ * One function for both shapes of file field: a multi-file one like
+ * 'field_images' (N items) and a single-file one like 'field_attachment' (0 or
+ * 1), since the only difference between them is how many deltas the same
+ * structure carries — not two copies of the same nested isset() chain. Used by
+ * the update endpoints to know what the node references BEFORE the request
+ * changes it: what remove_image_ids[] is allowed to name, and what has to be
+ * deleted from disk afterwards.
+ *
+ * @param object $node        A loaded node object.
+ * @param string $field_name  Machine name of the file field.
+ *
+ * @return array  The fids as integers, in delta order. Empty when the field is
+ *                absent or carries no file.
+ */
+function myapi_node_files_current_fids($node, $field_name) {
+  if (!isset($node->{$field_name}[LANGUAGE_NONE]) || !is_array($node->{$field_name}[LANGUAGE_NONE])) {
+    return [];
+  }
+
+  $fids = [];
+  foreach ($node->{$field_name}[LANGUAGE_NONE] as $item) {
+    if (isset($item['fid']) && (int) $item['fid'] > 0) {
+      $fids[] = (int) $item['fid'];
+    }
+  }
+
+  return $fids;
+}
+
+/**
+ * Validates the repeated field that names which files an update removes.
+ *
+ * Reads the repeated multipart field through myapi_request_post_field_array()
+ * — never $_POST directly — and checks every value twice: it must be a
+ * positive integer, and it must be a fid the node references RIGHT NOW. A fid
+ * belonging to another node of the same bundle, to a node of a different
+ * bundle, or to nothing at all fails exactly the same way: 422 invalid_field
+ * with @field naming the input, before a single file is touched. Silence plus a
+ * partial delete would leave the client believing it removed something that is
+ * still there, and would turn a stray fid into a way to probe other people's
+ * files.
+ *
+ * Validation only: nothing here queries the database, saves, or deletes. The
+ * caller decides what to do with the list, and the actual deletion happens in
+ * myapi_node_files_delete_removed() AFTER node_save().
+ *
+ * @param string $post_field    Name of the repeated multipart input, which is
+ *                              also the @field reported on failure (today
+ *                              'remove_image_ids' for every caller).
+ * @param array  $current_fids  The fids currently in the node's file field,
+ *                              from myapi_node_files_current_fids().
+ *
+ * @return array  The fids to remove, as integers, without duplicates. Empty
+ *                when the field was not sent.
+ */
+function myapi_node_files_parse_removals($post_field, array $current_fids) {
+  $raw = myapi_request_post_field_array($post_field);
+  if (empty($raw)) {
+    return [];
+  }
+
+  $removals = [];
+  foreach ($raw as $value) {
+    if (!ctype_digit((string) $value) || (int) $value <= 0) {
+      myapi_error('invalid_field', 422, ['@field' => $post_field]);
+    }
+    $fid = (int) $value;
+    if (!in_array($fid, $current_fids, TRUE)) {
+      myapi_error('invalid_field', 422, ['@field' => $post_field]);
+    }
+    if (!in_array($fid, $removals, TRUE)) {
+      $removals[] = $fid;
+    }
+  }
+
+  return $removals;
+}
+
+/**
+ * Deletes files that an update took out of a node.
+ *
+ * The counterpart of myapi_node_files_delete(): that one cleans up files this
+ * request had just saved and the node never referenced, this one removes files
+ * the node HAD referenced and no longer does — the images named in
+ * remove_image_ids[] and the attachment that was replaced or dropped. They
+ * live in private:// and nothing else points at them, so they are deleted for
+ * real (file_usage_delete() + file_delete()) instead of being left for cron:
+ * every correction a resident makes would otherwise add dead weight to disk.
+ *
+ * Passing 0 as the count to file_usage_delete() drops EVERY usage row this
+ * module holds on that fid for the node, which is what lets file_delete()
+ * actually remove it. That is safe only while a fid belongs to exactly one
+ * node — today it does, since each upload creates its own file_managed row and
+ * myapi_claims_file_claim_nid() (SPEC 65) already assumes that 1:1 relation. A
+ * future spec introducing files shared between nodes has to revisit this line
+ * first.
+ *
+ * MUST be called AFTER node_save(), never before: deleting first would open a
+ * window where the node still references a file that no longer exists, and a
+ * node_save() that fails would leave the node pointing at nothing. A fid that
+ * no longer loads is skipped in silence — the goal state (the file is gone) is
+ * already true.
+ *
+ * @param array $fids  Fids to delete. May be empty.
+ * @param int   $nid   The node the usage records belong to.
+ */
+function myapi_node_files_delete_removed(array $fids, $nid) {
+  foreach ($fids as $fid) {
+    $file = file_load($fid);
+    if (!$file) {
+      continue;
+    }
+    file_usage_delete($file, 'myapi', 'node', $nid, 0);
+    file_delete($file);
+  }
 }

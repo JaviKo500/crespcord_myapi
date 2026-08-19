@@ -56,8 +56,12 @@ module_load_include('inc', 'myapi', 'includes/myapi.unit_access');
 module_load_include('inc', 'myapi', 'includes/myapi.claims_common');
 // SPEC 90 moved myapi_node_files_save() / myapi_node_files_delete() out of
 // this file and into includes/myapi.node_files.inc, shared with service
-// requests. The include has to be loaded here or the upload paths of
-// myapi_claim_create() and myapi_claim_files_add() fatal.
+// requests, and SPEC 96 moved the three update-side helpers the same way:
+// myapi_node_files_current_fids(), myapi_node_files_parse_removals() and
+// myapi_node_files_delete_removed(). The include has to be loaded here or the
+// upload paths of myapi_claim_create(), myapi_claim_files_add() and
+// myapi_claim_update() fatal — none of the three is defined in this file any
+// more, under any name.
 module_load_include('inc', 'myapi', 'includes/myapi.node_files');
 
 /**
@@ -802,121 +806,6 @@ function myapi_claim_build_node($uid, $subject, $claim_type, $condominium_id, $d
   return $node;
 }
 
-/**
- * Reads the fids currently stored in a file field of a loaded node.
- *
- * One function for both file fields of the bundle: 'field_images' (N items)
- * and 'field_attachment' (0 or 1), since the only difference between them is
- * how many deltas the same structure carries — not two copies of the same
- * nested isset() chain. Used by the update endpoint (SPEC 67) to know what the
- * claim references BEFORE the request changes it: what remove_image_ids[] is
- * allowed to name, and what has to be deleted from disk afterwards.
- *
- * @param object $node        A loaded node object.
- * @param string $field_name  Machine name of the file field.
- *
- * @return array  The fids as integers, in delta order. Empty when the field is
- *                absent or carries no file.
- */
-function myapi_claim_node_file_fids($node, $field_name) {
-  if (!isset($node->{$field_name}[LANGUAGE_NONE]) || !is_array($node->{$field_name}[LANGUAGE_NONE])) {
-    return [];
-  }
-
-  $fids = [];
-  foreach ($node->{$field_name}[LANGUAGE_NONE] as $item) {
-    if (isset($item['fid']) && (int) $item['fid'] > 0) {
-      $fids[] = (int) $item['fid'];
-    }
-  }
-
-  return $fids;
-}
-
-/**
- * Validates the remove_image_ids[] field of an update request (SPEC 67).
- *
- * Reads the repeated multipart field through myapi_request_post_field_array()
- * — never $_POST directly — and checks every value twice: it must be a
- * positive integer, and it must be a fid the claim references RIGHT NOW. A fid
- * belonging to another claim, to a payment, or to nothing at all fails exactly
- * the same way: 422 invalid_field with @field remove_image_ids, before a
- * single file is touched. Silence plus a partial delete would leave the client
- * believing it removed something that is still there, and would turn a stray
- * fid into a way to probe other people's files.
- *
- * Validation only: nothing here queries the database, saves, or deletes. The
- * caller decides what to do with the list, and the actual deletion happens in
- * myapi_claim_update_delete_files() AFTER node_save().
- *
- * @param array $current_fids  The fids currently in the claim's field_images,
- *                              from myapi_claim_node_file_fids().
- *
- * @return array  The fids to remove, as integers, without duplicates. Empty
- *                when the field was not sent.
- */
-function myapi_claim_update_parse_removals(array $current_fids) {
-  $raw = myapi_request_post_field_array('remove_image_ids');
-  if (empty($raw)) {
-    return [];
-  }
-
-  $removals = [];
-  foreach ($raw as $value) {
-    if (!ctype_digit((string) $value) || (int) $value <= 0) {
-      myapi_error('invalid_field', 422, ['@field' => 'remove_image_ids']);
-    }
-    $fid = (int) $value;
-    if (!in_array($fid, $current_fids, TRUE)) {
-      myapi_error('invalid_field', 422, ['@field' => 'remove_image_ids']);
-    }
-    if (!in_array($fid, $removals, TRUE)) {
-      $removals[] = $fid;
-    }
-  }
-
-  return $removals;
-}
-
-/**
- * Deletes files that an update took out of a claim (SPEC 67).
- *
- * The counterpart of myapi_node_files_delete(): that one cleans up
- * files this request had just saved and the node never referenced, this one
- * removes files the node HAD referenced and no longer does — the images named
- * in remove_image_ids[] and the attachment that was replaced or dropped. They
- * live in private:// and nothing else points at them, so they are deleted for
- * real (file_usage_delete() + file_delete()) instead of being left for cron:
- * every correction a resident makes would otherwise add dead weight to disk.
- *
- * Passing 0 as the count to file_usage_delete() drops EVERY usage row this
- * module holds on that fid for the node, which is what lets file_delete()
- * actually remove it. That is safe only while a fid belongs to exactly one
- * claim — today it does, since each upload creates its own file_managed row
- * and myapi_claims_file_claim_nid() (SPEC 65) already assumes that 1:1
- * relation. A future spec introducing files shared between nodes has to revisit
- * this line first.
- *
- * MUST be called AFTER node_save(), never before: deleting first would open a
- * window where the node still references a file that no longer exists, and a
- * node_save() that fails would leave the claim pointing at nothing. A fid that
- * no longer loads is skipped in silence — the goal state (the file is gone) is
- * already true.
- *
- * @param array $fids  Fids to delete. May be empty.
- * @param int   $nid   The claim node the usage records belong to.
- */
-function myapi_claim_update_delete_files(array $fids, $nid) {
-  foreach ($fids as $fid) {
-    $file = file_load($fid);
-    if (!$file) {
-      continue;
-    }
-    file_usage_delete($file, 'myapi', 'node', $nid, 0);
-    file_delete($file);
-  }
-}
-
 /* ---------------------------------------------------------------------------
  * Endpoints.
  * ------------------------------------------------------------------------ */
@@ -1375,7 +1264,7 @@ function myapi_claim_create() {
  *      administration took the claim, the resident no longer edits it.
  *   6-11. The five text fields, with the exact same checks as
  *      myapi_claim_create().
- *   12. remove_image_ids[] — myapi_claim_update_parse_removals(), which is
+ *   12. remove_image_ids[] — myapi_node_files_parse_removals(), which is
  *      where a fid that is not one of THIS claim's images answers 422.
  *   13. Image quota: the number of new images admissible is
  *      5 - (current - removed), passed as $max_count to
@@ -1387,7 +1276,7 @@ function myapi_claim_create() {
  * and saves the NEW files first — a failure there deletes them and leaves the
  * claim untouched, text and files alike. Then the node is saved, then the new
  * files are tied to it with file_usage_add(), and only THEN the old ones are
- * deleted (myapi_claim_update_delete_files()). Deleting after node_save() is
+ * deleted (myapi_node_files_delete_removed()). Deleting after node_save() is
  * what guarantees a file the node still references is never destroyed.
  *
  * The node is node_load()ed and only the request's fields are overwritten, so
@@ -1492,13 +1381,13 @@ function myapi_claim_update($id) {
     myapi_error('claim_not_found', 404);
   }
 
-  $current_image_fids = myapi_claim_node_file_fids($node, 'field_images');
-  $current_attachment_fids = myapi_claim_node_file_fids($node, 'field_attachment');
+  $current_image_fids = myapi_node_files_current_fids($node, 'field_images');
+  $current_attachment_fids = myapi_node_files_current_fids($node, 'field_attachment');
 
   // 13. remove_image_ids[]: validated against what the claim references right
   // now. A fid of another claim, of a payment or of nothing answers 422 here,
   // before a single file is saved or deleted.
-  $removed_image_fids = myapi_claim_update_parse_removals($current_image_fids);
+  $removed_image_fids = myapi_node_files_parse_removals('remove_image_ids', $current_image_fids);
 
   // 14. Image quota: what is left after the removals decides how many new
   // images fit. myapi_node_files_save() already answers
@@ -1595,7 +1484,7 @@ function myapi_claim_update($id) {
   // 22. Only now the files that left the claim are deleted for real. After the
   // node_save(), never before: this is what guarantees no file the node still
   // references is ever destroyed.
-  myapi_claim_update_delete_files(array_merge($removed_image_fids, $deleted_attachment_fids), $node->nid);
+  myapi_node_files_delete_removed(array_merge($removed_image_fids, $deleted_attachment_fids), $node->nid);
 
   // 23. Respond 200 with the same object as GET /api/v1/claims/%, transactions
   // always expanded — the same helpers, so the two responses cannot drift.

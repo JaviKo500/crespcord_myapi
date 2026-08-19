@@ -170,9 +170,12 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'provider_not_eligible'              => 'The selected provider cannot receive this request.',
       // SPEC 95.
       'service_request_not_found'          => 'Service request not found.',
-      'service_request_forbidden'          => 'You cannot cancel this service request.',
+      'service_request_forbidden'          => 'You do not have permission on this service request.',
       'service_request_not_cancellable'    => 'This service request can no longer be cancelled.',
       'service_request_cancelled'          => 'Service request cancelled successfully.',
+      // SPEC 96.
+      'service_request_updated'            => 'Service request updated successfully.',
+      'service_request_not_editable'       => 'This service request can no longer be edited.',
     ],
     'es' => [
       'invalid_credentials'    => 'Usuario o contraseña incorrectos.',
@@ -264,9 +267,12 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'provider_not_eligible'              => 'El proveedor seleccionado no puede recibir esta solicitud.',
       // SPEC 95.
       'service_request_not_found'          => 'Solicitud de servicio no encontrada.',
-      'service_request_forbidden'          => 'No puedes cancelar esta solicitud.',
+      'service_request_forbidden'          => 'No tienes permiso sobre esta solicitud.',
       'service_request_not_cancellable'    => 'Esta solicitud ya no se puede cancelar.',
       'service_request_cancelled'          => 'Solicitud cancelada correctamente.',
+      // SPEC 96.
+      'service_request_updated'            => 'Solicitud actualizada correctamente.',
+      'service_request_not_editable'       => 'Esta solicitud ya no se puede editar.',
     ],
   ];
 

@@ -2,7 +2,8 @@
 
 /**
  * @file
- * Service request resource for the myapi module (SPECS 88, 89, 90 and 91).
+ * Service request resource for the myapi module (SPECS 88, 89, 90, 91, 95
+ * and 96).
  *
  * Four routes, authenticated throughout:
  *
@@ -15,6 +16,11 @@
  *   - GET /api/v1/service-requests/% — the detail of one request: the listing's
  *     eleven keys plus the condominium, the requester, the images, the
  *     attachment, closed_at and the offers (SPEC 89).
+ *   - POST /api/v1/service-requests/% — the requester corrects the title, the
+ *     description, the desired date and the files of their own request, while
+ *     it is still 'open' and nobody has bid (SPEC 96).
+ *   - PUT /api/v1/service-requests/%/cancel — the requester cancels, which
+ *     writes the status and one entry on the timeline (SPEC 95).
  *   - GET /api/v1/service-requests/%/files/% — the bytes of one image or of the
  *     attachment, both private:// since SPEC 77 (SPEC 89).
  *
@@ -48,12 +54,15 @@
  * The same docblock also states that no query of this module carries the tag;
  * this file keeps that sentence true instead of turning it into an exception.
  *
- * CREATION IS THE ONLY WRITE THIS FILE DOES, AND IT LIVES ON THE COLLECTION
- * ONLY (SPEC 90): POST /api/v1/service-requests, never on the item — creating
- * is always about the collection, the same criterion SPEC 66 gave claims.
- * PUT and DELETE still answer 405 on every route, and so does POST on the item
- * path: /api/v1/service-requests/% does not gain a write of its own. Editing,
- * cancelling, closing, awarding and offering are all still another spec —
+ * CREATION LIVES ON THE COLLECTION ONLY (SPEC 90): POST /api/v1/service-requests
+ * creates, never the item path — creating is always about the collection, the
+ * same criterion SPEC 66 gave claims. THE ITEM PATH IS WHERE THE REQUEST ITSELF
+ * IS WRITTEN: POST /api/v1/service-requests/% edits it (SPEC 96), POST and not
+ * PUT because PHP fills neither $_POST nor $_FILES on a PUT and an edit carries
+ * files — the same reason POST /api/v1/claims/% took in SPEC 67. Cancelling has
+ * its own named route (SPEC 95), because it is an action on the resource and not
+ * the writing of the resource. PUT and DELETE answer 405 on every route of this
+ * file. Closing, awarding and offering are all still another spec —
  * field_assigned_offer is never written by this file, and
  * field_assigned_provider is written only at birth, by
  * myapi_service_request_build_node(), never afterwards.
@@ -99,9 +108,9 @@ module_load_include('inc', 'myapi', 'includes/myapi.node_files');
  *
  * GET lists (SPEC 88); POST with no id creates (SPEC 90) — creation is always
  * on the collection, never on an item, the same criterion SPEC 66 gave claims.
- * Editing, cancelling, closing and awarding a request are all still out of
- * scope — every one of them needs decisions neither the listing nor the
- * creation have to make — so PUT and DELETE still answer 405.
+ * Editing and cancelling are writes on ONE request, so they live on the item
+ * routes and not here (SPECS 96 and 95); closing and awarding are still out of
+ * scope. PUT and DELETE answer 405 on this route whatever they carry.
  *
  * The method is checked BEFORE any authentication, the same criterion every
  * other dispatcher of this module follows: an unsupported method answers 405
@@ -966,29 +975,40 @@ function myapi_service_request_build_item($row, array $offer_counts) {
  * ------------------------------------------------------------------------ */
 
 /**
- * Dispatcher for /api/v1/service-requests/% (SPEC 89).
+ * Dispatcher for /api/v1/service-requests/% (SPECS 89 and 96).
  *
  * A SIBLING of myapi_service_request_dispatch(), not a branch inside it: Drupal
  * 7 resolves routes by number of segments first, so the collection and the item
  * are two menu entries that never compete, and one dispatcher per route keeps
  * each one's 405 as simple as it looks.
  *
- * Only GET. Creating, editing, cancelling, closing, awarding and offering are
- * all out of SPEC 89 — every one of them needs decisions a read does not have
- * to make.
+ * GET reads the detail (SPEC 89). Since SPEC 96, POST EDITS the request
+ * (myapi_service_request_update()) — POST and not PUT because PHP fills neither
+ * $_POST nor $_FILES on a PUT and an edit carries files, the same reason
+ * POST /api/v1/claims/% made that choice in SPEC 67. Cancelling has its own
+ * route (%/cancel, SPEC 95); closing, awarding and offering are still out.
+ *
+ * DELETE stays 405 and is not a synonym of the cancellation: a request is
+ * cancelled, never deleted, and hiding that behind the verb would lose the
+ * timeline entry the cancellation writes.
  *
  * The method is checked BEFORE the token and before the nid, same criterion as
- * every other dispatcher of this module: a POST answers 405 without a token and
+ * every other dispatcher of this module: a PUT answers 405 without a token and
  * without a query, because the method is wrong whoever is asking and whatever
  * they are asking about.
  *
  * @param mixed $nid  The route's wildcard, RAW as Drupal hands it over — a
- *                    string, and not necessarily a number. Validating it is
- *                    myapi_service_request_detail()'s first job.
+ *                    string, and not necessarily a number. Validating it is the
+ *                    first job of whichever endpoint takes it.
  */
 function myapi_service_request_item_dispatch($nid) {
-  if (myapi_request_method() === 'GET') {
+  $method = myapi_request_method();
+
+  if ($method === 'GET') {
     myapi_service_request_detail($nid);
+  }
+  elseif ($method === 'POST') {
+    myapi_service_request_update($nid);
   }
   else {
     myapi_error('method_not_allowed', 405);
@@ -2945,4 +2965,336 @@ function myapi_service_request_reject_live_offers($nid) {
   }
 
   return $rejected;
+}
+
+/**
+ * Whether a request still admits being edited by its requester (SPEC 96).
+ *
+ * TWO CONDITIONS, AND BOTH HAVE TO HOLD: the request is 'open', and it has
+ * received no offer at all. Before anybody has invested work in reading and
+ * pricing the statement of the job, changing it harms nobody; afterwards it
+ * does.
+ *
+ * THE STATUS IS COMPARED STRICTLY AGAINST THE LITERAL, not asked to
+ * myapi_services_transition_allowed(). There is no transition to consult here —
+ * editing does not move the status — and a corrupt or empty
+ * field_request_status is not 'open', so it falls on the right side of this
+ * comparison without a branch of its own. That is what makes a request with
+ * garbage in that field a 409 and never a 500.
+ *
+ * THE SECOND CONDITION IS NOT REDUNDANT WITH THE FIRST, however much the graph
+ * suggests it is. The graph says the first offer moves open → offered, but
+ * nothing executes that today: myapi.module has no 'service_offer' branch in
+ * hook_node_insert() nor in hook_node_update(), so an offer created from the
+ * back office leaves the request 'open' with offers hanging off it. This
+ * condition covers that hole, and the day the offers endpoint exists and syncs
+ * the status, it will simply stop being the one that fires.
+ *
+ * EVERY PUBLISHED OFFER COUNTS, whatever its status — 'withdrawn' and
+ * 'rejected' included. A provider who read the statement and bid on it must not
+ * find it changed, and whether they later withdrew or were rejected does not
+ * un-read it. The criterion that is expensive to explain is the one that
+ * distinguishes, not the one that counts them all.
+ *
+ * PURE: no query, no node_load(), no HTTP output. The caller has already paid
+ * for the row and the count, and decides what to answer — which is what lets
+ * the unit test run this function directly.
+ *
+ * @param object $row
+ *   The row of myapi_service_request_detail_row(), of which only `status` is
+ *   read.
+ * @param mixed $offer_count
+ *   The number of published offers of the request, from
+ *   myapi_service_request_offer_counts_by_nid().
+ *
+ * @return bool  TRUE when the request may be edited, FALSE otherwise.
+ */
+function myapi_service_request_update_gate($row, $offer_count) {
+  $status = isset($row->status) ? $row->status : NULL;
+  if ($status !== MYAPI_SERVICES_REQUEST_STATUS_OPEN) {
+    return FALSE;
+  }
+
+  return (int) $offer_count === 0;
+}
+
+/**
+ * POST /api/v1/service-requests/% — the resident corrects it (SPEC 96).
+ *
+ * The second write of this resource on an existing request, after the
+ * cancellation, and the one that changes what the job IS instead of what state
+ * it is in. Title, description, desired date, images and attachment; nothing
+ * else. The steps below are the order SPEC 90 fixed for this file and SPEC 95
+ * repeated — nid, token, load, access, status, body — with the writes last.
+ *
+ * POST AND NOT PUT, the second time this module makes that choice after
+ * POST /api/v1/claims/% (SPEC 67), and for the same reason: PHP fills neither
+ * $_POST nor $_FILES on a PUT, so a multipart body would arrive raw on
+ * php://input and need a MIME parser written by hand. There are files here, so
+ * the language made the decision. docs/service-request.md says so out loud,
+ * because the app has to know.
+ *
+ * WHO MAY EDIT: THE field_requester, EXACTLY, the same rule as the
+ * cancellation. Not node->uid — a request an operator registered on a
+ * resident's behalf belongs to the resident. Not the assigned provider, who may
+ * READ the detail and gets 403 here, and not the building admin, who edits from
+ * the back office with the native form.
+ *
+ * THE 404 IS RESOLVED BY myapi_service_request_detail_row(), NOT node_load().
+ * One query brings at once the existence criterion (the same one the GET uses,
+ * INNER JOIN with the category included), the requester_uid the 403 needs and
+ * the status the 409 needs. The node_load() comes afterwards and only to write.
+ * That ordering is what avoids the ugly branch of the cancellation: there the
+ * detail_row() runs at the END, so a deleted category term forces the response
+ * to degrade AFTER the write; here anything that cannot be serialised is
+ * answered 404 before a single byte is written.
+ *
+ * A REPLACEMENT AND NOT A PATCH. The three text fields travel on every call and
+ * a missing one is 422 missing_field, never "leave it as it was": telling
+ * "absent" from "empty" in multipart/form-data is slippery, and with three
+ * fields the cost to the client is one line. What the request does NOT name is
+ * preserved because the node is LOADED and only the named fields are
+ * overwritten — field_category, field_unit, field_condominium,
+ * field_requester, field_request_status, field_assigned_provider,
+ * field_assigned_offer and field_closed_at are never read from the request.
+ *
+ * NO DATABASE TRANSACTION, like the cancellation and like the claim: a
+ * node_save() with the Field API and its hooks inside an explicit transaction
+ * is a known source of deadlocks in Drupal 7. The only step that can be left
+ * half done is the last one, and its consequence is a dead file on disk that
+ * nothing references any more.
+ *
+ * THE node_save() FIRES NOTHING. hook_node_update() of myapi.module has no
+ * 'service_request' branch: no transaction, no notification, no status sync.
+ * Editing leaves no trace on the timeline, and that is a decision and not an
+ * omission.
+ *
+ * @param mixed $nid  The route's wildcard, raw.
+ */
+function myapi_service_request_update($nid) {
+  // 1. The nid, before anything else. Same guard as the detail and the
+  // cancellation: ctype_digit() over the string form rejects 'abc', '-3', '1.5'
+  // and '' alike, and the > 0 then rejects '0'. Costs no query.
+  if (!is_scalar($nid) || !ctype_digit((string) $nid) || (int) $nid <= 0) {
+    myapi_error('service_request_not_found', 404);
+  }
+  $nid = (int) $nid;
+
+  // 2. Authentication. Answers 401 missing_authorization / invalid_token on its
+  // own and never returns on failure.
+  $token = myapi_auth_require_access_token();
+  $uid = (int) $token->uid;
+
+  // 3. The request, in ONE query that answers three questions — see the
+  // docblock. FALSE covers the four causes of a 404 with the same answer: no
+  // such nid, another bundle, unpublished, or an orphaned category term.
+  $row = myapi_service_request_detail_row($nid);
+  if (!$row) {
+    myapi_error('service_request_not_found', 404);
+  }
+
+  // 4. WHO IS ASKING: field_requester and nothing else. A row whose requester
+  // is empty resolves to nobody, so nobody may edit it — 403 and never 200.
+  if (!isset($row->requester_uid) || $row->requester_uid === '' || (int) $row->requester_uid !== $uid) {
+    myapi_error('service_request_forbidden', 403);
+  }
+
+  // 5. The gate, AFTER the 403: an edit on somebody else's request that is also
+  // not editable answers 403, because "not yours" is the first true thing about
+  // it. The offer count is SPEC 88's aggregate, which already filters by bundle
+  // and by published — see myapi_service_request_update_gate() for why the
+  // count is asked at all when the status supposedly implies it.
+  $offer_counts = myapi_service_request_offer_counts_by_nid([$nid]);
+  $offer_count = isset($offer_counts[$nid]) ? $offer_counts[$nid] : 0;
+  if (!myapi_service_request_update_gate($row, $offer_count)) {
+    myapi_error('service_request_not_editable', 409);
+  }
+
+  // 6. The body, AFTER the 404, the 403 and the 409, so garbage in the request
+  // never masks an access or a status error. The three text fields are read
+  // through the request helpers and never off $_POST, and the same checks
+  // SPEC 90 wrote for the creation are reused verbatim: one truth per rule.
+  $title = myapi_request_post_field('title');
+  $description = myapi_request_post_field('description');
+  $desired_start_raw = myapi_request_post_field('desired_start');
+
+  $required = [
+    'title'         => $title,
+    'description'   => $description,
+    'desired_start' => $desired_start_raw,
+  ];
+  foreach ($required as $name => $value) {
+    if ($value === NULL || $value === '') {
+      myapi_error('missing_field', 422, ['@field' => $name]);
+    }
+  }
+
+  // 6a. title: node.title is varchar(255).
+  if (strlen($title) > 255) {
+    myapi_error('invalid_field', 422, ['@field' => 'title']);
+  }
+
+  // 6b. desired_start: strtotime() must parse it into a STRICTLY FUTURE
+  // instant — so a request whose stored date has already passed cannot be
+  // saved again with that same date, which is correct: the resident is being
+  // asked when they now want the job done.
+  $desired_start = myapi_service_request_parse_desired_start($desired_start_raw);
+  if ($desired_start === FALSE) {
+    myapi_error('invalid_field', 422, ['@field' => 'desired_start']);
+  }
+
+  // 7. The node itself, and now node_load(): what comes next SAVES it, and a
+  // write needs the whole entity with its fields. Everything the request does
+  // not name survives because this is a LOAD and not a rebuild. It cannot be
+  // FALSE here — step 3 proved this nid is a published request of this bundle —
+  // so there is no second 404 to answer.
+  $node = node_load($nid);
+
+  $current_image_fids = myapi_node_files_current_fids($node, 'field_images');
+  $current_attachment_fids = myapi_node_files_current_fids($node, 'field_attachment');
+
+  // 8. remove_image_ids[]: every value a positive integer AND a fid this
+  // request references RIGHT NOW. A fid of another request, of a claim or of
+  // nothing answers 422 HERE, before a single file touches the disk, and before
+  // a stray fid can serve to probe other people's files.
+  $removed_image_fids = myapi_node_files_parse_removals('remove_image_ids', $current_image_fids);
+
+  // 9. The image quota: what is LEFT AFTER the removals decides how many new
+  // ones fit, so a request that deletes three and uploads three is valid while
+  // one that uploads six without deleting anything is not.
+  // myapi_node_files_save() already answers service_request_too_many_images
+  // when the request sends more than this.
+  $kept_count = count($current_image_fids) - count($removed_image_fids);
+  $max_new_images = 5 - $kept_count;
+  if ($max_new_images < 0) {
+    $max_new_images = 0;
+  }
+
+  // 10. images[]: all-or-nothing. On failure nothing has been written yet, so
+  // the request keeps its text and its original files.
+  $image_files = myapi_node_files_save(
+    'field_images',
+    MYAPI_SERVICES_REQUEST_TYPE,
+    isset($_FILES['images']) ? $_FILES['images'] : [],
+    $max_new_images,
+    'service_request_invalid_image',
+    'service_request_too_many_images'
+  );
+
+  // 11. attachment: at most 1, and with its OWN error keys — answering the
+  // images key for an attachment problem would send the client to the wrong
+  // field. On failure the images step 10 had just saved are deleted too
+  // ($also_delete), so a rejected attachment leaves no orphan behind.
+  $attachment_file = NULL;
+  $attachment_saved = myapi_node_files_save(
+    'field_attachment',
+    MYAPI_SERVICES_REQUEST_TYPE,
+    isset($_FILES['attachment']) ? $_FILES['attachment'] : [],
+    1,
+    'service_request_invalid_attachment',
+    'service_request_too_many_attachments',
+    $image_files
+  );
+  if (!empty($attachment_saved)) {
+    $attachment_file = reset($attachment_saved);
+  }
+
+  // remove_attachment is IGNORED when a new attachment came with the request:
+  // field_attachment has cardinality 1, so uploading one already replaces the
+  // previous file — the outcome with and without the flag is identical, and a
+  // 422 would reject a request whose meaning is unambiguous.
+  $remove_attachment_raw = myapi_request_post_field('remove_attachment');
+  $remove_attachment = !$attachment_file
+    && $remove_attachment_raw !== NULL
+    && in_array(strtolower($remove_attachment_raw), ['1', 'true'], TRUE);
+
+  // 12. Overwrite ONLY what the request named, on the loaded node. Not
+  // $node->uid either: editing does not take ownership of the request.
+  $node->title = $title;
+  $node->field_description[LANGUAGE_NONE][0]['value'] = $description;
+  $node->field_desired_start[LANGUAGE_NONE][0]['value'] = $desired_start;
+
+  // 13. The final field_images: what survives the removals, in its current
+  // delta order, plus the new files at the end. Reordering the existing ones is
+  // out of this spec's scope — it needs the client to send the whole order and
+  // the server to validate it against what is there, which is another contract.
+  $items = [];
+  if (isset($node->field_images[LANGUAGE_NONE]) && is_array($node->field_images[LANGUAGE_NONE])) {
+    foreach ($node->field_images[LANGUAGE_NONE] as $item) {
+      if (isset($item['fid']) && in_array((int) $item['fid'], $removed_image_fids, TRUE)) {
+        continue;
+      }
+      $items[] = $item;
+    }
+  }
+  foreach ($image_files as $file) {
+    $items[] = ['fid' => $file->fid, 'display' => 1];
+  }
+  $node->field_images[LANGUAGE_NONE] = array_values($items);
+
+  // 14. The attachment: replaced, emptied, or left exactly as it was.
+  $deleted_attachment_fids = [];
+  if ($attachment_file) {
+    $node->field_attachment[LANGUAGE_NONE][0] = ['fid' => $attachment_file->fid, 'display' => 1];
+    $deleted_attachment_fids = $current_attachment_fids;
+  }
+  elseif ($remove_attachment) {
+    $node->field_attachment[LANGUAGE_NONE] = [];
+    $deleted_attachment_fids = $current_attachment_fids;
+  }
+
+  // 15. Persist. No hook_node_update() branch reacts to this bundle, so this
+  // creates no transaction and sends no notification — see the docblock.
+  node_save($node);
+
+  // 16. Tie every new file to the node so cron does not reap it as unused.
+  foreach ($image_files as $file) {
+    file_usage_add($file, 'myapi', 'node', $node->nid);
+  }
+  if ($attachment_file) {
+    file_usage_add($attachment_file, 'myapi', 'node', $node->nid);
+  }
+
+  // 17. Only NOW the files that left the request are deleted for real — the
+  // removed images and the attachment that was replaced or dropped. After the
+  // node_save() and never before: this is what guarantees no file the node
+  // still references is ever destroyed.
+  myapi_node_files_delete_removed(array_merge($removed_image_fids, $deleted_attachment_fids), $node->nid);
+
+  // 18. The answer: SIXTEEN KEYS, the detail's nineteen minus 'offers',
+  // 'offers_count' and 'transactions'. The gate has just proved there is no
+  // offer and the timeline is exactly where it was, so the response neither
+  // queries nor repeats them.
+  //
+  // The consequence has to be accepted with open eyes and is written in
+  // docs/service-request.md in these words: THIS OBJECT IS NOT INTERCHANGEABLE
+  // WITH THE GET'S, so the app cannot simply swap the detail it has on screen
+  // for what this call returns — it has to merge the sixteen keys onto the
+  // object it already holds.
+  //
+  // The row is read AGAIN, after the writes, because the sixteen keys have to
+  // equal the GET's byte for byte and the row of step 3 still carries the old
+  // title, description and attachment. It cannot fail to serialise: step 3
+  // already proved this request has a requester and a live category, and
+  // nothing above touches either. `viewer` is always 'requester' — step 4
+  // proved whoever got here is the field_requester — and `status` is always
+  // 'open', because editing does not move the status.
+  $row = myapi_service_request_detail_row($node->nid);
+
+  $row->requester_name = NULL;
+  $names = myapi_user_display_names([$uid]);
+  if (isset($names[$uid])) {
+    $row->requester_name = $names[$uid];
+  }
+
+  $images = myapi_service_request_load_images($node->nid);
+
+  // ONE SERIALISER AND NOT TWO: the sixteen keys come out of the same function
+  // that serves the GET, so they cannot drift from it by accident. The three
+  // that go are unset AFTER it builds, which is also what keeps the remaining
+  // sixteen in the documented order.
+  $detail = myapi_service_request_build_detail($row, 'requester', $images, [], 0, []);
+  unset($detail['offers_count'], $detail['offers'], $detail['transactions']);
+
+  myapi_respond(['service_request' => $detail], 200, 'service_request_updated');
 }
