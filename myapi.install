@@ -4061,3 +4061,116 @@ function myapi_update_7033() {
     '@transaction' => MYAPI_SERVICES_TRANSACTION_TYPE,
   ]);
 }
+
+/**
+ * SPEC 91: repairs the malformed file_managed.uri written by API uploads.
+ *
+ * The bug, and why it only showed in the back office: until this release
+ * myapi_node_files_save() (includes/myapi.node_files.inc) called
+ * file_save_upload() with $directory . '/', where $directory is whatever
+ * file_field_widget_uri() returns. Neither field_images nor field_attachment
+ * declares a file_directory, so that function answers 'private://' — a value
+ * that ALREADY ends in a slash — and the concatenation turned it into
+ * 'private:///'. file_save_upload() then leaves the destination alone (it only
+ * appends a separator when one is missing), so every file uploaded from the app
+ * was recorded as 'private:///<name>' instead of 'private://<name>'.
+ *
+ * The bytes were never in the wrong place: DrupalLocalStreamWrapper resolves a
+ * URI through file_uri_target(), which trims leading slashes, so the disk path
+ * was correct and the file was always readable. What broke was the STRING.
+ *
+ *   - Everything that speaks fids kept working — GET /api/v1/claims/%/files/%,
+ *     GET /api/v1/service-requests/%/files/%, the offer and transaction
+ *     listings — which is why the Flutter app showed the images all along.
+ *   - hook_file_download() is the one consumer that starts from a URI:
+ *     myapi_claims_file_fid_by_uri() and myapi_service_request_file_fid_by_uri()
+ *     match file_managed.uri exactly. Drupal hands them the NORMALIZED
+ *     'private://<name>' (image_style_deliver() rebuilds it from the request
+ *     path), the stored row said 'private:///<name>', the lookup missed, the
+ *     hook answered NULL, and with no module claiming the file core answered
+ *     403 — the broken thumbnails on node/%/edit and on the claim and service
+ *     request detail pages, for every role including uid 1.
+ *
+ * Scope: every file_managed row whose uri is not its own normalized form. In
+ * practice that is 'private:///%' — and 'public:///%' for anything uploaded
+ * before SPEC 65/77 moved the fields to private:// that myapi_update_7023()
+ * did not sweep, since that update only walked fids referenced from a node.
+ * Rows already normalized are left untouched, which is what makes this
+ * re-runnable: a second pass finds nothing to rewrite.
+ *
+ * Only file_managed.uri is written. The fid does not change, so
+ * field_data_field_images, field_data_field_attachment, their field_revision_*
+ * twins and file_usage — all of which store fids and never URIs — are correct
+ * as they stand and are not touched. Nothing is moved on disk either: the
+ * normalized URI resolves to the very path the malformed one already resolved
+ * to.
+ *
+ * A normalized URI that ALREADY belongs to a different fid is skipped and
+ * logged instead of written: file_managed.uri carries a unique key in the
+ * schema, so writing it would abort the update, and two fids pointing at one
+ * path is a duplicate that needs a human decision, not a migration.
+ *
+ * @return string
+ *   A summary line, shown by drush and by update.php.
+ */
+function myapi_update_7034() {
+  // Both malformed shapes the code could have produced. The LIKE keeps the
+  // scan off the rows that were always well formed, which on a site with a
+  // large file_managed is the difference between a sweep and a full table read.
+  $query = db_select('file_managed', 'fm');
+  $query->fields('fm', array('fid', 'uri'));
+  $condition = db_or();
+  $condition->condition('fm.uri', db_like('private:///') . '%', 'LIKE');
+  $condition->condition('fm.uri', db_like('public:///') . '%', 'LIKE');
+  $query->condition($condition);
+
+  $fixed = 0;
+  $skipped = 0;
+
+  foreach ($query->execute() as $row) {
+    $normalized = file_stream_wrapper_uri_normalize($row->uri);
+
+    // Defensive: the LIKE above should never hand back a row that normalizes
+    // to itself, but a scheme this module does not own could.
+    if ($normalized === $row->uri) {
+      continue;
+    }
+
+    $taken = db_select('file_managed', 'other')
+      ->fields('other', array('fid'))
+      ->condition('other.uri', $normalized)
+      ->condition('other.fid', $row->fid, '<>')
+      ->range(0, 1)
+      ->execute()
+      ->fetchField();
+
+    if ($taken !== FALSE) {
+      $skipped++;
+      watchdog(
+        'myapi',
+        'SPEC 91: el fichero @fid (@uri) no se pudo normalizar a @normalized porque esa uri ya pertenece al fichero @taken. Se salta y hay que resolver el duplicado a mano.',
+        array('@fid' => $row->fid, '@uri' => $row->uri, '@normalized' => $normalized, '@taken' => $taken),
+        WATCHDOG_WARNING
+      );
+      continue;
+    }
+
+    db_update('file_managed')
+      ->fields(array('uri' => $normalized))
+      ->condition('fid', $row->fid)
+      ->execute();
+
+    $fixed++;
+  }
+
+  // The rewritten rows are cached by fid under the 'entity_cache' /
+  // 'file_load_multiple' static, and file_load() would keep answering the old
+  // uri for the rest of THIS request. Cheap insurance, since the next request
+  // reads from the database anyway.
+  entity_get_controller('file')->resetCache();
+
+  return t('SPEC 91: @fixed uri de file_managed normalizadas (private:/// → private://), @skipped saltadas por colisión (registradas en el log). No se ha movido ningún fichero de disco ni se ha tocado ningún nodo.', array(
+    '@fixed'   => $fixed,
+    '@skipped' => $skipped,
+  ));
+}

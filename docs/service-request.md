@@ -699,6 +699,28 @@ galleries, and service requests — and each answers `NULL` for a file that is n
 theirs, which is what keeps payment receipts and every other private file of the
 site behaving exactly as before.
 
+### The `private:///` regression and its repair (SPEC 91)
+
+Files uploaded **from the app** between SPEC 77 and SPEC 91 were recorded in
+`file_managed.uri` as `private:///<name>` — three slashes, because
+`myapi_node_files_save()` appended a `/` to what `file_field_widget_uri()`
+already returns ending in one (neither `field_images` nor `field_attachment`
+declares a `file_directory`, so that function answers exactly `private://`).
+
+The bytes were never misplaced — every stream wrapper trims the extra slash
+before touching the disk. What broke was the string, and only for the reader
+that starts from a URI: `GET /api/v1/service-requests/%/files/%` looks the file
+up by **fid** and kept working, while `hook_file_download()` matches
+`file_managed.uri` as a **string**, missed the row, answered `NULL`, and left the
+back office with a **`403` on every thumbnail** — for every role, `uid 1`
+included.
+
+`myapi_node_files_save()` now passes the destination untouched, and
+`myapi_update_7034()` normalizes the rows already written. Only
+`file_managed.uri` is rewritten; the fid does not change, so the field tables and
+`file_usage` are already correct and nothing moves on disk. Same fix, same
+update, for claims — see [claim.md](claim.md).
+
 > **MAINTENANCE RULE — read this before adding another file field to
 > `service_request`.** Two things must happen or the file is born unreachable by
 > both consumers, with no error to explain it:

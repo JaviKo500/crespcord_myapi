@@ -168,7 +168,24 @@ function myapi_node_files_save($field_name, $bundle, array $files, $max_count, $
       $_FILES['files'][$part][$form_key] = $item[$part];
     }
 
-    $file = file_save_upload($form_key, $validators, $directory . '/');
+    // $directory is handed to file_save_upload() EXACTLY as
+    // file_field_widget_uri() built it, with no separator appended. That
+    // function returns 'private://' when the instance declares no
+    // file_directory — which is the case for both field_images and
+    // field_attachment — and file_save_upload() already adds the trailing '/'
+    // itself only when the destination lacks one ("A file URI may already have
+    // a trailing slash or look like 'public://'", includes/file.inc). Adding a
+    // second one here produced 'private:///' and stored a malformed
+    // file_managed.uri: the bytes landed in the right place, because every
+    // stream wrapper trims the extra slash before touching the disk, but the
+    // string kept it. Everything that speaks fids kept working —
+    // GET /api/v1/claims/%/files/% and its services twin among them — while
+    // hook_file_download(), the only consumer that matches file_managed.uri as
+    // a STRING, missed the row, answered NULL, and left the back office with a
+    // 403 on every thumbnail. myapi_update_7034() repairs the rows already
+    // written this way. Same reason includes/myapi.claim_transaction_admin.inc
+    // passes file_field_widget_uri() raw as '#upload_location'.
+    $file = file_save_upload($form_key, $validators, $directory);
     if (!is_object($file)) {
       myapi_node_files_delete($saved);
       myapi_node_files_delete($also_delete);

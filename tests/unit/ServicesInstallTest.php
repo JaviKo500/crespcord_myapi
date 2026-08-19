@@ -854,7 +854,10 @@ class ServicesInstallTest extends TestCase {
     $this->assertStringContainsString('function myapi_update_7031()', $source);
     $this->assertStringContainsString('function myapi_update_7032()', $source);
     $this->assertStringContainsString('function myapi_update_7033()', $source);
-    $this->assertStringNotContainsString('function myapi_update_7034()', $source);
+    // SPEC 91 appended 7034 (the file_managed.uri repair); the ceiling moves
+    // with it, so the guard keeps saying "nothing beyond the last spec".
+    $this->assertStringContainsString('function myapi_update_7034()', $source);
+    $this->assertStringNotContainsString('function myapi_update_7035()', $source);
     // 7028 is still SPEC 81's, not this spec's.
     $this->assertStringContainsString(
       '_myapi_services_install();',

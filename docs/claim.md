@@ -954,6 +954,38 @@ Two operational consequences of the same migration:
   once the app version that sends the header is published, or accept the window
   of broken images.
 
+### The `private:///` regression and its repair (SPEC 91)
+
+Files uploaded **from the app** between SPEC 65 and SPEC 91 were recorded in
+`file_managed.uri` as `private:///<name>` — three slashes. `myapi_node_files_save()`
+appended a `/` to what `file_field_widget_uri()` already returns ending in one:
+neither `field_images` nor `field_attachment` declares a `file_directory`, so
+that function answers exactly `private://`.
+
+The bytes were never misplaced. Every stream wrapper resolves a URI through
+`file_uri_target()`, which trims the extra slash, so the file always sat at the
+right path and was always readable. **What broke was the string**, and only for
+the one reader that starts from a URI:
+
+| Reader | Starts from | Effect |
+|--------|-------------|--------|
+| The app — `GET /api/v1/claims/%/files/%` | the **fid** | Unaffected. This is why the images kept showing in Flutter the whole time. |
+| The back office — `hook_file_download()` | the **URI** | `myapi_claims_file_fid_by_uri()` matches `file_managed.uri` as a string. Drupal hands it the normalized `private://<name>` (`image_style_deliver()` rebuilds it from the request path), the row said `private:///<name>`, the lookup missed, the hook answered `NULL`, no module claimed the file and core answered **`403` on every thumbnail** — for every role, `uid 1` included. |
+
+Two changes close it:
+
+- `myapi_node_files_save()` now hands `file_field_widget_uri()`'s value to
+  `file_save_upload()` untouched. Core appends the separator itself, and only
+  when it is missing.
+- `myapi_update_7034()` rewrites the rows already stored that way. It touches
+  **only** `file_managed.uri`: the fid does not change, so the field tables, their
+  `field_revision_*` twins and `file_usage` are already correct, and nothing moves
+  on disk. Re-runnable — a normalized row is skipped — and a normalization that
+  would collide with another fid is logged to `watchdog` instead of written.
+
+No `drush image-flush` is needed: the derivative path is computed from the
+normalized target, so it is the same path it always was.
+
 ### Maintenance rule
 
 Any new file field on `reclamo` or `claim_transaction` must be created with
