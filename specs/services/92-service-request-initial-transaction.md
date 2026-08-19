@@ -1,6 +1,6 @@
 # 92 — La transacción inicial de una solicitud de servicio
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-08-19
 - **Dependencias:**
   - `77-services-content-types-install` (Implemented) — dueña del bundle
@@ -325,54 +325,54 @@ ninguno de los tres serializadores de `service_request` (listado, detalle y
 
 **La transacción se crea, por los dos caminos**
 
-- [ ] Crear una solicitud desde `node/add/service_request` deja **exactamente una** `service_transaction` apuntando a ella por `field_request`.
-- [ ] `POST /api/v1/service-requests` deja **exactamente una**, indistinguible de la anterior salvo por el `uid`.
-- [ ] `field_request_status` de la transacción es **idéntico** al de la solicitud en el instante de crearla: `open`, `direct`, o el que el operador eligiera en el formulario (`offered`, `assigned`, `closed`, `cancelled`).
-- [ ] `field_status_date` es el instante real del alta con los segundos en `:00`, no la medianoche de ese día.
-- [ ] El `uid` de la transacción es el de la solicitud: el residente del token vía API, el operador vía back office.
-- [ ] La transacción nace publicada (`status = 1`).
-- [ ] **Editar** una solicitud ya creada —cambiarle el estado, el título o la descripción desde `node/%nid/edit`— **no** crea ninguna transacción nueva.
-- [ ] Guardar un `service_transaction` **no** modifica `field_request_status` de su solicitud, ni siquiera cuando difieren.
-- [ ] Las solicitudes creadas **antes** de este cambio siguen sin transacción; nada las toca.
+- [x] Crear una solicitud desde `node/add/service_request` deja **exactamente una** `service_transaction` apuntando a ella por `field_request`.
+- [x] `POST /api/v1/service-requests` deja **exactamente una**, indistinguible de la anterior salvo por el `uid`.
+- [x] `field_request_status` de la transacción es **idéntico** al de la solicitud en el instante de crearla: `open`, `direct`, o el que el operador eligiera en el formulario (`offered`, `assigned`, `closed`, `cancelled`).
+- [x] `field_status_date` es el instante real del alta con los segundos en `:00`, no la medianoche de ese día.
+- [x] El `uid` de la transacción es el de la solicitud: el residente del token vía API, el operador vía back office.
+- [x] La transacción nace publicada (`status = 1`).
+- [x] **Editar** una solicitud ya creada —cambiarle el estado, el título o la descripción desde `node/%nid/edit`— **no** crea ninguna transacción nueva.
+- [x] Guardar un `service_transaction` **no** modifica `field_request_status` de su solicitud, ni siquiera cuando difieren.
+- [x] Las solicitudes creadas **antes** de este cambio siguen sin transacción; nada las toca.
 
 **Los tres textos**
 
-- [ ] Una solicitud nacida en `open` produce el acuse de ofertas; una nacida en `direct`, el del proveedor seleccionado. Son textos distintos.
-- [ ] Una solicitud creada desde el back office en `closed` produce «Solicitud registrada con estado Cerrada.» — con la **etiqueta** del catálogo, no la clave.
-- [ ] Una clave de estado que no está en el catálogo produce el mismo texto genérico con la clave cruda, no un comentario vacío ni un error.
-- [ ] Un estado ausente o vacío produce «Solicitud registrada.», sin `@estado` colgando.
-- [ ] Cambiar una etiqueta en `myapi_services_request_statuses()` cambia el texto genérico sin tocar `includes/myapi.service_transaction.inc`.
+- [x] Una solicitud nacida en `open` produce el acuse de ofertas; una nacida en `direct`, el del proveedor seleccionado. Son textos distintos.
+- [x] Una solicitud creada desde el back office en `closed` produce «Solicitud registrada con estado Cerrada.» — con la **etiqueta** del catálogo, no la clave.
+- [x] Una clave de estado que no está en el catálogo produce el mismo texto genérico con la clave cruda, no un comentario vacío ni un error.
+- [x] Un estado ausente o vacío produce «Solicitud registrada.», sin `@estado` colgando.
+- [x] Cambiar una etiqueta en `myapi_services_request_statuses()` cambia el texto genérico sin tocar `includes/myapi.service_transaction.inc`.
 
 **El título**
 
-- [ ] Ninguna `service_transaction` creada tras este cambio tiene `title = ''`: `/admin/content` no muestra un solo enlace en blanco.
-- [ ] Con los cuatro valores presentes, el título es `Solicitud #<nid> · <Etiqueta> · <d/m/Y H:i> · <comentario recortado>`.
-- [ ] Falta un valor → falta su segmento, sin ` · ` colgando al principio, en medio ni al final.
-- [ ] Una `field_status_date` no parseable **omite** el segmento en vez de imprimir `01/01/1970`.
-- [ ] Un comentario con saltos de línea sale en una sola línea; uno de más de 60 caracteres se corta en frontera de palabra y termina en `…`; uno de exactamente 60 **no** lleva `…`.
-- [ ] El título nunca supera 255 caracteres, y el corte cae en frontera de carácter UTF-8.
-- [ ] Crear una transacción a mano desde `node/add/service_transaction` también recibe el título compuesto; editarla lo **regenera** en vez de dejar el anterior.
-- [ ] Sin ningún valor resoluble, el título es `Transacción de solicitud`.
+- [x] Ninguna `service_transaction` creada tras este cambio tiene `title = ''`: `/admin/content` no muestra un solo enlace en blanco.
+- [x] Con los cuatro valores presentes, el título es `Solicitud #<nid> · <Etiqueta> · <d/m/Y H:i> · <comentario recortado>`.
+- [x] Falta un valor → falta su segmento, sin ` · ` colgando al principio, en medio ni al final.
+- [x] Una `field_status_date` no parseable **omite** el segmento en vez de imprimir `01/01/1970`.
+- [x] Un comentario con saltos de línea sale en una sola línea; uno de más de 60 caracteres se corta en frontera de palabra y termina en `…`; uno de exactamente 60 **no** lleva `…`.
+- [x] El título nunca supera 255 caracteres, y el corte cae en frontera de carácter UTF-8.
+- [x] Crear una transacción a mano desde `node/add/service_transaction` también recibe el título compuesto; editarla lo **regenera** en vez de dejar el anterior.
+- [x] Sin ningún valor resoluble, el título es `Transacción de solicitud`.
 
 **No regresión — el criterio caro de este spec**
 
-- [ ] `GET /api/v1/service-requests`, `GET /api/v1/service-requests/%` y el `201` de `POST /api/v1/service-requests` devuelven **exactamente las mismas claves y valores** que antes: ninguna gana `transactions`.
-- [ ] `offers_count` **no** cuenta la transacción nueva. `field_request` está compartido por `service_offer` y `service_transaction` (SPEC 77), y el filtro por bundle de SPEC 88/89 es lo único que lo impide: es el punto exacto donde este spec podría romper algo ya entregado.
-- [ ] El array `offers` del detalle sigue sin incluir la transacción.
-- [ ] El rol `proveedor` ve la transacción exactamente igual de lejos que la solicitud a la que pertenece: el modo `via_request` de SPEC 78 ya la cubre y no se toca.
-- [ ] Las ramas previas de `myapi_node_insert()` (`pagos`, `reclamo`, `claim_transaction`, `boletin`) y las de `myapi_node_update()` quedan intactas: crear un reclamo sigue generando **una** `claim_transaction`, ni una más.
-- [ ] La rama `claim_transaction` de `myapi_node_presave()` sigue titulando reclamos igual: los títulos de las transacciones de reclamos no cambian ni un carácter.
-- [ ] `resources/service_request.resource.inc` no cambia ni una línea ejecutable — solo comentarios.
-- [ ] `myapi.install` no aparece en el diff; no hay `hook_update_N` nuevo y `drush updb` no tiene nada que ejecutar.
-- [ ] `myapi.info` no declara ninguna dependencia nueva.
-- [ ] Insertar la transacción **no** dispara una segunda inserción: no hay rama `service_transaction` en `myapi_node_insert()` y nada re-guarda la solicitud, así que no hay cascada.
+- [x] `GET /api/v1/service-requests`, `GET /api/v1/service-requests/%` y el `201` de `POST /api/v1/service-requests` devuelven **exactamente las mismas claves y valores** que antes: ninguna gana `transactions`.
+- [x] `offers_count` **no** cuenta la transacción nueva. `field_request` está compartido por `service_offer` y `service_transaction` (SPEC 77), y el filtro por bundle de SPEC 88/89 es lo único que lo impide: es el punto exacto donde este spec podría romper algo ya entregado.
+- [x] El array `offers` del detalle sigue sin incluir la transacción.
+- [x] El rol `proveedor` ve la transacción exactamente igual de lejos que la solicitud a la que pertenece: el modo `via_request` de SPEC 78 ya la cubre y no se toca.
+- [x] Las ramas previas de `myapi_node_insert()` (`pagos`, `reclamo`, `claim_transaction`, `boletin`) y las de `myapi_node_update()` quedan intactas: crear un reclamo sigue generando **una** `claim_transaction`, ni una más.
+- [x] La rama `claim_transaction` de `myapi_node_presave()` sigue titulando reclamos igual: los títulos de las transacciones de reclamos no cambian ni un carácter.
+- [x] `resources/service_request.resource.inc` no cambia ni una línea ejecutable — solo comentarios.
+- [x] `myapi.install` no aparece en el diff; no hay `hook_update_N` nuevo y `drush updb` no tiene nada que ejecutar.
+- [x] `myapi.info` no declara ninguna dependencia nueva.
+- [x] Insertar la transacción **no** dispara una segunda inserción: no hay rama `service_transaction` en `myapi_node_insert()` y nada re-guarda la solicitud, así que no hay cascada.
 
 **Pruebas y cierre**
 
-- [ ] `tests/unit/ServiceTransactionTest.php` pasa, y la suite completa sigue en verde sin ninguna regresión.
-- [ ] Un test falla si la rama `service_request` de `myapi_node_insert()` o la rama `service_transaction` de `myapi_node_presave()` desaparecen de `myapi.module`.
-- [ ] `drush cc all` no reporta errores.
-- [ ] `docs/service-transaction.md` existe y describe los tres textos, el formato del título y las cuatro cosas que este comportamiento no hace.
+- [x] `tests/unit/ServiceTransactionTest.php` pasa, y la suite completa sigue en verde sin ninguna regresión.
+- [x] Un test falla si la rama `service_request` de `myapi_node_insert()` o la rama `service_transaction` de `myapi_node_presave()` desaparecen de `myapi.module`.
+- [x] `drush cc all` no reporta errores.
+- [x] `docs/service-transaction.md` existe y describe los tres textos, el formato del título y las cuatro cosas que este comportamiento no hace.
 
 ---
 
