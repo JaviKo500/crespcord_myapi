@@ -408,6 +408,27 @@ function myapi_menu() {
     'file'             => 'resources/service_request.resource.inc',
   ];
 
+  // The provider's own board (SPEC 98): the requests that concern one of the
+  // token's providers — the ones they already offered on, the unassigned ones
+  // of their categories, and the ones awarded to them in ANY status. The
+  // 'proveedor' role is the gate, the same 403 'provider_role_required' as
+  // api/v1/providers/mine above; anybody else is refused, administrators
+  // included. Read-only: every write answers 405, and offering is another spec.
+  //
+  // A LITERAL path living beside the wildcard below, and written BEFORE it for
+  // exactly the reason api/v1/providers/mine is written before
+  // api/v1/providers/%: Drupal 7 resolves the literal part of a pattern before
+  // falling back to '%', so this route never reaches
+  // myapi_service_request_item_dispatch() and no nid is swallowed by it. The
+  // ordering here is readability, not routing — the core behaviour is what the
+  // two rely on, and api/v1/providers/mine has relied on it since SPEC 97.
+  $items['api/v1/service-requests/provider'] = [
+    'page callback'    => 'myapi_service_request_provider_dispatch',
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/service_request.resource.inc',
+  ];
+
   // The detail of one request and the bytes of its private files (SPEC 89).
   //
   // Siblings of the collection above and NOT displaced by it: Drupal 7 matches

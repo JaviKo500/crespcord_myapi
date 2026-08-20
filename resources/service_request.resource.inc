@@ -240,6 +240,223 @@ function myapi_service_request_list() {
 }
 
 /**
+ * Routes /api/v1/service-requests/provider by HTTP method (SPEC 98).
+ *
+ * READ-ONLY, AND ONLY GET. There is no POST here and there will not be one by
+ * accident: creating, withdrawing or awarding an offer is another spec, and a
+ * dispatcher that answered 405 for everything except GET is what keeps that
+ * decision visible.
+ *
+ * THE 405 COMES BEFORE THE TOKEN, deliberately: a POST to a GET-only route is
+ * wrong whether or not the caller is authenticated, and answering 401 first
+ * would tell a client with a broken verb to go fix its credentials. Same order
+ * myapi_service_request_dispatch() and the whole module already use.
+ */
+function myapi_service_request_provider_dispatch() {
+  if (myapi_request_method() === 'GET') {
+    myapi_service_request_provider_list();
+    return;
+  }
+
+  myapi_error('method_not_allowed', 405);
+}
+
+/**
+ * GET /api/v1/service-requests/provider — the provider's own board (SPEC 98).
+ *
+ * Orchestration only, like myapi_service_request_list(): the access rule lives
+ * in myapi_service_request_provider_scope(), the SQL in
+ * myapi_service_request_base_query(), the item in
+ * myapi_service_request_provider_build_item(). What this function owns is the
+ * ORDER, and the order is the contract.
+ *
+ * THE ONLY 403 IS THE ROLE, AND IT REUSES 'provider_role_required' (SPEC 97).
+ * Not a new i18n key: the cause is identical to GET /api/v1/providers/mine —
+ * "your account does not hold the provider role" — and one key per route would
+ * force the app to treat as different two errors that are not. An account WITH
+ * the role and NO linked provider node is a 200 with an empty list, never a
+ * 403: having the role and being linked to nothing is missing data, not a
+ * missing permission. There is no exception for administrators.
+ *
+ * '?provider_id' IS PARSED AFTER THE GATE AND BEFORE EVERYTHING ELSE. After,
+ * because a reader who may not be here should not learn whether their
+ * parameter was well formed; before, because a 422 must not cost a scope
+ * query. Every other parameter is lax, and '?unit_id' does not exist on this
+ * route at all — it is IGNORED IN SILENCE and never a 422, because filtering by
+ * flat contradicts decision 5, which only paints the unit when the job is
+ * already mine.
+ *
+ * THE EMPTY-SCOPE SHORT CIRCUIT COVERS BOTH CASES AT ONCE and is the FIRST of
+ * the two defences against the empty OR (risk 3): a role with no link, and a
+ * '?provider_id' that belongs to somebody else, both answer 200 with an empty
+ * list without a single scope query. The second defence is the impossible
+ * condition in myapi_service_request_base_query(). Two defences on purpose.
+ *
+ * $uid IS NULL IN THE COUNT AND IN THE FETCH, and that is exactly what SPEC 88
+ * left that parameter nullable for: the reader is the requester of nothing
+ * here, and the whole scope travels inside $filters['provider_scope'].
+ *
+ * TEN QUERIES, FIXED — token, account, link, active, categories, A, C, count,
+ * page, offers, names — AND NOT ONE OF THEM GROWS WITH THE PAGE. Twenty
+ * requests cost what one costs; the names of the whole page are resolved in ONE
+ * call to myapi_user_display_names() and never one per row.
+ */
+function myapi_service_request_provider_list() {
+  // 1. Authentication. Answers 401 on its own and never returns on failure.
+  $token = myapi_auth_require_access_token();
+
+  // 2. The account, because the gate reads ->roles and the token row does not
+  // carry them. Not an extra query: myapi_auth_require_access_token() already
+  // loaded this user and Drupal 7 serves the second call from its static cache.
+  $account = user_load($token->uid);
+
+  // 3. The gate, and the only 403 of this endpoint — see the docblock.
+  if (!myapi_provider_role_is($account)) {
+    myapi_error('provider_role_required', 403);
+  }
+
+  // 4. The providers of the ACCOUNT. They are what decision 5 measures `unit`
+  // against later, so they are kept apart from the '?provider_id' narrowing
+  // below and never overwritten by it.
+  $owned = myapi_provider_role_provider_ids($account);
+
+  // 5. The one parameter that can be WRONG rather than merely unknown. Strict
+  // in the format, lax in the ownership — see its parser.
+  $provider_id = myapi_service_request_parse_provider_id();
+
+  // 6. P: every provider of the account, or the single one selected. A nid that
+  // is not the account's narrows P to nothing, which is decision 9 — a 200 with
+  // an empty list, not a 403 that would confirm the node exists.
+  $scope_ids = $provider_id === NULL
+    ? $owned
+    : (in_array($provider_id, array_map('intval', $owned), TRUE) ? [$provider_id] : []);
+
+  // 7. Pagination and sort, read before the short circuit so the empty answer
+  // still reports the limit the caller asked for. Same idiom as the resident's
+  // listing: garbage falls back to the default, '-1' is "everything on one
+  // page" (SPEC 15).
+  $page = isset($_GET['page']) && ctype_digit((string) $_GET['page']) && (int) $_GET['page'] > 0
+    ? (int) $_GET['page']
+    : 1;
+
+  $limit = isset($_GET['limit']) && $_GET['limit'] === '-1'
+    ? -1
+    : (isset($_GET['limit']) && ctype_digit((string) $_GET['limit']) && (int) $_GET['limit'] > 0
+      ? max(1, min(50, (int) $_GET['limit']))
+      : 20);
+
+  if ($limit === -1) {
+    $page = 1;
+  }
+
+  $sort = isset($_GET['sort']) && in_array($_GET['sort'], ['asc', 'desc'], TRUE)
+    ? $_GET['sort']
+    : 'desc';
+
+  // 8. The access rule, resolved into its three ingredients. An empty P costs
+  // NO query here — myapi_service_request_provider_scope() short-circuits on an
+  // empty list — so the role-with-no-link case and the foreign-'?provider_id'
+  // case both reach the empty answer below without a single scope query, which
+  // is what decision 9 and SPEC 97 ask for.
+  $scope = myapi_service_request_provider_scope($scope_ids);
+
+  // 9. Nothing in A, B or C: one empty page, one exit, and NOT a 403. Three
+  // situations share this answer — the role with no linked provider, a
+  // '?provider_id' that is not the account's, and a provider with no offers, no
+  // awards and no biddable category — and they share the ONE response so they
+  // cannot drift into three slightly different empty bodies.
+  //
+  // This is also the FIRST of the two defences against the empty OR (risk 3):
+  // no empty scope ever reaches myapi_service_request_base_query(). The second
+  // is the impossible condition that function adds anyway. Two on purpose.
+  //
+  // `page` is forced to 1 and `total_pages` is 0 — not 1 — because there is
+  // nothing to page through; `limit` echoes what the caller asked for, so a
+  // client that sent '?limit=50' is not told it got 20.
+  if (!$scope['nids'] && !($scope['biddable'] && $scope['category_ids'])) {
+    myapi_respond([
+      'service_requests' => [],
+      'pagination'       => [
+        'total'       => 0,
+        'page'        => 1,
+        'limit'       => $limit,
+        'total_pages' => 0,
+      ],
+    ], 200);
+  }
+
+  // 10. The filters. Identical to the resident's listing EXCEPT '?unit_id',
+  // which is not read here at all, plus the scope that makes this endpoint what
+  // it is.
+  $category_id = myapi_service_request_parse_category_id();
+  $created = myapi_service_request_parse_created_range();
+
+  $filters = [
+    'status'         => myapi_service_request_parse_status(),
+    'category_id'    => $category_id,
+    'created_from'   => $created['from'],
+    'created_to'     => $created['to'],
+    'provider_scope' => $scope,
+  ];
+
+  // 11. Count first — the pagination block describes the FILTERED set and not
+  // the page. Because B lives in SQL, this total is the real one and not a
+  // number counted in PHP over a page.
+  $total = myapi_service_request_count(NULL, $filters);
+  $total_pages = $limit === -1
+    ? ($total > 0 ? 1 : 0)
+    : ($total > 0 ? (int) ceil($total / $limit) : 0);
+
+  // 12. The page, then the offers of that whole page in ONE query. The count is
+  // the REAL total, competition included (decision 10).
+  $rows = myapi_service_request_fetch(NULL, $filters, $page, $limit, $sort);
+
+  $nids = [];
+  $requester_uids = [];
+  foreach ($rows as $row) {
+    $nids[] = (int) $row->nid;
+    if (isset($row->requester_uid) && $row->requester_uid !== '') {
+      $requester_uids[(int) $row->requester_uid] = (int) $row->requester_uid;
+    }
+  }
+
+  $offer_counts = myapi_service_request_offer_counts_by_nid($nids);
+
+  // 13. The names of the WHOLE page in one call, by the shared rule of
+  // includes/myapi.user.inc — never one query per row. No contact detail is
+  // fetched: myapi_user_fetch_profile_fields() is not called from this
+  // resource, so no email, phone or id number can leak into a market listing.
+  $names = myapi_user_display_names(array_values($requester_uids));
+
+  foreach ($rows as $row) {
+    $row->requester_name = NULL;
+    if (isset($row->requester_uid) && $row->requester_uid !== '') {
+      $uid = (int) $row->requester_uid;
+      $row->requester_name = isset($names[$uid]) ? $names[$uid] : NULL;
+    }
+  }
+
+  // 14. Serialise. The account's providers and NOT $scope_ids — decision 5 is
+  // measured against what I operate, not against the view I am filtering by.
+  $service_requests = array_map(function ($row) use ($offer_counts, $owned) {
+    return myapi_service_request_provider_build_item($row, $offer_counts, $owned);
+  }, $rows);
+
+  // 15. Respond 200 (read-only endpoint, no message_key). Same envelope, same
+  // key and same pagination block as the resident's listing.
+  myapi_respond([
+    'service_requests' => $service_requests,
+    'pagination'       => [
+      'total'       => (int) $total,
+      'page'        => $page,
+      'limit'       => $limit,
+      'total_pages' => $total_pages,
+    ],
+  ], 200);
+}
+
+
+/**
  * Reads '?status' into a list of status keys, or NULL for no filter (SPEC 88).
  *
  * LAX, like every other parameter of this endpoint except category_id: an
@@ -1456,6 +1673,11 @@ function myapi_service_request_detail($nid) {
  *      has a live offer needs to see what became of it, and losing the detail
  *      the moment it is awarded to somebody else would leave an offer in their
  *      app with nothing behind it and a 403 as the only explanation.
+ *   2b. AWARDED TO ME (SPEC 98) — field_assigned_provider points at one of the
+ *      reader's providers. Whatever the status: 'direct', 'assigned', 'closed'
+ *      and 'cancelled' all included. It is set C of
+ *      myapi_service_request_provider_scope() — see the comment on the rule
+ *      itself, and keep the two in step.
  *   3. AN ELIGIBLE PROVIDER — the request is still biddable AND of one of the
  *      reader's categories AND at least one of their providers is active:
  *        status ∈ ('open', 'offered')
@@ -1473,10 +1695,11 @@ function myapi_service_request_detail($nid) {
  * hide from this provider in the back office" versus "what may they still bid
  * on in the app" — and they have to be able to diverge. A 'direct' request is
  * born with a provider already chosen, which is precisely what "unawarded"
- * excludes. The consequence is known and written down in the spec's Riesgos:
- * today the provider of a 'direct' request cannot read its detail. The spec
- * that creates direct requests is the one that will know what relation it
- * leaves behind, and whether rule 3 grows a fourth clause.
+ * excludes. SPEC 89 left the consequence written in its Riesgos — the provider
+ * of a 'direct' request could not read its own detail — and SPEC 98 is the
+ * spec that knew what relation that provider has with the request: rule 2b,
+ * above rule 3 rather than a fourth clause inside it, because "awarded to me"
+ * is the opposite of "unawarded" and cannot be a condition of the same rule.
  *
  * BOTH AWARD KEYS ARE CHECKED, NOT JUST THE STATUS, and they are read from the
  * RAW target_id and not from the joined node: a request left in 'offered' with
@@ -1532,6 +1755,31 @@ function myapi_service_request_viewer($row, $uid) {
 
   // Rule 2. Status-independent and category-independent, on purpose.
   if (myapi_provider_role_has_offered(isset($row->nid) ? $row->nid : 0, $provider_ids)) {
+    return 'provider';
+  }
+
+  // Rule 2b (SPEC 98). The request is awarded to one of my providers: it is my
+  // job, and it is my job in ANY status — 'direct', 'assigned', 'closed' and
+  // 'cancelled' included. This closes the 403 SPEC 89 left written in its
+  // Riesgos: until today the provider of a 'direct' request could not read its
+  // own detail, because rule 3 requires the request to be UNAWARDED, which is
+  // the exact opposite of this.
+  //
+  // It reads assigned_provider_raw, the raw column
+  // myapi_service_request_detail_row() already projects and rule 3 below
+  // already reads: NO new query and NO new column. It goes BEFORE rule 3 for
+  // the reason just given, and it is STRICTLY ADDITIVE — it can only turn a
+  // NULL (403) into 'provider', never the reverse, so no reader loses access
+  // and the requester never reaches it.
+  //
+  // THIS IS SET C OF myapi_service_request_provider_scope(), WRITTEN AS A
+  // PER-ROW DECISION. The two forms live side by side because neither can be
+  // derived from the other without losing the pagination or the loaded row; if
+  // one of them ever grows a condition the other does not, the symptom is an
+  // item in the provider listing that answers 403 when opened, and nothing
+  // fails loudly. ServiceRequestProviderListTest holds the equivalence.
+  if (!empty($row->assigned_provider_raw)
+    && in_array((int) $row->assigned_provider_raw, array_map('intval', $provider_ids), TRUE)) {
     return 'provider';
   }
 
