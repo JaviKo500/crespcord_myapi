@@ -816,6 +816,39 @@ class ProviderMineEndpointTest extends TestCase {
   }
 
   /* -------------------------------------------------------------------------
+   * The includes.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * THE RESOURCE MUST PULL includes/myapi.provider_role.inc ITSELF, and this is
+   * a regression test for a bug that reached a running site: myapi.module only
+   * module_load_include()s that file inside the back-office hooks that need it,
+   * so an api/v1 request reached myapi_provider_mine_list() with
+   * myapi_provider_role_is() undefined and answered a PHP fatal instead of a
+   * 403.
+   *
+   * ASSERTED OVER THE SOURCE, and it has to be: the module_load_include() of
+   * tests/unit/bootstrap.php is a no-op, because every suite requires the
+   * includes it needs by hand. That is exactly what hides a missing declaration
+   * from every other test in this class — they all pass with the line deleted.
+   */
+  public function testTheResourceDeclaresTheProviderRoleInclude() {
+    $source = file_get_contents(__DIR__ . '/../../resources/provider.resource.inc');
+
+    $this->assertStringContainsString(
+      "module_load_include('inc', 'myapi', 'includes/myapi.provider_role');",
+      $source,
+      'the role gate of GET /api/v1/providers/mine lives in an include the resource must load'
+    );
+
+    // And the two functions it is loaded for are really the ones this endpoint
+    // calls, so renaming either one does not leave the include behind as
+    // decoration.
+    $this->assertTrue(function_exists('myapi_provider_role_is'));
+    $this->assertTrue(function_exists('myapi_provider_role_provider_ids'));
+  }
+
+  /* -------------------------------------------------------------------------
    * Query string.
    * ---------------------------------------------------------------------- */
 

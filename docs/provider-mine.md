@@ -175,6 +175,10 @@ keys and mixing it into the order would hide it there.
   an account linked to hundreds of providers would receive them all. Assumed:
   today the real case is one or two per account, and adding pagination later is
   additive.
+- The role helpers live in `includes/myapi.provider_role.inc`, and
+  `resources/provider.resource.inc` loads that include **itself**:
+  `myapi.module` only pulls it inside the back-office hooks, so an API request
+  would otherwise reach the gate with the functions undefined.
 - **No cache**: no `ETag`, no `304`. Every request is answered fresh, like the
   rest of the module.
 - `field_rating_avg` and `field_rating_count` are still written by nothing —

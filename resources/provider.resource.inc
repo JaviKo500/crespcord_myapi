@@ -51,6 +51,12 @@ module_load_include('inc', 'myapi', 'includes/myapi.provider_files');
 // For myapi_provider_apply_active_conditions(): the SQL half of "an active
 // provider", shared with the category counts of SPEC 79 (SPEC 83).
 module_load_include('inc', 'myapi', 'includes/myapi.provider_query');
+// For myapi_provider_role_is() and myapi_provider_role_provider_ids(): the gate
+// and the account -> providers link of GET /api/v1/providers/mine (SPEC 97).
+// LOADED HERE AND NOT ONLY IN myapi.module: that file only pulls this include
+// inside the back-office hooks that need it, so an api/v1 request would reach
+// myapi_provider_mine_list() with the two functions undefined.
+module_load_include('inc', 'myapi', 'includes/myapi.provider_role');
 // For myapi_text_to_plain(): flattens field_address and field_services_desc
 // (SPEC 84), both text_long with a rich editor behind them.
 module_load_include('inc', 'myapi', 'includes/myapi.text');
