@@ -28,11 +28,13 @@ document:
   a request for the authenticated resident, with the condominium derived
   server-side and an optional direct award to an eligible provider (SPEC 90).
 
-One thing is deliberately **not** here and is its own spec: **the provider's
-side of the marketplace** — *the requests I may attend*. That is the other half
-of the market, with another scope and another shape. SPEC 89 gives a provider
-the **detail** of a request they already know about; how they come to know about
-it is that other endpoint.
+One thing is deliberately **not** here and has its own document: **the
+provider's side of the marketplace** — *the requests that concern me*. That is
+the other half of the market, with another scope and another shape, and it now
+exists:
+[`GET /api/v1/service-requests/provider`](service-request-provider.md)
+(SPEC 98). SPEC 89 gives a provider the **detail** of a request they already
+know about; that endpoint is how they come to know about it.
 
 **Authentication:** required (Bearer access token)
 
@@ -543,10 +545,11 @@ one below call the **same function** to decide.
 | 0 | The request exists | `type = 'service_request' AND status = 1` (and its category term exists) | Otherwise **`404 not_found`**, nothing else evaluated |
 | 1 | The requester | `field_requester = uid` | `viewer: "requester"` |
 | 2 | Already offered | one of the reader's `provider` nodes has an offer on this request | `viewer: "provider"` — **whatever the status**, and whatever the category is today |
+| 2b | Awarded to me | `field_assigned_provider` points at one of the reader's `provider` nodes | `viewer: "provider"` — **whatever the status**: `direct`, `assigned`, `closed` and `cancelled` included (SPEC 98) |
 | 3 | Eligible provider | status ∈ (`open`, `offered`) **and** `field_assigned_offer` empty **and** `field_assigned_provider` empty **and** the request's category is one of theirs **and** at least one of their providers is active | `viewer: "provider"` |
 | — | None | | **`403 forbidden`** |
 
-Four things this table decides, each with a reason:
+Five things this table decides, each with a reason:
 
 - **Rule 1 ignores roles entirely.** A resident who also holds `proveedor` reads
   their own request of a category they do not attend, complete. Same reasoning
@@ -555,6 +558,11 @@ Four things this table decides, each with a reason:
   to see what became of it. Losing the detail the moment it is awarded to
   somebody else would leave an offer in their app with nothing behind it and a
   `403` as the only explanation.
+- **Rule 2b goes before rule 3 and never inside it.** "Awarded to me" is the
+  exact opposite of rule 3's "unawarded", so it cannot be one more clause of the
+  same rule. It reads the raw `field_assigned_provider` column the detail
+  already projects, so it costs **no extra query**, and it is **strictly
+  additive**: it can only turn a `403` into a `200`, never the reverse.
 - **Rule 3 checks the status AND both award keys**, and reads them **raw**. A
   request left in `offered` with `field_assigned_offer` already filled in — an
   incoherent datum nothing prevents today — stops being biddable, which is the
@@ -565,23 +573,30 @@ Four things this table decides, each with a reason:
   `field_provider_users`, never the `proveedor` role on your account. A user
   holding the role with no provider node behind them is `403`.
 
-> **`direct` requests are `403` for providers, and that is deliberate.**
-> `myapi_provider_role_broadcast_statuses()` — what the back office does *not*
-> hide from a provider — includes `direct`; **rule 3 does not**. They are two
-> policies over the same datum and they have to be able to diverge: a `direct`
-> request is born with a provider already chosen, which is exactly what
-> "unawarded" excludes.
+> **A `direct` request is `403` for every provider EXCEPT the one it was
+> awarded to.** `myapi_provider_role_broadcast_statuses()` — what the back
+> office does *not* hide from a provider — includes `direct`; **rule 3 does
+> not**. They are two policies over the same datum and they have to be able to
+> diverge: a `direct` request is born with a provider already chosen, which is
+> exactly what "unawarded" excludes. So a provider of the category who was
+> **not** chosen still gets a `403`, and that is the point.
 >
-> **The consequence, written down so it is not discovered in production:** the
-> provider chosen in a direct award **cannot read the detail of that very
-> request** — not being the requester, not having offered (there was no bidding
-> round), and not eligible under rule 3 (the request is already awarded).
-> `POST /api/v1/service-requests` (SPEC 90) is what creates `direct` requests,
-> and it deliberately does **not** touch this rule — see that endpoint's
-> "Fuera de alcance". A future spec that lets a resident's app notify the chosen
-> provider, or that widens the detail to whoever a request is awarded to, is
-> where a fourth clause would be decided. A unit test pins the current
-> behaviour, so equalising the two lists breaks the suite.
+> **The chosen provider, on the other hand, reads it.** Until SPEC 98 they did
+> not: not being the requester, not having offered (there was no bidding round)
+> and not eligible under rule 3 (the request is already awarded), the provider
+> of a direct award could not open the detail of their own job. SPEC 89
+> documented that as a known gap waiting for *"the spec that knows what
+> relation the provider of a `direct` has with the request"*; **rule 2b is that
+> answer**, and it closes the gap for `assigned`, `closed` and `cancelled`
+> alike. Equalising rule 3 with the broadcast catalogue still breaks the suite —
+> that is a different question, and still the wrong fix.
+>
+> The rule the listing uses and the rule the detail uses are now **the same
+> rule written twice**, once as a set (to paginate) and once as a per-row
+> decision (to load one). If it appears in
+> [`GET /api/v1/service-requests/provider`](service-request-provider.md), it can
+> be opened; a test walks the whole status × award × category × offered matrix
+> to hold the two in step.
 
 ### `404` and `403` mean different things
 

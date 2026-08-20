@@ -20,6 +20,13 @@ individual ratings. For those there is
 provider with an expired licence and whose `id` is exactly the one this listing
 gives.
 
+**The `id` of each provider here is what
+[`GET /api/v1/service-requests/provider`](service-request-provider.md) accepts
+in `?provider_id`** (SPEC 98): this endpoint is where the app gets the values
+that let a reader narrow their board to one of their providers. Any other nid —
+somebody else's provider, or a node that is not one — answers `200` with an
+empty list there, never a `403`.
+
 **Authentication:** required (Bearer access token) **and the `proveedor` role**
 
 This is the **first `api/v1` endpoint of the module authorised by a role**.
