@@ -802,6 +802,152 @@ function myapi_provider_build_item($row, array $categories = []) {
 }
 
 /* ---------------------------------------------------------------------------
+ * The provider's OWN listing — GET /api/v1/providers/mine (SPEC 97).
+ *
+ * The other side of the marketplace above: not "which providers may I hire?"
+ * but "which providers am I?". Same rows, same builder, two differences that
+ * are the whole point — the audience is the account linked through
+ * field_provider_users instead of everybody, and an INACTIVE provider is
+ * listed rather than hidden, because its own operator is precisely who needs
+ * to be told that the licence expired.
+ *
+ * Nothing above this comment is modified. myapi_provider_build_item() and
+ * myapi_provider_fetch() are reused and not touched, which is what keeps the
+ * eight shared keys from ever diverging between the two listings.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * The rows of the providers ONE account is linked to (SPEC 97).
+ *
+ * Same base, same joins and — this is the contract — THE SAME OUTPUT ALIASES
+ * as myapi_provider_fetch(): nid, title, rating_avg, rating_count,
+ * short_description, hourly_rate and logo_uri. myapi_provider_build_item()
+ * reads them all with isset(), so a renamed alias here does not raise an
+ * error: it silently answers NULL in that key while the public listing stays
+ * correct. That is the failure mode ProviderMineEndpointTest exists to catch.
+ *
+ * IT DOES NOT CALL myapi_provider_apply_active_conditions(), AND THAT IS
+ * DELIBERATE — not an oversight to be tidied up later. That helper adds an
+ * INNER JOIN on field_data_field_license_expiry plus `status = 1`, which would
+ * drop exactly the providers this endpoint exists to show. The rule is not
+ * skipped, it is moved: myapi_provider_mine_build_item() computes the very
+ * same condition over the row as the `is_active` flag. Hence the LEFT join
+ * below, and hence its own alias — the helper documents that 'l' is reserved,
+ * and a future caller adding it back would collide on top of breaking the
+ * listing.
+ *
+ * n.type is filtered even though the nids come from field_provider_users,
+ * which today only exists on the 'provider' bundle: the query must not depend
+ * on where its nids were resolved.
+ *
+ * NO range(): an account operates one or two providers, so there is no
+ * pagination to page through (SPEC 97, decision 7). ORDER BY n.nid DESC is the
+ * deterministic order, the same tie-breaker the public listing already uses.
+ *
+ * @param array $nids
+ *   The provider nids the account is linked to. An empty list answers an empty
+ *   array WITH NO QUERY AT ALL — `IN ()` is not valid SQL and an account with
+ *   the role but no provider is a normal 200, not an error.
+ *
+ * @return array
+ *   Rows carrying the seven aliases above plus `status` and `license_expiry`,
+ *   the two myapi_provider_mine_build_item() adds on top. May be shorter than
+ *   $nids: a nid whose node was deleted simply matches nothing.
+ */
+function myapi_provider_mine_fetch(array $nids) {
+  if (empty($nids)) {
+    return [];
+  }
+
+  $query = db_select('node', 'n');
+  $query->fields('n', ['nid', 'title', 'status']);
+  $query->condition('n.type', MYAPI_SERVICES_PROVIDER_TYPE);
+  $query->condition('n.nid', $nids, 'IN');
+
+  // The five field joins of myapi_provider_fetch(), copied with their aliases
+  // and all of them LEFT for the same reason: an optional field that is empty
+  // cannot make the provider disappear from its owner's own list.
+  $query->leftJoin('field_data_field_rating_avg', 'ra', "ra.entity_id = n.nid AND ra.entity_type = 'node' AND ra.deleted = 0");
+  $query->addField('ra', 'field_rating_avg_value', 'rating_avg');
+
+  $query->leftJoin('field_data_field_rating_count', 'rc', "rc.entity_id = n.nid AND rc.entity_type = 'node' AND rc.deleted = 0");
+  $query->addField('rc', 'field_rating_count_value', 'rating_count');
+
+  $query->leftJoin('field_data_field_short_description', 'sd', "sd.entity_id = n.nid AND sd.entity_type = 'node' AND sd.deleted = 0");
+  $query->addField('sd', 'field_short_description_value', 'short_description');
+
+  $query->leftJoin('field_data_field_hourly_rate', 'hr', "hr.entity_id = n.nid AND hr.entity_type = 'node' AND hr.deleted = 0");
+  $query->addField('hr', 'field_hourly_rate_value', 'hourly_rate');
+
+  // The logo of SPEC 85, in the same two chained LEFT joins.
+  $query->leftJoin('field_data_field_logo', 'lg', "lg.entity_id = n.nid AND lg.entity_type = 'node' AND lg.deleted = 0");
+  $query->leftJoin('file_managed', 'fm', 'fm.fid = lg.field_logo_fid');
+  $query->addField('fm', 'uri', 'logo_uri');
+
+  // The licence, LEFT and under an alias of its own ('lx', never 'l'). This is
+  // the join myapi_provider_apply_active_conditions() makes INNER; here it must
+  // let through both the provider with an expired licence and the one with no
+  // licence row at all, so that is_active can say so instead of the provider
+  // vanishing.
+  $query->leftJoin('field_data_field_license_expiry', 'lx', "lx.entity_id = n.nid AND lx.entity_type = 'node' AND lx.deleted = 0");
+  $query->addField('lx', 'field_license_expiry_value', 'license_expiry');
+
+  $query->orderBy('n.nid', 'DESC');
+
+  return $query->execute()->fetchAll();
+}
+
+/**
+ * One item of the own listing: the eight shared keys plus two (SPEC 97).
+ *
+ * myapi_provider_build_item() is called UNCHANGED and its result is extended,
+ * never rebuilt. That is the whole design of this endpoint: the eight keys the
+ * app already knows from GET /api/v1/providers cannot drift here, because they
+ * are literally the same code. `hourly_rate` travels along even though the own
+ * listing had no use for it — nine keys were asked for and ten are answered —
+ * and that is the price paid on purpose (SPEC 97, decision 6).
+ *
+ * The two new keys go LAST, so the existing order is untouched.
+ *
+ * IS_ACTIVE IS A DUPLICATE OF A BUSINESS RULE, and it is worth naming it:
+ * myapi_provider_apply_active_conditions() (includes/myapi.provider_query.inc)
+ * writes the same condition — published AND field_license_expiry >=
+ * REQUEST_TIME, with the same inclusive boundary — as an SQL filter. Here it is
+ * a flag over an already fetched row, which is a shape that helper cannot
+ * produce. THE CONTRACT IS THE EQUIVALENCE: `is_active: TRUE` means "this
+ * provider appears today in GET /api/v1/providers", and a spec that changes
+ * what active means has to change BOTH places. ProviderMineEndpointTest pins
+ * the boundary.
+ *
+ * Both keys are pure bools, never NULL and never 0/1: a provider with no
+ * licence row — the LEFT join above answers NULL — is `is_active: FALSE`, the
+ * same as an expired one, because a third value would mean exactly what FALSE
+ * already means.
+ *
+ * @param object $row
+ *   One row of myapi_provider_mine_fetch(), that is a row of
+ *   myapi_provider_fetch() plus `status` and `license_expiry`.
+ * @param array $categories
+ *   The categories of THIS provider, already built. Same contract as
+ *   myapi_provider_build_item().
+ *
+ * @return array
+ *   Ten keys: the eight of the marketplace item, then `status` and
+ *   `is_active`.
+ */
+function myapi_provider_mine_build_item($row, array $categories = []) {
+  $item = myapi_provider_build_item($row, $categories);
+
+  $item['status'] = isset($row->status) && (int) $row->status === 1;
+  $item['is_active'] = $item['status']
+    && isset($row->license_expiry)
+    && $row->license_expiry !== ''
+    && (int) $row->license_expiry >= REQUEST_TIME;
+
+  return $item;
+}
+
+/* ---------------------------------------------------------------------------
  * The provider detail — GET /api/v1/providers/% (SPEC 84).
  *
  * Announced by the @file above since SPEC 82/83: the phone, the address, the
