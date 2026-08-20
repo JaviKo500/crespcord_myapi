@@ -30,8 +30,9 @@ require_once __DIR__ . '/../../resources/service_request.resource.inc';
  * The two rules worth stating out loud, because both are easy to "fix" into
  * bugs:
  *
- * - A status that is not exactly 'open' is not editable, and that INCLUDES an
- *   empty or unknown one. The comparison is strict against the literal on
+ * - Only 'open' and 'direct' are editable — the two statuses in which nobody has
+ *   priced the job yet. Anything else is not, and that INCLUDES an empty or
+ *   unknown status. The comparison is strict against the two literals on
  *   purpose: "I do not know what state this is in" has to read as "I do not let
  *   it be edited", never as a 500.
  * - Zero offers means zero, whatever became of them. The count this function
@@ -78,22 +79,30 @@ class ServiceRequestUpdateTest extends TestCase {
    * ---------------------------------------------------------------------- */
 
   /**
-   * The only combination that admits an edit: 'open' and nobody has bid.
+   * The two combinations that admit an edit: 'open' or 'direct', and nobody has
+   * bid. They are the two pre-commitment statuses — 'open' waits for whoever
+   * bids, 'direct' waits for the one provider the resident named — and neither
+   * carries an accepted offer.
    */
-  public function testOpenWithoutOffersIsEditable() {
-    $this->assertTrue(
-      myapi_service_request_update_gate($this->row(MYAPI_SERVICES_REQUEST_STATUS_OPEN), 0)
-    );
+  public function testTheTwoPreCommitmentStatusesWithoutOffersAreEditable() {
+    foreach ([
+      MYAPI_SERVICES_REQUEST_STATUS_OPEN,
+      MYAPI_SERVICES_REQUEST_STATUS_DIRECT,
+    ] as $status) {
+      $this->assertTrue(
+        myapi_service_request_update_gate($this->row($status), 0),
+        $status
+      );
+    }
   }
 
   /**
-   * The other five statuses of the catalogue, none of them editable — not even
-   * 'direct', which has a provider but no offer, so the count alone would let
-   * it through.
+   * The other four statuses of the catalogue, none of them editable. In all
+   * four the job has been priced, awarded or ended, so the statement is no
+   * longer the resident's alone to change.
    */
   public function testEveryOtherStatusIsNotEditable() {
     $statuses = [
-      MYAPI_SERVICES_REQUEST_STATUS_DIRECT,
       MYAPI_SERVICES_REQUEST_STATUS_OFFERED,
       MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED,
       MYAPI_SERVICES_REQUEST_STATUS_CLOSED,
@@ -132,6 +141,18 @@ class ServiceRequestUpdateTest extends TestCase {
   /* -------------------------------------------------------------------------
    * The gate — the offers half.
    * ---------------------------------------------------------------------- */
+
+  /**
+   * 'direct' with an offer hanging off it closes the gate too. Nothing in the
+   * module stops an offer from being created on a 'direct' request today, and
+   * the rule reads the same in both statuses: whoever priced the statement must
+   * not find it changed.
+   */
+  public function testDirectWithAnOfferIsNotEditable() {
+    $this->assertFalse(
+      myapi_service_request_update_gate($this->row(MYAPI_SERVICES_REQUEST_STATUS_DIRECT), 1)
+    );
+  }
 
   /**
    * 'open' with one live offer: the provider has read and priced the job.
@@ -439,12 +460,11 @@ class ServiceRequestUpdateTest extends TestCase {
   }
 
   /**
-   * A status other than 'open' closes it too, and the 409 arrives without the
-   * offer count having to say anything.
+   * A status past the point where the job was priced closes it too, and the 409
+   * arrives without the offer count having to say anything.
    */
-  public function testANonOpenStatusClosesTheGateThroughTheEndpoint() {
+  public function testANonEditableStatusClosesTheGateThroughTheEndpoint() {
     foreach ([
-      MYAPI_SERVICES_REQUEST_STATUS_DIRECT,
       MYAPI_SERVICES_REQUEST_STATUS_OFFERED,
       MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED,
       MYAPI_SERVICES_REQUEST_STATUS_CLOSED,
@@ -463,6 +483,45 @@ class ServiceRequestUpdateTest extends TestCase {
       $this->assertSame('service_request_not_editable', $result['json']['error_code'], $status);
       $this->assertSame([], myapi_test_node_saves(), $status . ': nothing was saved');
     }
+  }
+
+  /**
+   * A 'direct' REQUEST IS EDITED LIKE ANY OTHER, and its award comes out
+   * untouched: `status` stays 'direct' and `assigned_provider` still names the
+   * provider the resident chose. assigned_provider_id is not a field of the
+   * request body, so an edit cannot move the job to somebody else — which is
+   * the whole reason editing a 'direct' request is safe.
+   */
+  public function testADirectRequestIsEditableAndKeepsItsAward() {
+    $this->seed([], [
+      'frs.field_request_status_value' => MYAPI_SERVICES_REQUEST_STATUS_DIRECT,
+      'assigned_provider_id'           => '501',
+      'assigned_provider_name'         => 'Servicios Díaz',
+      'assigned_provider_raw'          => '501',
+    ]);
+    myapi_test_node_seed([self::NID => [
+      'nid' => self::NID, 'type' => MYAPI_SERVICES_REQUEST_TYPE, 'uid' => 41,
+      'status' => 1, 'created' => 1750000000, 'title' => 'Fuga en el calentador',
+      'field_request_status' => [LANGUAGE_NONE => [['value' => MYAPI_SERVICES_REQUEST_STATUS_DIRECT]]],
+      'field_requester' => [LANGUAGE_NONE => [['target_id' => self::UID]]],
+      'field_assigned_provider' => [LANGUAGE_NONE => [['target_id' => 501]]],
+      'field_images' => [LANGUAGE_NONE => []],
+    ]]);
+    myapi_test_file_seed();
+    $this->validPost(['title' => 'Fuga en el calentador, urgente']);
+
+    $result = $this->update();
+    $item = $result['json']['data']['service_request'];
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame(MYAPI_SERVICES_REQUEST_STATUS_DIRECT, $item['status']);
+    $this->assertSame(['id' => 501, 'name' => 'Servicios Díaz'], $item['assigned_provider']);
+    $this->assertCount(16, $item, 'the shape does not change with the status');
+
+    $node = myapi_test_node_saves()[0];
+    $this->assertSame('Fuga en el calentador, urgente', $node->title);
+    $this->assertSame(MYAPI_SERVICES_REQUEST_STATUS_DIRECT, $node->field_request_status[LANGUAGE_NONE][0]['value']);
+    $this->assertSame(501, $node->field_assigned_provider[LANGUAGE_NONE][0]['target_id']);
   }
 
   /* -------------------------------------------------------------------------

@@ -2,6 +2,9 @@
 
 - **Estado:** Implemented
 - **Fecha:** 2026-08-19
+- **Modificado:** 2026-08-20 — la compuerta admite también `direct`, no solo
+  `open`. Cambio pedido después de la implementación inicial y recogido aquí
+  antes de tocar el código; el resto del spec no se mueve.
 - **Dependencias:**
   - `77-services-content-types-install` (Implemented) — dueña del bundle
     `service_request` y de los cuatro campos que este spec escribe
@@ -39,8 +42,8 @@
 
 **Objetivo:** Que el residente pueda corregir el título, la descripción, la
 fecha deseada y los ficheros de su propia solicitud de servicio con
-`POST /api/v1/service-requests/{id}`, mientras siga `open` y nadie haya
-ofertado todavía.
+`POST /api/v1/service-requests/{id}`, mientras siga `open` o `direct` y nadie
+haya ofertado todavía.
 
 ---
 
@@ -55,9 +58,10 @@ ofertado todavía.
     mismo cambio que el SPEC 67 hizo en `myapi_claim_dispatch()`.
   - **`myapi_service_request_update($nid)`** (nueva) — el endpoint completo:
     compuerta, validación, escritura y respuesta.
-  - **`myapi_service_request_update_gate($row)`** (nueva, pura) — responde si
-    una solicitud admite edición según su estado y su número de ofertas.
-    Separada del endpoint para que el test unitario la ejecute sin HTTP.
+  - **`myapi_service_request_update_gate($row, $offer_count)`** (nueva, pura) —
+    responde si una solicitud admite edición según su estado y su número de
+    ofertas. Separada del endpoint para que el test unitario la ejecute sin
+    HTTP.
 
 - **`includes/myapi.node_files.inc`** (ampliar) — tres funciones **movidas**
   desde `resources/claim.resource.inc`, renombradas de `claim` a `node`, sin
@@ -99,14 +103,17 @@ nuevo.
   ve la solicitud: eso es otra solicitud, no una edición.
 - **`unit_id`,** y con él el `condominium_id` derivado. Mismo argumento: el
   condominio decide quién ve la solicitud, y moverla de sitio no es corregirla.
-- **`assigned_provider_id`.** Una solicitud con proveedor asignado está en
-  `direct`, y `direct` no es editable. No hay caso que atender.
+- **`assigned_provider_id`.** Una solicitud `direct` **sí** es editable, pero
+  solo en lo que el trabajo *es*, nunca en **a quién** se le encargó: mover la
+  adjudicación a otro proveedor es otra acción, con otro significado para los
+  dos proveedores. El campo no existe en el cuerpo de la petición, así que la
+  adjudicación sobrevive intacta a la edición.
 - **Reordenar las imágenes.** Las que sobreviven mantienen su orden de delta y
   las nuevas van al final, igual que en el SPEC 67.
 - **Editar desde el proveedor, el operador o el administrador de edificio.** El
   back office ya edita con el formulario nativo de Drupal.
-- **Editar en `offered`, `direct`, `assigned`, `closed` o `cancelled`,** y editar
-  una `open` que ya recibió ofertas.
+- **Editar en `offered`, `assigned`, `closed` o `cancelled`,** y editar una
+  `open` o una `direct` que ya recibió ofertas.
 - **Dejar rastro de la edición:** ni transacción en el timeline, ni notificación
   a nadie, ni historial de qué cambió.
 - **Control de concurrencia** (`If-Unmodified-Since`, `updated_at` en el cuerpo,
@@ -151,14 +158,25 @@ el nodo con `node_load()` y sobrescribe solo lo que la petición nombra:
 `field_request_status`, `field_assigned_provider`, `field_assigned_offer` y
 `field_closed_at` no se leen de la petición jamás.
 
-### La compuerta — `myapi_service_request_update_gate($row)`
+### La compuerta — `myapi_service_request_update_gate($row, $offer_count)`
 
 Dos condiciones, y las dos tienen que cumplirse:
 
-1. `$row->status === 'open'`. La comparación estricta contra el literal, no el
-   grafo de `myapi_services_transition_allowed()`: aquí no hay transición de
-   estado que consultar, y un estado corrupto o vacío no es `'open'`, así que
-   cae del lado correcto sin una rama propia.
+1. `$row->status` es exactamente `'open'` **o** `'direct'`. Son los dos estados
+   **previos al compromiso**: `open` espera a quien oferte, `direct` espera al
+   único proveedor que el residente nombró, y **ninguno de los dos lleva una
+   oferta aceptada** — una adjudicación directa no adjudica oferta alguna (SPEC
+   87), así que `field_assigned_offer` está vacío en los dos. Eso, y no el
+   número de actores implicados, es lo que hace inocua la edición. La
+   comparación estricta contra los dos literales, no el grafo de
+   `myapi_services_transition_allowed()`: aquí no hay transición de estado que
+   consultar, y un estado corrupto o vacío no es ninguno de los dos, así que cae
+   del lado correcto sin una rama propia.
+
+   **Lo que la edición no puede hacer en `direct`** es cambiar a quién se le
+   encargó el trabajo: `assigned_provider_id` no es un campo del cuerpo, así que
+   `field_assigned_provider` y el `status` salen de la edición valiendo lo
+   mismo. Eso es justamente lo que hace segura la edición de una `direct`.
 2. La solicitud tiene **cero** ofertas publicadas, contadas con
    `myapi_service_request_offer_counts_by_nid([$nid])` — la agregación del SPEC
    88, que ya filtra por bundle `service_offer` y `status = 1`. Cuenta
@@ -173,6 +191,10 @@ no tiene ninguna rama `service_offer` en `hook_node_insert()` ni en
 solicitud en `open` con ofertas colgando. La compuerta tapa ese hueco, y el día
 que exista el endpoint de ofertas y sincronice el estado, la segunda condición
 simplemente dejará de ser la que dispara.
+
+Y **se aplica a los dos estados**, no solo a `open`: hoy tampoco hay nada que
+impida crear una oferta sobre una solicitud `direct`, y la regla se lee igual en
+los dos casos — quien puso precio al enunciado no debe encontrárselo cambiado.
 
 Los dos fallos responden lo mismo: `409 service_request_not_editable`. Para el
 residente el resultado es idéntico —no puede editar— y dos códigos obligarían
@@ -256,7 +278,8 @@ serializador y no dos: las dieciséis que quedan salen de la misma función que
 sirve el `GET`, así que no pueden divergir de él por accidente.
 
 `viewer` es siempre `'requester'` —el paso de acceso ya probó que quien llegó
-aquí es el `field_requester`— y `status` es siempre `'open'`, porque editar no
+aquí es el `field_requester`— y `status` vale lo que la solicitud ya tenía,
+`'open'` o `'direct'`, porque editar no
 mueve el estado. `message` es `service_request_updated`.
 
 ### Errores
@@ -267,7 +290,7 @@ mueve el estado. `message` es `service_request_updated`.
 | 404  | `service_request_not_found`           | El `{id}` no es entero positivo; o la solicitud no existe, es de otro bundle, está despublicada, o su término de categoría fue borrado. |
 | 401  | `missing_authorization` / `invalid_token` | Sin cabecera `Authorization`, o token inválido o caducado. |
 | 403  | `service_request_forbidden`           | La solicitud existe y quien pide no es su `field_requester`. Incluye al proveedor asignado y al administrador. |
-| 409  | `service_request_not_editable`        | El estado no es `open`, o es `open` y ya tiene al menos una oferta. |
+| 409  | `service_request_not_editable`        | El estado no es `open` ni `direct`, o es uno de los dos y ya tiene al menos una oferta. |
 | 422  | `missing_field`                       | Falta `title`, `description` o `desired_start`. `@field` dice cuál. |
 | 422  | `invalid_field`                       | `title` de más de 255; `description` vacía; `desired_start` que no parsea o no es futura; `remove_image_ids[]` con un valor no entero o con un fid que la solicitud no referencia. `@field` dice cuál. |
 | 422  | `service_request_invalid_image` / `service_request_too_many_images` | Imagen de tipo o tamaño no permitido; o más imágenes de las que caben en el cupo. |
@@ -428,10 +451,14 @@ al objeto del detalle, y que el método es `POST` y no `PUT` porque PHP no puebl
 ### Compuerta
 
 - [x] `open` sin ninguna oferta: la edición procede.
+- [x] `direct` sin ninguna oferta: la edición procede también.
+- [x] Una `direct` editada sigue en `direct` y conserva su
+      `assigned_provider`: la adjudicación no se toca.
 - [x] `open` con una oferta en `sent`: `409 service_request_not_editable`.
 - [x] `open` con una única oferta en `withdrawn`: `409` igualmente.
 - [x] `open` con una única oferta en `rejected`: `409` igualmente.
-- [x] `offered`, `direct`, `assigned`, `closed` y `cancelled`: `409`, los cinco.
+- [x] `direct` con una oferta colgando: `409` igualmente.
+- [x] `offered`, `assigned`, `closed` y `cancelled`: `409`, los cuatro.
 - [x] Un `field_request_status` vacío o con un valor fuera del catálogo: `409`,
       nunca `500`.
 - [x] El `409` llega **después** del `404` y del `403`: una solicitud ajena y no
@@ -527,7 +554,9 @@ al objeto del detalle, y que el método es `POST` y no `PUT` porque PHP no puebl
 
 ### Tests unitarios — `tests/unit/ServiceRequestUpdateTest.php`
 
-- [x] Cubre la compuerta en los ocho casos de estado y en los tres de ofertas.
+- [x] Cubre la compuerta en los seis estados del catálogo —los dos editables y
+      los cuatro que no lo son— más el vacío y el desconocido, y en los casos de
+      ofertas de cada uno de los dos editables.
 - [x] Cubre el cálculo del cupo, incluido el caso en que las eliminaciones
       superan a las imágenes existentes y `max_nuevas` se topa en 0.
 - [ ] Cubre la lista final de `field_images`: supervivientes en su orden de
@@ -574,8 +603,11 @@ al objeto del detalle, y que el método es `POST` y no `PUT` porque PHP no puebl
   que la ve; eso es otra solicitud, no una edición.
 - **No:** `unit_id`, y con él el condominio derivado. Mismo argumento, y más
   fuerte: el condominio es el ámbito de visibilidad entero.
-- **No:** `assigned_provider_id`. Una solicitud con proveedor asignado está en
-  `direct`, y `direct` no es editable, así que no hay caso que atender.
+- **No:** `assigned_provider_id`, aunque `direct` **sí** sea editable. El
+  residente corrige *qué* es el trabajo; *a quién* se lo encargó no es algo que
+  este endpoint pueda mover. Cambiar de proveedor significa retirarle el encargo
+  a uno y dárselo a otro: otra acción, con otro significado para los dos, y con
+  su propia notificación el día que exista una.
 - **No:** reordenar las imágenes. Las supervivientes conservan su orden y las
   nuevas van al final. Reordenar necesita que el cliente mande el orden completo
   y que el servidor lo valide contra lo que hay: es otro contrato.
@@ -592,9 +624,19 @@ al objeto del detalle, y que el método es `POST` y no `PUT` porque PHP no puebl
 
 **Cuándo se puede editar**
 
-- **Sí:** solo `open` y con cero ofertas. Antes de que nadie haya invertido
-  trabajo en leer y presupuestar el enunciado, cambiarlo no perjudica a nadie;
-  después, sí.
+- **Sí:** `open` y `direct`, las dos con cero ofertas. Son los dos estados
+  previos al compromiso: antes de que nadie haya puesto precio al enunciado,
+  cambiarlo no perjudica a nadie; después, sí. Ninguno de los dos lleva una
+  oferta aceptada —una adjudicación directa no adjudica oferta alguna (SPEC
+  87)—, y eso, y no cuántos actores hay implicados, es lo que decide.
+- **Sí:** editar una `direct` es seguro **porque la adjudicación no es
+  editable**. El proveedor nombrado sigue siendo el mismo antes y después; lo
+  único que cambia es el enunciado del trabajo que se le encargó. Si algún día
+  `assigned_provider_id` entrara en el cuerpo, esta decisión habría que
+  revisarla entera.
+- **No:** exigir que `direct` no tenga proveedor asignado para dejar editar. Es
+  la contradicción en sus términos: una `direct` sin proveedor es un dato roto,
+  no un caso que atender.
 - **Sí:** cuenta **cualquier** oferta publicada, con el estado que sea. Un
   proveedor que ofertó y se retiró leyó el enunciado igual, y el que fue
   rechazado también. El criterio caro de explicar es el que distingue, no el que
@@ -613,8 +655,8 @@ al objeto del detalle, y que el método es `POST` y no `PUT` porque PHP no puebl
 - **No:** `service_request_has_offers` como código aparte. Se puede añadir el día
   que la app quiera decir «un proveedor ya te ofertó»; añadirlo hoy es adivinar
   una pantalla que no existe.
-- **Sí:** comparación estricta contra el literal `'open'`, no
-  `myapi_services_transition_allowed()`. Aquí no hay transición de estado que
+- **Sí:** comparación estricta contra los dos literales, `'open'` y `'direct'`,
+  no `myapi_services_transition_allowed()`. Aquí no hay transición de estado que
   consultar —el estado no se mueve—, así que preguntarle al grafo sería usarlo
   para algo que no responde.
 

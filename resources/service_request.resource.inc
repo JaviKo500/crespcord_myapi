@@ -18,7 +18,7 @@
  *     attachment, closed_at and the offers (SPEC 89).
  *   - POST /api/v1/service-requests/% — the requester corrects the title, the
  *     description, the desired date and the files of their own request, while
- *     it is still 'open' and nobody has bid (SPEC 96).
+ *     it is still 'open' or 'direct' and nobody has bid (SPEC 96).
  *   - PUT /api/v1/service-requests/%/cancel — the requester cancels, which
  *     writes the status and one entry on the timeline (SPEC 95).
  *   - GET /api/v1/service-requests/%/files/% — the bytes of one image or of the
@@ -2970,17 +2970,26 @@ function myapi_service_request_reject_live_offers($nid) {
 /**
  * Whether a request still admits being edited by its requester (SPEC 96).
  *
- * TWO CONDITIONS, AND BOTH HAVE TO HOLD: the request is 'open', and it has
- * received no offer at all. Before anybody has invested work in reading and
- * pricing the statement of the job, changing it harms nobody; afterwards it
+ * TWO CONDITIONS, AND BOTH HAVE TO HOLD: the request is in one of the two
+ * PRE-COMMITMENT statuses, and it has received no offer at all. Before anybody
+ * has priced the statement of the job, changing it harms nobody; afterwards it
  * does.
  *
- * THE STATUS IS COMPARED STRICTLY AGAINST THE LITERAL, not asked to
+ * THE TWO STATUSES ARE 'open' AND 'direct'. They are the two ways a request
+ * waits without anybody having committed to a price: 'open' waits for whoever
+ * bids, 'direct' waits for the one provider the resident named. Neither carries
+ * an accepted offer — a direct award adjudicates no offer at all (SPEC 87), so
+ * field_assigned_offer is empty in both — and that, and not the number of
+ * actors involved, is what makes an edit harmless. WHAT THE EDIT MAY NOT DO in
+ * 'direct' is change WHO the job was given to: assigned_provider_id is not a
+ * field of the request body, so the award survives the edit untouched.
+ *
+ * THE STATUS IS COMPARED STRICTLY AGAINST THE TWO LITERALS, not asked to
  * myapi_services_transition_allowed(). There is no transition to consult here —
  * editing does not move the status — and a corrupt or empty
- * field_request_status is not 'open', so it falls on the right side of this
- * comparison without a branch of its own. That is what makes a request with
- * garbage in that field a 409 and never a 500.
+ * field_request_status is neither of the two, so it falls on the right side of
+ * this comparison without a branch of its own. That is what makes a request
+ * with garbage in that field a 409 and never a 500.
  *
  * THE SECOND CONDITION IS NOT REDUNDANT WITH THE FIRST, however much the graph
  * suggests it is. The graph says the first offer moves open → offered, but
@@ -2996,6 +3005,11 @@ function myapi_service_request_reject_live_offers($nid) {
  * un-read it. The criterion that is expensive to explain is the one that
  * distinguishes, not the one that counts them all.
  *
+ * THE OFFER CONDITION APPLIES TO BOTH STATUSES and not only to 'open', even
+ * though a 'direct' request is not supposed to have offers: nothing in the
+ * module enforces that today either, and the rule reads the same in both cases —
+ * whoever priced the statement must not find it changed.
+ *
  * PURE: no query, no node_load(), no HTTP output. The caller has already paid
  * for the row and the count, and decides what to answer — which is what lets
  * the unit test run this function directly.
@@ -3010,8 +3024,15 @@ function myapi_service_request_reject_live_offers($nid) {
  * @return bool  TRUE when the request may be edited, FALSE otherwise.
  */
 function myapi_service_request_update_gate($row, $offer_count) {
+  $editable = [
+    MYAPI_SERVICES_REQUEST_STATUS_OPEN,
+    MYAPI_SERVICES_REQUEST_STATUS_DIRECT,
+  ];
+
+  // Strict, so an empty status, a NULL one, 0 or FALSE are none of the two and
+  // need no branch of their own.
   $status = isset($row->status) ? $row->status : NULL;
-  if ($status !== MYAPI_SERVICES_REQUEST_STATUS_OPEN) {
+  if (!in_array($status, $editable, TRUE)) {
     return FALSE;
   }
 
@@ -3048,6 +3069,12 @@ function myapi_service_request_update_gate($row, $offer_count) {
  * detail_row() runs at the END, so a deleted category term forces the response
  * to degrade AFTER the write; here anything that cannot be serialised is
  * answered 404 before a single byte is written.
+ *
+ * WHEN: 'open' OR 'direct', and with no offer. Both are pre-commitment states —
+ * nobody has priced the statement of the job — and 'direct' adjudicates no offer
+ * at all (SPEC 87), so an edit there corrects the job without touching who it
+ * was given to: assigned_provider_id is not a field of this request body, so the
+ * award survives untouched.
  *
  * A REPLACEMENT AND NOT A PATCH. The three text fields travel on every call and
  * a missing one is 422 missing_field, never "leave it as it was": telling
@@ -3101,9 +3128,11 @@ function myapi_service_request_update($nid) {
 
   // 5. The gate, AFTER the 403: an edit on somebody else's request that is also
   // not editable answers 403, because "not yours" is the first true thing about
-  // it. The offer count is SPEC 88's aggregate, which already filters by bundle
-  // and by published — see myapi_service_request_update_gate() for why the
-  // count is asked at all when the status supposedly implies it.
+  // it. It admits 'open' and 'direct' — the two statuses in which nobody has
+  // priced the job yet. The offer count is SPEC 88's aggregate, which already
+  // filters by bundle and by published — see
+  // myapi_service_request_update_gate() for why the count is asked at all when
+  // the status supposedly implies it.
   $offer_counts = myapi_service_request_offer_counts_by_nid([$nid]);
   $offer_count = isset($offer_counts[$nid]) ? $offer_counts[$nid] : 0;
   if (!myapi_service_request_update_gate($row, $offer_count)) {
@@ -3277,8 +3306,10 @@ function myapi_service_request_update($nid) {
   // title, description and attachment. It cannot fail to serialise: step 3
   // already proved this request has a requester and a live category, and
   // nothing above touches either. `viewer` is always 'requester' — step 4
-  // proved whoever got here is the field_requester — and `status` is always
-  // 'open', because editing does not move the status.
+  // proved whoever got here is the field_requester — and `status` is whatever
+  // the request already had, 'open' or 'direct', because editing does not move
+  // the status. A 'direct' request comes back with its assigned_provider
+  // untouched: the award is not a field of the request body.
   $row = myapi_service_request_detail_row($node->nid);
 
   $row->requester_name = NULL;

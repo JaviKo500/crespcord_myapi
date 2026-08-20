@@ -1139,7 +1139,8 @@ curl -i -X POST https://host/api/v1/service-requests \
 
 Lets the resident **correct their own service request**: the title, the
 description, the desired date, the images and the attachment. Nothing else, and
-only while the request is still `open` and **nobody has offered on it yet**.
+only while the request is still `open` or `direct` and **nobody has offered on
+it yet**.
 
 The request is `multipart/form-data` (text fields plus files), not JSON — same
 contract as the creation and as
@@ -1161,11 +1162,13 @@ Out of scope of this endpoint, each of them its own spec if it ever arrives:
 changing the `category_id` (it changes which providers see the request — that is
 another request, not a correction) or the `unit_id` and with it the condominium
 (same argument, and stronger: the condominium is the whole visibility scope);
-`assigned_provider_id` (a request with a provider is in `direct`, and `direct` is
-not editable, so there is no case to attend); **reordering** the images; editing
-from the provider, the operator or the building admin (the back office already
-edits with Drupal's native form); editing in any state other than `open` with
-zero offers; leaving any **trace** of the edit — no timeline entry, no
+`assigned_provider_id` — a `direct` request **is** editable, but only in what
+the job *is*, never in **who** it was given to: moving the award to another
+provider is a different action, with a different meaning for both providers;
+**reordering** the images; editing from the provider, the operator or the
+building admin (the back office already edits with Drupal's native form);
+editing in `offered`, `assigned`, `closed` or `cancelled`, and editing an
+`open` or `direct` request that has already received an offer; leaving any **trace** of the edit — no timeline entry, no
 notification, no history of what changed; and any **concurrency control**
 (`If-Unmodified-Since`, an `updated_at` in the body, or any other optimistic
 lock): two simultaneous edits by the same resident, and the last one wins.
@@ -1231,12 +1234,20 @@ service request is signed by one person. The **assigned provider**, who may
 *read* the detail, gets `403` here; the **building admin** edits from the back
 office with the native form.
 
-**When: `open`, and with zero offers.** Both conditions, and both have to hold:
+**When: `open` or `direct`, and with zero offers.** Both conditions, and both
+have to hold:
 
 | # | Condition | Why |
 |---|-----------|-----|
-| 1 | `field_request_status` is exactly `open` | A comparison against the literal, not a question to the transition graph: editing moves no status, so there is no transition to consult — and a corrupt or empty status is not `open`, which is what makes it a `409` and never a `500`. |
-| 2 | The request has **zero** published offers | Before anybody has invested work in reading and pricing the statement of the job, changing it harms nobody; afterwards it does. |
+| 1 | `field_request_status` is exactly `open` **or** `direct` | The two **pre-commitment** statuses: `open` waits for whoever bids, `direct` waits for the one provider the resident named, and **neither carries an accepted offer** — a direct award adjudicates no offer at all (SPEC 87). A comparison against the two literals, not a question to the transition graph: editing moves no status, so there is no transition to consult — and a corrupt or empty status is neither of the two, which is what makes it a `409` and never a `500`. |
+| 2 | The request has **zero** published offers | Before anybody has priced the statement of the job, changing it harms nobody; afterwards it does. It applies to `direct` too: nothing in the module stops an offer from being created on a `direct` request today, and the rule reads the same in both. |
+
+> **Editing a `direct` request does not touch its award.** `status` stays
+> `direct` and `assigned_provider` still names the provider the resident chose,
+> because `assigned_provider_id` is **not a field of this request body**. The
+> resident corrects *what* the job is; *who* it was given to is not something
+> this endpoint can move. That is precisely what makes editing a `direct`
+> request safe.
 
 **Any** published offer counts, whatever its status — `withdrawn` and `rejected`
 included. A provider who read the statement and bid on it must not find it
@@ -1322,9 +1333,10 @@ the `node_save()` of an edit creates no `service_transaction`: `transactions` in
 a later `GET` holds exactly the same elements as before. That is a decision, not
 an omission — the timeline records **status changes**, and an edit is not one.
 
-**No notification and no email** to anybody, and `field_request_status` stays in
-`open`. What does change is `{node}.changed`, which is the `node_save()` doing
-its job.
+**No notification and no email** to anybody — not even to the provider of a
+`direct` request whose statement just changed; the marketplace has no notifier
+at all yet — and `field_request_status` does not move. What does change is
+`{node}.changed`, which is the `node_save()` doing its job.
 
 The endpoint is **not idempotent and does not need to be**: two edits in a row
 both succeed, and the second simply writes what it was given.
@@ -1345,8 +1357,9 @@ The sixteen come out of the **same serialiser** that serves the `GET`, so they
 cannot drift from it: they are byte for byte what an immediate
 `GET /api/v1/service-requests/{id}` answers for those same keys. `viewer` is
 always `"requester"` — the access check proved whoever got here is the
-`field_requester` — and `status` is always `"open"`, because editing does not
-move the status. `images` is always an array, empty when there are none and
+`field_requester` — and `status` is whatever the request already had, `"open"`
+or `"direct"`, because editing does not move the status. A `direct` request
+answers the same sixteen keys with `assigned_provider` filled in. `images` is always an array, empty when there are none and
 never `null`; `attachment` is `null` when there is none, never `{fid: null}`.
 
 **Success response (200)**
@@ -1388,7 +1401,7 @@ never `null`; `attachment` is `null` when there is none, never `{fid: null}`.
 | 401 | `missing_authorization` | `Authorization` header absent or not a `Bearer <token>`. |
 | 401 | `invalid_token` | Access token invalid, revoked, expired, or its user is missing/blocked. |
 | 403 | `service_request_forbidden` | The request exists and the caller is not its `field_requester`. Includes the assigned provider — who may *read* it — and the building admin. A request whose `field_requester` is empty answers `403` too: nobody owns it, so nobody edits it. |
-| 409 | `service_request_not_editable` | The status is not `open`, or it is `open` and the request already has at least one offer. |
+| 409 | `service_request_not_editable` | The status is neither `open` nor `direct`, or it is one of the two and the request already has at least one offer. |
 | 422 | `missing_field` | `title`, `description` or `desired_start` absent or empty after `trim()`. `@field` names which. |
 | 422 | `invalid_field` | `title` over 255 chars; `desired_start` unparseable or not strictly in the future; `remove_image_ids[]` carrying a value that is not a positive integer or a `fid` the request does not reference. `@field` names which. |
 | 422 | `service_request_invalid_image` | An image fails extension or size validation. All-or-nothing: nothing is saved. |
@@ -1666,9 +1679,10 @@ Written down so it is not looked for in this document:
   **closing**: `cancelled` is one of the two terminal statuses and now has a
   door; `closed` is the other and has none.
 - **Editing anything but the five fields the edit names**, and editing at all
-  once the request has left `open` or has received its first offer. The
-  category, the unit, the assigned provider and the order of the images are not
-  editable through the API — see
+  once the request has left `open`/`direct` or has received its first offer. The
+  category, the unit, **the assigned provider** and the order of the images are
+  not editable through the API: a `direct` request can be corrected, but the
+  award cannot be moved to another provider — see
   [`POST /api/v1/service-requests/{id}`](#post-apiv1service-requestsid).
 - **Any trace of an edit.** No timeline entry, no notification, no history of
   what changed, and no concurrency control: two simultaneous edits, and the last
