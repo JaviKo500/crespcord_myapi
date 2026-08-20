@@ -176,6 +176,11 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       // SPEC 96.
       'service_request_updated'            => 'Service request updated successfully.',
       'service_request_not_editable'       => 'This service request can no longer be edited.',
+      // SPEC 97. A key of its own instead of reusing the generic 'forbidden':
+      // the 403 of GET /api/v1/providers/mine has a single, actionable cause
+      // (ask the operator for the provider role), and error_code exists so the
+      // app can tell it apart without reading the message text.
+      'provider_role_required'             => 'Your account does not have the provider role.',
     ],
     'es' => [
       'invalid_credentials'    => 'Usuario o contraseña incorrectos.',
@@ -273,6 +278,8 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       // SPEC 96.
       'service_request_updated'            => 'Solicitud actualizada correctamente.',
       'service_request_not_editable'       => 'Esta solicitud ya no se puede editar.',
+      // SPEC 97 — see the note next to the English key.
+      'provider_role_required'             => 'Tu cuenta no tiene el rol de proveedor.',
     ],
   ];
 
