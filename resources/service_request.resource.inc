@@ -620,13 +620,18 @@ function myapi_service_request_provider_scope(array $provider_ids) {
  *                        'category_id' => int|NULL, 'unit_id' => int|NULL
  *                        ('vivienda' nid, compared against the RAW target_id),
  *                        'created_from' => int|NULL, 'created_to' => int|NULL
- *                        (Unix timestamps compared against n.created)]. All
- *                        optional; NULL means no filter on that column, and
- *                        they compose with AND.
+ *                        (Unix timestamps compared against n.created),
+ *                        'provider_scope' => array|NULL (SPEC 98: the shape
+ *                        myapi_service_request_provider_scope() returns —
+ *                        ABSENT OR NULL LEAVES THE QUERY EXACTLY AS IT WAS,
+ *                        which is what keeps the resident's listing free of
+ *                        this)]. All optional; NULL means no filter on that
+ *                        column, and they compose with AND.
  *
  * @return SelectQuery  The query, with these aliases already in place:
  *                      n (node), fr (requester), fcat (category field),
- *                      td (taxonomy term), frs (status), fu (unit field).
+ *                      td (taxonomy term), frs (status), fu (unit field) —
+ *                      plus sfao/sfap when 'provider_scope' turns B on.
  */
 function myapi_service_request_base_query($uid, array $filters = []) {
   $query = db_select('node', 'n')
@@ -690,6 +695,74 @@ function myapi_service_request_base_query($uid, array $filters = []) {
 
   if (isset($filters['created_to']) && $filters['created_to'] !== NULL) {
     $query->condition('n.created', $filters['created_to'], '<=');
+  }
+
+  // The provider scope, and the ONLY door A ∪ B ∪ C has into this shared query
+  // (SPEC 98). ABSENT OR NULL LEAVES THE QUERY BYTE FOR BYTE AS IT WAS: not a
+  // condition, not a join, not a placeholder. The resident's listing pays
+  // nothing for this, which is the promise the spec makes and the acceptance
+  // criterion that guards it.
+  if (!empty($filters['provider_scope'])) {
+    $scope = $filters['provider_scope'];
+    $scope_nids = !empty($scope['nids']) ? $scope['nids'] : [];
+    $scope_market = !empty($scope['biddable']) && !empty($scope['category_ids']);
+
+    // *** AN EMPTY db_or() RETURNS THE WHOLE SYSTEM, NOT NOTHING. ***
+    // Drupal 7 compiles a condition group with no conditions to NOTHING AT
+    // ALL — not to FALSE. An empty scope reaching the OR below without this
+    // guard would produce a query with NO provider filter, and the endpoint
+    // would answer EVERY service_request of EVERY condominium, requester name
+    // and condominium included. It is the worst failure this code can have.
+    // myapi_service_request_provider_list() cuts earlier and answers an empty
+    // list before it ever gets here; this is the SECOND defence, an impossible
+    // condition, so that a bug in this file answers NOTHING and never
+    // EVERYTHING.
+    if (!$scope_nids && !$scope_market) {
+      $query->condition('n.nid', [0], 'IN');
+    }
+    else {
+      $or = db_or();
+
+      // A ∪ C — already resolved to nids, because both are bounded by the
+      // account's own activity and do not grow with the system.
+      if ($scope_nids) {
+        $or->condition('n.nid', $scope_nids, 'IN');
+      }
+
+      // B, the market — kept in SQL because it DOES grow with the system, and
+      // because only there can pagination's total describe the real set.
+      if ($scope_market) {
+        // *** THE ALIASES 'sfao' AND 'sfap' ARE THEIR OWN ON PURPOSE. ***
+        // These two tables end up joined TWICE in the page query: once here,
+        // for B's conditions, and once in myapi_service_request_fetch() as
+        // 'fao'/'fap', to resolve the nodes. It looks like an oversight and it
+        // is not (SPEC 98, risk 5): merging them towards fao/fap would move
+        // joins into the resident's page query, and merging them towards this
+        // base would change the resident's countQuery too. Either way the
+        // promise that GET /api/v1/service-requests gains not a single join
+        // breaks, and it breaks SILENTLY, because the answer stays correct.
+        // Reusing the aliases would simply be a collision. DO NOT MERGE.
+        $query->leftJoin('field_data_field_assigned_offer', 'sfao', "sfao.entity_id = n.nid AND sfao.entity_type = 'node' AND sfao.deleted = 0");
+        $query->leftJoin('field_data_field_assigned_provider', 'sfap', "sfap.entity_id = n.nid AND sfap.entity_type = 'node' AND sfap.deleted = 0");
+
+        $market = db_and();
+        // The SPEC 89 list, and NOT myapi_provider_role_broadcast_statuses():
+        // that catalogue carries 'direct', which is born assigned — the very
+        // thing the two isNull() below rule out. A 'direct' of mine still
+        // arrives, through C; a foreign one arrives through nothing.
+        $market->condition('frs.field_request_status_value', [
+          MYAPI_SERVICES_REQUEST_STATUS_OPEN,
+          MYAPI_SERVICES_REQUEST_STATUS_OFFERED,
+        ], 'IN');
+        $market->isNull('sfao.field_assigned_offer_target_id');
+        $market->isNull('sfap.field_assigned_provider_target_id');
+        $market->condition('fcat.field_category_tid', $scope['category_ids'], 'IN');
+
+        $or->condition($market);
+      }
+
+      $query->condition($or);
+    }
   }
 
   return $query;
@@ -759,7 +832,10 @@ function myapi_service_request_count($uid, array $filters = []) {
  * @param string $sort     'asc' or 'desc' on the creation date.
  *
  * @return array  Rows carrying the fifteen aliases
- *                myapi_service_request_build_item() reads.
+ *                myapi_service_request_build_item() reads, plus the three
+ *                SPEC 98 added for the provider listing — `requester_uid`,
+ *                `condominium_id` and `condominium_name` — which that builder
+ *                ignores, so the resident's response is unchanged.
  */
 function myapi_service_request_fetch($uid, array $filters, $page, $limit, $sort) {
   $query = myapi_service_request_base_query($uid, $filters);
@@ -820,6 +896,30 @@ function myapi_service_request_fetch($uid, array $filters, $page, $limit, $sort)
   $query->leftJoin('node', 'np', 'np.nid = fap.field_assigned_provider_target_id AND np.type = :provider_type AND np.status = 1', [':provider_type' => MYAPI_SERVICES_PROVIDER_TYPE]);
   $query->addField('np', 'nid', 'assigned_provider_id');
   $query->addField('np', 'title', 'assigned_provider_name');
+
+  // The requester's uid and the condominium (SPEC 98). THREE COLUMNS THAT
+  // myapi_service_request_build_item() DOES NOT READ, which is precisely why
+  // adding them here changes nothing for the resident: their listing carries
+  // two more columns nobody looks at and answers byte for byte what it did.
+  // Only myapi_service_request_provider_build_item() reads them.
+  //
+  // The uid is free: 'fr' is joined by the base query already, unconditionally,
+  // because a request has to HAVE a requester to exist. Projecting it costs no
+  // table and no row. myapi_service_request_provider_list() turns the page's
+  // unique uids into names in ONE call to myapi_user_display_names(), never one
+  // query per row.
+  $query->addField('fr', 'field_requester_target_id', 'requester_uid');
+
+  // The condominium, byte for byte the two joins myapi_service_request_detail_row()
+  // makes — same aliases, same bundle, same status = 1 — so the two responses
+  // cannot drift on what a condominium is. Its name is the NODE TITLE and not a
+  // field: the 'condominio' bundle has none. An empty reference, a deleted node
+  // or an unpublished one leaves both columns null, which the item turns into a
+  // whole `condominium: null` while the request keeps its place in the list.
+  $query->leftJoin('field_data_field_condominium', 'fco', "fco.entity_id = n.nid AND fco.entity_type = 'node' AND fco.deleted = 0");
+  $query->leftJoin('node', 'nc', "nc.nid = fco.field_condominium_target_id AND nc.type = 'condominio' AND nc.status = 1");
+  $query->addField('nc', 'nid', 'condominium_id');
+  $query->addField('nc', 'title', 'condominium_name');
 
   $direction = ($sort === 'asc') ? 'ASC' : 'DESC';
   $query->orderBy('n.created', $direction);
@@ -1057,6 +1157,103 @@ function myapi_service_request_build_item($row, array $offer_counts) {
       ? format_date((int) $row->desired_start, 'custom', 'Y-m-d\TH:i:s')
       : NULL,
   ];
+}
+
+/**
+ * Serialises one row of the PROVIDER listing: the eleven keys plus two
+ * (SPEC 98).
+ *
+ * THE ELEVEN COME FROM myapi_service_request_build_item(), UNTOUCHED, and the
+ * two new ones go AFTER them — the same construction-by-delegation SPEC 97
+ * used, and for the same reason: the shared serialiser is the one thing that
+ * cannot be allowed to drift, so the provider's response is the resident's
+ * response plus a suffix and never a second copy of the same eleven keys.
+ *
+ * THE UNIT IS OVERWRITTEN TO NULL UNLESS THE JOB IS ALREADY MINE (decision 5).
+ * SPEC 89 nulls `unit` for EVERY provider reader with a reason that still
+ * holds: the flat number adds nothing to the decision to bid and does say
+ * where a specific person lives, to anyone in the category. But once the
+ * request is awarded to one of MY providers the argument inverts — I am going
+ * to that house, the address is the operational datum of the job, and hiding
+ * it would force a second channel for something the API already has.
+ *
+ * THE COMPARISON IS AGAINST assigned_provider AS ALREADY BUILT, AND NEVER
+ * AGAINST THE RAW COLUMN. That key was resolved against `node` with the bundle
+ * and status = 1, so an award pointing at a deleted or unpublished node
+ * answers `assigned_provider: null` and therefore `unit: null` too: the rule
+ * fails towards the closed side, which is the only direction a privacy rule
+ * may fail in.
+ *
+ * $owned_provider_ids ARE THE ACCOUNT'S PROVIDERS AND NOT '?provider_id'. With
+ * ?provider_id=A, a request awarded to my other provider B that shows up
+ * through A's offer still paints the unit: I am going to that house either
+ * way, and narrowing a VIEW does not change what I already know.
+ *
+ * THE KEY ALWAYS TRAVELS, with value null when it does not apply. A client
+ * that gets it sometimes and not others would have to tell "absent" from
+ * "null", and here the two mean the same thing.
+ *
+ * The condominium, by contrast, travels ALWAYS (decision 6): it names the area
+ * without naming the door.
+ *
+ * @param object $row
+ *   One row of myapi_service_request_fetch(), with the aliases that function's
+ *   docblock lists plus `requester_uid`, `condominium_id`, `condominium_name`
+ *   and `requester_name` — the last one written onto the row by
+ *   myapi_service_request_provider_list() out of ONE call to
+ *   myapi_user_display_names() for the whole page.
+ * @param array $offer_counts
+ *   The whole page's map, exactly as myapi_service_request_build_item() takes
+ *   it. The count is the REAL total, competition included (decision 10).
+ * @param array $owned_provider_ids
+ *   Every provider nid of the READER'S ACCOUNT — see above, not the
+ *   '?provider_id' selection.
+ *
+ * @return array
+ *   The thirteen keys, in the documented order.
+ */
+function myapi_service_request_provider_build_item($row, array $offer_counts, array $owned_provider_ids) {
+  $item = myapi_service_request_build_item($row, $offer_counts);
+
+  // The unit, only when the job is already mine — see the docblock. Compared
+  // against the BUILT key and not the raw column, so a broken award closes it.
+  $assigned = $item['assigned_provider'];
+  $mine = $assigned !== NULL
+    && in_array((int) $assigned['id'], array_map('intval', $owned_provider_ids), TRUE);
+
+  if (!$mine) {
+    $item['unit'] = NULL;
+  }
+
+  // A WHOLE null and never {id: null, name: null}, the shape `unit`,
+  // `assigned_offer` and `assigned_provider` already use above. The requester's
+  // join is INNER, so in practice this only fires on corrupt data.
+  $requester = NULL;
+  if (isset($row->requester_uid) && $row->requester_uid !== '') {
+    $requester = [
+      'id'   => (int) $row->requester_uid,
+      'name' => isset($row->requester_name) ? $row->requester_name : NULL,
+    ];
+  }
+
+  // Same shape myapi_service_request_build_detail() builds, so the listing and
+  // the detail cannot answer two different things about the same condominium.
+  // `name` is the NODE TITLE: the 'condominio' bundle has no name field.
+  $condominium = NULL;
+  if (isset($row->condominium_id) && $row->condominium_id !== '') {
+    $condominium = [
+      'id'   => (int) $row->condominium_id,
+      'name' => isset($row->condominium_name) ? $row->condominium_name : NULL,
+    ];
+  }
+
+  // Appended, never interleaved: the eleven keep their order and their place,
+  // which is what makes "the first eleven are byte for byte the resident's"
+  // checkable.
+  $item['requester'] = $requester;
+  $item['condominium'] = $condominium;
+
+  return $item;
 }
 
 /* ---------------------------------------------------------------------------
