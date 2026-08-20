@@ -11,6 +11,10 @@ provider is loaded, edited and suspended by the operator from the back office.
 The listing is filterable by **one** category and orderable by rating or by
 hourly rate in both directions. Ordered by rating, descending, by default.
 
+A provider that operates on the platform sees **its own** providers, active or
+not, through [GET /api/v1/providers/mine](provider-mine.md) — the same eight
+fields as here plus two flags, and no pagination.
+
 The address, the long description (`field_services_desc`), the tags, the full
 gallery and the ratings of a provider do not travel through this listing — see
 [GET /api/v1/providers/%](provider-detail.md) for the detail. The logo does
