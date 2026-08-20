@@ -1,6 +1,6 @@
 # 98 — Listado de solicitudes de servicio del proveedor (`GET /api/v1/service-requests/provider`)
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-08-20
 - **Dependencias:**
   - `88-service-requests-list` (Implemented) — dueña de
@@ -608,196 +608,196 @@ Checklist booleano. Cada línea se comprueba con una petición HTTP o ejecutando
 
 ### Autorización y método
 
-- [ ] `GET /api/v1/service-requests/provider` sin cabecera `Authorization`
+- [x] `GET /api/v1/service-requests/provider` sin cabecera `Authorization`
       responde `401` con `error_code: "missing_authorization"`.
-- [ ] Con un token revocado, caducado o inexistente responde `401` con
+- [x] Con un token revocado, caducado o inexistente responde `401` con
       `error_code: "invalid_token"`.
-- [ ] Con un token válido de una cuenta **sin** el rol `proveedor` responde `403`
+- [x] Con un token válido de una cuenta **sin** el rol `proveedor` responde `403`
       con `error_code: "provider_role_required"` — la misma clave que
       `GET /api/v1/providers/mine`, sin ninguna clave i18n nueva.
-- [ ] Una cuenta con rol `administrator` y **sin** `proveedor` recibe el mismo
+- [x] Una cuenta con rol `administrator` y **sin** `proveedor` recibe el mismo
       `403`. No hay excepción para administradores.
-- [ ] Una cuenta con rol `proveedor` y **ningún** nodo vinculado en
+- [x] Una cuenta con rol `proveedor` y **ningún** nodo vinculado en
       `field_provider_users` recibe `200` con `service_requests: []` y
       `pagination.total: 0` — nunca `403` ni `404`.
-- [ ] Un residente sin rol `proveedor` que además es solicitante recibe `403`:
+- [x] Un residente sin rol `proveedor` que además es solicitante recibe `403`:
       sus solicitudes propias no aparecen por esta ruta.
-- [ ] `POST`, `PUT`, `DELETE` y `PATCH` sobre la ruta responden `405` con
+- [x] `POST`, `PUT`, `DELETE` y `PATCH` sobre la ruta responden `405` con
       `error_code: "method_not_allowed"`, **sin cabecera `Authorization`
       incluida**: el `405` llega antes que el `401`.
 
 ### El alcance A ∪ B ∪ C
 
-- [ ] Una solicitud `open` de una categoría del proveedor, sin adjudicar,
+- [x] Una solicitud `open` de una categoría del proveedor, sin adjudicar,
       **aparece** (B).
-- [ ] Una solicitud `offered` sin adjudicar, de una categoría del proveedor,
+- [x] Una solicitud `offered` sin adjudicar, de una categoría del proveedor,
       **aparece** (B): tener ofertas de terceros no la retira del mercado.
-- [ ] Una solicitud `open` de una categoría que el proveedor **no** atiende **no
+- [x] Una solicitud `open` de una categoría que el proveedor **no** atiende **no
       aparece**.
-- [ ] Una solicitud `direct` **ajena** (adjudicada a otro proveedor) **no
+- [x] Una solicitud `direct` **ajena** (adjudicada a otro proveedor) **no
       aparece**, aunque sea de mi categoría.
-- [ ] Una solicitud `direct` **adjudicada a mi proveedor aparece** (C).
-- [ ] Una solicitud `assigned`, `closed` o `cancelled` **adjudicada a mi
+- [x] Una solicitud `direct` **adjudicada a mi proveedor aparece** (C).
+- [x] Una solicitud `assigned`, `closed` o `cancelled` **adjudicada a mi
       proveedor aparece** (C), en los tres estados.
-- [ ] Una solicitud en la que **oferté y perdí** (adjudicada a un tercero, estado
+- [x] Una solicitud en la que **oferté y perdí** (adjudicada a un tercero, estado
       `assigned` o `closed`) **aparece** (A).
-- [ ] Una solicitud en la que oferté y cuya **categoría ya no atiendo**
+- [x] Una solicitud en la que oferté y cuya **categoría ya no atiendo**
       **aparece** (A): A es independiente de la categoría y del estado.
-- [ ] Con **todos** los proveedores de la cuenta suspendidos o con licencia
+- [x] Con **todos** los proveedores de la cuenta suspendidos o con licencia
       caducada, B desaparece: solo quedan las de A y C. La lista **no** es un
       `403`.
-- [ ] Con dos proveedores, uno activo y otro no, B usa las categorías de
+- [x] Con dos proveedores, uno activo y otro no, B usa las categorías de
       **ambos** cuando no hay `?provider_id` — la misma lectura de unión que
       `myapi_provider_role_any_provider_active()` ya hace.
-- [ ] Una solicitud **despublicada** (`node.status = 0`) no aparece por ninguna
+- [x] Una solicitud **despublicada** (`node.status = 0`) no aparece por ninguna
       de las tres vías.
-- [ ] Ninguna solicitud aparece **dos veces**, aunque cumpla A, B y C a la vez.
+- [x] Ninguna solicitud aparece **dos veces**, aunque cumpla A, B y C a la vez.
 
 ### La equivalencia con el detalle (decisión 7)
 
-- [ ] **Para toda solicitud de la lista, `GET /api/v1/service-requests/{id}`
+- [x] **Para toda solicitud de la lista, `GET /api/v1/service-requests/{id}`
       responde `200` con ese mismo token.** Ni un `403`.
-- [ ] Recíprocamente, una solicitud que da `200` en el detalle a un token
+- [x] Recíprocamente, una solicitud que da `200` en el detalle a un token
       proveedor está en la lista de ese token (salvo que ese token sea además su
       solicitante, caso que esta ruta no cubre).
-- [ ] El proveedor de una solicitud `direct` puede leer su detalle: el `403`
+- [x] El proveedor de una solicitud `direct` puede leer su detalle: el `403`
       documentado en los Riesgos del SPEC 89 ya no ocurre.
-- [ ] `GET /api/v1/service-requests/{id}/files/{fid}` sigue la misma regla
+- [x] `GET /api/v1/service-requests/{id}/files/{fid}` sigue la misma regla
       ampliada: el proveedor adjudicado descarga las fotos de su trabajo.
-- [ ] Ningún lector que antes recibía `200` en el detalle recibe ahora `403`. La
+- [x] Ningún lector que antes recibía `200` en el detalle recibe ahora `403`. La
       regla 2b solo amplía.
-- [ ] El residente solicitante sigue leyendo su detalle exactamente igual que
+- [x] El residente solicitante sigue leyendo su detalle exactamente igual que
       antes.
 
 ### `?provider_id`
 
-- [ ] `?provider_id` con el nid de un proveedor de la cuenta acota los tres
+- [x] `?provider_id` con el nid de un proveedor de la cuenta acota los tres
       conjuntos a ese proveedor: sus ofertas, sus categorías y sus
       adjudicaciones.
-- [ ] Con un proveedor **suspendido** en `?provider_id`, B desaparece aunque un
+- [x] Con un proveedor **suspendido** en `?provider_id`, B desaparece aunque un
       hermano de la cuenta esté activo: la licencia que cuenta es la del
       proveedor seleccionado.
-- [ ] **La unión de los resultados de `?provider_id` de cada proveedor de la
+- [x] **La unión de los resultados de `?provider_id` de cada proveedor de la
       cuenta es exactamente la lista sin filtro**, sin faltar ni repetir ninguna.
-- [ ] `?provider_id` con un nid que **no es de la cuenta** responde `200` con
+- [x] `?provider_id` con un nid que **no es de la cuenta** responde `200` con
       lista vacía y `total: 0`. No `403`, no `404`, y **sin consulta de
       alcance**.
-- [ ] `?provider_id` con el nid de un nodo que no es un proveedor, o que no
+- [x] `?provider_id` con el nid de un nodo que no es un proveedor, o que no
       existe, responde igual: `200` con lista vacía.
-- [ ] `?provider_id=abc`, `?provider_id=1,2`, `?provider_id=-1` y
+- [x] `?provider_id=abc`, `?provider_id=1,2`, `?provider_id=-1` y
       `?provider_id=0` responden `422` con `error_code: "invalid_field"`,
       **antes de cualquier consulta**.
-- [ ] `?provider_id` ausente devuelve la unión de todos los proveedores de la
+- [x] `?provider_id` ausente devuelve la unión de todos los proveedores de la
       cuenta.
 
 ### Contenido del ítem
 
-- [ ] Cada ítem tiene **exactamente 13 claves**, en el orden: `id`, `title`,
+- [x] Cada ítem tiene **exactamente 13 claves**, en el orden: `id`, `title`,
       `description`, `status`, `category`, `unit`, `offers_count`,
       `assigned_offer`, `assigned_provider`, `created`, `desired_start`,
       `requester`, `condominium`.
-- [ ] Las **once primeras** son byte a byte iguales a las que
+- [x] Las **once primeras** son byte a byte iguales a las que
       `GET /api/v1/service-requests` devuelve para esa misma solicitud a su
       solicitante, salvo `unit` cuando la regla de la decisión 5 la anula.
-- [ ] `requester` es `{id, name}` con `name = "$field_nombre $field_apellidos"`,
+- [x] `requester` es `{id, name}` con `name = "$field_nombre $field_apellidos"`,
       el mismo valor que `myapi_user_display_names()` devuelve y que el detalle
       ya pinta.
-- [ ] **No viaja ningún dato de contacto**: `requester` no lleva `email`,
+- [x] **No viaja ningún dato de contacto**: `requester` no lleva `email`,
       `phone`, `cedula` ni `username`.
-- [ ] Un solicitante sin `field_nombre` o sin `field_apellidos` cae al mismo
+- [x] Un solicitante sin `field_nombre` o sin `field_apellidos` cae al mismo
       respaldo que `myapi_user_display_names()` ya aplica, y el ítem no se rompe.
-- [ ] `condominium` es `{id, name}` con `name` = el **título del nodo**
+- [x] `condominium` es `{id, name}` con `name` = el **título del nodo**
       `condominio`, y viaja en **todos** los ítems, adjudicados o no.
-- [ ] `condominium` es un `null` **entero** —nunca `{id: null, name: null}`—
+- [x] `condominium` es un `null` **entero** —nunca `{id: null, name: null}`—
       cuando la referencia está vacía o el nodo fue borrado o despublicado, y la
       solicitud **conserva su sitio en la lista**.
-- [ ] `requester` es un `null` entero en el mismo caso.
-- [ ] `offers_count` es el **total real de ofertas publicadas**, incluidas las de
+- [x] `requester` es un `null` entero en el mismo caso.
+- [x] `offers_count` es el **total real de ofertas publicadas**, incluidas las de
       la competencia, y no `0` ni `null` en una solicitud abierta ajena.
-- [ ] `offers_count` **no** cuenta filas de `service_transaction`: una solicitud
+- [x] `offers_count` **no** cuenta filas de `service_transaction`: una solicitud
       con tres cambios de estado y cero ofertas responde `0`.
-- [ ] `assigned_provider` nombra al ganador **aunque no sea uno de mis
+- [x] `assigned_provider` nombra al ganador **aunque no sea uno de mis
       proveedores**.
 
 ### La regla de la `unit` (decisión 5)
 
-- [ ] Una solicitud **adjudicada a uno de mis proveedores** trae
+- [x] Una solicitud **adjudicada a uno de mis proveedores** trae
       `unit: {id, name}`.
-- [ ] Una solicitud `open` de mi categoría, sin adjudicar, trae **`unit: null`**.
-- [ ] Una solicitud adjudicada a **otro** proveedor —incluso una en la que
+- [x] Una solicitud `open` de mi categoría, sin adjudicar, trae **`unit: null`**.
+- [x] Una solicitud adjudicada a **otro** proveedor —incluso una en la que
       oferté— trae `unit: null`.
-- [ ] Una solicitud cuya adjudicación apunta a un nodo borrado o despublicado
+- [x] Una solicitud cuya adjudicación apunta a un nodo borrado o despublicado
       (`assigned_provider: null`) trae `unit: null`.
-- [ ] Con `?provider_id=A`, una solicitud adjudicada a **mi otro proveedor B**
+- [x] Con `?provider_id=A`, una solicitud adjudicada a **mi otro proveedor B**
       que aparece por A **sí** trae la unidad: la regla se evalúa contra los
       proveedores de la cuenta, no contra `?provider_id`.
-- [ ] La clave `unit` **está siempre presente**, con valor `null` cuando no toca.
+- [x] La clave `unit` **está siempre presente**, con valor `null` cuando no toca.
       Nunca se omite.
 
 ### Paginación, filtros y orden
 
-- [ ] Sin parámetros, la respuesta trae `limit: 20`, `page: 1` y las solicitudes
+- [x] Sin parámetros, la respuesta trae `limit: 20`, `page: 1` y las solicitudes
       más recientes primero (`node.created DESC`, desempate por `nid DESC`).
-- [ ] `pagination.total` describe el **conjunto filtrado completo**, no la
+- [x] `pagination.total` describe el **conjunto filtrado completo**, no la
       página, y `total_pages` es `0` —no `1`— cuando no hay resultados.
-- [ ] `?limit=-1` devuelve todo en una página, con `page: 1` forzado.
-- [ ] `?limit=999` cae a `50`; `?limit=abc` y `?page=0` caen a los valores por
+- [x] `?limit=-1` devuelve todo en una página, con `page: 1` forzado.
+- [x] `?limit=999` cae a `50`; `?limit=abc` y `?page=0` caen a los valores por
       defecto sin `422`.
-- [ ] `?sort=asc` invierte el orden; un valor cualquiera cae a `desc`.
-- [ ] `?status=closed` sobre la lista de un proveedor con trabajos cerrados
+- [x] `?sort=asc` invierte el orden; un valor cualquiera cae a `desc`.
+- [x] `?status=closed` sobre la lista de un proveedor con trabajos cerrados
       devuelve solo esos; `?status=open,offered` devuelve el mercado.
-- [ ] `?status=inventado` se descarta en silencio y la respuesta es la de sin
+- [x] `?status=inventado` se descarta en silencio y la respuesta es la de sin
       filtro; nunca `422`.
-- [ ] `?category_id` malformado responde `422 invalid_field`; un tid válido que
+- [x] `?category_id` malformado responde `422 invalid_field`; un tid válido que
       no atiendo intersecta en la lista vacía sin error.
-- [ ] `?date_from` y `?date_to` acotan por `node.created` con el mismo parser que
+- [x] `?date_from` y `?date_to` acotan por `node.created` con el mismo parser que
       el listado del residente.
-- [ ] **`?unit_id=30057` se ignora en silencio**: la respuesta es idéntica a la
+- [x] **`?unit_id=30057` se ignora en silencio**: la respuesta es idéntica a la
       de la ruta sin ese parámetro, y no es `422`.
-- [ ] Una página más allá de la última responde `200` con lista vacía, no `404`.
+- [x] Una página más allá de la última responde `200` con lista vacía, no `404`.
 
 ### No regresión
 
-- [ ] `GET /api/v1/service-requests` responde **byte a byte lo mismo** que antes
+- [x] `GET /api/v1/service-requests` responde **byte a byte lo mismo** que antes
       de este spec, con los mismos parámetros, la misma paginación y las mismas
       once claves por ítem.
-- [ ] La consulta del residente **no gana ni una condición ni un join**: sin
+- [x] La consulta del residente **no gana ni una condición ni un join**: sin
       `provider_scope`, `myapi_service_request_base_query()` produce el mismo SQL
       que hoy.
-- [ ] `myapi_service_request_build_item()` no tiene ni una línea modificada.
-- [ ] `myapi_provider_role_category_ids()` y
+- [x] `myapi_service_request_build_item()` no tiene ni una línea modificada.
+- [x] `myapi_provider_role_category_ids()` y
       `myapi_provider_role_any_provider_active()` devuelven exactamente lo mismo
       que antes del refactor, y con el mismo número de consultas.
-- [ ] `GET /api/v1/providers/mine`, `GET /api/v1/providers` y
+- [x] `GET /api/v1/providers/mine`, `GET /api/v1/providers` y
       `GET /api/v1/service-categories` responden igual que antes.
-- [ ] `GET /api/v1/service-requests/provider` no colisiona con
+- [x] `GET /api/v1/service-requests/provider` no colisiona con
       `GET /api/v1/service-requests/{id}`: el detalle por nid sigue respondiendo
       lo mismo.
 
 ### Seguridad
 
-- [ ] **Un alcance vacío nunca produce un `OR` sin condiciones.** Un test
+- [x] **Un alcance vacío nunca produce un `OR` sin condiciones.** Un test
       comprueba que la consulta lleva una condición imposible y no devuelve el
       sistema entero.
-- [ ] Ningún parámetro entra en el SQL sin pasar por el placeholder de
+- [x] Ningún parámetro entra en el SQL sin pasar por el placeholder de
       `db_select()`.
-- [ ] Un proveedor **no** ve solicitudes de un condominio en el que ninguna de
+- [x] Un proveedor **no** ve solicitudes de un condominio en el que ninguna de
       sus categorías tiene trabajo abierto ni adjudicado.
 
 ### Código y despliegue
 
-- [ ] `myapi.info` no tiene ni una línea modificada.
-- [ ] `includes/myapi.i18n.inc` y `docs/i18n.md` no tienen ni una línea
+- [x] `myapi.info` no tiene ni una línea modificada.
+- [x] `includes/myapi.i18n.inc` y `docs/i18n.md` no tienen ni una línea
       modificada.
-- [ ] No hay `hook_update_N()` nuevo: `drush updb` no tiene nada que ejecutar.
-- [ ] Tras `drush cc all` la ruta responde; sin `drush cc all` responde el 404 de
+- [x] No hay `hook_update_N()` nuevo: `drush updb` no tiene nada que ejecutar.
+- [x] Tras `drush cc all` la ruta responde; sin `drush cc all` responde el 404 de
       Drupal.
-- [ ] Una petición completa consume **diez consultas** y **no crece con el número
+- [x] Una petición completa consume **diez consultas** y **no crece con el número
       de filas de la página**: veinte solicitudes cuestan lo mismo que una.
-- [ ] `vendor/bin/phpunit` pasa en verde, incluidos
+- [x] `vendor/bin/phpunit` pasa en verde, incluidos
       `ServiceRequestProviderListTest`, `ServiceRequestListTest`,
       `ServiceRequestDetailTest`, `ProviderRoleTest` y `ProviderMineEndpointTest`.
-- [ ] `docs/service-request-provider.md` existe y documenta los `401`, `403`,
+- [x] `docs/service-request-provider.md` existe y documenta los `401`, `403`,
       `405` y `422`.
 
 ---
