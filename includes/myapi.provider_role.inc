@@ -487,8 +487,28 @@ function myapi_provider_role_category_ids($account = NULL) {
     $account = $user;
   }
 
-  $provider_ids = myapi_provider_role_provider_ids($account);
+  return myapi_provider_role_category_ids_for_providers(
+    myapi_provider_role_provider_ids($account)
+  );
+}
 
+/**
+ * Returns the category tids of an explicit set of providers.
+ *
+ * The body myapi_provider_role_category_ids() used to hold, extracted so a
+ * caller can ask "the categories of THIS provider" instead of "the categories
+ * of the whole account" (SPEC 98's ?provider_id, decision 13): that endpoint
+ * narrows P to a single provider and needs its categories, not the union with
+ * a sibling's. The static cache was already keyed by the provider-id set, so
+ * the extraction is mechanical and costs no extra read.
+ *
+ * @param array $provider_ids
+ *   Provider nids; may be empty.
+ *
+ * @return array
+ *   List of category tids; may be empty.
+ */
+function myapi_provider_role_category_ids_for_providers(array $provider_ids) {
   if (!$provider_ids) {
     return [];
   }
@@ -537,8 +557,28 @@ function myapi_provider_role_any_provider_active($account = NULL) {
     $account = $user;
   }
 
-  $provider_ids = myapi_provider_role_provider_ids($account);
+  return myapi_provider_role_any_provider_active_for_providers(
+    myapi_provider_role_provider_ids($account)
+  );
+}
 
+/**
+ * Tells whether an explicit set of providers has at least one ACTIVE member.
+ *
+ * The body myapi_provider_role_any_provider_active() used to hold, extracted
+ * for the same reason as
+ * myapi_provider_role_category_ids_for_providers() (SPEC 98, decision 13):
+ * with ?provider_id the licence that counts is the SELECTED provider's, not
+ * an active sibling's — "put the app in Provider A mode" includes being
+ * suspended. The static cache was already keyed by the provider-id set.
+ *
+ * @param array $provider_ids
+ *   Provider nids; may be empty.
+ *
+ * @return bool
+ *   TRUE when at least one of those providers is active.
+ */
+function myapi_provider_role_any_provider_active_for_providers(array $provider_ids) {
   if (!$provider_ids) {
     return FALSE;
   }
@@ -639,6 +679,59 @@ function myapi_provider_role_offered_request_ids(array $provider_ids) {
  */
 function myapi_provider_role_has_offered($request_nid, array $provider_ids) {
   return in_array((int) $request_nid, myapi_provider_role_offered_request_ids($provider_ids), TRUE);
+}
+
+/**
+ * Returns the service_request nids assigned to one of those providers.
+ *
+ * The twin of myapi_provider_role_offered_request_ids(), and set C of
+ * SPEC 98's access rule: every request whose field_assigned_provider points
+ * at one of these providers, IN ANY STATUS — 'direct', 'assigned', 'closed'
+ * and 'cancelled' included. That "any status" is the whole point: it is what
+ * turns the provider listing into "my work" and not just "my market", and it
+ * is also what SPEC 89's rule 3 cannot express, since that one requires the
+ * request to be unassigned.
+ *
+ * The INNER JOIN to node is not decorative: field_assigned_provider is only
+ * instanced on 'service_request' today, but this function must not depend on
+ * that — the same discipline myapi_service_request_offer_counts_by_nid()
+ * documents for field_request. It also drops unpublished requests, which must
+ * not surface through any of the three sets.
+ *
+ * Statically cached per provider-id set, like its twin.
+ *
+ * @param array $provider_ids
+ *   Provider nids; may be empty.
+ *
+ * @return array
+ *   List of service_request nids; may be empty.
+ */
+function myapi_provider_role_assigned_request_ids(array $provider_ids) {
+  if (!$provider_ids) {
+    return [];
+  }
+
+  $cache = &drupal_static(__FUNCTION__, []);
+  $key = implode(',', $provider_ids);
+
+  if (!isset($cache[$key])) {
+    $query = db_select('field_data_field_assigned_provider', 'fap');
+    $query->fields('fap', ['entity_id']);
+    $query->innerJoin(
+      'node',
+      'n',
+      "n.nid = fap.entity_id AND n.type = :assigned_request_type AND n.status = 1",
+      [':assigned_request_type' => MYAPI_SERVICES_REQUEST_TYPE]
+    );
+    $query->condition('fap.entity_type', 'node');
+    $query->condition('fap.deleted', 0);
+    $query->condition('fap.field_assigned_provider_target_id', $provider_ids, 'IN');
+
+    $result = $query->execute()->fetchCol();
+    $cache[$key] = array_values(array_unique(array_map('intval', $result)));
+  }
+
+  return $cache[$key];
 }
 
 /**

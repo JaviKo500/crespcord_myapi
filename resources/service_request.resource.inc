@@ -345,6 +345,33 @@ function myapi_service_request_parse_unit_id() {
 }
 
 /**
+ * Reads '?provider_id' into a 'provider' nid, or NULL for no filter (SPEC 98).
+ *
+ * THE THIRD STRICT PARAMETER, and the third to copy '?unit_id' line by line:
+ * STRICT IN THE FORMAT, LAX IN THE OWNERSHIP. '?provider_id=abc', '1,2', '-1'
+ * or '0' is a broken client and earns its 422 invalid_field before a single
+ * query runs; a nid that belongs to somebody else, or to no node at all, is
+ * NOT an error — it narrows P to the empty set and the endpoint answers 200
+ * with an empty list (SPEC 98, decision 9). The reason is the one written in
+ * myapi_service_request_parse_unit_id(): a 403 would confirm to whoever probed
+ * that the provider exists, and would cost a query to say what an empty list
+ * says for free. It also spares a new i18n key.
+ *
+ * ONE ID, NEVER A LIST. '?provider_id=1,2' is a malformed value and not a
+ * two-provider filter: the union of every provider of the account is what the
+ * parameter's ABSENCE already means, so a list would only offer a slower way
+ * to ask for a subset nobody asked for.
+ *
+ * Never returns on a bad value: myapi_error() prints and exits.
+ *
+ * @return int|NULL
+ *   The 'provider' nid to narrow P by, or NULL when the parameter is absent.
+ */
+function myapi_service_request_parse_provider_id() {
+  return myapi_service_request_parse_id_param('provider_id');
+}
+
+/**
  * The strict parser BOTH '?category_id' and '?unit_id' are made of (SPEC 91).
  *
  * ONE FUNCTION AND NOT TWO COPIES. The two parameters refuse the same three
@@ -421,6 +448,80 @@ function myapi_service_request_parse_created_range() {
   return [
     'from' => $range['from'] !== NULL ? strtotime($range['from'] . ' 00:00:00') : NULL,
     'to'   => $range['to'] !== NULL ? strtotime($range['to'] . ' 23:59:59') : NULL,
+  ];
+}
+
+/**
+ * Resolves the provider access rule into the three ingredients of A ∪ B ∪ C
+ * (SPEC 98).
+ *
+ * THE ACCESS RULE OF THE PROVIDER LISTING, WRITTEN ONCE AND AS A SET. A
+ * request concerns the reader when it is in ANY of:
+ *
+ *   A — "I already offered": a published service_offer of one of these
+ *       providers points at it. ANY status, ANY category — even one the
+ *       provider no longer attends. From
+ *       myapi_provider_role_offered_request_ids(), untouched.
+ *   B — "the market": status IN ('open','offered') AND no assigned offer AND
+ *       no assigned provider AND the category is one of theirs AND at least
+ *       one of them is active. This is rule 3 of
+ *       myapi_service_request_viewer(), condition by condition.
+ *   C — "my work": field_assigned_provider points at one of them, IN ANY
+ *       STATUS, 'closed' and 'cancelled' included. From
+ *       myapi_provider_role_assigned_request_ids().
+ *
+ * A AND C COME BACK AS NIDS, B AS THE INGREDIENTS OF A SQL CONDITION, and that
+ * asymmetry is deliberate (SPEC 98, decision 12). A and C are bounded by the
+ * account's own activity — the offers it sent, the jobs it was given — so the
+ * IN list has tens or hundreds of members and does not grow with the system.
+ * B does: every open request of a popular category can be thousands, and
+ * resolving it to nids in PHP would make the query slower the BETTER the
+ * marketplace works, and would move the pagination total out of SQL.
+ * myapi_service_request_base_query() is where these three become a WHERE.
+ *
+ * B USES THE SPEC 89 STATUS LIST AND NOT
+ * myapi_provider_role_broadcast_statuses(). That catalogue includes 'direct',
+ * and B has to exclude it: a 'direct' is born assigned, which is exactly what
+ * "unassigned" rules out. A 'direct' of MINE still shows up — through C. A
+ * foreign one shows up through nothing, which is the right answer.
+ *
+ * 'biddable' IS RESOLVED BEFORE 'category_ids' AND SWITCHES IT OFF: with no
+ * active provider in P there is no B at all, so the categories are not worth a
+ * query. One query less for the suspended provider.
+ *
+ * THIS IS THE SAME RULE myapi_service_request_viewer() WRITES AS A PER-ROW
+ * DECISION (its rules 2b and 3). The two forms cannot be derived from one
+ * another without losing either the pagination or the loaded row, so they
+ * live side by side — and if they ever drift, the symptom is an item in this
+ * listing that answers 403 when opened. ServiceRequestProviderListTest holds
+ * the equivalence over the whole status × assignment × category × offered
+ * matrix; that test is the only thing that catches the drift.
+ *
+ * @param array $provider_ids
+ *   The providers P is narrowed to: every provider of the account, or the
+ *   single one '?provider_id' selected. Empty gives three empty ingredients
+ *   without a single query.
+ *
+ * @return array
+ *   ['nids' => array (A ∪ C, deduplicated), 'category_ids' => array (B's
+ *   categories, empty when B is off), 'biddable' => bool (B's licence gate)].
+ */
+function myapi_service_request_provider_scope(array $provider_ids) {
+  if (!$provider_ids) {
+    return ['nids' => [], 'category_ids' => [], 'biddable' => FALSE];
+  }
+
+  $biddable = myapi_provider_role_any_provider_active_for_providers($provider_ids);
+
+  return [
+    'nids' => array_values(array_unique(array_merge(
+      myapi_provider_role_offered_request_ids($provider_ids),
+      myapi_provider_role_assigned_request_ids($provider_ids)
+    ))),
+    'category_ids' => $biddable
+      ? myapi_provider_role_category_ids_for_providers($provider_ids)
+      : [],
+    'biddable' => $biddable,
   ];
 }
 
