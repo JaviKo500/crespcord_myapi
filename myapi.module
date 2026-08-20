@@ -333,6 +333,24 @@ function myapi_menu() {
     'file'             => 'resources/provider.resource.inc',
   ];
 
+  // The account's OWN providers (SPEC 97): the provider nodes linked to the
+  // token's user through field_provider_users, active or not. The first api/v1
+  // route of the module authorised by the 'proveedor' role — anybody else gets
+  // a 403, administrators included.
+  //
+  // A LITERAL path living beside the wildcard below, and it does not compete
+  // with it: Drupal 7 resolves the literal part of a pattern before falling
+  // back to '%', so 'api/v1/providers/mine' never reaches
+  // myapi_provider_detail_dispatch() and no nid is swallowed by this route.
+  // Written BEFORE the wildcard for the same readability reason as the gallery
+  // comment further down.
+  $items['api/v1/providers/mine'] = [
+    'page callback'    => 'myapi_provider_mine_dispatch',
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/provider.resource.inc',
+  ];
+
   // One provider's detail (SPEC 84): the phone, the address, the long
   // description, the tags, the full gallery and the last three ratings, on
   // top of the seven fields the listing above already answers. Read-only and

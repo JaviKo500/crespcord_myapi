@@ -817,6 +817,110 @@ function myapi_provider_build_item($row, array $categories = []) {
  * ------------------------------------------------------------------------ */
 
 /**
+ * Routes GET /api/v1/providers/mine by method (SPEC 97).
+ *
+ * The method is checked BEFORE any authentication, like myapi_provider_dispatch()
+ * and every other dispatcher of this module: a POST answers 405 with no token,
+ * because the method is wrong whoever is asking.
+ */
+function myapi_provider_mine_dispatch() {
+  if (myapi_request_method() === 'GET') {
+    myapi_provider_mine_list();
+  }
+  else {
+    myapi_error('method_not_allowed', 405);
+  }
+}
+
+/**
+ * GET /api/v1/providers/mine — the providers the account operates (SPEC 97).
+ *
+ * THE FIRST api/v1 ENDPOINT OF THE MODULE THAT AUTHORISES BY THE 'proveedor'
+ * ROLE. Until today the role only narrowed the back office (SPEC 78) and no
+ * resource asked for it; docs/provider-role.md said that the API-side
+ * authorisation would be written in the spec of the endpoints that need it,
+ * and this is that spec. Note the contrast with
+ * resources/service_request.resource.inc, which deliberately looks only at
+ * field_provider_users: there the question is "which requests concern you?",
+ * and answering it by role would stop a resident who is also a provider from
+ * seeing their own. Here the question is literally "are you a provider?".
+ *
+ * ROLE AND LINK ARE TWO DIFFERENT THINGS, and the status codes say so:
+ *
+ *   - No 'proveedor' role → 403. The single cause of a 403 here, and there is
+ *     NO exception for administrators: an administrator has no providers of
+ *     their own, and the back office already shows them all.
+ *   - Role but no node in field_provider_users → 200 with an empty list. "The
+ *     operator has not linked you yet" is a pending task of somebody else, and
+ *     a 403 would disguise it as a problem with the account. Nothing in this
+ *     module validates that role and link go together (docs/provider-role.md
+ *     documents that hole), so the symptom is an empty screen and not an
+ *     opaque error.
+ *
+ * Query string parameters are IGNORED IN SILENCE — no page, no limit, no
+ * category_id, no order_by, no sort, and none of them is ever a 422. Same
+ * silent-fallback rule the public listing follows, and it protects the client
+ * that reuses marketplace code and sends a stray ?limit=20.
+ *
+ * Which providers: ALL of the account's, active or not. That is the difference
+ * from the marketplace, and the reason the endpoint exists — a provider whose
+ * licence expired must be told so, not shown an empty screen. The `status` and
+ * `is_active` flags of myapi_provider_mine_build_item() carry the reason.
+ *
+ * The cost is FOUR queries whether the account operates one provider or
+ * twenty: the token, the link, the rows and the categories. Never one query
+ * per provider.
+ */
+function myapi_provider_mine_list() {
+  // 1. Authentication: a valid Bearer access token, or 401. Unlike the
+  // marketplace, the row IS used — this listing is entirely per-user.
+  $token = myapi_auth_require_access_token();
+
+  // 2. The account object, because the gate reads ->roles and the token row
+  // does not carry them. NOT an extra query: myapi_auth_require_access_token()
+  // already loaded this same user, and Drupal 7 serves the second call from its
+  // static entity cache.
+  $account = user_load($token->uid);
+
+  // 3. The gate, and the only 403 of this endpoint.
+  if (!myapi_provider_role_is($account)) {
+    myapi_error('provider_role_required', 403);
+  }
+
+  // 4. The link. An empty list is a 200 with no providers and no further
+  // queries — see the docblock: having the role and being linked to nothing are
+  // missing data, not a missing permission.
+  $nids = myapi_provider_role_provider_ids($account);
+  if (empty($nids)) {
+    myapi_respond(['providers' => []], 200);
+  }
+
+  // 5. The rows, without the "active" filter of the marketplace.
+  $rows = myapi_provider_mine_fetch($nids);
+
+  // 6. The categories of every provider in ONE query, the SPEC 83 helper
+  // untouched. THE NIDS PASSED ARE THE ONES OF THE ROWS, not those of step 4:
+  // a link pointing at a node that no longer exists returns no row, and asking
+  // for its categories would be a lookup for a provider that is not in the
+  // response.
+  $nids_found = [];
+  foreach ($rows as $row) {
+    $nids_found[] = (int) $row->nid;
+  }
+  $categories = myapi_provider_categories_by_nid($nids_found);
+
+  $providers = array_map(function ($row) use ($categories) {
+    $nid = (int) $row->nid;
+
+    return myapi_provider_mine_build_item($row, isset($categories[$nid]) ? $categories[$nid] : []);
+  }, $rows);
+
+  // 7. Respond 200. ONE key in `data` and no `pagination`: an account operates
+  // one or two providers, not a pageable collection (SPEC 97, decision 7).
+  myapi_respond(['providers' => $providers], 200);
+}
+
+/**
  * The rows of the providers ONE account is linked to (SPEC 97).
  *
  * Same base, same joins and — this is the contract — THE SAME OUTPUT ALIASES
