@@ -1142,12 +1142,31 @@ class MyapiTestSelectQuery implements IteratorAggregate {
    * satisfied, exactly as a single skipped condition is — which keeps a test
    * free to seed only the columns its case is about. With at least one known
    * sub-condition, OR needs one of them true and AND needs all of them.
+   *
+   * A SUB-CONDITION MAY ITSELF BE A GROUP SINCE SPEC 98, and that is the one
+   * shape this evaluator gained after being written: the provider scope is an
+   * OR of "n.nid IN (A ∪ C)" and an AND of the four conditions that define the
+   * market, so the nesting is the rule itself and not a style. It recurses
+   * with the SAME laxness — a nested group with no known sub-condition
+   * anywhere inside it does not participate either, which is what
+   * groupKnown() below decides.
    */
   private function matchesGroup(array $row, MyapiTestConditionGroup $group) {
     $known = 0;
     $true = 0;
 
     foreach ($group->conditions() as $condition) {
+      if ($condition['operator'] === 'GROUP') {
+        if (!$this->groupKnown($row, $condition['group'])) {
+          continue;
+        }
+        $known++;
+        if ($this->matchesGroup($row, $condition['group'])) {
+          $true++;
+        }
+        continue;
+      }
+
       $column = $this->conditionKey($row, $condition['field']);
       if (!array_key_exists($column, $row)) {
         continue;
@@ -1163,6 +1182,33 @@ class MyapiTestSelectQuery implements IteratorAggregate {
     }
 
     return $group->conjunction() === 'OR' ? $true > 0 : $true === $known;
+  }
+
+  /**
+   * Tells whether a group carries at least one condition the fixture can
+   * answer, at any depth (SPEC 98).
+   *
+   * The nested counterpart of the array_key_exists() check above: without it,
+   * a nested group made entirely of unknown columns would evaluate to TRUE and
+   * COUNT as a satisfied branch of the enclosing OR — turning "this row is not
+   * about my case" into "this row matches". Unknown must stay unknown however
+   * deep it sits.
+   */
+  private function groupKnown(array $row, MyapiTestConditionGroup $group) {
+    foreach ($group->conditions() as $condition) {
+      if ($condition['operator'] === 'GROUP') {
+        if ($this->groupKnown($row, $condition['group'])) {
+          return TRUE;
+        }
+        continue;
+      }
+
+      if (array_key_exists($this->conditionKey($row, $condition['field']), $row)) {
+        return TRUE;
+      }
+    }
+
+    return FALSE;
   }
 
   /**
@@ -1383,9 +1429,15 @@ class MyapiTestStatement implements IteratorAggregate, Countable {
  * A db_or() / db_and() condition group (SPEC 77).
  *
  * Drupal's DatabaseCondition, reduced to what myapi builds with it: a
- * conjunction and a flat list of simple conditions. No nesting, because no
- * query in this module nests one — a group inside a group throws rather than
- * being silently flattened into the wrong boolean.
+ * conjunction and a list of conditions, each of which may itself be a group.
+ *
+ * NESTING WAS A THROW UNTIL SPEC 98, on the grounds that no query in this
+ * module nested one and that flattening a group into the wrong boolean in
+ * silence is worse than failing. The provider scope is the first query that
+ * genuinely nests — an OR of "n.nid IN (A ∪ C)" and an AND of the four market
+ * conditions — so the tripwire fired exactly when it was meant to, and the
+ * evaluator learnt to recurse instead. Anything that is neither a string nor
+ * a group still throws.
  */
 class MyapiTestConditionGroup {
 
@@ -1397,8 +1449,14 @@ class MyapiTestConditionGroup {
   }
 
   public function condition($field, $value = NULL, $operator = NULL) {
+    if ($field instanceof MyapiTestConditionGroup) {
+      $this->conditions[] = ['field' => NULL, 'group' => $field, 'operator' => 'GROUP'];
+
+      return $this;
+    }
+
     if (!is_string($field)) {
-      throw new RuntimeException('MyapiTestConditionGroup: nested groups are not supported.');
+      throw new RuntimeException('MyapiTestConditionGroup: a condition is either a column or a group.');
     }
     $this->conditions[] = [
       'field'    => $field,

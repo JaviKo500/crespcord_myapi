@@ -2004,6 +2004,13 @@ class ServiceRequestListEndpointTest extends TestCase {
       'field_data_field_offer_status fos'      => 'LEFT',
       'field_data_field_assigned_provider fap' => 'LEFT',
       'node np'                                => 'LEFT',
+      // SPEC 98. The condominium travels in the page query of EVERY reader,
+      // but myapi_service_request_build_item() does not read it, so the
+      // resident's response is byte for byte what it was — the two joins carry
+      // columns nobody looks at until
+      // myapi_service_request_provider_build_item() does.
+      'field_data_field_condominium fco'       => 'LEFT',
+      'node nc'                                => 'LEFT',
     ], $joins);
   }
 

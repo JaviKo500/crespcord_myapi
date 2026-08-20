@@ -1051,7 +1051,12 @@ class ServiceRequestDetailEndpointTest extends TestCase {
    * closes the request instead of reopening it to everyone.
    */
   public function testAnIncoherentlyAwardedRequestIsRefused() {
-    foreach (['assigned_offer_raw' => '46', 'assigned_provider_raw' => '9'] as $column => $value) {
+    // The award points at a FOREIGN provider, and since SPEC 98 that is not a
+    // detail of the fixture: rule 2b reads this very column, so an award to
+    // self::PROVIDER_NID would now be a legitimate 200 — "my job, in any
+    // status" — and would stop testing what this test is about, which is that
+    // an incoherent award still CLOSES a request to everybody else.
+    foreach (['assigned_offer_raw' => '46', 'assigned_provider_raw' => '4242'] as $column => $value) {
       $result = $this->detailFor(self::PROVIDER_UID, $this->providerScenario([
         $column => $value,
         // The joined node is NULL: the reference points at something
