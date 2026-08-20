@@ -1,6 +1,6 @@
 # 97 — Listado de los proveedores propios de una cuenta con rol `proveedor`
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-08-20
 - **Dependencias:**
   - `77-services-content-types-install` (Implemented) — dueña del bundle
@@ -314,76 +314,76 @@ ejecutando `vendor/bin/phpunit`.
 
 ### Autorización
 
-- [ ] `GET /api/v1/providers/mine` sin cabecera `Authorization` responde `401`
+- [x] `GET /api/v1/providers/mine` sin cabecera `Authorization` responde `401`
       con `error_code: "missing_authorization"`.
-- [ ] Con un token revocado, caducado o inexistente responde `401` con
+- [x] Con un token revocado, caducado o inexistente responde `401` con
       `error_code: "invalid_token"`.
-- [ ] Con un token válido de una cuenta **sin** el rol `proveedor` responde
+- [x] Con un token válido de una cuenta **sin** el rol `proveedor` responde
       `403` con `error_code: "provider_role_required"`.
-- [ ] Una cuenta con rol `administrator` y **sin** `proveedor` recibe el mismo
+- [x] Una cuenta con rol `administrator` y **sin** `proveedor` recibe el mismo
       `403`. No hay excepción para administradores.
-- [ ] Una cuenta con rol `proveedor` y **ningún** nodo vinculado en
+- [x] Una cuenta con rol `proveedor` y **ningún** nodo vinculado en
       `field_provider_users` recibe `200` con
       `data: { "providers": [] }` — nunca `403` ni `404`.
-- [ ] `POST`, `PUT`, `DELETE` y `PATCH` sobre la ruta responden `405` con
+- [x] `POST`, `PUT`, `DELETE` y `PATCH` sobre la ruta responden `405` con
       `error_code: "method_not_allowed"`, **sin cabecera `Authorization`
       incluida**: el `405` llega antes que el `401`.
 
 ### Contenido de la respuesta
 
-- [ ] `data` tiene **exactamente una** clave, `providers`. No hay `pagination`.
-- [ ] Con dos proveedores vinculados, la respuesta trae los dos, ordenados por
+- [x] `data` tiene **exactamente una** clave, `providers`. No hay `pagination`.
+- [x] Con dos proveedores vinculados, la respuesta trae los dos, ordenados por
       `id` **descendente**.
-- [ ] Cada ítem tiene **exactamente 10 claves**, en el orden: `id`, `logo`,
+- [x] Cada ítem tiene **exactamente 10 claves**, en el orden: `id`, `logo`,
       `title`, `categories`, `rating_avg`, `rating_count`,
       `short_description`, `hourly_rate`, `status`, `is_active`.
-- [ ] Las ocho primeras claves de un proveedor **activo** son **byte a byte
+- [x] Las ocho primeras claves de un proveedor **activo** son **byte a byte
       iguales** a las que ese mismo proveedor devuelve en
       `GET /api/v1/providers`.
-- [ ] Un proveedor propio **despublicado** (`node.status = 0`) aparece en la
+- [x] Un proveedor propio **despublicado** (`node.status = 0`) aparece en la
       lista con `status: false` e `is_active: false`, y **no** aparece en
       `GET /api/v1/providers`.
-- [ ] Un proveedor propio publicado con `field_license_expiry` en el pasado
+- [x] Un proveedor propio publicado con `field_license_expiry` en el pasado
       aparece con `status: true` e `is_active: false`.
-- [ ] Un proveedor propio publicado **sin fila** en `field_license_expiry`
+- [x] Un proveedor propio publicado **sin fila** en `field_license_expiry`
       aparece con `status: true` e `is_active: false`. `is_active` no es `null`.
-- [ ] Un proveedor propio publicado con licencia vigente aparece con
+- [x] Un proveedor propio publicado con licencia vigente aparece con
       `status: true` e `is_active: true`, y **sí** aparece en
       `GET /api/v1/providers`.
-- [ ] `status` e `is_active` viajan como booleanos JSON (`true`/`false`), nunca
+- [x] `status` e `is_active` viajan como booleanos JSON (`true`/`false`), nunca
       como `0`/`1` ni como `"true"`.
-- [ ] Un proveedor propio sin logo, sin categorías, sin rating, sin tarifa y sin
+- [x] Un proveedor propio sin logo, sin categorías, sin rating, sin tarifa y sin
       descripción se devuelve igual, con `logo: null`, `categories: []`,
       `rating_avg: null`, `rating_count: 0`, `hourly_rate: null` y
       `short_description: ""`.
-- [ ] Un nid en `field_provider_users` cuyo nodo ya no existe **no** rompe la
+- [x] Un nid en `field_provider_users` cuyo nodo ya no existe **no** rompe la
       respuesta: se omite y el resto de proveedores se devuelve igual.
 
 ### Parámetros y ruta
 
-- [ ] `?page=2`, `?limit=1`, `?category_id=abc`, `?order_by=title` y cualquier
+- [x] `?page=2`, `?limit=1`, `?category_id=abc`, `?order_by=title` y cualquier
       otro parámetro se **ignoran**: la respuesta es idéntica a la de la ruta
       sin query string. Ninguno produce `422`.
-- [ ] `GET /api/v1/providers/mine` no colisiona con
+- [x] `GET /api/v1/providers/mine` no colisiona con
       `GET /api/v1/providers/{id}`: el detalle de un proveedor por nid sigue
       respondiendo lo mismo que antes de este spec.
-- [ ] `GET /api/v1/providers` responde exactamente lo mismo que antes de este
+- [x] `GET /api/v1/providers` responde exactamente lo mismo que antes de este
       spec, con los mismos parámetros y la misma paginación.
 
 ### Código y despliegue
 
-- [ ] `myapi_provider_build_item()` y `myapi_provider_fetch()` no tienen ni una
+- [x] `myapi_provider_build_item()` y `myapi_provider_fetch()` no tienen ni una
       línea modificada.
-- [ ] `myapi.info` no tiene ni una línea modificada.
-- [ ] No hay `hook_update_N()` nuevo: `drush updb` no tiene nada que ejecutar.
-- [ ] Tras `drush cc all` la ruta responde; sin `drush cc all` responde el 404
+- [x] `myapi.info` no tiene ni una línea modificada.
+- [x] No hay `hook_update_N()` nuevo: `drush updb` no tiene nada que ejecutar.
+- [x] Tras `drush cc all` la ruta responde; sin `drush cc all` responde el 404
       de Drupal.
-- [ ] Una petición completa consume **cuatro consultas** y no crece con el
+- [x] Una petición completa consume **cuatro consultas** y no crece con el
       número de proveedores vinculados.
-- [ ] `vendor/bin/phpunit` pasa en verde, incluidos
+- [x] `vendor/bin/phpunit` pasa en verde, incluidos
       `ProviderMineEndpointTest`, `ProviderListEndpointTest`,
       `ProviderRoleTest` y `ProviderActiveConditionsTest`.
-- [ ] `docs/provider-mine.md` existe y documenta los `401`, `403` y `405`.
+- [x] `docs/provider-mine.md` existe y documenta los `401`, `403` y `405`.
 
 ---
 
