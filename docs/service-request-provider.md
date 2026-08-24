@@ -17,6 +17,11 @@ pagination, the filters and the authorisation; what changes is only which set a
 request belongs to. The app tells the two apart with `?status`:
 `?status=open,offered` is *the market*, everything else is *my work*.
 
+The item of this list is
+[`GET /api/v1/service-requests/provider/{id}`](#get-apiv1service-requestsproviderid),
+documented below: same gate, same access rule, same thirteen keys, plus six of
+its own. **Whatever this list shows opens there, and nothing else does.**
+
 Read-only. There is no `POST` here and there will not be one by accident:
 creating, withdrawing or awarding an offer is another spec. `POST`, `PUT`,
 `DELETE` and `PATCH` answer `405`.
@@ -263,12 +268,16 @@ naming the door. A provider who reads "Residencial Los Almendros" knows whether
 the job is nearby before bidding; they do not know which apartment anybody
 lives in.
 
-> **Known difference between this listing and the detail.** The detail still
-> nulls `unit` for **every** provider reader, without the exception above. So in
-> "my work" the provider sees the flat here, taps, and does not see it there.
-> It is deliberate and not a bug: touching the detail too would reopen a privacy
-> decision SPEC 89 took with its own reasoning. It is the obvious work for the
-> spec that continues this one.
+**The detail of this family answers the same `unit`.** Since SPEC 99,
+[`GET /api/v1/service-requests/provider/{id}`](#get-apiv1service-requestsproviderid)
+applies this very rule, out of this very function — so a request whose flat
+is painted on the board still shows it when the provider taps. The `unit`
+disappearing on tap was SPEC 98's known gap and it is closed.
+
+What is still different is the **resident's** detail,
+[`GET /api/v1/service-requests/{id}`](service-request.md): that one nulls `unit`
+for every provider reader and calls its trimmed list `offers`. See *Two details
+of the same request* at the end of this file.
 
 ### Ordering and pagination
 
@@ -336,3 +345,292 @@ category read, because there can be no market for it.
 - **`?limit=-1` on a busy category** can be the whole market of that category
   plus the provider's entire history, each row with a dozen joins. The real
   ceiling is `?limit=50`; the app does not need `-1`.
+
+---
+
+## GET /api/v1/service-requests/provider/{id}
+
+The detail of **one** service request, for the provider (SPEC 99). The item of
+the listing above, plus its images, its attachment, the reader's own offers and
+the complete timeline.
+
+The item route of this family, and the sibling of
+[`GET /api/v1/service-requests/{id}`](service-request.md), which serves the
+**resident**. Both read the same node; they differ in three things and only in
+three, all listed in *Two details of the same request* below.
+
+**Whatever the listing shows opens here, and nothing else does.** The two use
+the same access rule, and that equivalence is a test and not an intention: a
+request that appears on the board and answers `403` here would be a bug.
+
+Read-only. `POST`, `PUT`, `PATCH` and `DELETE` answer `405`, checked **before
+the token and before any query**: the method is wrong whoever is asking.
+
+**Authentication:** required (Bearer access token) **and the `proveedor` role**
+
+**Headers**
+| Header | Value |
+|--------|-------|
+| Authorization | `Bearer <access_token>` |
+| Accept-Language | `es` / `en` (optional, defaults to `es`) |
+
+**Request body**
+
+None — this is a `GET`.
+
+---
+
+### Who gets in
+
+Two gates and then the access rule, in this order — and the order is the
+contract, because it decides which error a reader sees.
+
+| # | Step | Failure |
+|---|------|---------|
+| 1 | The `{id}` is a positive integer | `404 not_found`, **without a single query** |
+| 2 | The token is valid | `401 missing_authorization` / `401 invalid_token` |
+| 3 | The account holds the `proveedor` role | `403 provider_role_required` |
+| 4 | The account operates at least one provider | `403 forbidden` |
+| 5 | The request exists and is published | `404 not_found` |
+| 6 | The reader is a **provider** of it | `403 forbidden` |
+
+**Step 3 is the only thing this route asks for over the resident's detail.**
+That one lets in any account that operates a provider, role or no role, and
+that is right *there*: it serves residents and providers alike and cannot
+reject by role. This one can. It is also the point where an administrator cuts
+an account off the provider channel by removing a role, without unlinking a
+single node.
+
+**Steps 3 and 4 run before the request is loaded.** A `{id}` that does not
+exist, asked for by an account with no role, answers `403 provider_role_required`
+and **never `404`**: a reader who is not on this route may not learn which
+requests exist.
+
+**The role with no linked provider is `403 forbidden` here, and `200` with an
+empty list on the listing.** Not a contradiction: a list has a legitimate way of
+saying *"nothing"*, a detail does not. Over one concrete resource there is only
+*"here it is"* or *"you may not see it"*, and with no provider to operate there
+is no access rule that could ever be satisfied. `403` and not `404`, because the
+request does exist — step 5 proved it.
+
+**The requester of the request is `403` here**, even holding the `proveedor`
+role. Their own request told through this route would carry an empty `my_offers`
+and a `unit` decided by the award — the same request counted wrong. Their route
+exists and it is [`GET /api/v1/service-requests/{id}`](service-request.md).
+
+#### Step 6: the three ways in
+
+The same rule the resident's detail uses, **unmodified**. Both routes call the
+same function; neither reimplements a condition of it, because a rule copied in
+two places drifts.
+
+| Rule | Condition | What it covers |
+|------|-----------|----------------|
+| **2** | One of my providers already offered on the request | I keep seeing the work I bid on, in **any** status and **even after it leaves my category** |
+| **2b** | `field_assigned_provider` ∈ my providers | **The `direct` awarded to me**, and every job already won — `closed` and `cancelled` included |
+| **3** | `status ∈ (open, offered)` **and** no award of either kind **and** the category is mine **and** some provider of mine is active | **The open market of my category** |
+
+A **foreign `direct`** enters through none of them: it is born awarded, so rule 3
+excludes it by definition and rule 2b points at somebody else. That is a
+`403 forbidden`, and it is the right answer.
+
+---
+
+**Success response (200)**
+
+```json
+{
+  "success": true,
+  "data": {
+    "service_request": {
+      "id": 128,
+      "title": "Fuga en el calentador",
+      "description": "El calentador gotea.\nDesde el lunes.",
+      "status": "assigned",
+      "category": { "id": 12, "code": "plumbing", "name": "Plomería" },
+      "unit": { "id": 55, "name": "A-301" },
+      "offers_count": 4,
+      "assigned_offer": { "id": 901, "status": "accepted" },
+      "assigned_provider": { "id": 41, "name": "Plomería Torres" },
+      "created": "2026-08-12T09:14:00",
+      "desired_start": "2026-08-20T08:00:00",
+      "requester": { "id": 3, "name": "Ana Pérez" },
+      "condominium": { "id": 500, "name": "Residencial Los Almendros" },
+      "viewer": "provider",
+      "images": [
+        { "id": 91, "url": "https://…/api/v1/service-requests/128/files/91", "filename": "fuga.jpg" }
+      ],
+      "attachment": { "id": 92, "url": "https://…/api/v1/service-requests/128/files/92", "filename": "presupuesto.pdf" },
+      "closed_at": null,
+      "my_offers": [
+        {
+          "id": 901,
+          "provider": { "id": 41, "name": "Plomería Torres", "logo": null },
+          "amount": 150.5,
+          "message": "Puedo pasar el jueves.",
+          "status": "accepted",
+          "created": "2026-08-13T11:02:00"
+        }
+      ],
+      "transactions": [
+        { "id": 701, "status": "open", "status_date": "2026-08-12T09:14:00", "comment": "Hemos recibido su solicitud.", "created": "2026-08-12T09:14:00" }
+      ]
+    }
+  }
+}
+```
+
+### The object: nineteen keys, always the nineteen, in this order
+
+The **thirteen of the listing item**, without a single difference, followed by
+**six of its own**.
+
+| # | Field | Type | Note |
+|---|-------|------|------|
+| 1 | `id` | int | `node.nid` |
+| 2 | `title` | string | |
+| 3 | `description` | string | `""` when empty; as stored, line breaks included |
+| 4 | `status` | string \| null | `open`, `direct`, `offered`, `assigned`, `closed`, `cancelled` |
+| 5 | `category` | object | `{id, code, name}`; `code` is `""` and never `null` |
+| 6 | `unit` | object \| null | **Only when the job is already mine** — the rule of this file |
+| 7 | `offers_count` | int | **The real total**, competition included |
+| 8 | `assigned_offer` | object \| null | `{id, status}` |
+| 9 | `assigned_provider` | object \| null | `{id, name}`. **Not masked**, even when the winner is a rival |
+| 10 | `created` | string | `Y-m-d\TH:i:s` |
+| 11 | `desired_start` | string \| null | `Y-m-d\TH:i:s` |
+| 12 | `requester` | object \| null | `{id, name}` — `name` is `"field_nombre field_apellidos"`, or the username |
+| 13 | `condominium` | object \| null | `{id, name}` — `name` is the **node title**. Travels always |
+| 14 | `viewer` | string | **Always `"provider"`** |
+| 15 | `images` | array | `{id, url, filename}` in upload order. **Always an array**, `[]` when there are none |
+| 16 | `attachment` | object \| null | `{id, url, filename}` |
+| 17 | `closed_at` | string \| null | `Y-m-d\TH:i:s`. `null` in every request that is not `closed` |
+| 18 | `my_offers` | array | **Only mine.** Always an array, `[]` when I have not bid |
+| 19 | `transactions` | array | The **complete** timeline. Always an array |
+
+**The thirteen are byte for byte the listing's item for the same `{id}`** — same
+types, same nulls, same order — because they come out of the very same
+serialiser. Nothing appears and nothing disappears with the data or with who is
+asking: a `null` is an answer, an absent key is a question, and a nested object
+that does not apply is a **whole `null`** and never `{id: null, name: null}`.
+
+### `viewer` is constant, and travels anyway
+
+It is always `"provider"` on this route. It stays so the client model of the two
+detail routes is the **same object** with the same parser; dropping it would buy
+nothing but a second almost identical class.
+
+### `my_offers`, and not `offers`
+
+Only the offers whose `field_provider` is one of the account's providers, and
+the name says so. The trim is made by the query and never in PHP.
+
+| | |
+|---|---|
+| Four offers on the request, one of them mine | `my_offers` has **1** element, `offers_count` is **4** |
+| No offers of mine | `my_offers` is `[]`, and the response is still `200` |
+
+Each element is `{id, provider: {id, name, logo}, amount, message, status,
+created}` — the six keys of the resident's detail, under the honest name.
+
+**The competition's amounts never travel.** What does travel is the count, and
+the winner's name in `assigned_provider`, unmasked: masking them would create
+two truths about the same datum depending on which endpoint you asked.
+
+**There is no `can_offer` key.** The client derives *"can I still bid on this?"*
+from `status`, `assigned_provider` and `my_offers`, all three of which are
+already here. Adding it would tie the response to a business rule that lives in
+the access function today and might not agree with it tomorrow.
+
+### `transactions` is not trimmed
+
+The whole timeline, comments included, exactly as the resident sees it. There is
+no stable ownership criterion in a status transition, and a timeline with holes
+in it is a story the client would paint as complete. If some event must be
+hidden from a provider, the place to decide it is the timeline's own spec.
+
+### Private files
+
+`images[].url` and `attachment.url` point at
+[`GET /api/v1/service-requests/{id}/files/{fid}`](service-request.md) — the
+resident's file route, reused as is. **There is no
+`/api/v1/service-requests/provider/{id}/files/{fid}`, and there will not be
+one:** that route already authorises with the same access rule this detail
+uses, so a sibling would be new code making exactly the same decision. Two
+routes, one rule, no possible divergence.
+
+Whoever can read this detail can download its bytes, and nobody else.
+
+---
+
+**Possible errors**
+
+| Code | `error_code` | When |
+|------|--------------|------|
+| 401 | `missing_authorization` | No `Authorization` header |
+| 401 | `invalid_token` | Revoked, expired or unknown token |
+| 403 | `provider_role_required` | The account does not hold the `proveedor` role — administrators included. Answered **before** the request is loaded |
+| 403 | `forbidden` | The role with no linked provider; a foreign `direct`; another category; a rival's job I never bid on; **or the requester of the request** |
+| 404 | `not_found` | `{id}` is not a positive integer (**no query at all**), or no such request: it does not exist, it is unpublished, or it is of another bundle |
+| 405 | `method_not_allowed` | Any method other than `GET`. Checked **before** the token, so a `POST` with no header at all is `405` and not `401` |
+
+**No new i18n key.** All six already exist in the catalogue.
+
+**`403` and `404` mean different things here**, unlike in the listing, which
+simply does not show a row. `404` is *"no such request"*; `403` is *"it exists,
+and you are not a provider of it"*. The `{id}` is not a secret — the reader
+reached it from a listing that handed it over.
+
+---
+
+### Two details of the same request
+
+The same node, read by the same provider, answers differently on the two detail
+routes. Both are deliberate, and this is the whole list:
+
+| | `/service-requests/{id}` (SPEC 89) | `/service-requests/provider/{id}` (SPEC 99) |
+|---|---|---|
+| The `proveedor` role | not required | **required** — `403 provider_role_required` |
+| A `requester` reading it | `200`, their own detail, complete | `403 forbidden` |
+| `unit` for a provider reader | **always `null`** | `{id, name}` **when the job is already theirs** |
+| The offers key | `offers`, trimmed to the reader | **`my_offers`**, and the name says so |
+| `viewer` | `requester` or `provider` | always `provider` |
+| Where `viewer` sits | **12th**, before `requester` | **14th**, after `condominium` |
+
+Everything else — the other seventeen keys, their types, their nulls, the
+timeline, the file route and the access rule for a provider — is identical. The
+two orders differ only in the position of `viewer`, because each route appends
+its own keys after the listing item it is built from, and the two listings do
+not have the same number of keys.
+
+**Why both exist.** Renaming `offers` to `my_offers` and uncovering `unit` on
+the resident's route would break an app in production, and requiring the
+`proveedor` role there would lock out accounts that read it without one. So the
+provider's answer got its own route, the same way the listing did.
+
+**What comes next.** The obvious work for the spec that continues this one is to
+**deprecate the provider's access to the resident's route** and leave one answer
+per reader. Until then, an app that reads a request as a provider should use
+this route.
+
+### Cost
+
+**Six content queries, fixed**, plus the token's and the role questions, which
+are cached per account: the request row, the requester's name, the images,
+`offers_count`, my offers and the timeline. Exactly what the resident's detail
+already costs, over one single node, and none of them grows with the number of
+images, offers or transactions.
+
+### Known limits
+
+- **The `unit` does not expire.** A job awarded to one of my providers shows the
+  flat in **any** status, `closed` and `cancelled` included — a job cancelled a
+  year ago still names the address it was going to. It is the same surface the
+  listing already exposes and it is not widened here; capping it by status or by
+  date is a retention rule no spec has taken yet, and taking it only in the
+  detail would put this route out of step with the board again.
+- **The requester's name reaches the whole market.** Any active provider of the
+  category reads the full name of whoever asked for the work just by opening an
+  open request — without the address, since `unit` is `null` there, but with the
+  name and the condominium. Inherited from the listing and not widened.
+- **The back office keeps its own rule**, unchanged by this endpoint. See the
+  listing's limits above.
