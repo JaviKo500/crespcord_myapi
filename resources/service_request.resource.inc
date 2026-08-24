@@ -2431,6 +2431,114 @@ function myapi_service_request_build_detail($row, $viewer, array $images, array 
 }
 
 /**
+ * Shapes the whole detail item FOR THE PROVIDER: the listing's thirteen keys
+ * plus six (SPEC 99).
+ *
+ * THE SIBLING OF myapi_service_request_build_detail(), NOT A BRANCH INSIDE IT.
+ * The two answer the same node to two different readers, and SPEC 99's
+ * decision 1 is that they do it from two functions: folding this into the one
+ * above would have meant an `if` picking between `offers` and `my_offers` and
+ * between two `unit` rules, which is exactly the shape SPEC 89 split the
+ * dispatchers to avoid.
+ *
+ * THE THIRTEEN COME FROM myapi_service_request_provider_build_item(),
+ * UNTOUCHED — the same construction-by-delegation SPEC 97 and 98 used, one
+ * level further down. That function already owns the provider's `unit` rule,
+ * the `requester` and the `condominium`, so none of the three is restated
+ * here, and "the thirteen first keys are byte for byte what
+ * GET /api/v1/service-requests/provider answers for that nid" is an acceptance
+ * criterion this file cannot break by accident.
+ *
+ * THE UNIT RULE IS NOT WRITTEN HERE, AND THAT IS THE POINT. The detail no
+ * longer contradicts the listing about the same nid — SPEC 98's risk 4 — for
+ * the structural reason that both read it out of the same function. Note the
+ * inversion against myapi_service_request_build_detail(), which OVERWRITES
+ * `unit` to NULL for every provider reader: that is still correct on the
+ * resident's route, which this spec does not touch.
+ *
+ * `my_offers` AND NOT `offers` (decision 7). The general detail hands a
+ * provider a key called `offers` carrying only their own, which forces the
+ * client to know which route it came through before it can read it. Here the
+ * name says what it holds. The trim itself is still made by the QUERY —
+ * myapi_service_request_load_offers($nid, $provider_ids) — and never in PHP.
+ *
+ * `viewer` IS THE CONSTANT 'provider' AND STILL TRAVELS (decision 8). Every
+ * 200 of this route is a provider reading, so the key carries no information;
+ * it stays so the Flutter model of the two detail routes is the SAME object
+ * with the same parser, and dropping it would buy nothing but a second almost
+ * identical class.
+ *
+ * `transactions` TRAVELS WHOLE, not trimmed to "my" events (decision 9): there
+ * is no stable ownership criterion in a status transition, and a timeline with
+ * holes in it is a story the client would paint as complete.
+ *
+ * PURE: no database, no node_load(), no $_GET. Every input arrives resolved.
+ *
+ * @param object $row
+ *   The row of myapi_service_request_detail_row(), which projects every alias
+ *   myapi_service_request_provider_build_item() reads — the fifteen of
+ *   myapi_service_request_build_item() plus `requester_uid`, `condominium_id`
+ *   and `condominium_name` — plus `attachment_fid`, `attachment_filename` and
+ *   `closed_at` for the six added below. `requester_name` is the one it does
+ *   NOT project: the caller writes it onto the row out of
+ *   myapi_user_display_names(), exactly as myapi_service_request_detail()
+ *   does.
+ * @param array $images
+ *   The list of myapi_service_request_build_file() items, in delta order.
+ *   Always an array, empty when there are none.
+ * @param array $my_offers
+ *   The list of myapi_service_request_build_offer() items, ALREADY TRIMMED BY
+ *   THE QUERY to the reader's own providers. Always an array.
+ * @param mixed $offers_count
+ *   The TOTAL number of published offers of the request, competition included,
+ *   from myapi_service_request_offer_counts_by_nid(). Never count($my_offers),
+ *   which would answer the reader 1 or 0 where the key promises the total.
+ * @param array $transactions
+ *   The timeline, from myapi_service_request_load_transactions(): already
+ *   ordered and already shaped. Always an array.
+ * @param array $owned_provider_ids
+ *   Every provider nid of the READER'S ACCOUNT, from
+ *   myapi_provider_role_provider_ids(). Never empty on this route — the
+ *   orchestrator answered 403 before getting here — and it is what the `unit`
+ *   rule measures the award against.
+ *
+ * @return array  The nineteen keys, in the documented order.
+ */
+function myapi_service_request_provider_build_detail($row, array $images, array $my_offers, $offers_count, array $transactions, array $owned_provider_ids) {
+  $nid = (int) $row->nid;
+
+  // The thirteen keys of the provider's listing, from the provider's listing's
+  // own serialiser — the `unit` rule of decision 5 included. The count is
+  // handed over as the one-entry map that function expects.
+  $item = myapi_service_request_provider_build_item(
+    $row, [$nid => (int) $offers_count], $owned_provider_ids
+  );
+
+  // Appended, never interleaved: the thirteen keep their order and their
+  // place, which is what makes the byte-for-byte comparison against the
+  // listing checkable.
+  return array_merge($item, [
+    'viewer'      => 'provider',
+    // Always an array, never null: "no photos" is an empty list, and a client
+    // that can iterate has nothing to branch on.
+    'images'      => array_values($images),
+    'attachment'  => myapi_service_request_build_file(
+      isset($row->attachment_fid) ? $row->attachment_fid : NULL,
+      isset($row->attachment_filename) ? $row->attachment_filename : NULL,
+      $nid
+    ),
+    // A datestamp like desired_start, so format_date() and not the raw column.
+    // NULL — and not format_date(0), a 1970 nobody typed — while the request
+    // is not closed, which is every request that is not 'closed'.
+    'closed_at'   => isset($row->closed_at) && $row->closed_at !== ''
+      ? format_date((int) $row->closed_at, 'custom', 'Y-m-d\TH:i:s')
+      : NULL,
+    'my_offers'   => array_values($my_offers),
+    'transactions' => array_values($transactions),
+  ]);
+}
+
+/**
  * Dispatcher for /api/v1/service-requests/%/files/% (SPEC 89).
  *
  * Its own dispatcher and not a second case inside the item one: routing
