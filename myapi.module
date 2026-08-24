@@ -429,6 +429,42 @@ function myapi_menu() {
     'file'             => 'resources/service_request.resource.inc',
   ];
 
+  // The provider's detail of one request (SPEC 99), the item of the board
+  // above. Its own gate — 403 'provider_role_required' without the role — its
+  // own key `my_offers` instead of the general detail's trimmed `offers`, and
+  // the `unit` of decision 5, visible only once the job is already the
+  // reader's. Read-only, like the listing: every write answers 405.
+  //
+  // FIVE COMPONENTS, and it competes with nothing. Drupal 7 matches by the
+  // number of path components first, which alone separates this route from
+  // three of the four already here: 'api/v1/service-requests/provider' (four)
+  // still resolves the listing, 'api/v1/service-requests/%' (four) still
+  // resolves the general detail, and '%/files/%' has six.
+  //
+  // The one route with the same count is 'api/v1/service-requests/%/cancel',
+  // and the two are told apart by WHERE the literal sits: 'provider' in
+  // position 3 with the wildcard in 4, against a wildcard in 3 with 'cancel'
+  // in 4. '/service-requests/provider/7' cannot match the second — part 4 is
+  // '7' and not 'cancel' — and '/service-requests/7/cancel' cannot match this
+  // one, because part 3 is '7' and not 'provider'. Different masks, disjoint
+  // by construction.
+  //
+  // 'page arguments' => [4] and NOT [3]: the wildcard is the FIFTH component
+  // — api / v1 / service-requests / provider / % — and [3] would hand the
+  // dispatcher the literal 'provider'.
+  //
+  // No sibling files route: images and attachment keep pointing at
+  // api/v1/service-requests/%/files/%, which authorises with the very same
+  // myapi_service_request_viewer() this detail does (decision 10). Two routes,
+  // one rule, no possible divergence.
+  $items['api/v1/service-requests/provider/%'] = [
+    'page callback'    => 'myapi_service_request_provider_item_dispatch',
+    'page arguments'   => [4],
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/service_request.resource.inc',
+  ];
+
   // The detail of one request and the bytes of its private files (SPEC 89).
   //
   // Siblings of the collection above and NOT displaced by it: Drupal 7 matches

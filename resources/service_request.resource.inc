@@ -2539,6 +2539,39 @@ function myapi_service_request_provider_build_detail($row, array $images, array 
 }
 
 /**
+ * Dispatcher for /api/v1/service-requests/provider/% (SPEC 99).
+ *
+ * A SIBLING of myapi_service_request_provider_dispatch() and of
+ * myapi_service_request_item_dispatch(), and a branch inside neither of them.
+ * Drupal 7 resolves routes by number of components first and by the literal in
+ * the position second, so /provider (four), /% (four, wildcard) and
+ * /provider/% (five) are three menu entries that never compete — and one
+ * dispatcher per route is what keeps each one's 405 as simple as it looks.
+ *
+ * READ-ONLY, AND ONLY GET. Offering, editing an offer, accepting, rejecting,
+ * awarding and closing are all out of SPEC 99 and none of them will land here
+ * by accident: a dispatcher that answers 405 to everything but GET is what
+ * keeps that decision visible.
+ *
+ * THE 405 COMES BEFORE THE TOKEN AND BEFORE ANY QUERY, deliberately and like
+ * every other dispatcher of this module: the method is wrong whoever is asking
+ * and whatever they are asking about, and answering 401 first would tell a
+ * client with a broken verb to go fix its credentials.
+ *
+ * @param mixed $nid  The route's wildcard, RAW as Drupal hands it over — a
+ *                    string, and not necessarily a number. Validating it is
+ *                    the first job of the endpoint that takes it.
+ */
+function myapi_service_request_provider_item_dispatch($nid = NULL) {
+  if (myapi_request_method() === 'GET') {
+    myapi_service_request_provider_detail($nid);
+    return;
+  }
+
+  myapi_error('method_not_allowed', 405);
+}
+
+/**
  * GET /api/v1/service-requests/provider/% — the provider's detail (SPEC 99).
  *
  * Orchestration only, and the SIBLING of myapi_service_request_detail(): every
