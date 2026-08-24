@@ -2539,6 +2539,166 @@ function myapi_service_request_provider_build_detail($row, array $images, array 
 }
 
 /**
+ * GET /api/v1/service-requests/provider/% — the provider's detail (SPEC 99).
+ *
+ * Orchestration only, and the SIBLING of myapi_service_request_detail(): every
+ * decision it makes already lives in a helper, and what this function owns is
+ * the ORDER. The order is the contract, and it is this one:
+ *
+ *   1. the nid          → 404 not_found, before a single query
+ *   2. the token        → 401 missing_authorization / invalid_token
+ *   3. THE ROLE GATE    → 403 provider_role_required
+ *   4. the providers    → 403 forbidden when there are none
+ *   5. the row          → 404 not_found
+ *   6. the access rule  → 403 forbidden unless it answers 'provider'
+ *   7. the four loads
+ *   8. the serialisation
+ *
+ * THE ROLE GATE IS THE ONLY THING THIS ENDPOINT ASKS FOR OVER THE GENERAL
+ * DETAIL (decision 3). GET /api/v1/service-requests/% lets in any account that
+ * operates a provider, role or no role, and that is correct THERE: it serves
+ * residents and providers alike and cannot reject by role. This route can —
+ * it is the provider's — and the precedent is the listing of SPECS 97 and 98.
+ * It is also the point where an administrator cuts an account off the
+ * provider channel by removing a role, without unlinking a single node.
+ *
+ * IT RUNS BEFORE THE ROW IS LOADED, so a nid that does not exist asked for by
+ * an account with no role answers 403 and never 404: the reader is not on this
+ * route at all, and telling them apart which requests exist would be answering
+ * a question they may not ask.
+ *
+ * THE GATE READS THE LOADED ACCOUNT AND NOT A SYNTHETIC OBJECT.
+ * myapi_provider_role_is() reads ->roles, so (object) ['uid' => n] would deny
+ * every account alive. user_load() is not an extra query — the token check
+ * already loaded this user and Drupal 7 serves the second call from its static
+ * cache — and it is exactly what myapi_service_request_provider_list() does
+ * for the same gate.
+ *
+ * A ROLE WITH NO PROVIDER BEHIND IT IS 403 HERE AND 200-WITH-AN-EMPTY-LIST ON
+ * THE LISTING (decision 5), and the two are not in contradiction. A listing
+ * has a legitimate way of saying "nothing": the empty list. A detail does not
+ * — over one concrete resource there is only "here it is" or "you may not see
+ * it" — and with no provider to operate there is no access rule that could
+ * ever be satisfied. 403 and not 404: the request exists, the reader does not
+ * reach it.
+ *
+ * THE ACCESS RULE IS myapi_service_request_viewer(), UNMODIFIED (decision 2).
+ * Not one new condition, not one parameter, not one `if`. SPEC 98 already
+ * widened it with rule 2b — the 'direct' awarded to me — which is the case
+ * this route needed. Writing a second definition of "who may read this" here
+ * would make a THIRD copy of the access rule (risk 1) and the first one that
+ * was forgotten in an update would be the one that opened the hole.
+ *
+ * A 'requester' IS A 403 HERE (decision 4). It reads as the unkind answer and
+ * it is the correct one: a resident who also holds the 'proveedor' role would
+ * otherwise receive their own request through this route with `my_offers`
+ * empty and `unit` decided by the award — the same request told wrong. Their
+ * route exists and it is GET /api/v1/service-requests/%.
+ *
+ * SIX CONTENT QUERIES, FIXED, plus the token's and the provider_role ones,
+ * which that include caches statically per uid:
+ *
+ *   1. the request row                  — myapi_service_request_detail_row()
+ *   2. the requester's name             — myapi_user_display_names()
+ *   3. the images, in delta order       — myapi_service_request_load_images()
+ *   4. offers_count, the REAL total     — myapi_service_request_offer_counts_by_nid()
+ *   5. MY offers                        — myapi_service_request_load_offers()
+ *   6. the timeline                     — myapi_service_request_load_transactions()
+ *
+ * Exactly what the general detail already costs, over one single node.
+ *
+ * NOTHING HERE IS TAGGED 'node_access', same as SPECS 88, 89 and 98: the
+ * access decision is myapi_service_request_viewer(), in one place and in plain
+ * sight, and a tag would add a second, invisible one that could contradict it.
+ *
+ * @param mixed $nid  The route's wildcard, RAW as Drupal hands it over.
+ */
+function myapi_service_request_provider_detail($nid) {
+  // 1. The nid, before anything else — including the token. ctype_digit() over
+  // the string form rejects 'abc', '-1', '1.5' and '' alike; the > 0 then
+  // rejects '0'. Nothing is leaked by answering first: the answer is about the
+  // SHAPE of the URL and not about what exists.
+  if (!is_scalar($nid) || !ctype_digit((string) $nid) || (int) $nid <= 0) {
+    myapi_error('not_found', 404);
+  }
+  $nid = (int) $nid;
+
+  // 2. Authentication. Answers 401 missing_authorization / invalid_token on
+  // its own and never returns on failure.
+  $token = myapi_auth_require_access_token();
+  $uid = (int) $token->uid;
+
+  // 3. The role gate, and the one step this endpoint adds over the general
+  // detail — see the docblock. The account is loaded because the gate reads
+  // ->roles; it costs no query.
+  $account = user_load($uid);
+  if (!myapi_provider_role_is($account)) {
+    myapi_error('provider_role_required', 403);
+  }
+
+  // 4. The providers of the ACCOUNT. Empty means the role is there and there
+  // is nothing to operate with it, so no access rule below could ever be met.
+  // They are also what the `unit` rule measures the award against.
+  $provider_ids = myapi_provider_role_provider_ids($account);
+  if (!$provider_ids) {
+    myapi_error('forbidden', 403);
+  }
+
+  // 5. The request itself. FALSE covers all four "no such request" cases at
+  // once — it does not exist, it is unpublished, it is of another bundle, or
+  // its category tid is orphaned — and the reader is told none of them apart.
+  $row = myapi_service_request_detail_row($nid);
+  if (!$row) {
+    myapi_error('not_found', 404);
+  }
+
+  // 6. WHO IS ASKING, by the one function that decides it, shared with the
+  // general detail and with the file endpoint. Only 'provider' passes here:
+  // NULL is a 403 and so is 'requester'.
+  if (myapi_service_request_viewer($row, $uid) !== 'provider') {
+    myapi_error('forbidden', 403);
+  }
+
+  // 7. The requester's name, by the shared rule of includes/myapi.user.inc.
+  // Written onto the row because that is what the serialiser reads — the only
+  // key of the thirteen that myapi_service_request_detail_row() does not
+  // project. No contact detail is fetched.
+  $row->requester_name = NULL;
+  if (isset($row->requester_uid) && $row->requester_uid !== '') {
+    $names = myapi_user_display_names([(int) $row->requester_uid]);
+    $row->requester_name = isset($names[(int) $row->requester_uid])
+      ? $names[(int) $row->requester_uid]
+      : NULL;
+  }
+
+  // 8. The images, the REAL total, my offers and the timeline. The trim is a
+  // query argument and never a filter in PHP, and $provider_ids is never empty
+  // here — step 4 answered 403 — which matters because an empty list means
+  // "every offer" to that function.
+  $images = myapi_service_request_load_images($nid);
+
+  $offer_counts = myapi_service_request_offer_counts_by_nid([$nid]);
+  $offers_count = isset($offer_counts[$nid]) ? $offer_counts[$nid] : 0;
+
+  $my_offers = array_map(
+    'myapi_service_request_build_offer',
+    myapi_service_request_load_offers($nid, $provider_ids)
+  );
+
+  // NOT TRIMMED BY READER (decision 9). It runs after the 403 above, so a
+  // reader who fits no rule never pays for this query.
+  $transactions = myapi_service_request_load_transactions($nid);
+
+  // 9. Respond 200 (read-only endpoint, no message_key). One object under
+  // 'service_request', the same envelope the general detail uses.
+  myapi_respond([
+    'service_request' => myapi_service_request_provider_build_detail(
+      $row, $images, $my_offers, $offers_count, $transactions, $provider_ids
+    ),
+  ], 200);
+}
+
+/**
  * Dispatcher for /api/v1/service-requests/%/files/% (SPEC 89).
  *
  * Its own dispatcher and not a second case inside the item one: routing
