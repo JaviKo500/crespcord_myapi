@@ -1,6 +1,6 @@
 # 99 — Detalle de una solicitud para el proveedor (`GET /api/v1/service-requests/provider/{id}`)
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-08-24
 - **Dependencias:**
   - `89-service-request-detail` (Implemented) — la **hermana exacta**. Es dueña
@@ -422,147 +422,147 @@ detalle como diferencia deliberada — deja de ser cierta en esta ruta.
 
 ### Método y autenticación
 
-- [ ] `POST`, `PUT`, `PATCH` y `DELETE` sobre
+- [x] `POST`, `PUT`, `PATCH` y `DELETE` sobre
       `/api/v1/service-requests/provider/{id}` responden
       `405 method_not_allowed`, **sin token** y sin tocar la base de datos.
-- [ ] Sin cabecera `Authorization` → `401 missing_authorization`.
-- [ ] Con token caducado, revocado o inventado → `401 invalid_token`.
+- [x] Sin cabecera `Authorization` → `401 missing_authorization`.
+- [x] Con token caducado, revocado o inventado → `401 invalid_token`.
 
 ### La compuerta de rol
 
-- [ ] Una cuenta autenticada **sin** el rol `proveedor` →
+- [x] Una cuenta autenticada **sin** el rol `proveedor` →
       `403 provider_role_required`, aunque exista un nodo `proveedor` que la
       referencie.
-- [ ] Una cuenta **con** el rol `proveedor` pero sin ningún nodo `proveedor` que
+- [x] Una cuenta **con** el rol `proveedor` pero sin ningún nodo `proveedor` que
       la referencie → `403 forbidden`.
-- [ ] La compuerta de rol se evalúa **antes** de cargar la solicitud: un nid
+- [x] La compuerta de rol se evalúa **antes** de cargar la solicitud: un nid
       inexistente pedido por una cuenta sin rol responde
       `403 provider_role_required`, no `404`.
 
 ### Las tres vías de acceso
 
-- [ ] Una solicitud `open` de una de mis categorías, sin adjudicar, con algún
+- [x] Una solicitud `open` de una de mis categorías, sin adjudicar, con algún
       proveedor mío activo → `200` (regla 3).
-- [ ] Una solicitud `offered` de mi categoría, sin adjudicar → `200` (regla 3).
-- [ ] Una solicitud por la que uno de mis proveedores **ya ofertó** → `200` en
+- [x] Una solicitud `offered` de mi categoría, sin adjudicar → `200` (regla 3).
+- [x] Una solicitud por la que uno de mis proveedores **ya ofertó** → `200` en
       **cualquier estado**, incluidas `assigned`, `closed` y `cancelled`, y
       **aunque haya salido de mi categoría** (regla 2).
-- [ ] Una solicitud `direct` **adjudicada a uno de mis proveedores** → `200`
+- [x] Una solicitud `direct` **adjudicada a uno de mis proveedores** → `200`
       (regla 2b).
-- [ ] Una solicitud `assigned`, `closed` o `cancelled` adjudicada a uno de mis
+- [x] Una solicitud `assigned`, `closed` o `cancelled` adjudicada a uno de mis
       proveedores → `200` (regla 2b).
 
 ### Los `403` y los `404`
 
-- [ ] Una solicitud `direct` **adjudicada a otro proveedor** → `403 forbidden`.
-- [ ] Una solicitud `open` de una categoría que no es mía → `403 forbidden`.
-- [ ] Una solicitud ya adjudicada a un rival por la que nunca oferté →
+- [x] Una solicitud `direct` **adjudicada a otro proveedor** → `403 forbidden`.
+- [x] Una solicitud `open` de una categoría que no es mía → `403 forbidden`.
+- [x] Una solicitud ya adjudicada a un rival por la que nunca oferté →
       `403 forbidden`.
-- [ ] Una solicitud de mi categoría cuando **ningún** proveedor mío está activo →
+- [x] Una solicitud de mi categoría cuando **ningún** proveedor mío está activo →
       `403 forbidden`.
-- [ ] **El solicitante de la propia solicitud**, si además tiene el rol
+- [x] **El solicitante de la propia solicitud**, si además tiene el rol
       `proveedor` y no encaja en ninguna regla de proveedor → `403 forbidden`.
       Este endpoint no es suyo.
-- [ ] Un nid que no existe → `404 not_found`.
-- [ ] Un nid de un nodo despublicado → `404 not_found`.
-- [ ] Un nid de un nodo que **no** es del bundle `service_request` →
+- [x] Un nid que no existe → `404 not_found`.
+- [x] Un nid de un nodo despublicado → `404 not_found`.
+- [x] Un nid de un nodo que **no** es del bundle `service_request` →
       `404 not_found`.
-- [ ] `abc`, `0`, `-1` y `1.5` como nid → `404 not_found`, sin consulta.
+- [x] `abc`, `0`, `-1` y `1.5` como nid → `404 not_found`, sin consulta.
 
 ### La equivalencia con el listado
 
-- [ ] Sobre el mismo conjunto de solicitudes y la misma cuenta: **toda**
+- [x] Sobre el mismo conjunto de solicitudes y la misma cuenta: **toda**
       solicitud que `GET /api/v1/service-requests/provider` devuelve responde
       `200` en este endpoint.
-- [ ] **Ninguna** solicitud que ese listado excluye responde `200` en este
+- [x] **Ninguna** solicitud que ese listado excluye responde `200` en este
       endpoint.
 
 ### Contenido de la respuesta
 
-- [ ] La respuesta es
+- [x] La respuesta es
       `{ "success": true, "data": { "service_request": { ... } } }`.
-- [ ] El objeto trae **exactamente 19 claves**, siempre las mismas y en el orden
+- [x] El objeto trae **exactamente 19 claves**, siempre las mismas y en el orden
       documentado: `id`, `title`, `description`, `status`, `category`, `unit`,
       `offers_count`, `assigned_offer`, `assigned_provider`, `created`,
       `desired_start`, `requester`, `condominium`, `viewer`, `images`,
       `attachment`, `closed_at`, `my_offers`, `transactions`.
-- [ ] `viewer` vale `"provider"` en toda respuesta `200`.
-- [ ] Las 13 primeras claves son **byte a byte** las del ítem del mismo nid en
+- [x] `viewer` vale `"provider"` en toda respuesta `200`.
+- [x] Las 13 primeras claves son **byte a byte** las del ítem del mismo nid en
       `GET /api/v1/service-requests/provider`.
-- [ ] `category` trae `{id, code, name}`; `code` es `""` y no `null` cuando el
+- [x] `category` trae `{id, code, name}`; `code` es `""` y no `null` cuando el
       término no tiene código.
-- [ ] `requester` trae `{id, name}` con el nombre resuelto por la regla del
+- [x] `requester` trae `{id, name}` con el nombre resuelto por la regla del
       SPEC 09 (`field_nombre + field_apellidos`, o `users.name`).
-- [ ] `condominium` viaja **siempre** que exista, tanto en el mercado abierto
+- [x] `condominium` viaja **siempre** que exista, tanto en el mercado abierto
       como en un trabajo adjudicado.
-- [ ] `images` y `my_offers` y `transactions` son **siempre arrays**, nunca
+- [x] `images` y `my_offers` y `transactions` son **siempre arrays**, nunca
       `null`, y vacíos cuando no hay nada.
-- [ ] `attachment` es `null` cuando no hay adjunto, y `{id, url, filename}`
+- [x] `attachment` es `null` cuando no hay adjunto, y `{id, url, filename}`
       cuando lo hay.
-- [ ] `closed_at` es `null` en toda solicitud que no esté `closed`.
-- [ ] Un objeto anidado ausente es un `null` entero, nunca
+- [x] `closed_at` es `null` en toda solicitud que no esté `closed`.
+- [x] Un objeto anidado ausente es un `null` entero, nunca
       `{id: null, name: null}`.
 
 ### La regla de la `unit`
 
-- [ ] Solicitud del mercado abierto de mi categoría, sin adjudicar →
+- [x] Solicitud del mercado abierto de mi categoría, sin adjudicar →
       `unit: null`.
-- [ ] Solicitud adjudicada a **uno de mis proveedores** → `unit: {id, name}`, con
+- [x] Solicitud adjudicada a **uno de mis proveedores** → `unit: {id, name}`, con
       `name` = `field_nombre_vivienda`.
-- [ ] Solicitud adjudicada a **un rival** → `unit: null`.
-- [ ] Solicitud con `assigned_provider: null` (nodo proveedor borrado o
+- [x] Solicitud adjudicada a **un rival** → `unit: null`.
+- [x] Solicitud con `assigned_provider: null` (nodo proveedor borrado o
       despublicado) → `unit: null`.
-- [ ] La cuenta opera los proveedores A y B; una solicitud adjudicada a B →
+- [x] La cuenta opera los proveedores A y B; una solicitud adjudicada a B →
       `unit` visible, sin depender de por cuál de los dos se obtuvo el acceso.
-- [ ] El mismo nid da la **misma** `unit` en el listado del proveedor y en este
+- [x] El mismo nid da la **misma** `unit` en el listado del proveedor y en este
       detalle. *(Cierra el Riesgo 4 del SPEC 98.)*
 
 ### `my_offers` y `offers_count`
 
-- [ ] `my_offers` contiene **solo** las ofertas cuyo `field_provider` es uno de
+- [x] `my_offers` contiene **solo** las ofertas cuyo `field_provider` es uno de
       mis proveedores.
-- [ ] Con cuatro ofertas en la solicitud, una mía: `my_offers` tiene 1 elemento y
+- [x] Con cuatro ofertas en la solicitud, una mía: `my_offers` tiene 1 elemento y
       `offers_count` vale `4`.
-- [ ] Sin ofertas mías: `my_offers` es `[]` y la respuesta sigue siendo `200`.
-- [ ] Cada oferta trae
+- [x] Sin ofertas mías: `my_offers` es `[]` y la respuesta sigue siendo `200`.
+- [x] Cada oferta trae
       `{id, provider: {id, name, logo}, amount, message, status, created}`.
-- [ ] `assigned_provider` nombra al ganador **aunque sea un rival**, y su nombre
+- [x] `assigned_provider` nombra al ganador **aunque sea un rival**, y su nombre
       no se enmascara.
 
 ### Ficheros privados
 
-- [ ] `images[].url` y `attachment.url` apuntan a
+- [x] `images[].url` y `attachment.url` apuntan a
       `/api/v1/service-requests/{id}/files/{fid}`, la ruta del SPEC 89.
-- [ ] Un proveedor con acceso `200` a este detalle descarga los bytes de esas
+- [x] Un proveedor con acceso `200` a este detalle descarga los bytes de esas
       URLs con `200`.
-- [ ] Un proveedor con `403` en este detalle recibe `403` también en esas URLs.
-- [ ] **No** existe ninguna ruta
+- [x] Un proveedor con `403` en este detalle recibe `403` también en esas URLs.
+- [x] **No** existe ninguna ruta
       `/api/v1/service-requests/provider/{id}/files/{fid}`.
 
 ### No regresión
 
-- [ ] `GET /api/v1/service-requests/{id}` responde **exactamente igual que
+- [x] `GET /api/v1/service-requests/{id}` responde **exactamente igual que
       antes** para residente y para proveedor: mismas claves, mismo orden,
       `unit: null` para todo lector proveedor y clave `offers` (no `my_offers`).
-- [ ] `GET /api/v1/service-requests/provider` responde exactamente igual que
+- [x] `GET /api/v1/service-requests/provider` responde exactamente igual que
       antes.
-- [ ] `GET /api/v1/service-requests` (listado del residente) responde exactamente
+- [x] `GET /api/v1/service-requests` (listado del residente) responde exactamente
       igual que antes.
-- [ ] `myapi_service_request_viewer()` no tiene ni una línea distinta.
-- [ ] La suite completa (`scripts/run-unit-tests.sh`) pasa en verde.
+- [x] `myapi_service_request_viewer()` no tiene ni una línea distinta.
+- [x] La suite completa (`scripts/run-unit-tests.sh`) pasa en verde.
 
 ### Código y despliegue
 
-- [ ] `myapi.info` no cambia: no hay ficheros nuevos de código.
-- [ ] `myapi.install` no cambia: cero esquema.
-- [ ] Ninguna clave i18n nueva.
-- [ ] Ninguna consulta de este spec lleva `addTag('node_access')`, igual que el
+- [x] `myapi.info` no cambia: no hay ficheros nuevos de código.
+- [x] `myapi.install` no cambia: cero esquema.
+- [x] Ninguna clave i18n nueva.
+- [x] Ninguna consulta de este spec lleva `addTag('node_access')`, igual que el
       SPEC 88, 89 y 98.
-- [ ] Todo el código y los comentarios en inglés; los mensajes al usuario salen
+- [x] Todo el código y los comentarios en inglés; los mensajes al usuario salen
       del catálogo.
-- [ ] `docs/service-request-provider.md` documenta el endpoint y **ya no**
+- [x] `docs/service-request-provider.md` documenta el endpoint y **ya no**
       contiene la nota sobre la `unit` que desaparece en el detalle.
-- [ ] `drush cc all` y la ruta responde.
+- [x] `drush cc all` y la ruta responde.
 
 ---
 
