@@ -1401,6 +1401,26 @@ class ServiceRequestProviderDetailTest extends TestCase {
   }
 
   /**
+   * `my_offers` IS TRIMMED BY TWO THINGS, NOT ONE: the request AND the reader's
+   * providers. An offer of mine on a DIFFERENT request never leaks into this
+   * one, and it does not raise this request's `offers_count` either.
+   */
+  public function testMyOffersCarriesOnlyTheOffersOfThisRequest() {
+    $result = $this->detail([$this->request(), $this->request(300)], [
+      'field_data_field_request' => [
+        $this->offer(self::NID, self::PROVIDER_A, 900),
+        // Mine, and of the same account — but on another request.
+        $this->offer(300, self::PROVIDER_A, 905),
+      ],
+    ]);
+
+    $item = $this->item($result);
+
+    $this->assertSame([900], array_column($item['my_offers'], 'id'));
+    $this->assertSame(1, $item['offers_count'], 'the count is this request\'s too');
+  }
+
+  /**
    * Each offer is {id, provider: {id, name, logo}, amount, message, status,
    * created} — the six keys of SPEC 89, in order, under the new name.
    */
