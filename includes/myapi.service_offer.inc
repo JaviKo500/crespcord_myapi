@@ -428,3 +428,482 @@ function myapi_service_offer_eligibility($request_row, $provider_row, $uid, $now
 
   return NULL;
 }
+
+/* ---------------------------------------------------------------------------
+ * The body, and the node it becomes.
+ *
+ * Everything below is PURE. Nothing here reads the database, and the only
+ * Drupal it touches is t(), drupal_strlen() and truncate_utf8() — which is
+ * what puts the whole validation matrix, whole, inside tests/unit.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Validates the eleven fields of the body, in order (SPEC 100).
+ *
+ * SAME CONTRACT AS myapi_service_request_validate_cancel_reason() (SPEC 95):
+ * it answers ['ok' => TRUE, 'values' => [...]] or ['ok' => FALSE,
+ * 'error_code' => …, 'replacements' => …], and never prints, never exits and
+ * never decides an HTTP status. Every failure here is a 422; the caller is the
+ * one that says so.
+ *
+ * IT RUNS ONLY AFTER THE GATE HAS PASSED. Who you are does not depend on what
+ * you wrote, so an empty body over a closed request answers 409 and not 422 —
+ * the order lives in myapi_service_offer_create(), and this function is never
+ * reached in that case.
+ *
+ * THE ORDER OF THE ELEVEN IS THE CONTRACT, and the first failure answers. The
+ * three conditional rules are what make it matter:
+ *
+ *   3. `amount` is REQUIRED for 'fixed', 'estimate' and 'hourly' and FORBIDDEN
+ *      for 'on_site_quote'. Both halves are enforced: a quote to be priced on
+ *      site that carries a number is as wrong as a closed price with none.
+ *   4. `tax_included` without an `amount` is refused rather than ignored. "Tax
+ *      is included" in a quote with no figure is a statement about nothing.
+ *   8. `duration` and `duration_unit` travel together or not at all. One
+ *      without the other means nothing, and accepting it would store half a
+ *      fact the serialiser would then have to hide.
+ *
+ * A MISSING OR UNPARSEABLE BODY IS A MISSING `message`, not a body error of its
+ * own: the first thing the client failed to send IS the message, and inventing
+ * a separate code for "no body" would give the app two things to handle where
+ * there is one.
+ *
+ * BOOLEANS ARE READ AS JSON BOOLEANS AND NOTHING ELSE. "true", "1" and 1 are
+ * all 422: the body is JSON, the client can send a real boolean, and accepting
+ * the string "false" would open the door to reading it as true — which is what
+ * PHP does with any non-empty string.
+ *
+ * LENGTHS ARE MEASURED IN CHARACTERS, with drupal_strlen() and never strlen():
+ * 2000 accented characters are not 2000 bytes, and the cut has to be the one
+ * the provider can count. Same rule SPEC 95 set for the cancellation reason.
+ *
+ * THE TWO DATES MUST BE STRICTLY IN THE FUTURE, the same decision SPEC 90 took
+ * for `desired_start` and for the same reason: everything is compared against
+ * the server's clock and the exact second is not a case a client builds on
+ * purpose. Rule 7 then compares available_from <= valid_until and NOT the other
+ * way round — promising availability for after the offer expires is the
+ * incoherence; being able to come before it expires is not.
+ *
+ * An optional text that is empty after trim() is stored as ABSENT, not as "".
+ * The serialiser answers null for it either way, and an empty row is a value
+ * somebody will eventually read as one.
+ *
+ * @param mixed $body  The decoded JSON body, or anything at all when the client
+ *                     sent no body or an unparseable one.
+ *
+ * @return array  ['ok' => TRUE, 'values' => [...]] with the twelve validated
+ *                values, or ['ok' => FALSE, 'error_code' => string,
+ *                'replacements' => array].
+ */
+function myapi_service_offer_validate_body($body) {
+  if (!is_array($body)) {
+    $body = [];
+  }
+
+  $values = [
+    'message'        => NULL,
+    'amount_type'    => NULL,
+    'amount'         => NULL,
+    'tax_included'   => NULL,
+    'valid_until'    => NULL,
+    'available_from' => NULL,
+    'duration'       => NULL,
+    'duration_unit'  => NULL,
+    'includes'       => NULL,
+    'excludes'       => NULL,
+    'warranty_days'  => NULL,
+    // The one value that is never NULL: an undeclared visit requirement is no
+    // visit requirement.
+    'requires_visit' => FALSE,
+  ];
+
+  /* 1. message — required, 1..2000 characters. */
+  if (!array_key_exists('message', $body)) {
+    return _myapi_service_offer_invalid('missing_field', 'message');
+  }
+  if (!is_string($body['message'])) {
+    return _myapi_service_offer_invalid('invalid_field', 'message');
+  }
+  $message = trim($body['message']);
+  if ($message === '') {
+    return _myapi_service_offer_invalid('invalid_field', 'message');
+  }
+  if (drupal_strlen($message) > 2000) {
+    return _myapi_service_offer_invalid('invalid_field', 'message');
+  }
+  $values['message'] = $message;
+
+  /* 2. amount_type — required, and one of the catalogue's four. */
+  if (!array_key_exists('amount_type', $body)) {
+    return _myapi_service_offer_invalid('missing_field', 'amount_type');
+  }
+  $amount_types = myapi_services_offer_amount_types();
+  if (!is_string($body['amount_type']) || !isset($amount_types[$body['amount_type']])) {
+    return _myapi_service_offer_invalid('invalid_field', 'amount_type');
+  }
+  $values['amount_type'] = $body['amount_type'];
+
+  /* 3. amount — conditional on amount_type, both ways. */
+  $priced = $values['amount_type'] !== 'on_site_quote';
+  $has_amount = array_key_exists('amount', $body) && $body['amount'] !== NULL && $body['amount'] !== '';
+
+  if ($priced && !$has_amount) {
+    return ['ok' => FALSE, 'error_code' => 'service_offer_amount_required', 'replacements' => []];
+  }
+  if (!$priced && $has_amount) {
+    return ['ok' => FALSE, 'error_code' => 'service_offer_amount_not_allowed', 'replacements' => []];
+  }
+  if ($has_amount) {
+    // is_numeric() and not is_float(): a JSON client may send 150.50 as a
+    // string to keep the decimals exact, and that is a legitimate amount. It
+    // answers FALSE for booleans and arrays, which is what keeps `true` out.
+    if (!is_numeric($body['amount']) || is_bool($body['amount'])) {
+      return _myapi_service_offer_invalid('invalid_field', 'amount');
+    }
+    $amount = (float) $body['amount'];
+    // 0 IS A PRICE somebody offered, so the floor is inclusive. The ceiling is
+    // the field's own: number_decimal(10, 2).
+    if ($amount < 0 || $amount > 99999999.99) {
+      return _myapi_service_offer_invalid('invalid_field', 'amount');
+    }
+    $values['amount'] = $amount;
+  }
+
+  /* 4. tax_included — a real boolean, and only alongside an amount. */
+  if (array_key_exists('tax_included', $body) && $body['tax_included'] !== NULL) {
+    if (!is_bool($body['tax_included'])) {
+      return _myapi_service_offer_invalid('invalid_field', 'tax_included');
+    }
+    if ($values['amount'] === NULL) {
+      return ['ok' => FALSE, 'error_code' => 'service_offer_tax_without_amount', 'replacements' => []];
+    }
+    $values['tax_included'] = $body['tax_included'];
+  }
+
+  /* 5 and 6. The two dates — parseable and strictly in the future. */
+  foreach (['valid_until', 'available_from'] as $field) {
+    if (!array_key_exists($field, $body) || $body[$field] === NULL || $body[$field] === '') {
+      continue;
+    }
+    $timestamp = _myapi_service_offer_future_timestamp($body[$field]);
+    if ($timestamp === FALSE) {
+      return _myapi_service_offer_invalid('invalid_field', $field);
+    }
+    $values[$field] = $timestamp;
+  }
+
+  /* 7. Coherence between the two — see the docblock on the direction. */
+  if ($values['valid_until'] !== NULL && $values['available_from'] !== NULL
+    && $values['available_from'] > $values['valid_until']) {
+    return ['ok' => FALSE, 'error_code' => 'service_offer_dates_inconsistent', 'replacements' => []];
+  }
+
+  /* 8. duration and duration_unit — both or neither. */
+  $has_duration = array_key_exists('duration', $body) && $body['duration'] !== NULL && $body['duration'] !== '';
+  $has_unit = array_key_exists('duration_unit', $body) && $body['duration_unit'] !== NULL && $body['duration_unit'] !== '';
+
+  if ($has_duration !== $has_unit) {
+    return ['ok' => FALSE, 'error_code' => 'service_offer_duration_incomplete', 'replacements' => []];
+  }
+  if ($has_duration) {
+    $duration = _myapi_service_offer_integer($body['duration']);
+    if ($duration === FALSE || $duration < 1 || $duration > 9999) {
+      return _myapi_service_offer_invalid('invalid_field', 'duration');
+    }
+    $units = myapi_services_offer_duration_units();
+    if (!is_string($body['duration_unit']) || !isset($units[$body['duration_unit']])) {
+      return _myapi_service_offer_invalid('invalid_field', 'duration_unit');
+    }
+    $values['duration'] = $duration;
+    $values['duration_unit'] = $body['duration_unit'];
+  }
+
+  /* 9. includes and excludes — optional text, up to 2000 characters. */
+  foreach (['includes', 'excludes'] as $field) {
+    if (!array_key_exists($field, $body) || $body[$field] === NULL) {
+      continue;
+    }
+    if (!is_string($body[$field])) {
+      return _myapi_service_offer_invalid('invalid_field', $field);
+    }
+    $text = trim($body[$field]);
+    if (drupal_strlen($text) > 2000) {
+      return _myapi_service_offer_invalid('invalid_field', $field);
+    }
+    // Empty after trim() is stored as ABSENT, not as "".
+    if ($text !== '') {
+      $values[$field] = $text;
+    }
+  }
+
+  /* 10. warranty_days — an integer from 0 to 3650. */
+  if (array_key_exists('warranty_days', $body) && $body['warranty_days'] !== NULL && $body['warranty_days'] !== '') {
+    $days = _myapi_service_offer_integer($body['warranty_days']);
+    // 0 IS A DECLARATION — "no warranty" — and not an absence.
+    if ($days === FALSE || $days < 0 || $days > 3650) {
+      return _myapi_service_offer_invalid('invalid_field', 'warranty_days');
+    }
+    $values['warranty_days'] = $days;
+  }
+
+  /* 11. requires_visit — a real boolean; absent is FALSE. */
+  if (array_key_exists('requires_visit', $body) && $body['requires_visit'] !== NULL) {
+    if (!is_bool($body['requires_visit'])) {
+      return _myapi_service_offer_invalid('invalid_field', 'requires_visit');
+    }
+    $values['requires_visit'] = $body['requires_visit'];
+  }
+
+  return ['ok' => TRUE, 'values' => $values];
+}
+
+/**
+ * The failure shape of myapi_service_offer_validate_body(), for the codes that
+ * name a field.
+ *
+ * Written once because eleven rules return it: a helper is what keeps the
+ * '@field' replacement from being retyped fourteen times, where one typo would
+ * answer a message naming the wrong field.
+ *
+ * @param string $error_code  'missing_field' or 'invalid_field'.
+ * @param string $field       The body key, as the client wrote it.
+ *
+ * @return array  The ['ok' => FALSE, ...] shape.
+ */
+function _myapi_service_offer_invalid($error_code, $field) {
+  return [
+    'ok'           => FALSE,
+    'error_code'   => $error_code,
+    'replacements' => ['@field' => $field],
+  ];
+}
+
+/**
+ * A date the client sent, as a timestamp, or FALSE.
+ *
+ * strtotime() and not a format assumption, exactly like
+ * myapi_service_request_parse_desired_start(): the documented format is
+ * 'Y-m-d H:i' and anything else strtotime() understands is accepted too, which
+ * costs nothing and refuses nothing a client legitimately sends.
+ *
+ * STRICTLY GREATER THAN REQUEST_TIME. The exact second of now is refused along
+ * with the past — an offer that is valid until this instant is not valid, and
+ * SPEC 90 drew the same line for 'desired_start'.
+ *
+ * @param mixed $raw  The value as it came in the body.
+ *
+ * @return int|FALSE  The timestamp, or FALSE when it does not parse or is not
+ *                    in the future.
+ */
+function _myapi_service_offer_future_timestamp($raw) {
+  if (!is_string($raw) || $raw === '') {
+    return FALSE;
+  }
+
+  $timestamp = strtotime($raw);
+
+  if ($timestamp === FALSE || $timestamp <= REQUEST_TIME) {
+    return FALSE;
+  }
+
+  return $timestamp;
+}
+
+/**
+ * An integer the client sent, or FALSE.
+ *
+ * Accepts a JSON integer and a string of digits — the two shapes a client
+ * legitimately produces — and refuses everything else, booleans and floats with
+ * a fractional part included: 2.5 hours is not a duration this field can store,
+ * and silently flooring it would change what the provider said.
+ *
+ * @param mixed $raw  The value as it came in the body.
+ *
+ * @return int|FALSE
+ */
+function _myapi_service_offer_integer($raw) {
+  if (is_bool($raw) || !is_numeric($raw)) {
+    return FALSE;
+  }
+
+  if ((string) (int) $raw !== (string) $raw && (int) $raw != $raw) {
+    return FALSE;
+  }
+
+  return (int) $raw;
+}
+
+/**
+ * The node.title of an offer (SPEC 100).
+ *
+ * "Oferta de <proveedor> — solicitud #<nid>", never longer than the 255
+ * characters node.title holds.
+ *
+ * THE PROVIDER'S NAME IS WHAT GETS TRUNCATED, not the whole string. Cutting the
+ * finished title would take the request number off the end for a long enough
+ * company name, and the number is the half that makes the title findable in
+ * /admin/content. So the fixed part is measured first and the name is given
+ * whatever is left, with truncate_utf8()'s word-safe cut and its ellipsis.
+ *
+ * NO t() PLACEHOLDER for either value. Drupal runs check_plain() over '@name'
+ * style replacements and this string goes into a raw column, so a provider
+ * called "Fontanería & Hijos" would be stored with an &amp; in its title —
+ * the same trap myapi_service_transaction_title() documents.
+ *
+ * A provider with no resolvable name still gets a title: the module's promise
+ * since SPEC 60 is that no node is ever titleless, and /admin/content showing
+ * a list of blank links is how that promise gets broken quietly.
+ *
+ * @param mixed $request_nid    The request nid.
+ * @param string|NULL $provider_name  The provider's node title.
+ *
+ * @return string  Never empty, never longer than 255 characters.
+ */
+function myapi_service_offer_title($request_nid, $provider_name) {
+  $suffix = ' — ' . t('solicitud') . ' #' . (int) $request_nid;
+  $provider_name = trim((string) $provider_name);
+
+  if ($provider_name === '') {
+    return truncate_utf8(t('Oferta') . $suffix, 255, TRUE, TRUE);
+  }
+
+  $prefix = t('Oferta de') . ' ';
+  $budget = 255 - drupal_strlen($prefix) - drupal_strlen($suffix);
+
+  if ($budget < 1) {
+    // Defensive: only reachable if the two translated fragments grew past 255
+    // characters between them, which would be a translation bug and not data.
+    return truncate_utf8($prefix . $provider_name . $suffix, 255, TRUE, TRUE);
+  }
+
+  if (drupal_strlen($provider_name) > $budget) {
+    $provider_name = truncate_utf8($provider_name, $budget, TRUE, TRUE);
+  }
+
+  return $prefix . $provider_name . $suffix;
+}
+
+/**
+ * The field_comment of the 'open' → 'offered' transaction (SPEC 100).
+ *
+ * SPEC 92 established that no transaction is ever born without a comment, and
+ * this function is what keeps that promise for the one this endpoint writes. It
+ * never returns an empty string.
+ *
+ * The provider's NAME and not the account's: the timeline is read by the
+ * resident, and "Plomería Torres envió una oferta" is the sentence that means
+ * something to them — the operator's user account does not.
+ *
+ * No t() placeholder and no check_plain(), for the two reasons SPEC 92 gives:
+ * field_comment is stored raw and escaped by whoever renders it, and a '@name'
+ * replacement would bake an &amp; into the column.
+ *
+ * @param string|NULL $provider_name  The provider's node title.
+ *
+ * @return string  The comment to store, never empty.
+ */
+function myapi_service_offer_transaction_comment($provider_name) {
+  $provider_name = trim((string) $provider_name);
+
+  if ($provider_name === '') {
+    return t('Se recibió una oferta.');
+  }
+
+  return $provider_name . ' ' . t('envió una oferta.');
+}
+
+/**
+ * Builds the offer node, WITHOUT saving it (SPEC 100).
+ *
+ * Same pattern as myapi_claim_build_node() and
+ * myapi_service_request_build_node(): pure, so the whole shape of what gets
+ * written is assertable in tests/unit, and node_save() stays in the resource
+ * where the ordering of the three writes lives.
+ *
+ * THE SEVEN VALUES THE SERVER FIXES, none of which is a field of the body:
+ *
+ *   node.type          'service_offer'.
+ *   node.uid           The uid of the Bearer token — the ACCOUNT that bid.
+ *   node.status        1.
+ *   node.title         myapi_service_offer_title().
+ *   field_request      The {id} of the route, already validated. It cannot
+ *                      contradict a request_id in the body because there is no
+ *                      request_id in the body.
+ *   field_offer_status Always 'sent'. A `status` in the body is ignored, not
+ *                      refused: it is not a field of this request.
+ *   the three chat     field_firebase_path, field_chat_opened_at and
+ *   fields             field_last_message_at are never written. They have been
+ *                      empty since SPEC 77 and this spec does not open the chat.
+ *
+ * node.uid AND field_provider ARE TWO DIFFERENT THINGS AND BOTH ARE WRITTEN. A
+ * provider may be operated by several accounts, and the offer has to know which
+ * of them sent it — the node's author — as well as which company it commits.
+ *
+ * AN OPTIONAL VALUE THAT IS NULL IS NOT WRITTEN AT ALL, rather than written as
+ * an empty row. The two are different in the database and the serialiser reads
+ * them the same way only by accident; leaving the field alone is what makes a
+ * new offer that declared nothing indistinguishable from one stored before
+ * myapi_update_7035(), which is exactly right.
+ *
+ * requires_visit IS THE EXCEPTION and is ALWAYS written, as 0 or 1. It has no
+ * third state — the absence of "I need to visit" is "I do not" — so storing the
+ * false is storing what the provider said.
+ *
+ * Only 'value' is written and never 'format', the rule every write path of this
+ * module follows: the column is stored raw and escaped by whoever renders it.
+ *
+ * @param mixed $uid            The authenticated account's uid.
+ * @param mixed $request_nid    The request this offer is made on.
+ * @param mixed $provider_id    The validated provider nid.
+ * @param string|NULL $provider_name  The provider's node title, for the title.
+ * @param array $values         The 'values' of myapi_service_offer_validate_body().
+ *
+ * @return object  The node, ready for node_save().
+ */
+function myapi_service_offer_build_node($uid, $request_nid, $provider_id, $provider_name, array $values) {
+  $node = new stdClass();
+  $node->type = MYAPI_SERVICES_OFFER_TYPE;
+  node_object_prepare($node);
+  $node->uid = $uid;
+  $node->status = 1;
+  $node->language = LANGUAGE_NONE;
+  $node->title = myapi_service_offer_title($request_nid, $provider_name);
+
+  $node->field_request[LANGUAGE_NONE][0]['target_id'] = (int) $request_nid;
+  $node->field_provider[LANGUAGE_NONE][0]['target_id'] = (int) $provider_id;
+  $node->field_offer_message[LANGUAGE_NONE][0]['value'] = $values['message'];
+  $node->field_offer_status[LANGUAGE_NONE][0]['value'] = MYAPI_SERVICES_OFFER_STATUS_SENT;
+  $node->field_offer_amount_type[LANGUAGE_NONE][0]['value'] = $values['amount_type'];
+
+  // The eight optional ones: written only when the provider declared them.
+  if ($values['amount'] !== NULL) {
+    $node->field_offer_amount[LANGUAGE_NONE][0]['value'] = $values['amount'];
+  }
+  if ($values['tax_included'] !== NULL) {
+    $node->field_offer_tax_included[LANGUAGE_NONE][0]['value'] = $values['tax_included'] ? 1 : 0;
+  }
+  if ($values['valid_until'] !== NULL) {
+    $node->field_offer_valid_until[LANGUAGE_NONE][0]['value'] = $values['valid_until'];
+  }
+  if ($values['available_from'] !== NULL) {
+    $node->field_offer_available_from[LANGUAGE_NONE][0]['value'] = $values['available_from'];
+  }
+  if ($values['duration'] !== NULL) {
+    $node->field_offer_duration[LANGUAGE_NONE][0]['value'] = $values['duration'];
+    $node->field_offer_duration_unit[LANGUAGE_NONE][0]['value'] = $values['duration_unit'];
+  }
+  if ($values['includes'] !== NULL) {
+    $node->field_offer_includes[LANGUAGE_NONE][0]['value'] = $values['includes'];
+  }
+  if ($values['excludes'] !== NULL) {
+    $node->field_offer_excludes[LANGUAGE_NONE][0]['value'] = $values['excludes'];
+  }
+  if ($values['warranty_days'] !== NULL) {
+    $node->field_offer_warranty_days[LANGUAGE_NONE][0]['value'] = $values['warranty_days'];
+  }
+
+  // Always written — see the docblock.
+  $node->field_offer_requires_visit[LANGUAGE_NONE][0]['value'] = $values['requires_visit'] ? 1 : 0;
+
+  return $node;
+}

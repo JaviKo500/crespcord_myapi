@@ -482,4 +482,490 @@ class ServiceOfferCreateTest extends TestCase {
     $this->assertEquals($before[0], $request_row);
     $this->assertEquals($before[1], $provider_row);
   }
+  /* -------------------------------------------------------------------------
+   * The body: eleven rules, in order, first failure answers (SPEC 100).
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * The minimum body the endpoint accepts: three fields and nothing else.
+   * Risk 2 of the spec rests on this — a provider on site, on a phone, bidding
+   * for a 150-dollar job, must be able to finish the form.
+   */
+  private function minimalBody(array $values = []) {
+    return $values + [
+      'message'     => 'Puedo pasar el jueves por la mañana.',
+      'amount_type' => 'fixed',
+      'amount'      => 150.5,
+    ];
+  }
+
+  private function validate($body) {
+    return myapi_service_offer_validate_body($body);
+  }
+
+  private function assertRejected($body, $error_code, $field = NULL) {
+    $result = $this->validate($body);
+
+    $this->assertFalse($result['ok']);
+    $this->assertSame($error_code, $result['error_code']);
+    if ($field !== NULL) {
+      $this->assertSame(['@field' => $field], $result['replacements']);
+    }
+  }
+
+  private function assertAccepted($body) {
+    $result = $this->validate($body);
+
+    $this->assertTrue(
+      $result['ok'],
+      'expected acceptance, got ' . (isset($result['error_code']) ? $result['error_code'] : '?')
+    );
+
+    return $result['values'];
+  }
+
+  /**
+   * The minimum body, and the twelve values it produces. Everything the
+   * provider did not declare comes back NULL — except requires_visit, which is
+   * FALSE and never NULL.
+   */
+  public function testTheMinimalBodyIsAccepted() {
+    $values = $this->assertAccepted($this->minimalBody());
+
+    $this->assertSame('Puedo pasar el jueves por la mañana.', $values['message']);
+    $this->assertSame('fixed', $values['amount_type']);
+    $this->assertSame(150.5, $values['amount']);
+
+    foreach (['tax_included', 'valid_until', 'available_from', 'duration',
+      'duration_unit', 'includes', 'excludes', 'warranty_days'] as $key) {
+      $this->assertNull($values[$key], $key . ' must default to null');
+    }
+    $this->assertFalse($values['requires_visit']);
+  }
+
+  /**
+   * A missing or unparseable body IS a missing `message`, not a code of its
+   * own: the first thing the client failed to send is the message, and a
+   * separate code would give the app two things to handle where there is one.
+   *
+   * @dataProvider bodilessCases
+   */
+  public function testAMissingBodyIsAMissingMessage($body) {
+    $this->assertRejected($body, 'missing_field', 'message');
+  }
+
+  public function bodilessCases() {
+    return [
+      'empty array' => [[]],
+      // json_decode() of an unparseable body answers NULL.
+      'null'        => [NULL],
+      'a string'    => ['not json'],
+      'a number'    => [7],
+      'false'       => [FALSE],
+    ];
+  }
+
+  /**
+   * The eleven rules, one broken field at a time, in the order of the spec's
+   * table.
+   *
+   * @dataProvider bodyCases
+   */
+  public function testTheBodyIsValidatedRuleByRule(array $overrides, $error_code, $field) {
+    // A NULL override means "remove the key", which is how a missing required
+    // field is expressed.
+    $body = $this->minimalBody();
+    foreach ($overrides as $key => $value) {
+      if ($value === '__unset__') {
+        unset($body[$key]);
+      }
+      else {
+        $body[$key] = $value;
+      }
+    }
+
+    $this->assertRejected($body, $error_code, $field);
+  }
+
+  public function bodyCases() {
+    return [
+      /* 1 — message. */
+      'message missing'      => [['message' => '__unset__'], 'missing_field', 'message'],
+      'message empty'        => [['message' => ''], 'invalid_field', 'message'],
+      'message only spaces'  => [['message' => "   \n  "], 'invalid_field', 'message'],
+      'message not a string' => [['message' => 42], 'invalid_field', 'message'],
+      'message is an array'  => [['message' => ['a']], 'invalid_field', 'message'],
+      'message 2001 chars'   => [['message' => str_repeat('a', 2001)], 'invalid_field', 'message'],
+
+      /* 2 — amount_type. */
+      'type missing'         => [['amount_type' => '__unset__'], 'missing_field', 'amount_type'],
+      'type off catalogue'   => [['amount_type' => 'negotiable'], 'invalid_field', 'amount_type'],
+      'type empty'           => [['amount_type' => ''], 'invalid_field', 'amount_type'],
+      'type not a string'    => [['amount_type' => 3], 'invalid_field', 'amount_type'],
+
+      /* 3 — amount, conditional both ways. */
+      'fixed with no amount' => [['amount' => '__unset__'], 'service_offer_amount_required', NULL],
+      'estimate, no amount'  => [['amount_type' => 'estimate', 'amount' => '__unset__'], 'service_offer_amount_required', NULL],
+      'hourly, no amount'    => [['amount_type' => 'hourly', 'amount' => '__unset__'], 'service_offer_amount_required', NULL],
+      'on site WITH amount'  => [['amount_type' => 'on_site_quote'], 'service_offer_amount_not_allowed', NULL],
+      'amount negative'      => [['amount' => -1], 'invalid_field', 'amount'],
+      'amount over the cap'  => [['amount' => 100000000], 'invalid_field', 'amount'],
+      'amount not a number'  => [['amount' => 'mucho'], 'invalid_field', 'amount'],
+      'amount is true'       => [['amount' => TRUE], 'invalid_field', 'amount'],
+
+      /* 4 — tax_included. */
+      'tax without amount'   => [['amount_type' => 'on_site_quote', 'amount' => '__unset__', 'tax_included' => TRUE], 'service_offer_tax_without_amount', NULL],
+      'tax as "true"'        => [['tax_included' => 'true'], 'invalid_field', 'tax_included'],
+      'tax as "1"'           => [['tax_included' => '1'], 'invalid_field', 'tax_included'],
+      'tax as 1'             => [['tax_included' => 1], 'invalid_field', 'tax_included'],
+      'tax as "false"'       => [['tax_included' => 'false'], 'invalid_field', 'tax_included'],
+
+      /* 5 and 6 — the two dates. */
+      'valid_until garbage'  => [['valid_until' => 'el jueves'], 'invalid_field', 'valid_until'],
+      'valid_until past'     => [['valid_until' => '2001-01-01 10:00'], 'invalid_field', 'valid_until'],
+      'valid_until not text' => [['valid_until' => 12345], 'invalid_field', 'valid_until'],
+      'available garbage'    => [['available_from' => 'mañana temprano???'], 'invalid_field', 'available_from'],
+      'available past'       => [['available_from' => '2001-01-01 10:00'], 'invalid_field', 'available_from'],
+
+      /* 8 — duration and its unit. */
+      'duration, no unit'    => [['duration' => 3], 'service_offer_duration_incomplete', NULL],
+      'unit, no duration'    => [['duration_unit' => 'hours'], 'service_offer_duration_incomplete', NULL],
+      'duration zero'        => [['duration' => 0, 'duration_unit' => 'hours'], 'invalid_field', 'duration'],
+      'duration negative'    => [['duration' => -3, 'duration_unit' => 'hours'], 'invalid_field', 'duration'],
+      'duration over 9999'   => [['duration' => 10000, 'duration_unit' => 'hours'], 'invalid_field', 'duration'],
+      'duration fractional'  => [['duration' => 2.5, 'duration_unit' => 'hours'], 'invalid_field', 'duration'],
+      'unit off catalogue'   => [['duration' => 3, 'duration_unit' => 'weeks'], 'invalid_field', 'duration_unit'],
+
+      /* 9 — includes and excludes. */
+      'includes 2001 chars'  => [['includes' => str_repeat('a', 2001)], 'invalid_field', 'includes'],
+      'excludes 2001 chars'  => [['excludes' => str_repeat('a', 2001)], 'invalid_field', 'excludes'],
+      'includes not a text'  => [['includes' => 5], 'invalid_field', 'includes'],
+
+      /* 10 — warranty_days. */
+      'warranty negative'    => [['warranty_days' => -1], 'invalid_field', 'warranty_days'],
+      'warranty over 3650'   => [['warranty_days' => 3651], 'invalid_field', 'warranty_days'],
+      'warranty fractional'  => [['warranty_days' => 1.5], 'invalid_field', 'warranty_days'],
+
+      /* 11 — requires_visit. */
+      'visit as "true"'      => [['requires_visit' => 'true'], 'invalid_field', 'requires_visit'],
+      'visit as 1'           => [['requires_visit' => 1], 'invalid_field', 'requires_visit'],
+      'visit as 0'           => [['requires_visit' => 0], 'invalid_field', 'requires_visit'],
+    ];
+  }
+
+  /**
+   * The boundaries that must be ACCEPTED. Every one of them is a value a real
+   * provider sends and a careless off-by-one would refuse.
+   */
+  public function testTheAcceptedBoundaries() {
+    // 2000 characters, and ACCENTED ones: drupal_strlen() counts characters,
+    // strlen() would count bytes and refuse this at roughly 1000.
+    $this->assertAccepted($this->minimalBody(['message' => str_repeat('á', 2000)]));
+
+    // 0 is a price somebody offered, with a closed price type.
+    $this->assertSame(0.0, $this->assertAccepted($this->minimalBody(['amount' => 0]))['amount']);
+
+    // The ceiling of number_decimal(10, 2), exactly.
+    $this->assertSame(99999999.99, $this->assertAccepted($this->minimalBody(['amount' => 99999999.99]))['amount']);
+
+    // An amount sent as a string, to keep the decimals exact over the wire.
+    $this->assertSame(150.5, $this->assertAccepted($this->minimalBody(['amount' => '150.50']))['amount']);
+
+    // on_site_quote with NO amount is the whole point of that type.
+    $on_site = $this->assertAccepted([
+      'message'     => 'Tengo que verlo antes de dar precio.',
+      'amount_type' => 'on_site_quote',
+    ]);
+    $this->assertNull($on_site['amount']);
+
+    // 0 warranty days is a declaration — "no warranty" — and not an absence.
+    $this->assertSame(0, $this->assertAccepted($this->minimalBody(['warranty_days' => 0]))['warranty_days']);
+    $this->assertSame(3650, $this->assertAccepted($this->minimalBody(['warranty_days' => 3650]))['warranty_days']);
+
+    // The two ends of the duration range.
+    $one = $this->assertAccepted($this->minimalBody(['duration' => 1, 'duration_unit' => 'hours']));
+    $this->assertSame(1, $one['duration']);
+    $max = $this->assertAccepted($this->minimalBody(['duration' => 9999, 'duration_unit' => 'days']));
+    $this->assertSame(9999, $max['duration']);
+
+    // Real booleans, both of them, both ways.
+    $flags = $this->assertAccepted($this->minimalBody([
+      'tax_included'   => FALSE,
+      'requires_visit' => TRUE,
+    ]));
+    $this->assertFalse($flags['tax_included']);
+    $this->assertTrue($flags['requires_visit']);
+  }
+
+  /**
+   * Rule 7 compares available_from <= valid_until AND NOT THE OTHER WAY ROUND.
+   * Promising availability for after the offer expires is the incoherence;
+   * being able to come before it expires is not.
+   */
+  public function testTheTwoDatesMustBeCoherentInOneDirectionOnly() {
+    $soon = date('Y-m-d H:i', REQUEST_TIME + 3600);
+    $later = date('Y-m-d H:i', REQUEST_TIME + 7200);
+
+    // available_from AFTER valid_until: refused.
+    $this->assertRejected(
+      $this->minimalBody(['valid_until' => $soon, 'available_from' => $later]),
+      'service_offer_dates_inconsistent'
+    );
+
+    // available_from BEFORE valid_until: accepted, and this is the normal case.
+    $this->assertAccepted($this->minimalBody(['valid_until' => $later, 'available_from' => $soon]));
+
+    // The same instant: accepted. Nothing is incoherent about an offer that
+    // expires the moment you become available.
+    $this->assertAccepted($this->minimalBody(['valid_until' => $soon, 'available_from' => $soon]));
+
+    // Either one alone is fine.
+    $this->assertAccepted($this->minimalBody(['valid_until' => $later]));
+    $this->assertAccepted($this->minimalBody(['available_from' => $soon]));
+  }
+
+  /**
+   * The cut is STRICTLY the future, the same line SPEC 90 drew for
+   * `desired_start`: the exact second of now is refused along with the past.
+   */
+  public function testTheExactSecondOfNowIsAlreadyThePast() {
+    $now = date('Y-m-d H:i:s', REQUEST_TIME);
+
+    $this->assertRejected($this->minimalBody(['valid_until' => $now]), 'invalid_field', 'valid_until');
+    $this->assertRejected($this->minimalBody(['available_from' => $now]), 'invalid_field', 'available_from');
+
+    $this->assertAccepted($this->minimalBody([
+      'valid_until' => date('Y-m-d H:i:s', REQUEST_TIME + 1),
+    ]));
+  }
+
+  /**
+   * An optional text that is empty after trim() is stored as ABSENT and not as
+   * "": the two are different in the database, and an empty row is a value
+   * somebody will eventually read as one.
+   */
+  public function testAnEmptyOptionalTextIsStoredAsAbsent() {
+    $values = $this->assertAccepted($this->minimalBody([
+      'includes' => '   ',
+      'excludes' => '',
+    ]));
+
+    $this->assertNull($values['includes']);
+    $this->assertNull($values['excludes']);
+
+    // And a real one is trimmed but otherwise stored as typed.
+    $kept = $this->assertAccepted($this->minimalBody([
+      'includes' => "  Mano de obra.\nDesplazamiento.  ",
+    ]));
+    $this->assertSame("Mano de obra.\nDesplazamiento.", $kept['includes']);
+  }
+
+  /**
+   * The order is the contract here too: a body that breaks two rules answers
+   * the earlier one, so the provider fixes the first thing that is wrong
+   * instead of chasing errors one deploy at a time.
+   */
+  public function testTheFirstBrokenRuleAnswers() {
+    // message (1) beats amount_type (2).
+    $this->assertRejected(['amount_type' => 'nope'], 'missing_field', 'message');
+
+    // amount_type (2) beats amount (3).
+    $this->assertRejected(
+      ['message' => 'Hola.', 'amount_type' => 'nope', 'amount' => -5],
+      'invalid_field',
+      'amount_type'
+    );
+
+    // amount (3) beats tax_included (4).
+    $this->assertRejected(
+      $this->minimalBody(['amount' => -5, 'tax_included' => 'sí']),
+      'invalid_field',
+      'amount'
+    );
+
+    // The dates (5, 6) beat their coherence (7).
+    $this->assertRejected(
+      $this->minimalBody(['valid_until' => 'nunca', 'available_from' => '2001-01-01 10:00']),
+      'invalid_field',
+      'valid_until'
+    );
+  }
+
+  /**
+   * `status` in the body is IGNORED and never refused: it is not a field of
+   * this request, and the offer is born 'sent' whatever the client sends.
+   * Same for a `request_id`, which lives in the route and nowhere else.
+   */
+  public function testUnknownKeysInTheBodyAreIgnored() {
+    $values = $this->assertAccepted($this->minimalBody([
+      'status'     => 'selected',
+      'request_id' => 999,
+      'provider'   => ['id' => 1],
+    ]));
+
+    $this->assertArrayNotHasKey('status', $values);
+    $this->assertArrayNotHasKey('request_id', $values);
+    $this->assertCount(12, $values);
+  }
+
+  /* -------------------------------------------------------------------------
+   * The node, the title and the transaction comment (SPEC 100).
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * The seven values the server fixes, none of which is a field of the body.
+   */
+  public function testTheNodeCarriesWhatTheServerDecides() {
+    $values = $this->assertAccepted($this->minimalBody());
+    $node = myapi_service_offer_build_node(self::UID, 128, 41, 'Plomería Torres', $values);
+
+    $this->assertSame(MYAPI_SERVICES_OFFER_TYPE, $node->type);
+    $this->assertSame(self::UID, $node->uid);
+    $this->assertSame(1, $node->status);
+    $this->assertSame(128, $node->field_request[LANGUAGE_NONE][0]['target_id']);
+    $this->assertSame(41, $node->field_provider[LANGUAGE_NONE][0]['target_id']);
+    $this->assertSame('sent', $node->field_offer_status[LANGUAGE_NONE][0]['value']);
+    $this->assertSame(MYAPI_SERVICES_OFFER_STATUS_SENT, $node->field_offer_status[LANGUAGE_NONE][0]['value']);
+
+    // The three chat fields are never written.
+    foreach (['field_firebase_path', 'field_chat_opened_at', 'field_last_message_at'] as $field) {
+      $this->assertFalse(property_exists($node, $field), $field . ' must stay empty');
+    }
+  }
+
+  /**
+   * An optional value the provider did not declare is NOT WRITTEN AT ALL,
+   * rather than written as an empty row: a new offer that declared nothing must
+   * be indistinguishable from one stored before myapi_update_7035().
+   */
+  public function testAnUndeclaredOptionalIsNotWritten() {
+    $node = myapi_service_offer_build_node(
+      self::UID, 128, 41, 'Plomería Torres',
+      $this->assertAccepted($this->minimalBody())
+    );
+
+    foreach (['field_offer_tax_included', 'field_offer_valid_until',
+      'field_offer_available_from', 'field_offer_duration',
+      'field_offer_duration_unit', 'field_offer_includes',
+      'field_offer_excludes', 'field_offer_warranty_days'] as $field) {
+      $this->assertFalse(property_exists($node, $field), $field . ' must not be written when undeclared');
+    }
+
+    // requires_visit IS the exception: always written, as 0 or 1.
+    $this->assertSame(0, $node->field_offer_requires_visit[LANGUAGE_NONE][0]['value']);
+  }
+
+  /**
+   * A full body writes all ten quote columns, with the booleans stored as the
+   * 0/1 a list_boolean column holds and never as PHP booleans.
+   */
+  public function testAFullBodyWritesEveryQuoteColumn() {
+    $valid_until = date('Y-m-d H:i', REQUEST_TIME + 7200);
+    $available_from = date('Y-m-d H:i', REQUEST_TIME + 3600);
+
+    $values = $this->assertAccepted($this->minimalBody([
+      'tax_included'   => TRUE,
+      'valid_until'    => $valid_until,
+      'available_from' => $available_from,
+      'duration'       => 3,
+      'duration_unit'  => 'hours',
+      'includes'       => 'Mano de obra.',
+      'excludes'       => 'El calentador.',
+      'warranty_days'  => 90,
+      'requires_visit' => TRUE,
+    ]));
+
+    $node = myapi_service_offer_build_node(self::UID, 128, 41, 'Plomería Torres', $values);
+
+    $this->assertSame('fixed', $node->field_offer_amount_type[LANGUAGE_NONE][0]['value']);
+    $this->assertSame(150.5, $node->field_offer_amount[LANGUAGE_NONE][0]['value']);
+    $this->assertSame(1, $node->field_offer_tax_included[LANGUAGE_NONE][0]['value']);
+    $this->assertSame(strtotime($valid_until), $node->field_offer_valid_until[LANGUAGE_NONE][0]['value']);
+    $this->assertSame(strtotime($available_from), $node->field_offer_available_from[LANGUAGE_NONE][0]['value']);
+    $this->assertSame(3, $node->field_offer_duration[LANGUAGE_NONE][0]['value']);
+    $this->assertSame('hours', $node->field_offer_duration_unit[LANGUAGE_NONE][0]['value']);
+    $this->assertSame('Mano de obra.', $node->field_offer_includes[LANGUAGE_NONE][0]['value']);
+    $this->assertSame('El calentador.', $node->field_offer_excludes[LANGUAGE_NONE][0]['value']);
+    $this->assertSame(90, $node->field_offer_warranty_days[LANGUAGE_NONE][0]['value']);
+    $this->assertSame(1, $node->field_offer_requires_visit[LANGUAGE_NONE][0]['value']);
+
+    // Only 'value' is ever written, never 'format'.
+    $this->assertSame(['value'], array_keys($node->field_offer_message[LANGUAGE_NONE][0]));
+    $this->assertSame(['value'], array_keys($node->field_offer_includes[LANGUAGE_NONE][0]));
+  }
+
+  /**
+   * A `status` in the body cannot make the offer anything but 'sent'. The
+   * validator drops the key and the builder writes the constant.
+   */
+  public function testTheBodyCannotChooseTheOfferStatus() {
+    $values = $this->assertAccepted($this->minimalBody(['status' => 'selected']));
+    $node = myapi_service_offer_build_node(self::UID, 128, 41, 'Torres', $values);
+
+    $this->assertSame('sent', $node->field_offer_status[LANGUAGE_NONE][0]['value']);
+  }
+
+  /**
+   * node.title never exceeds 255 characters, NOT EVEN with the longest provider
+   * name on the site — and the request number, which is what makes the title
+   * findable in /admin/content, survives the cut.
+   */
+  public function testTheTitleFitsAndKeepsTheRequestNumber() {
+    $short = myapi_service_offer_title(128, 'Plomería Torres');
+    $this->assertStringContainsString('Plomería Torres', $short);
+    $this->assertStringContainsString('#128', $short);
+
+    $long = myapi_service_offer_title(128, str_repeat('Fontanería Hermanos Rodríguez ', 40));
+    $this->assertLessThanOrEqual(255, drupal_strlen($long));
+    $this->assertStringContainsString('#128', $long, 'the request number must survive the truncation');
+    $this->assertStringEndsWith('#128', $long);
+  }
+
+  /**
+   * No node of this module is ever titleless (the promise since SPEC 60), so a
+   * provider whose name does not resolve still gets a usable title.
+   */
+  public function testATitlelessProviderStillGetsATitle() {
+    foreach ([NULL, '', '   '] as $name) {
+      $title = myapi_service_offer_title(128, $name);
+
+      $this->assertNotSame('', trim($title));
+      $this->assertStringContainsString('#128', $title);
+      $this->assertLessThanOrEqual(255, drupal_strlen($title));
+    }
+  }
+
+  /**
+   * The title carries the provider's name RAW, with no check_plain(): it goes
+   * into a raw column, and a t() '@name' replacement would store an &amp;
+   * where the company has an ampersand.
+   */
+  public function testTheTitleDoesNotEscapeTheProvidersName() {
+    $title = myapi_service_offer_title(128, 'Fontanería & Hijos');
+
+    $this->assertStringContainsString('Fontanería & Hijos', $title);
+    $this->assertStringNotContainsString('&amp;', $title);
+  }
+
+  /**
+   * SPEC 92's promise: no transaction is ever born without a comment. It names
+   * the PROVIDER and not the account, because the resident reads the timeline
+   * and the operator's user account means nothing to them.
+   */
+  public function testTheTransactionCommentIsNeverEmptyAndNamesTheProvider() {
+    $this->assertStringContainsString(
+      'Plomería Torres',
+      myapi_service_offer_transaction_comment('Plomería Torres')
+    );
+
+    foreach ([NULL, '', '   '] as $name) {
+      $this->assertNotSame('', trim(myapi_service_offer_transaction_comment($name)));
+    }
+
+    // Raw, like the title and for the same reason.
+    $this->assertStringNotContainsString(
+      '&amp;',
+      myapi_service_offer_transaction_comment('Fontanería & Hijos')
+    );
+  }
 }
