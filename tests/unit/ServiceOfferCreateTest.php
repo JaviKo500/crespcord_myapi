@@ -10,6 +10,8 @@ require_once __DIR__ . '/../../includes/myapi.auth.inc';
 require_once __DIR__ . '/../../includes/myapi.services_common.inc';
 require_once __DIR__ . '/../../includes/myapi.provider_role.inc';
 require_once __DIR__ . '/../../includes/myapi.service_offer.inc';
+require_once __DIR__ . '/../../includes/myapi.service_request_query.inc';
+require_once __DIR__ . '/../../resources/service_offer.resource.inc';
 
 /**
  * Unit tests for the offer's domain (SPEC 100).
@@ -1060,5 +1062,258 @@ class ServiceOfferCreateTest extends TestCase {
         $this->assertNotSame($key, myapi_t($key, ['@field' => 'x'], $lang), $key . ' (' . $lang . ')');
       }
     }
+  }
+  /* -------------------------------------------------------------------------
+   * The endpoint itself: method, nid, token and the role gate (SPEC 100).
+   *
+   * WHAT THIS SECTION CAN AND CANNOT REACH. myapi_request_body() reads
+   * php://input, which a unit test cannot write — the same limitation
+   * RequestValidationTest and AuthEndpointGuardsTest already document — so
+   * everything from step 4 (provider_id) onwards is exercised through its pure
+   * functions above and through the manual matrix of the spec's step 11, never
+   * from here. What IS reachable is every guard that runs BEFORE the body is
+   * read, and those are exactly the ones whose whole point is the order they
+   * run in.
+   * ---------------------------------------------------------------------- */
+
+  const TOKEN = 'a-valid-access-token';
+  const REQUEST_NID = 128;
+  const PROVIDER_A = 41;
+
+  protected function setUp(): void {
+    myapi_test_db_seed();
+    myapi_test_static_reset();
+    myapi_test_write_reset();
+    $GLOBALS['myapi_test_users'] = [];
+    $GLOBALS['myapi_test_nodes'] = [];
+    $_SERVER['REQUEST_METHOD'] = 'POST';
+    unset($_SERVER['HTTP_AUTHORIZATION']);
+  }
+
+  protected function tearDown(): void {
+    $GLOBALS['myapi_test_users'] = [];
+    myapi_test_static_reset();
+    myapi_test_db_seed();
+    unset($_SERVER['HTTP_AUTHORIZATION']);
+  }
+
+  private function tokenRow($uid, array $overrides = []) {
+    return $overrides + [
+      'id'                => '1',
+      'uid'               => (string) $uid,
+      'access_token_hash' => myapi_token_hash(self::TOKEN),
+      'revoked'           => '0',
+      'access_expires_at' => REQUEST_TIME + 1800,
+    ];
+  }
+
+  /**
+   * Seeds an account with a token and a set of roles. The provider role by
+   * default, because it is the precondition of everything that is not the gate.
+   */
+  private function seedAccount($uid = self::UID, $roles = NULL) {
+    $roles = $roles === NULL ? ['authenticated user', MYAPI_PROVIDER_ROLE] : $roles;
+
+    $GLOBALS['myapi_test_users'][$uid] = [
+      'uid'    => $uid,
+      'name'   => 'usuario' . $uid,
+      'status' => 1,
+      'roles'  => $roles,
+    ];
+
+    myapi_test_db_seed(['my_api_tokens' => [$this->tokenRow($uid)]]);
+    myapi_test_static_reset();
+  }
+
+  private function authenticate() {
+    $_SERVER['HTTP_AUTHORIZATION'] = 'Bearer ' . self::TOKEN;
+  }
+
+  /**
+   * Runs the endpoint the way hook_menu() does — the wildcard raw, as Drupal
+   * hands it over.
+   */
+  private function dispatch($nid = self::REQUEST_NID) {
+    return myapi_test_capture(function () use ($nid) {
+      myapi_service_offer_dispatch($nid);
+    });
+  }
+
+  /**
+   * EVERY METHOD BUT POST IS 405, AND BEFORE THE TOKEN AND BEFORE ANY QUERY. A
+   * GET with no Authorization header at all is still 405, never 401 — and GET
+   * is in this list on purpose: there is no collection read here, the offers
+   * travel inside the two details.
+   */
+  public function testEveryMethodOtherThanPostIs405BeforeAuthentication() {
+    foreach (['GET', 'PUT', 'PATCH', 'DELETE', 'HEAD'] as $method) {
+      $_SERVER['REQUEST_METHOD'] = $method;
+      unset($_SERVER['HTTP_AUTHORIZATION']);
+      myapi_test_db_queries();
+
+      $result = $this->dispatch();
+
+      $this->assertSame(405, $result['status'], $method);
+      $this->assertSame('method_not_allowed', $result['json']['error_code'], $method);
+      $this->assertFalse($result['json']['success'], $method);
+      $this->assertSame([], myapi_test_db_queries(), $method . ' must cost no query');
+      $this->assertSame([], myapi_test_node_saves(), $method . ' must write nothing');
+    }
+  }
+
+  /**
+   * The 405 does not depend on the shape of the id either: the method is wrong
+   * whatever the URL names.
+   */
+  public function testTheMethodIsCheckedBeforeTheNid() {
+    $_SERVER['REQUEST_METHOD'] = 'GET';
+    myapi_test_db_queries();
+
+    $result = $this->dispatch('no-soy-un-nid');
+
+    $this->assertSame(405, $result['status']);
+    $this->assertSame([], myapi_test_db_queries());
+  }
+
+  /**
+   * A nid that cannot name a request is 404, BEFORE the token: the answer is
+   * about the shape of the URL and not about what exists, so it leaks nothing
+   * and costs no query — not even the token's.
+   *
+   * @dataProvider impossibleNids
+   */
+  public function testAnImpossibleNidIs404WithNoQuery($nid) {
+    myapi_test_db_queries();
+
+    $result = $this->dispatch($nid);
+
+    $this->assertSame(404, $result['status'], var_export($nid, TRUE));
+    $this->assertSame('service_request_not_found', $result['json']['error_code'], var_export($nid, TRUE));
+    $this->assertSame([], myapi_test_db_queries(), var_export($nid, TRUE) . ' must cost no query');
+  }
+
+  public function impossibleNids() {
+    return [
+      'not a number' => ['abc'],
+      'zero'         => ['0'],
+      'negative'     => ['-3'],
+      'fractional'   => ['1.5'],
+      'empty'        => [''],
+      'null'         => [NULL],
+      'an array'     => [['128']],
+      'with spaces'  => [' 128 '],
+    ];
+  }
+
+  /**
+   * No Authorization header is 401 missing_authorization, and the role gate is
+   * never reached.
+   */
+  public function testNoTokenIs401() {
+    $this->seedAccount();
+
+    $result = $this->dispatch();
+
+    $this->assertSame(401, $result['status']);
+    $this->assertSame('missing_authorization', $result['json']['error_code']);
+    $this->assertSame([], myapi_test_node_saves());
+  }
+
+  /**
+   * An invented, a revoked and an expired token are all 401 invalid_token —
+   * told apart from each other by nothing, on purpose.
+   */
+  public function testABadTokenIs401() {
+    $cases = [
+      'invented' => NULL,
+      'revoked'  => ['revoked' => '1'],
+      'expired'  => ['access_expires_at' => REQUEST_TIME - 1],
+    ];
+
+    foreach ($cases as $label => $overrides) {
+      $GLOBALS['myapi_test_users'][self::UID] = [
+        'uid' => self::UID, 'name' => 'u', 'status' => 1,
+        'roles' => ['authenticated user', MYAPI_PROVIDER_ROLE],
+      ];
+      myapi_test_db_seed([
+        'my_api_tokens' => $overrides === NULL ? [] : [$this->tokenRow(self::UID, $overrides)],
+      ]);
+      myapi_test_static_reset();
+      $this->authenticate();
+
+      $result = $this->dispatch();
+
+      $this->assertSame(401, $result['status'], $label);
+      $this->assertSame('invalid_token', $result['json']['error_code'], $label);
+    }
+  }
+
+  /**
+   * THE ROLE GATE, BEFORE ANY QUERY ABOUT PROVIDERS OR REQUESTS. An account
+   * without the 'proveedor' role is 403 provider_role_required — AND SO IS AN
+   * ADMINISTRATOR. Operating a provider is a marketplace fact, not a
+   * permission, so no role short-circuits it.
+   *
+   * @dataProvider rolelessAccounts
+   */
+  public function testAnAccountWithoutTheProviderRoleIs403($roles) {
+    $this->seedAccount(self::UID, $roles);
+    $this->authenticate();
+
+    $result = $this->dispatch();
+
+    $this->assertSame(403, $result['status']);
+    $this->assertSame('provider_role_required', $result['json']['error_code']);
+    $this->assertSame([], myapi_test_node_saves(), 'a refused account must write nothing');
+  }
+
+  public function rolelessAccounts() {
+    return [
+      'plain user'    => [['authenticated user']],
+      'administrator' => [['authenticated user', 'administrator']],
+      'no roles'      => [[]],
+    ];
+  }
+
+  /**
+   * With the role and a valid token, the next thing asked for is provider_id —
+   * and a body that never arrived is a MISSING provider_id, not a body error of
+   * its own.
+   *
+   * php://input is empty in a unit test, so this is the one step-4 case
+   * reachable from here; the other three shapes of a bad provider_id are
+   * acceptance criteria of the manual matrix.
+   */
+  public function testAnAbsentBodyIsAMissingProviderId() {
+    $this->seedAccount();
+    $this->authenticate();
+
+    $result = $this->dispatch();
+
+    $this->assertSame(422, $result['status']);
+    $this->assertSame('missing_field', $result['json']['error_code']);
+    $this->assertStringContainsString('provider_id', $result['json']['error']);
+    $this->assertSame([], myapi_test_node_saves());
+  }
+
+  /**
+   * Every refusal above answers the documented envelope — success false, an
+   * error_code and a TRANSLATED error — and none of them writes a node.
+   */
+  public function testEveryRefusalAnswersTheErrorEnvelopeAndWritesNothing() {
+    $this->seedAccount(self::UID, ['authenticated user']);
+    $this->authenticate();
+
+    $result = $this->dispatch();
+
+    $this->assertSame(['success', 'error_code', 'error'], array_keys($result['json']));
+    $this->assertFalse($result['json']['success']);
+    $this->assertNotSame(
+      $result['json']['error_code'],
+      $result['json']['error'],
+      'the message must be translated, not the key echoed back'
+    );
+    $this->assertSame([], myapi_test_node_saves());
+    $this->assertTrue($result['exited']);
   }
 }

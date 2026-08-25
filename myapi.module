@@ -510,6 +510,25 @@ function myapi_menu() {
     'file'             => 'resources/service_request.resource.inc',
   ];
 
+  // A provider bids on a request (SPEC 100). FIVE COMPONENTS, exactly like
+  // 'api/v1/service-requests/%/cancel' above, and the two are told apart by the
+  // literal in the fifth position — Drupal 7 compares the number of components
+  // first, which already separates this from the four-part routes and from the
+  // six-part file one, and 'offers' cannot be confused with 'cancel'. Same
+  // reasoning SPEC 99 wrote down for its own route.
+  //
+  // Its callback lives in a resource of its own because the offer IS a resource
+  // of its own (Rules 2 and 5 of CLAUDE.md), even though the path hangs off the
+  // request: an offer does not exist outside its request, and the nid in the
+  // route is what makes a contradicting request_id in the body impossible.
+  $items['api/v1/service-requests/%/offers'] = [
+    'page callback'    => 'myapi_service_offer_dispatch',
+    'page arguments'   => [3],
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/service_offer.resource.inc',
+  ];
+
   // Back-office reservation calendar (SPEC 47). The only route of this module
   // that is not an api/v1 endpoint: it renders HTML for an operator, not the
   // JSON envelope for the app, which is why its callback lives in includes/
