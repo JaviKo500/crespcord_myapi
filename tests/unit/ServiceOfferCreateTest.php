@@ -321,4 +321,165 @@ class ServiceOfferCreateTest extends TestCase {
     $this->assertSame(0.0, $zero);
     $this->assertNotNull($zero);
   }
+  /* -------------------------------------------------------------------------
+   * The gate: six conditions, in order, first failure answers (SPEC 100).
+   * ---------------------------------------------------------------------- */
+
+  private const NOW = 1787000000;
+  private const UID = 12;
+  private const CATEGORY = 5;
+
+  /**
+   * A row of myapi_service_offer_provider_row(): mine, published, licence in
+   * date, serving the request's category. Every gate case below starts from
+   * this one and breaks exactly one thing.
+   */
+  private function providerRow(array $values = []) {
+    return (object) ($values + [
+      'nid'            => '41',
+      'title'          => 'Plomería Torres',
+      'status'         => '1',
+      'license_expiry' => (string) (self::NOW + 86400),
+      'owned'          => TRUE,
+      'category_ids'   => [self::CATEGORY],
+    ]);
+  }
+
+  /**
+   * A row of myapi_service_request_detail_row(): open, unawarded, of the
+   * provider's category, and NOT this account's own request.
+   */
+  private function requestRow(array $values = []) {
+    return (object) ($values + [
+      'nid'                    => '128',
+      'status'                 => MYAPI_SERVICES_REQUEST_STATUS_OPEN,
+      'requester_uid'          => '77',
+      'category_id'            => (string) self::CATEGORY,
+      'assigned_offer_raw'     => NULL,
+      'assigned_provider_raw'  => NULL,
+    ]);
+  }
+
+  private function gate($request_row, $provider_row) {
+    return myapi_service_offer_eligibility($request_row, $provider_row, self::UID, self::NOW);
+  }
+
+  /**
+   * The happy path: everything in place answers NULL, which is the only value
+   * that means "let them through".
+   */
+  public function testTheGateLetsAnEligibleProviderThrough() {
+    $this->assertNull($this->gate($this->requestRow(), $this->providerRow()));
+  }
+
+  /**
+   * The whole matrix, one broken thing at a time.
+   *
+   * @dataProvider gateCases
+   */
+  public function testTheGateAnswersTheRightCode($request_values, $provider_values, $expected) {
+    $request_row = $request_values === FALSE ? FALSE : $this->requestRow($request_values);
+    $provider_row = $provider_values === FALSE ? FALSE : $this->providerRow($provider_values);
+
+    $this->assertSame($expected, $this->gate($request_row, $provider_row));
+  }
+
+  public function gateCases() {
+    return [
+      /* 1 — not mine. */
+      'no such provider node'      => [[], FALSE, 'service_offer_provider_not_owned'],
+      'somebody else\'s provider'  => [[], ['owned' => FALSE], 'service_offer_provider_not_owned'],
+
+      /* 2 — mine, but suspended. */
+      'unpublished provider'       => [[], ['status' => '0'], 'service_offer_provider_not_active'],
+      'licence expired yesterday'  => [[], ['license_expiry' => (string) (self::NOW - 1)], 'service_offer_provider_not_active'],
+      'licence empty'              => [[], ['license_expiry' => ''], 'service_offer_provider_not_active'],
+      'licence missing'            => [[], ['license_expiry' => NULL], 'service_offer_provider_not_active'],
+      // The boundary: the licence dies the second AFTER it expires, so the
+      // exact second is still active. myapi_services_provider_is_active() owns
+      // this and it is asserted here only to prove the gate asks it.
+      'licence expiring now'       => [[], ['license_expiry' => (string) self::NOW], NULL],
+
+      /* 3 — no such request. Asked AFTER the provider. */
+      'no such request'            => [FALSE, [], 'service_request_not_found'],
+
+      /* 4 — my own request. */
+      'my own request'             => [['requester_uid' => (string) self::UID], [], 'service_offer_own_request'],
+
+      /* 5 — the request is not taking offers. */
+      'direct'                     => [['status' => MYAPI_SERVICES_REQUEST_STATUS_DIRECT], [], 'service_request_not_offerable'],
+      'assigned'                   => [['status' => MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED], [], 'service_request_not_offerable'],
+      'closed'                     => [['status' => MYAPI_SERVICES_REQUEST_STATUS_CLOSED], [], 'service_request_not_offerable'],
+      'cancelled'                  => [['status' => MYAPI_SERVICES_REQUEST_STATUS_CANCELLED], [], 'service_request_not_offerable'],
+      // Never a 500: a status nobody can name reads as "not offerable".
+      'status empty'               => [['status' => ''], [], 'service_request_not_offerable'],
+      'status corrupt'             => [['status' => 'pendiente'], [], 'service_request_not_offerable'],
+      'status missing'             => [['status' => NULL], [], 'service_request_not_offerable'],
+      // 'offered' IS biddable: the second and third providers still bid.
+      'offered'                    => [['status' => MYAPI_SERVICES_REQUEST_STATUS_OFFERED], [], NULL],
+
+      /* 5 — awarded, read RAW. */
+      'awarded an offer'           => [['assigned_offer_raw' => '900'], [], 'service_request_not_offerable'],
+      'awarded a provider'         => [['assigned_provider_raw' => '41'], [], 'service_request_not_offerable'],
+      'awarded, offered'           => [['status' => MYAPI_SERVICES_REQUEST_STATUS_OFFERED, 'assigned_offer_raw' => '900'], [], 'service_request_not_offerable'],
+
+      /* 6 — not my category. */
+      'another category'           => [['category_id' => '99'], [], 'service_offer_category_mismatch'],
+      'provider serves none'       => [[], ['category_ids' => []], 'service_offer_category_mismatch'],
+      'request has no category'    => [['category_id' => NULL], [], 'service_offer_category_mismatch'],
+      // Two categories, one of them the request's: through.
+      'provider serves two'        => [[], ['category_ids' => [99, self::CATEGORY]], NULL],
+    ];
+  }
+
+  /**
+   * THE ORDER IS THE CONTRACT, not just the list. Every case below breaks TWO
+   * conditions at once and must answer the EARLIER one — which is what makes
+   * the error a client reads actionable instead of arbitrary.
+   *
+   * @dataProvider gatePrecedence
+   */
+  public function testTheFirstFailingConditionAnswers($request_values, $provider_values, $expected) {
+    $request_row = $request_values === FALSE ? FALSE : $this->requestRow($request_values);
+    $provider_row = $provider_values === FALSE ? FALSE : $this->providerRow($provider_values);
+
+    $this->assertSame($expected, $this->gate($request_row, $provider_row));
+  }
+
+  public function gatePrecedence() {
+    return [
+      // Not mine beats suspended.
+      'not owned + unpublished' => [[], ['owned' => FALSE, 'status' => '0'], 'service_offer_provider_not_owned'],
+      // AND it beats "no such request": an account with no standing to bid
+      // learns nothing about which request nids exist.
+      'not owned + no request'  => [FALSE, ['owned' => FALSE], 'service_offer_provider_not_owned'],
+      'suspended + no request'  => [FALSE, ['status' => '0'], 'service_offer_provider_not_active'],
+      // No such request beats everything about the request itself.
+      'no request + own + shut' => [FALSE, [], 'service_request_not_found'],
+      // Mine beats closed: you are told it is yours, not that it is shut.
+      'own + cancelled'         => [['requester_uid' => (string) self::UID, 'status' => MYAPI_SERVICES_REQUEST_STATUS_CANCELLED], [], 'service_offer_own_request'],
+      // Closed beats wrong category.
+      'cancelled + category'    => [['status' => MYAPI_SERVICES_REQUEST_STATUS_CANCELLED, 'category_id' => '99'], [], 'service_request_not_offerable'],
+      // Awarded is condition 5 and the category is 6, so the award answers.
+      'awarded + category'      => [['assigned_provider_raw' => '41', 'category_id' => '99'], [], 'service_request_not_offerable'],
+    ];
+  }
+
+  /**
+   * The gate is PURE: called twice with the same rows it answers the same
+   * thing, and it writes nothing back into them. Cheap to assert, and it is
+   * what lets the whole matrix above run with no site booted.
+   */
+  public function testTheGateIsPureAndMutatesNothing() {
+    $request_row = $this->requestRow();
+    $provider_row = $this->providerRow();
+
+    $before = [clone $request_row, clone $provider_row];
+
+    $this->assertNull($this->gate($request_row, $provider_row));
+    $this->assertNull($this->gate($request_row, $provider_row));
+
+    $this->assertEquals($before[0], $request_row);
+    $this->assertEquals($before[1], $provider_row);
+  }
 }
