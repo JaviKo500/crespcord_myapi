@@ -108,6 +108,12 @@ module_load_include('inc', 'myapi', 'includes/myapi.node_files');
 // Both moved verbatim and kept their names, so every call site below is the one
 // it always was — see the @file docblock of the include.
 module_load_include('inc', 'myapi', 'includes/myapi.service_request_query');
+// SPEC 100: myapi_service_offer_build(), which lived here as
+// myapi_service_request_build_offer() until the offer got a resource of its
+// own. Six keys became fifteen; the first six are unchanged, so the three call
+// sites below — the detail, the provider's detail and the cancellation —
+// answer everything they answered before plus nine keys.
+module_load_include('inc', 'myapi', 'includes/myapi.service_offer');
 
 /**
  * Dispatcher for /api/v1/service-requests (SPECS 88 and 90).
@@ -1405,7 +1411,7 @@ function myapi_service_request_detail($nid) {
     : [];
 
   $offers = array_map(
-    'myapi_service_request_build_offer',
+    'myapi_service_offer_build',
     myapi_service_request_load_offers($nid, $provider_ids)
   );
 
@@ -1670,8 +1676,11 @@ function myapi_service_request_load_images($nid) {
  *                             NO TRIM (the requester), never "no offers".
  *
  * @return array  Rows carrying `nid`, `provider_id`, `provider_name`,
- *                `provider_logo_uri`, `amount`, `message`, `status` and
- *                `created` — the aliases myapi_service_request_build_offer()
+ *                `provider_logo_uri`, `amount`, `message`, `status`,
+ *                `created`, and the ten of SPEC 100: `amount_type`,
+ *                `valid_until`, `available_from`, `duration`, `duration_unit`,
+ *                `includes`, `excludes`, `tax_included`, `warranty_days` and
+ *                `requires_visit` — the aliases myapi_service_offer_build()
  *                reads.
  */
 function myapi_service_request_load_offers($nid, array $provider_ids) {
@@ -1712,6 +1721,45 @@ function myapi_service_request_load_offers($nid, array $provider_ids) {
 
   $query->leftJoin('field_data_field_offer_status', 'fost', "fost.entity_id = no.nid AND fost.entity_type = 'node' AND fost.deleted = 0");
   $query->addField('fost', 'field_offer_status_value', 'status');
+
+  // The ten quote columns of SPEC 100. ALL TEN ARE LEFT JOINS, and that is not
+  // the usual caution: an offer created before myapi_update_7035() has no row
+  // in ANY of these ten tables, so a single INNER here would drop every
+  // historic offer out of `offers` and out of `my_offers` — and out of
+  // agreement with offers_count, which counts it. They answer null, which is
+  // what myapi_service_offer_build() serves for them.
+  //
+  // None of the ten can multiply a row: every field is cardinality 1 and joined
+  // on entity_id, which is the primary key of those tables.
+  $query->leftJoin('field_data_field_offer_amount_type', 'fat', "fat.entity_id = no.nid AND fat.entity_type = 'node' AND fat.deleted = 0");
+  $query->addField('fat', 'field_offer_amount_type_value', 'amount_type');
+
+  $query->leftJoin('field_data_field_offer_valid_until', 'fvu', "fvu.entity_id = no.nid AND fvu.entity_type = 'node' AND fvu.deleted = 0");
+  $query->addField('fvu', 'field_offer_valid_until_value', 'valid_until');
+
+  $query->leftJoin('field_data_field_offer_available_from', 'faf', "faf.entity_id = no.nid AND faf.entity_type = 'node' AND faf.deleted = 0");
+  $query->addField('faf', 'field_offer_available_from_value', 'available_from');
+
+  $query->leftJoin('field_data_field_offer_duration', 'fdu', "fdu.entity_id = no.nid AND fdu.entity_type = 'node' AND fdu.deleted = 0");
+  $query->addField('fdu', 'field_offer_duration_value', 'duration');
+
+  $query->leftJoin('field_data_field_offer_duration_unit', 'fdn', "fdn.entity_id = no.nid AND fdn.entity_type = 'node' AND fdn.deleted = 0");
+  $query->addField('fdn', 'field_offer_duration_unit_value', 'duration_unit');
+
+  $query->leftJoin('field_data_field_offer_includes', 'fin', "fin.entity_id = no.nid AND fin.entity_type = 'node' AND fin.deleted = 0");
+  $query->addField('fin', 'field_offer_includes_value', 'includes');
+
+  $query->leftJoin('field_data_field_offer_excludes', 'fex', "fex.entity_id = no.nid AND fex.entity_type = 'node' AND fex.deleted = 0");
+  $query->addField('fex', 'field_offer_excludes_value', 'excludes');
+
+  $query->leftJoin('field_data_field_offer_tax_included', 'fti', "fti.entity_id = no.nid AND fti.entity_type = 'node' AND fti.deleted = 0");
+  $query->addField('fti', 'field_offer_tax_included_value', 'tax_included');
+
+  $query->leftJoin('field_data_field_offer_warranty_days', 'fwd', "fwd.entity_id = no.nid AND fwd.entity_type = 'node' AND fwd.deleted = 0");
+  $query->addField('fwd', 'field_offer_warranty_days_value', 'warranty_days');
+
+  $query->leftJoin('field_data_field_offer_requires_visit', 'frv', "frv.entity_id = no.nid AND frv.entity_type = 'node' AND frv.deleted = 0");
+  $query->addField('frv', 'field_offer_requires_visit_value', 'requires_visit');
 
   // The trim. Empty list = no condition at all, and never an "IN ()", which is
   // invalid SQL in Drupal 7.
@@ -1862,68 +1910,6 @@ function myapi_service_request_build_file($fid, $filename, $request_nid) {
 }
 
 /**
- * Shapes one offer row into the item of the `offers` list (SPEC 89).
- *
- * ALWAYS THE SAME SIX KEYS, IN THIS ORDER — id, provider, amount, message,
- * status, created — whatever the data. PURE: no database, no node_load().
- *
- * `provider` IS THE WHOLE OBJECT OR NULL, AND THE OFFER STAYS IN THE LIST
- * EITHER WAY. The provider is resolved through a LEFT JOIN restricted to
- * published 'provider' nodes, so an unpublished or deleted one leaves this NULL
- * — and dropping the offer instead would make `offers` disagree with
- * `offers_count`, which counts it. The same distinction
- * myapi_service_request_build_item() makes with the awarded pair.
- *
- * `logo` IS AN ABSOLUTE, DIRECT URL, unlike the request's own images: field_logo
- * is public:// (SPEC 85), so it is served by the web server and needs no token.
- * Same guard as myapi_provider_build_item() — isset() AND !== '' — so a provider
- * with no logo, or one whose field row points at a file_managed that no longer
- * exists, answers NULL and never "" nor a broken URL.
- *
- * `amount` IS A FLOAT OR NULL, NEVER "95.50" AND NEVER 0.0. The field is
- * optional by SPEC 77's decision — the price can be settled in the chat — and 0
- * is a price somebody offered, not a missing one. Same rule as `hourly_rate` in
- * GET /api/v1/providers.
- *
- * `message` travels AS STORED, with the line breaks the provider typed, exactly
- * like `description` in the listing item. The instance pins the 'plain_text'
- * format (SPEC 77); the note in docs/service-request.md says what depends on
- * that.
- *
- * @param object $row
- *   One row of myapi_service_request_load_offers(), carrying `nid`,
- *   `provider_id`, `provider_name`, `provider_logo_uri`, `amount`, `message`,
- *   `status` and `created`.
- *
- * @return array  The six keys above, in that order.
- */
-function myapi_service_request_build_offer($row) {
-  $provider = NULL;
-  if (isset($row->provider_id) && $row->provider_id !== '') {
-    $provider = [
-      'id'   => (int) $row->provider_id,
-      'name' => isset($row->provider_name) ? $row->provider_name : NULL,
-      'logo' => isset($row->provider_logo_uri) && $row->provider_logo_uri !== ''
-        ? file_create_url($row->provider_logo_uri)
-        : NULL,
-    ];
-  }
-
-  return [
-    'id'       => (int) $row->nid,
-    'provider' => $provider,
-    'amount'   => isset($row->amount) && $row->amount !== ''
-      ? (float) $row->amount
-      : NULL,
-    'message'  => isset($row->message) ? $row->message : '',
-    'status'   => isset($row->status) ? $row->status : NULL,
-    'created'  => isset($row->created)
-      ? format_date((int) $row->created, 'custom', 'Y-m-d\TH:i:s')
-      : NULL,
-  ];
-}
-
-/**
  * Shapes the whole detail item, for either reader (SPEC 89).
  *
  * THE TEN FIRST KEYS ARE THE LISTING'S, PRODUCED BY THE LISTING'S OWN
@@ -1993,7 +1979,7 @@ function myapi_service_request_build_offer($row) {
  *   The list of myapi_service_request_build_file() items, in delta order.
  *   Always an array, empty when there are none.
  * @param array $offers
- *   The list of myapi_service_request_build_offer() items, already ordered and
+ *   The list of myapi_service_offer_build() items, already ordered and
  *   already trimmed to the reader by the query. Always an array.
  * @param mixed $offers_count
  *   The TOTAL number of published offers of the request, from
@@ -2122,7 +2108,7 @@ function myapi_service_request_build_detail($row, $viewer, array $images, array 
  *   The list of myapi_service_request_build_file() items, in delta order.
  *   Always an array, empty when there are none.
  * @param array $my_offers
- *   The list of myapi_service_request_build_offer() items, ALREADY TRIMMED BY
+ *   The list of myapi_service_offer_build() items, ALREADY TRIMMED BY
  *   THE QUERY to the reader's own providers. Always an array.
  * @param mixed $offers_count
  *   The TOTAL number of published offers of the request, competition included,
@@ -2349,7 +2335,7 @@ function myapi_service_request_provider_detail($nid) {
   $offers_count = isset($offer_counts[$nid]) ? $offer_counts[$nid] : 0;
 
   $my_offers = array_map(
-    'myapi_service_request_build_offer',
+    'myapi_service_offer_build',
     myapi_service_request_load_offers($nid, $provider_ids)
   );
 
@@ -3269,7 +3255,7 @@ function myapi_service_request_cancel($nid) {
   // same argument the detail passes for this reader. They all come back with
   // the statuses step 7c just wrote.
   $offers = array_map(
-    'myapi_service_request_build_offer',
+    'myapi_service_offer_build',
     myapi_service_request_load_offers($node->nid, [])
   );
 

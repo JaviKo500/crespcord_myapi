@@ -10,6 +10,7 @@ require_once __DIR__ . '/../../includes/myapi.auth.inc';
 require_once __DIR__ . '/../../includes/myapi.user.inc';
 require_once __DIR__ . '/../../includes/myapi.services_common.inc';
 require_once __DIR__ . '/../../includes/myapi.provider_role.inc';
+require_once __DIR__ . '/../../includes/myapi.service_offer.inc';
 require_once __DIR__ . '/../../includes/myapi.service_request_query.inc';
 require_once __DIR__ . '/../../resources/service_request.resource.inc';
 
@@ -1422,8 +1423,10 @@ class ServiceRequestProviderDetailTest extends TestCase {
   }
 
   /**
-   * Each offer is {id, provider: {id, name, logo}, amount, message, status,
-   * created} — the six keys of SPEC 89, in order, under the new name.
+   * Each offer is fifteen keys since SPEC 100 — {id, provider: {id, name,
+   * logo}, amount, message, status, created} first and unchanged, then the nine
+   * of the quote. The prefix is what makes this test's original assertion still
+   * true: the six keys of SPEC 89, in order, under the new name.
    */
   public function testEachOfMyOffersHasTheSixKeysOfSpec89() {
     $result = $this->detail([$this->request()], [
@@ -1434,8 +1437,18 @@ class ServiceRequestProviderDetailTest extends TestCase {
 
     $offer = $this->item($result)['my_offers'][0];
 
+    // The prefix, byte for byte what SPEC 89 answered.
     $this->assertSame(
       ['id', 'provider', 'amount', 'message', 'status', 'created'],
+      array_slice(array_keys($offer), 0, 6)
+    );
+    $this->assertSame(
+      [
+        'id', 'provider', 'amount', 'message', 'status', 'created',
+        'amount_type', 'valid_until', 'available_from', 'duration',
+        'includes', 'excludes', 'tax_included', 'warranty_days',
+        'requires_visit',
+      ],
       array_keys($offer)
     );
     $this->assertSame(['id', 'name', 'logo'], array_keys($offer['provider']));

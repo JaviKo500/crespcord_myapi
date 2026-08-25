@@ -11,6 +11,7 @@ require_once __DIR__ . '/../../includes/myapi.services_common.inc';
 require_once __DIR__ . '/../../includes/myapi.provider_role.inc';
 require_once __DIR__ . '/../../includes/myapi.building_admin.inc';
 require_once __DIR__ . '/../../includes/myapi.service_request_files.inc';
+require_once __DIR__ . '/../../includes/myapi.service_offer.inc';
 require_once __DIR__ . '/../../includes/myapi.service_request_query.inc';
 require_once __DIR__ . '/../../resources/service_request.resource.inc';
 require_once __DIR__ . '/../../myapi.module';
@@ -670,22 +671,45 @@ class ServiceRequestDetailEndpointTest extends TestCase {
         'filename' => 'presupuesto.pdf',
       ],
       'closed_at'         => NULL,
+      // Fifteen keys per offer since SPEC 100, and the SIX FIRST ARE SPEC 89's,
+      // unchanged and in their original order. This fixture seeds no quote
+      // column, so the nine new keys answer exactly what an offer stored before
+      // myapi_update_7035() answers: null everywhere, and false for
+      // requires_visit — which is never null.
       'offers'            => [
         [
-          'id'       => 46,
-          'provider' => ['id' => 9, 'name' => 'Servicios Díaz', 'logo' => NULL],
-          'amount'   => 95.5,
-          'message'  => 'Puedo pasar el jueves.',
-          'status'   => 'sent',
-          'created'  => format_date(self::CREATED + 20, 'custom', 'Y-m-d\TH:i:s'),
+          'id'             => 46,
+          'provider'       => ['id' => 9, 'name' => 'Servicios Díaz', 'logo' => NULL],
+          'amount'         => 95.5,
+          'message'        => 'Puedo pasar el jueves.',
+          'status'         => 'sent',
+          'created'        => format_date(self::CREATED + 20, 'custom', 'Y-m-d\TH:i:s'),
+          'amount_type'    => NULL,
+          'valid_until'    => NULL,
+          'available_from' => NULL,
+          'duration'       => NULL,
+          'includes'       => NULL,
+          'excludes'       => NULL,
+          'tax_included'   => NULL,
+          'warranty_days'  => NULL,
+          'requires_visit' => FALSE,
         ],
         [
-          'id'       => 45,
-          'provider' => ['id' => 7, 'name' => 'Plomería Rivas', 'logo' => NULL],
-          'amount'   => NULL,
-          'message'  => "Necesito ver la instalación.\nLuego doy precio.",
-          'status'   => 'sent',
-          'created'  => format_date(self::CREATED + 10, 'custom', 'Y-m-d\TH:i:s'),
+          'id'             => 45,
+          'provider'       => ['id' => 7, 'name' => 'Plomería Rivas', 'logo' => NULL],
+          'amount'         => NULL,
+          'message'        => "Necesito ver la instalación.\nLuego doy precio.",
+          'status'         => 'sent',
+          'created'        => format_date(self::CREATED + 10, 'custom', 'Y-m-d\TH:i:s'),
+          'amount_type'    => NULL,
+          'valid_until'    => NULL,
+          'available_from' => NULL,
+          'duration'       => NULL,
+          'includes'       => NULL,
+          'excludes'       => NULL,
+          'tax_included'   => NULL,
+          'warranty_days'  => NULL,
+          'requires_visit' => FALSE,
         ],
       ],
       // Empty here on purpose: this fixture seeds no transaction, and the key
