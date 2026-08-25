@@ -2,7 +2,9 @@
 
 The provider's side of the marketplace: a provider bids on an open request of
 their category, with the fields that turn *a text and a number* into a quote the
-resident can compare.
+resident can compare — **or prices a `direct` request that was awarded to them
+from the start**, which is the same body on the same route and the only place in
+this module where the price of that job can live.
 
 One route, and it hangs off the request because **an offer does not exist
 outside its request**:
@@ -22,6 +24,10 @@ them would be a third thing to keep in agreement with `offers_count`.
 Creates the offer of one of the authenticated account's providers on an open
 request of that provider's category, and — **when the offer is the first one** —
 moves the request from `open` to `offered` and writes one entry on its timeline.
+
+**It also carries the quote of a `direct` request**, sent by the provider it was
+awarded to. That case moves **no status at all** and is documented on its own
+below: [Quoting a `direct` request](#quoting-a-direct-request).
 
 **Authentication:** required. And the `proveedor` role, and a provider node the
 account operates.
@@ -127,8 +133,8 @@ what makes the error actionable instead of arbitrary.
 | 2 | That provider is **active**: published, with a licence still in date | `403 service_offer_provider_not_active` |
 | 3 | The request exists, is a `service_request` and is published | `404 service_request_not_found` |
 | 4 | You are **not** its requester | `403 service_offer_own_request` |
-| 5 | It is in `open` or `offered`, and nothing is awarded on it | `409 service_request_not_offerable` |
-| 6 | Its category is one your provider serves | `403 service_offer_category_mismatch` |
+| 5 | It is in `open` or `offered` with nothing awarded on it, **or it is a `direct` awarded to the very provider that is bidding** | `409 service_request_not_offerable` |
+| 6 | Its category is one your provider serves — **skipped on a `direct` of your own** | `403 service_offer_category_mismatch` |
 | 7 | That provider has no **live** offer on it already | `409 service_offer_already_sent` |
 
 **All seven run before a single field of the body is validated.** Who you are
@@ -143,17 +149,45 @@ to bid learns nothing about which request nids exist.
 
 **Condition 5 reads the raw award columns**, not the resolved ones. An award
 pointing at an *unpublished* provider is still an award, and reading the
-resolved value would quietly reopen a request that is already somebody's job. A
-`direct` request falls out here with no rule of its own — it is neither of the
-two biddable statuses **and** it is born with a provider assigned. A `direct`
-awarded **to you** falls the same way: a request that is already yours is not
-bid on, it is worked on.
+resolved value would quietly reopen a request that is already somebody's job.
+
+**Condition 5 has two branches, and only two:**
+
+| The request is… | Offerable when |
+|---|---|
+| `open` or `offered` | Nothing is awarded on it — **neither** `field_assigned_offer` **nor** `field_assigned_provider`. |
+| `direct` | `field_assigned_provider` is **exactly the `provider_id` that is bidding**, and `field_assigned_offer` is still empty. |
+| anything else | Never. |
+
+**A `direct` awarded to somebody else answers the same `409`, not a code of its
+own.** A provider who is not the awarded one cannot even *see* that request —
+neither the detail nor the marketplace listing shows it to them — so the shared
+code hides nothing they did not already not know, while a specific one would
+**confirm** to them that the job is taken.
+
+**`field_assigned_offer` must be empty even on a `direct` of your own.** A
+request that already carries an awarded offer went through a round of bidding,
+and that is not the case this branch opens.
 
 **An empty or corrupt `field_request_status` answers `409`, never `500`.**
 
 **Condition 6 needs no special case for a provider with no categories:** an
 empty set matches nothing, and *you do not serve this category* is the true
 statement then too.
+
+**Condition 6 is skipped on a `direct` of your own, and on nothing else.** The
+provider was already checked against the category
+[when the request was created](service-request.md#post-apiv1service-requests);
+asking again here would lock a company out of a job **the resident personally
+handed them**, only because they stopped serving that category afterwards. The
+resident's choice outranks the catalogue.
+
+**Condition 2 is *not* skipped with it.** The category says *what* you do; the
+licence says *whether you may operate at all*. A company whose licence expired
+does not invoice, even for a job that was already theirs — and unlike the
+category, the way out is immediate and in their own hands. So a `direct` of your
+own, sent with an unpublished or expired provider, answers
+`403 service_offer_provider_not_active` and **not** the `409`.
 
 **Condition 7 — "live" means `sent` or `selected`.** An offer in `rejected` or
 `withdrawn` does not compete, so it blocks nothing and you may bid again. **Two
@@ -166,6 +200,11 @@ ratings, and the resident contracts the provider, not the account.
 > A zero too many in the amount stays written until the resident awards somebody
 > else or cancels. Confirm the send in the app with a summary of what is going
 > out. Editing and withdrawing are the next spec.
+>
+> **On a `direct` this hurts more**, because there is no competing offer to
+> absorb the mistake: the resident's only way out of a wrong price is cancelling
+> the job. Nothing is recorded as *agreed*, so the damage stops there — but the
+> app must show the amount **in large type** on the confirmation screen.
 
 ### What the server decides, and the client never sends
 
@@ -189,21 +228,37 @@ indistinguishable from one stored before SPEC 100 — which is exactly right.
 
 ### The three writes
 
-| # | Write | When |
-|---|-------|------|
-| 1 | **The offer** | Always. It is what you asked to create. |
-| 2 | **The request**, to `offered` | **Only if it moves.** `open` → `offered`, and the transition is *asked* of the status graph, never transcribed. A request already in `offered` is not saved at all. |
-| 3 | **A `service_transaction`** | **Only if the status actually moved.** |
+| # | Write | `open` | `offered` | `direct` of your own |
+|---|-------|:---:|:---:|:---:|
+| 1 | **The offer**, always `sent` | ✅ | ✅ | ✅ |
+| 2 | **The request**, to `offered` | ✅ | — | **—** |
+| 3 | **A `service_transaction`** | ✅ | — | **✅** |
 
-**The transaction is written only when the status changes, and that is a
-decision.** `service_transaction` has been *one entry per status change* since
-SPEC 77, and the third offer on an already-`offered` request changes none.
-Recording it would write a timeline row whose status repeats the one before it.
-The resident learns about the second and third offers from `offers_count` and
-from `offers`, not from the history.
+**Write 2 happens only if the request moves.** `open` → `offered`, and the
+transition is *asked* of the status graph, never transcribed. A request already
+in `offered` is not saved at all — no no-op save — which is what keeps its
+`changed` timestamp honest. **A `direct` is never saved either**: it comes out
+of this endpoint with the same status, the same awarded provider and the same
+`changed` it went in with.
+
+**Write 3 follows the status change — with one deliberate exception.**
+`service_transaction` has been *one entry per status change* since SPEC 77, and
+the third offer on an already-`offered` request changes none. Recording it would
+write a timeline row whose status repeats the one before it; the resident learns
+about the second and third offers from `offers_count` and from `offers`, not
+from the history.
+
+**The quote of a `direct` is that exception, and it writes an entry anyway.** It
+is the one thing the `open` → `offered` move gives that would otherwise be lost:
+the resident seeing *"your provider sent you a quote"* on their timeline instead
+of having to notice a new element inside an array their screen may not even be
+painting. Its `field_request_status` **repeats** the `direct` the request already
+had, because that is the truth — the status did not change — and the **comment**
+is what tells the two entries apart.
 
 **Neither `field_assigned_offer` nor `field_assigned_provider` is ever touched:
-bidding is not awarding.**
+bidding is not awarding.** On a `direct`, quoting is not awarding either — the
+award already happened, when the request was created.
 
 > **The three writes are not one atomic transaction.** If write 2 or 3 failed,
 > an offer would be left on an `open` request. That is the state the module
@@ -257,7 +312,9 @@ query and a join for a value the bidding app already has; it travels in
 **`request` is a sibling of `service_offer`, not a sixteenth key of it**, and it
 carries only `id` and `status`. It is the one thing you cannot deduce from what
 you just sent — whether your offer was the first, and so whether the request
-moved — and `status` is the one **after** the write.
+moved — and `status` is the one **after** the write. On a `direct` it answers
+`"direct"`, which is exactly why the key exists: the client does not have to
+guess whether anything moved.
 
 ### Possible errors
 
@@ -273,8 +330,8 @@ moved — and `status` is the one **after** the write.
 | 403 | `service_offer_provider_not_owned` | `provider_id` is not one of the account's providers. |
 | 403 | `service_offer_provider_not_active` | It is, but the node is unpublished or its licence has expired or is empty. |
 | 403 | `service_offer_own_request` | You are the request's `field_requester`. |
-| 409 | `service_request_not_offerable` | The request is not in `open`/`offered`, or something is already awarded on it. |
-| 403 | `service_offer_category_mismatch` | Your provider does not serve the request's category. |
+| 409 | `service_request_not_offerable` | The request is not in `open`/`offered`, or something is already awarded on it — **or** it is a `direct` that is not awarded to the provider you are bidding with, or one that already carries an awarded offer. |
+| 403 | `service_offer_category_mismatch` | Your provider does not serve the request's category. **Not answered on a `direct` of your own**, where the category is not asked. |
 | 409 | `service_offer_already_sent` | That provider already has a `sent` or `selected` offer on this request. |
 | 422 | `service_offer_amount_required` | `amount_type` is `fixed`, `estimate` or `hourly` and no `amount` came. |
 | 422 | `service_offer_amount_not_allowed` | `amount_type` is `on_site_quote` and an `amount` came. |
@@ -291,16 +348,87 @@ answers: `message`, `amount_type`, `amount`, `tax_included`, `valid_until`,
 
 ---
 
+## Quoting a `direct` request
+
+A [`direct` request](service-request.md) is born **already awarded**: the
+resident picked the company themselves, so there was never a round of bidding.
+And that left a hole — **`service_request` has no monetary field of its own**.
+The only place in this module where the price of a job lives is
+`field_offer_amount`, and that field is on the offer. A `direct` with no offer
+has no price, and by design it never will have one.
+
+This route is how that price gets written. Same URL, same body, same `201`.
+
+**What is different, and it is only three things:**
+
+| | `open` / `offered` | `direct` of your own |
+|---|---|---|
+| Who may send it | Any active provider of the category | **Only the awarded provider** |
+| The category | Checked | **Not checked** |
+| The request's status afterwards | `offered` | **`direct`, unchanged** |
+
+### The status does not move, and that is the point
+
+A `direct` moved to `offered` could be **closed without rating the provider**:
+the rule that makes a rating compulsory answers *yes* for `assigned` and
+`direct` and *no* for `offered`. It would fail silently, on a real job, with a
+real company left unrated. And `offered` means *not awarded*, which would
+contradict the `field_assigned_provider` the request carries.
+
+A `direct` moved to `assigned` would record as **agreed** a price the resident
+never accepted, with no way back — `assigned` only leads to `closed` or
+`cancelled`.
+
+Standing still is the only option that breaks nothing. So after your quote:
+
+- the request is still `direct`, with its `changed` untouched;
+- closing it **still requires rating you**;
+- `field_assigned_offer` is still empty — quoting is not awarding;
+- your offer is `sent`, and **nothing in this module moves it from there yet**.
+
+### What the resident sees
+
+- A new entry on the timeline: *"&lt;your company&gt; envió su presupuesto."*,
+  carrying `field_request_status: "direct"` — the status it already had.
+- The offer inside `offers`, with `offers_count` now `1` on a `direct` request.
+- **They cannot edit the request any more.** The edit gate allows `open` or
+  `direct` **with zero offers**, and it counts offers instead of trusting the
+  status, so your quote closes it. That is the intended rule: the statement of
+  work stops changing the moment there is a price on it.
+
+> ⚠️ **A timeline entry whose status repeats the previous one is new here.** A
+> client that assumed *every entry is a status change* will paint "Directa"
+> twice. The **comment** is the headline; the status is data.
+
+> ⚠️ **`offers_count` on a `direct` can now be `1`.** A client that assumed
+> `direct ⇒ 0 offers` breaks — but that assumption was **already false**:
+> nothing has ever stopped an offer being created on a `direct` from the back
+> office, which is precisely why the edit gate counts offers. This endpoint does
+> not create the case; it puts a door on it.
+
+### What is still missing on a `direct`
+
+- **The resident cannot accept or reject the quote.** The offer stays `sent` for
+  ever. What is left to agree is the *amount*, and that is discussed in the chat.
+- **The chat is still closed.** Its three fields have been empty since SPEC 77.
+  What changed is that the row they would hang off **now exists** — before this,
+  a `direct` had no offer and therefore no possible thread.
+
+---
+
 ## What is still not here
 
 Written down so it is not looked for in this document:
 
 - **Editing or withdrawing an offer.** No `PUT`, no `DELETE`, and no way to
   reach the `withdrawn` status, which exists in the catalogue and nothing writes.
-  This is the real limitation of this endpoint — see the warning above.
+  This is the real limitation of this endpoint — see the warning above — and
+  **the `direct` quote makes it the next required spec**, not one more on the
+  list.
 - **Awarding one.** `selected`, `field_assigned_offer` and the transition
   `offered → assigned` are the resident's side and another spec. Nothing in this
-  module writes `selected` yet.
+  module writes `selected` yet — **including on a `direct`**, where the resident
+  accepting the quote is a verb this endpoint does not have.
 - **Files on an offer.** Photos of previous jobs and a PDF quote. Hanging a file
   off an offer breaks the ownership chain the private-file route resolves by
   `n.type = service_request`, and it forces a decision about whether the

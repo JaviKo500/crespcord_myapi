@@ -203,6 +203,18 @@ no external I/O of any kind, so its failure surface is the same as the
 `node_save()` that already ran. Claims have carried the identical risk since
 SPEC 57 without an incident.
 
+**An entry no longer implies a status change.** *One entry per status change*
+was true from SPEC 77 until SPEC 101, which relaxes it in **exactly one case**:
+when the awarded provider of a `direct` request
+[sends their quote](service-offer.md#quoting-a-direct-request), an entry is
+written whose `field_request_status` **repeats** the `direct` the request
+already carried, because the status genuinely did not move. It is written
+anyway so the resident sees *"your provider sent you a quote"* on their
+timeline. What tells that entry from the acknowledgement above it is the
+**`field_comment`**, not the status — so a client that renders the status key as
+the headline will print *Directa* twice. Render the comment; treat the status as
+data. Nothing else in the module writes an entry without a transition behind it.
+
 **No cascade, and how to keep it that way.** Inserting the transaction fires
 `hook_node_insert()` again with a `service_transaction` node. There is
 deliberately **no branch for that bundle** in that hook, so it matches nothing

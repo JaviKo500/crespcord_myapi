@@ -314,7 +314,14 @@ award"* and *"there is an award I cannot paint"* are the same screen.
 listing answers, and an offer later withdrawn was still received. An
 **unpublished** offer does not count.
 
-A `direct` request always answers `0`: it went through no bidding round.
+**A `direct` request can answer `1` since SPEC 101.** It went through no bidding
+round, but the provider it was awarded to may
+[send their quote](service-offer.md#quoting-a-direct-request) — and that quote
+is an offer like any other, counted here like any other. Do **not** assume
+`direct ⇒ 0`: the assumption was already unsafe (nothing ever stopped a
+back-office offer on a `direct`) and now there is a route that does it on
+purpose. `2` is not reachable: only the awarded provider may quote, and only
+once while their offer is live.
 
 The breakdown by status is detail information and belongs to
 `GET /api/v1/service-requests/{id}`, which lists the offers one by one.
@@ -784,8 +791,9 @@ offers, not hundreds.
 The request's `service_transaction` entries: what happened to it and when. Every
 request created since SPEC 92 is born with one — the acknowledgement, carrying
 the status it was created with. **Offering** adds its own since SPEC 100, when
-an offer is the first one and moves the request `open → offered`; cancelling
-adds its own since SPEC 95. Awarding and closing still add none. See
+an offer is the first one and moves the request `open → offered`; **quoting a
+`direct`** adds one since SPEC 101, *without* the status moving; cancelling adds
+its own since SPEC 95. Awarding and closing still add none. See
 [service-transaction.md](service-transaction.md) for who writes them.
 
 **Each transaction:**
@@ -816,6 +824,16 @@ it by the server's zone and answer an hour nobody wrote. `created` **is** a real
 timestamp and **is** converted — two date columns, two rules, on purpose. It is
 the same distinction `reception_date` and `created` make in
 [claim.md](claim.md).
+
+> ⚠️ **An entry does not always mean the status changed.** Since SPEC 101 there
+> is exactly one that does not: when the awarded provider of a `direct` request
+> [sends their quote](service-offer.md#quoting-a-direct-request), an entry is
+> written whose `status` **repeats** the `direct` the request already had. The
+> status column is telling the truth — nothing moved — and the **`comment`** is
+> what distinguishes the entry: *"&lt;company&gt; envió su presupuesto."* next to
+> the acknowledgement's own text. A client that renders the status key as the
+> headline will show *Directa* twice; **render the comment**, and treat the
+> status as data.
 
 **Order:** `status_date` ascending, tie-broken by `id` ascending. It is a
 timeline, read oldest first. The tie-break is not decoration — two entries of
@@ -1307,7 +1325,7 @@ have to hold:
 | # | Condition | Why |
 |---|-----------|-----|
 | 1 | `field_request_status` is exactly `open` **or** `direct` | The two **pre-commitment** statuses: `open` waits for whoever bids, `direct` waits for the one provider the resident named, and **neither carries an accepted offer** — a direct award adjudicates no offer at all (SPEC 87). A comparison against the two literals, not a question to the transition graph: editing moves no status, so there is no transition to consult — and a corrupt or empty status is neither of the two, which is what makes it a `409` and never a `500`. |
-| 2 | The request has **zero** published offers | Before anybody has priced the statement of the job, changing it harms nobody; afterwards it does. It applies to `direct` too: nothing in the module stops an offer from being created on a `direct` request today, and the rule reads the same in both. |
+| 2 | The request has **zero** published offers | Before anybody has priced the statement of the job, changing it harms nobody; afterwards it does. It applies to `direct` too, and there it now has a door of its own: since SPEC 101 the awarded provider can [send their quote through the API](service-offer.md#quoting-a-direct-request), and back-office offers on a `direct` were always possible. The rule reads the same in both. |
 
 > **Editing a `direct` request does not touch its award.** `status` stays
 > `direct` and `assigned_provider` still names the provider the resident chose,
@@ -1329,6 +1347,15 @@ changed, and having later withdrawn or been rejected does not un-read it.
 > branch, so an offer created from the back office leaves the request in `open`
 > with offers hanging off it. This condition covers that hole, which is why it
 > counts offers instead of trusting the status.
+>
+> **And since SPEC 101 it covers a second one, by API and not by back office.**
+> The awarded provider of a `direct` can now
+> [quote it](service-offer.md#quoting-a-direct-request), and that quote **does
+> not move the status** — a `direct` stays `direct` on purpose. So a request in
+> `direct` with one offer on it is now an ordinary, reachable state, and the
+> only thing that closes editing on it is this count. A condition that trusted
+> the status would leave the resident rewriting the job **after** their provider
+> had priced it.
 
 Both failures answer the **same** `409 service_request_not_editable`. For the
 resident the outcome is identical — they cannot edit — and two codes would force
@@ -1760,18 +1787,20 @@ Written down so it is not looked for in this document:
   it, awarding it, and `GET /api/v1/offers/{id}`. Creating one has its own route
   and its own document since SPEC 100 —
   [`POST /api/v1/service-requests/{id}/offers`](service-offer.md) — and it is
-  what moves a request from `open` to `offered`. Here offers are still only
-  **read**, inside one request.
+  what moves a request from `open` to `offered`. Since SPEC 101 that same route
+  also carries the **quote of a `direct`**, which moves no status at all. Here
+  offers are still only **read**, inside one request.
 - **The chat.** `field_firebase_path`, `field_chat_opened_at` and
   `field_last_message_at` do not travel: who opens the thread and when the path
   is generated is another spec, and a key served today is a contract that spec
   could no longer change.
 - **Writing to the timeline directly.** It is **read** since SPEC 93, in the
   detail and in the `201` — see [the timeline](#the-timeline-transactions) — and
-  the cancellation now **writes** one, as the side effect of a transition. What
-  does not exist is any way to write an entry *as such*: no
-  `POST /api/v1/service-requests/{id}/transactions`, no commenting, no changing
-  status by hand. Each remaining transition will create its own entry in its own
+  the cancellation now **writes** one, as the side effect of a transition; since
+  SPEC 101 the quote of a `direct` writes one **without** any transition behind
+  it, the single exception. What does not exist is any way to write an entry *as
+  such*: no `POST /api/v1/service-requests/{id}/transactions`, no commenting, no
+  changing status by hand. Each remaining transition will create its own entry in its own
   spec, next to the rest of its effects.
 - **Files hanging from a transaction.** `service_transaction` has no
   `field_images` and no `field_attachment`, so its entries carry five keys and
