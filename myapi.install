@@ -2242,6 +2242,84 @@ function _myapi_services_install() {
     'cardinality' => 1,
     'settings'    => ['allowed_values' => myapi_services_offer_statuses()],
   ]);
+  // The ten fields of SPEC 100, which turn "a text and a number" into a quote
+  // the resident can actually compare. Every instance below is optional — see
+  // the (d) block — and that is the point: creating a column is cheap today and
+  // ruinous in six months node by node, while REQUIRING one is a decision of
+  // the endpoint, adjusted without touching the database.
+  //
+  // The two allowed_values lists are READ from includes/myapi.services_common.inc
+  // and never retyped here, the same rule field_offer_status and
+  // field_request_status already follow.
+  _myapi_reservations_ensure_field('field_offer_amount_type', [
+    'field_name'  => 'field_offer_amount_type',
+    'type'        => 'list_text',
+    'cardinality' => 1,
+    'settings'    => ['allowed_values' => myapi_services_offer_amount_types()],
+  ]);
+  _myapi_reservations_ensure_field('field_offer_valid_until', [
+    'field_name'  => 'field_offer_valid_until',
+    'type'        => 'datestamp',
+    'cardinality' => 1,
+    'settings'    => $timestamp_settings,
+  ]);
+  _myapi_reservations_ensure_field('field_offer_available_from', [
+    'field_name'  => 'field_offer_available_from',
+    'type'        => 'datestamp',
+    'cardinality' => 1,
+    'settings'    => $timestamp_settings,
+  ]);
+  // 'min' => 0 IS NOT AN SQL CONSTRAINT and is deliberately not written here:
+  // in Drupal 7 it is an #element_validate the 'number' widget adds, so a
+  // programmatic node_save() writes a -15 without a word. The endpoint repeats
+  // the cut, exactly as docs/services-install.md already warns for
+  // field_hourly_rate. Same for field_offer_warranty_days below.
+  _myapi_reservations_ensure_field('field_offer_duration', [
+    'field_name'  => 'field_offer_duration',
+    'type'        => 'number_integer',
+    'cardinality' => 1,
+  ]);
+  _myapi_reservations_ensure_field('field_offer_duration_unit', [
+    'field_name'  => 'field_offer_duration_unit',
+    'type'        => 'list_text',
+    'cardinality' => 1,
+    'settings'    => ['allowed_values' => myapi_services_offer_duration_units()],
+  ]);
+  // text_processing 0, unlike field_offer_message above: that one carries a
+  // format column ('plain_text', pinned) inherited from SPEC 77, and these two
+  // do not need one to store text that is escaped when rendered. A format
+  // nobody reads is a column somebody will eventually interpret.
+  _myapi_reservations_ensure_field('field_offer_includes', [
+    'field_name'  => 'field_offer_includes',
+    'type'        => 'text_long',
+    'cardinality' => 1,
+  ]);
+  _myapi_reservations_ensure_field('field_offer_excludes', [
+    'field_name'  => 'field_offer_excludes',
+    'type'        => 'text_long',
+    'cardinality' => 1,
+  ]);
+  // list_boolean and not a plain integer: the two of them have to be able to be
+  // ABSENT, which is a third reading neither a checkbox nor a NOT NULL column
+  // can express. 'tax_included' null means the provider never said, and the
+  // response serves that null rather than inventing a false.
+  _myapi_reservations_ensure_field('field_offer_tax_included', [
+    'field_name'  => 'field_offer_tax_included',
+    'type'        => 'list_boolean',
+    'cardinality' => 1,
+    'settings'    => ['allowed_values' => [0 => 'No', 1 => 'Sí']],
+  ]);
+  _myapi_reservations_ensure_field('field_offer_warranty_days', [
+    'field_name'  => 'field_offer_warranty_days',
+    'type'        => 'number_integer',
+    'cardinality' => 1,
+  ]);
+  _myapi_reservations_ensure_field('field_offer_requires_visit', [
+    'field_name'  => 'field_offer_requires_visit',
+    'type'        => 'list_boolean',
+    'cardinality' => 1,
+    'settings'    => ['allowed_values' => [0 => 'No', 1 => 'Sí']],
+  ]);
   // The three chat fields. Created now, empty and unused: the chat transport
   // is not built by SPEC 77 and may not end up being Firebase at all, but the
   // shape of the data it needs is already decided — one thread per offer — and
@@ -2620,6 +2698,100 @@ function _myapi_services_install() {
     'default_value' => [['value' => 'sent']],
     'widget'        => ['type' => 'options_select'],
   ]);
+  // The ten instances of SPEC 100. EVERY ONE OF THEM IS 'required' => 0, and
+  // that is not laziness: there are real offers already saved on this site, and
+  // a required instance would leave each of them unsaveable from node/%/edit
+  // until a human filled the new field in. The obligation lives where it can be
+  // reasoned about — POST /api/v1/service-requests/%/offers demands
+  // 'amount_type', and nothing else beyond the message.
+  //
+  // 'options_select' and NOT 'options_onoff' for the two booleans: a checkbox
+  // has no empty state, so the operator could never leave "impuesto incluido"
+  // unanswered, which is precisely the value the field has to be able to hold.
+  _myapi_reservations_ensure_instance('field_offer_amount_type', $offer_type, [
+    'field_name'  => 'field_offer_amount_type',
+    'entity_type' => 'node',
+    'bundle'      => $offer_type,
+    'label'       => 'Tipo de precio',
+    'required'    => 0,
+    'description' => 'Cómo se lee el monto. Vacío en las ofertas anteriores a este campo; el API exige uno al crear una oferta nueva.',
+    'widget'      => ['type' => 'options_select'],
+  ]);
+  _myapi_reservations_ensure_instance('field_offer_valid_until', $offer_type, [
+    'field_name'  => 'field_offer_valid_until',
+    'entity_type' => 'node',
+    'bundle'      => $offer_type,
+    'label'       => 'Válida hasta',
+    'required'    => 0,
+    'description' => 'Informativa: ningún proceso caduca ofertas por esta fecha.',
+    'widget'      => $date_widget,
+  ]);
+  _myapi_reservations_ensure_instance('field_offer_available_from', $offer_type, [
+    'field_name'  => 'field_offer_available_from',
+    'entity_type' => 'node',
+    'bundle'      => $offer_type,
+    'label'       => 'Disponible desde',
+    'required'    => 0,
+    'widget'      => $date_widget,
+  ]);
+  _myapi_reservations_ensure_instance('field_offer_duration', $offer_type, [
+    'field_name'  => 'field_offer_duration',
+    'entity_type' => 'node',
+    'bundle'      => $offer_type,
+    'label'       => 'Duración estimada',
+    'required'    => 0,
+    'description' => 'Solo tiene sentido junto a la unidad. El API toma las dos o ninguna.',
+    'widget'      => ['type' => 'number'],
+  ]);
+  _myapi_reservations_ensure_instance('field_offer_duration_unit', $offer_type, [
+    'field_name'  => 'field_offer_duration_unit',
+    'entity_type' => 'node',
+    'bundle'      => $offer_type,
+    'label'       => 'Unidad de la duración',
+    'required'    => 0,
+    'widget'      => ['type' => 'options_select'],
+  ]);
+  _myapi_reservations_ensure_instance('field_offer_includes', $offer_type, [
+    'field_name'  => 'field_offer_includes',
+    'entity_type' => 'node',
+    'bundle'      => $offer_type,
+    'label'       => 'Qué incluye',
+    'required'    => 0,
+    'widget'      => ['type' => 'text_textarea'],
+  ]);
+  _myapi_reservations_ensure_instance('field_offer_excludes', $offer_type, [
+    'field_name'  => 'field_offer_excludes',
+    'entity_type' => 'node',
+    'bundle'      => $offer_type,
+    'label'       => 'Qué no incluye',
+    'required'    => 0,
+    'widget'      => ['type' => 'text_textarea'],
+  ]);
+  _myapi_reservations_ensure_instance('field_offer_tax_included', $offer_type, [
+    'field_name'  => 'field_offer_tax_included',
+    'entity_type' => 'node',
+    'bundle'      => $offer_type,
+    'label'       => 'Impuesto incluido',
+    'required'    => 0,
+    'description' => 'Vacío = el proveedor no lo declaró. Solo tiene sentido cuando hay monto.',
+    'widget'      => ['type' => 'options_select'],
+  ]);
+  _myapi_reservations_ensure_instance('field_offer_warranty_days', $offer_type, [
+    'field_name'  => 'field_offer_warranty_days',
+    'entity_type' => 'node',
+    'bundle'      => $offer_type,
+    'label'       => 'Garantía (días)',
+    'required'    => 0,
+    'widget'      => ['type' => 'number'],
+  ]);
+  _myapi_reservations_ensure_instance('field_offer_requires_visit', $offer_type, [
+    'field_name'  => 'field_offer_requires_visit',
+    'entity_type' => 'node',
+    'bundle'      => $offer_type,
+    'label'       => 'Requiere visita previa',
+    'required'    => 0,
+    'widget'      => ['type' => 'options_select'],
+  ]);
   _myapi_reservations_ensure_instance('field_firebase_path', $offer_type, [
     'field_name'  => 'field_firebase_path',
     'entity_type' => 'node',
@@ -2851,6 +3023,22 @@ function _myapi_services_uninstall_destructive() {
     // other bundle uses it, so deleting it takes nobody else's data down. A
     // destructive uninstall does remove every logo and its files.
     'field_logo',
+    // SPEC 100. The ten quote fields of 'service_offer'. Same reasoning as the
+    // names above: all ten are new in the whole module and live on no other
+    // bundle, so deleting them takes nobody else's data down. Missing one here
+    // would leave an orphan field behind after a destructive uninstall, and a
+    // reinstall would then find it already there and never recreate it with the
+    // right settings.
+    'field_offer_amount_type',
+    'field_offer_valid_until',
+    'field_offer_available_from',
+    'field_offer_duration',
+    'field_offer_duration_unit',
+    'field_offer_includes',
+    'field_offer_excludes',
+    'field_offer_tax_included',
+    'field_offer_warranty_days',
+    'field_offer_requires_visit',
   ];
   foreach ($owned as $field_name) {
     if (field_info_field($field_name)) {

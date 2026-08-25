@@ -59,6 +59,24 @@ class ServicesInstallTest extends TestCase {
   ];
 
   /**
+   * The ten fields SPEC 100 adds to 'service_offer'. All new names in the whole
+   * module, which is why they are owned and not borrowed. Listed in the order
+   * of the spec's table so a diff against it reads straight down.
+   */
+  private const NEW_OFFER_FIELDS = [
+    'field_offer_amount_type',
+    'field_offer_valid_until',
+    'field_offer_available_from',
+    'field_offer_duration',
+    'field_offer_duration_unit',
+    'field_offer_includes',
+    'field_offer_excludes',
+    'field_offer_tax_included',
+    'field_offer_warranty_days',
+    'field_offer_requires_visit',
+  ];
+
+  /**
    * The install file as text, for the guards at the bottom.
    */
   private function installSource() {
@@ -90,6 +108,28 @@ class ServicesInstallTest extends TestCase {
       "_myapi_reservations_ensure_instance('" . $field_name . "', \$provider_type, [",
       $field_name . ' must have an instance on the provider bundle'
     );
+  }
+
+  /**
+   * One _myapi_reservations_ensure_instance() call on the 'service_offer'
+   * bundle (SPEC 100).
+   */
+  private function offerInstanceDefinition($field_name) {
+    return $this->definitionAt(
+      $this->functionSource('_myapi_services_install'),
+      "_myapi_reservations_ensure_instance('" . $field_name . "', \$offer_type, [",
+      $field_name . ' must have an instance on the service_offer bundle'
+    );
+  }
+
+  /**
+   * The '$owned = [...]' list of the destructive teardown, as text.
+   */
+  private function ownedFieldList() {
+    $teardown = $this->functionSource('_myapi_services_uninstall_destructive');
+    $start = strpos($teardown, '$owned = [');
+
+    return substr($teardown, $start, strpos($teardown, '];', $start) - $start);
   }
 
   /**
@@ -1296,5 +1336,172 @@ class ServicesInstallTest extends TestCase {
     $this->assertStringNotContainsString('node_save(', $update);
     $this->assertStringNotContainsString('field_delete_field(', $update);
     $this->assertStringNotContainsString('field_delete_instance(', $update);
+  }
+  /* -------------------------------------------------------------------------
+   * The ten quote fields of 'service_offer' (SPEC 100).
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * Every one of the ten is created, with the type and the cardinality the
+   * spec's table names. Storage is the half that a hook_update_N cannot undo
+   * cheaply — changing a type once there are rows means a migration — so it is
+   * pinned here field by field rather than counted.
+   *
+   * @dataProvider newOfferFields
+   */
+  public function testTheTenQuoteFieldsAreCreated($field_name, $type, array $contains) {
+    $field = $this->fieldDefinition($field_name);
+
+    $this->assertStringContainsString("'type' => '" . $type . "'", $field);
+    $this->assertStringContainsString("'cardinality' => 1", $field, $field_name . ' must hold one value');
+
+    foreach ($contains as $expected) {
+      $this->assertStringContainsString($expected, $field, $field_name . ' must carry ' . $expected);
+    }
+  }
+
+  public function newOfferFields() {
+    return [
+      // The two list_text fields read their values from the catalogue and
+      // never retype them — see the dedicated test below.
+      'amount type'    => ['field_offer_amount_type', 'list_text', ["'allowed_values' => myapi_services_offer_amount_types()"]],
+      // The two dates share the bundle's timestamp settings, so a licence and
+      // an offer validity are stored with the same granularity.
+      'valid until'    => ['field_offer_valid_until', 'datestamp', ["'settings' => \$timestamp_settings"]],
+      'available from' => ['field_offer_available_from', 'datestamp', ["'settings' => \$timestamp_settings"]],
+      'duration'       => ['field_offer_duration', 'number_integer', []],
+      'duration unit'  => ['field_offer_duration_unit', 'list_text', ["'allowed_values' => myapi_services_offer_duration_units()"]],
+      // text_long with no settings: no format column, unlike field_offer_message.
+      'includes'       => ['field_offer_includes', 'text_long', []],
+      'excludes'       => ['field_offer_excludes', 'text_long', []],
+      // list_boolean and not an integer: the value has to be able to be absent.
+      'tax included'   => ['field_offer_tax_included', 'list_boolean', ["'allowed_values' => [0 => 'No', 1 => 'Sí']"]],
+      'warranty days'  => ['field_offer_warranty_days', 'number_integer', []],
+      'requires visit' => ['field_offer_requires_visit', 'list_boolean', ["'allowed_values' => [0 => 'No', 1 => 'Sí']"]],
+    ];
+  }
+
+  /**
+   * THE DECISION THE WHOLE SPEC RESTS ON: all ten instances are OPTIONAL.
+   * There are real offers already saved on this site, and a required instance
+   * would leave every one of them unsaveable from node/%/edit until a human
+   * filled the new field in. The obligation lives in the endpoint, where it can
+   * be reasoned about and changed without touching the database.
+   *
+   * @dataProvider newOfferInstances
+   */
+  public function testTheTenQuoteInstancesAreOptionalAndHangOffTheOffer($field_name, $widget, $label) {
+    $instance = $this->offerInstanceDefinition($field_name);
+
+    $this->assertStringContainsString("'bundle' => \$offer_type", $instance);
+    $this->assertStringContainsString("'required' => 0", $instance, $field_name . ' must stay optional');
+    $this->assertStringContainsString("'widget' => " . $widget, $instance);
+    $this->assertStringContainsString("'label' => '" . $label . "'", $instance);
+  }
+
+  public function newOfferInstances() {
+    return [
+      'amount type'    => ['field_offer_amount_type', "['type' => 'options_select']", 'Tipo de precio'],
+      'valid until'    => ['field_offer_valid_until', '$date_widget', 'Válida hasta'],
+      'available from' => ['field_offer_available_from', '$date_widget', 'Disponible desde'],
+      'duration'       => ['field_offer_duration', "['type' => 'number']", 'Duración estimada'],
+      'duration unit'  => ['field_offer_duration_unit', "['type' => 'options_select']", 'Unidad de la duración'],
+      'includes'       => ['field_offer_includes', "['type' => 'text_textarea']", 'Qué incluye'],
+      'excludes'       => ['field_offer_excludes', "['type' => 'text_textarea']", 'Qué no incluye'],
+      'tax included'   => ['field_offer_tax_included', "['type' => 'options_select']", 'Impuesto incluido'],
+      'warranty days'  => ['field_offer_warranty_days', "['type' => 'number']", 'Garantía (días)'],
+      'requires visit' => ['field_offer_requires_visit', "['type' => 'options_select']", 'Requiere visita previa'],
+    ];
+  }
+
+  /**
+   * The two booleans must NOT use 'options_onoff'. A checkbox has no empty
+   * state, so the operator could never leave "impuesto incluido" unanswered —
+   * and "unanswered" is exactly the third value the field exists to hold, the
+   * one the detail serves as null instead of inventing a false.
+   */
+  public function testTheTwoBooleansCanBeLeftUnanswered() {
+    foreach (['field_offer_tax_included', 'field_offer_requires_visit'] as $field_name) {
+      $this->assertStringNotContainsString(
+        'options_onoff',
+        $this->offerInstanceDefinition($field_name),
+        $field_name . ' must keep an empty state, so no checkbox widget'
+      );
+    }
+  }
+
+  /**
+   * Same rule testStatusFieldsTakeTheirValuesFromTheCatalogue holds the status
+   * fields to: the two new list_text fields READ their allowed_values from
+   * includes/myapi.services_common.inc and never retype a single key. A
+   * hand-typed list here would drift the day a value is added, and the
+   * symptom — a value the API accepts that the field refuses to store — would
+   * point everywhere except at the installer.
+   */
+  public function testTheQuoteFieldsTakeTheirValuesFromTheCatalogue() {
+    $installer = $this->functionSource('_myapi_services_install');
+
+    $this->assertStringContainsString(
+      "'allowed_values' => myapi_services_offer_amount_types()",
+      $installer,
+      'field_offer_amount_type must read its allowed_values from the catalogue'
+    );
+    $this->assertStringContainsString(
+      "'allowed_values' => myapi_services_offer_duration_units()",
+      $installer,
+      'field_offer_duration_unit must read its allowed_values from the catalogue'
+    );
+
+    $keys = array_merge(
+      array_keys(myapi_services_offer_amount_types()),
+      array_keys(myapi_services_offer_duration_units())
+    );
+    foreach ($keys as $key) {
+      $this->assertStringNotContainsString(
+        "'" . $key . "' =>",
+        $installer,
+        'the installer must not retype the catalogue it can read'
+      );
+    }
+  }
+
+  /**
+   * All ten names are new in the whole module and live on no other bundle, so
+   * the destructive teardown deletes them outright. Missing one would strand a
+   * field on a bundle that no longer exists — and a reinstall would then find
+   * it already there and never recreate it with the right settings.
+   */
+  public function testTheTenQuoteFieldsAreOwnedByThisFeature() {
+    $owned = $this->ownedFieldList();
+
+    foreach (self::NEW_OFFER_FIELDS as $field_name) {
+      $this->assertStringContainsString(
+        "'" . $field_name . "'",
+        $owned,
+        $field_name . ' is created by this feature and must be deleted by its teardown'
+      );
+    }
+  }
+
+  /**
+   * The eight fields SPEC 77 gave 'service_offer' are untouched by this spec.
+   * Ten new columns next to them is the cheap change; altering one of the eight
+   * would be a migration, and this asserts none was smuggled in.
+   */
+  public function testTheEightOriginalOfferFieldsAreUnchanged() {
+    $this->assertStringContainsString("'required' => 1", $this->offerInstanceDefinition('field_request'));
+    $this->assertStringContainsString("'required' => 1", $this->offerInstanceDefinition('field_provider'));
+    $this->assertStringContainsString("'required' => 1", $this->offerInstanceDefinition('field_offer_message'));
+    $this->assertStringContainsString("'required' => 0", $this->offerInstanceDefinition('field_offer_amount'));
+    $this->assertStringContainsString("'required' => 1", $this->offerInstanceDefinition('field_offer_status'));
+
+    // The three chat fields stay optional and stay empty: no spec has built the
+    // transport yet, and this one does not either.
+    foreach (['field_firebase_path', 'field_chat_opened_at', 'field_last_message_at'] as $field_name) {
+      $this->assertStringContainsString("'required' => 0", $this->offerInstanceDefinition($field_name));
+    }
+
+    $field = $this->fieldDefinition('field_offer_amount');
+    $this->assertStringContainsString("'settings' => ['precision' => 10, 'scale' => 2]", $field);
   }
 }
