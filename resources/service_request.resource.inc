@@ -3428,7 +3428,15 @@ function myapi_service_request_reject_live_offers($nid) {
   $query->condition('no.status', 1);
 
   $query->innerJoin('field_data_field_offer_status', 'fos', "fos.entity_id = no.nid AND fos.entity_type = 'node' AND fos.deleted = 0");
-  $query->condition('fos.field_offer_status_value', ['sent', 'selected'], 'IN');
+  // The two live statuses, off the constants of services_common (SPEC 100) and
+  // not the literals this line carried since SPEC 95: it is the same value
+  // written where the offer's lifecycle is defined, so the day one of the two
+  // keys changes, this sweep and the uniqueness gate of the offer endpoint move
+  // together instead of one of them being forgotten.
+  $query->condition('fos.field_offer_status_value', [
+    MYAPI_SERVICES_OFFER_STATUS_SENT,
+    MYAPI_SERVICES_OFFER_STATUS_SELECTED,
+  ], 'IN');
 
   $query->addField('no', 'nid', 'nid');
 

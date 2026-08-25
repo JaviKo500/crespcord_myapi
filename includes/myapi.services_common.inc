@@ -103,6 +103,22 @@ if (!defined('MYAPI_SERVICES_REQUEST_STATUS_CANCELLED')) {
   define('MYAPI_SERVICES_REQUEST_STATUS_CANCELLED', 'cancelled');
 }
 
+// The status an offer is born in, and the only one POST
+// /api/v1/service-requests/%/offers ever writes (SPEC 100): 'sent' is not a
+// field of the request body, it is what creating an offer MEANS.
+if (!defined('MYAPI_SERVICES_OFFER_STATUS_SENT')) {
+  define('MYAPI_SERVICES_OFFER_STATUS_SENT', 'sent');
+}
+
+// The awarded offer. Named here alongside 'sent' because the two are read
+// together wherever a LIVE offer is what matters — the uniqueness gate of
+// SPEC 100 and the rejection sweep of SPEC 95 — and 'rejected' / 'withdrawn'
+// are dead offers that block nothing. Awarding itself is still another spec:
+// nothing in this module writes this value yet.
+if (!defined('MYAPI_SERVICES_OFFER_STATUS_SELECTED')) {
+  define('MYAPI_SERVICES_OFFER_STATUS_SELECTED', 'selected');
+}
+
 /**
  * The machine names of the five node bundles this feature installs.
  *
@@ -176,6 +192,61 @@ function myapi_services_offer_statuses() {
     'selected'  => 'Seleccionada',
     'rejected'  => 'Rechazada',
     'withdrawn' => 'Retirada',
+  ];
+}
+
+/**
+ * How the amount of an offer is to be read (SPEC 100).
+ *
+ * The catalogue that turns "a number" into a quote: the same 150 means a closed
+ * price, a guess, an hourly rate or nothing at all, and without this the
+ * resident is comparing figures that do not mean the same thing. It is the ONE
+ * new field POST /api/v1/service-requests/%/offers makes mandatory beyond the
+ * message, precisely because the number is unreadable without it.
+ *
+ * 'on_site_quote' is the value that carries NO amount, and the endpoint enforces
+ * both halves of that: an amount is required for the other three and forbidden
+ * for this one. That rule lives in myapi_service_offer_validate_body(), not
+ * here — this file stays pure catalogue.
+ *
+ * Keys are stable and English (they travel in the API); labels are Spanish and
+ * only ever seen in the back office, the same criterion as every catalogue
+ * above. The installer reads this for the allowed_values of
+ * field_offer_amount_type and never retypes the list.
+ *
+ * @return array
+ *   Amount type key => Spanish label.
+ */
+function myapi_services_offer_amount_types() {
+  return [
+    'fixed'         => 'Precio cerrado',
+    'estimate'      => 'Estimado',
+    'hourly'        => 'Por hora',
+    'on_site_quote' => 'A presupuestar en sitio',
+  ];
+}
+
+/**
+ * The unit the estimated duration of an offer is expressed in (SPEC 100).
+ *
+ * Two values and no more: below an hour nothing in this marketplace is worth
+ * quoting, and above a handful of days the honest answer is a date, which is
+ * what field_offer_available_from already carries. Weeks and months were left
+ * out for that reason and not by omission — adding one later is a value in this
+ * list plus an update, and it does not change a single caller.
+ *
+ * Meaningless on its own: a duration without its unit says nothing and a unit
+ * without its duration says less, so the endpoint takes the two together or
+ * neither, and the response serves them as ONE object. Same criterion as the
+ * amount above.
+ *
+ * @return array
+ *   Duration unit key => Spanish label.
+ */
+function myapi_services_offer_duration_units() {
+  return [
+    'hours' => 'Horas',
+    'days'  => 'Días',
   ];
 }
 

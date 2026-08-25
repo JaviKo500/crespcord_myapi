@@ -183,6 +183,99 @@ class ServicesInstallTest extends TestCase {
   }
 
   /* -------------------------------------------------------------------------
+   * The two catalogues of the offer's quote (SPEC 100).
+   * ---------------------------------------------------------------------- */
+
+  public function testOfferAmountTypeCatalogue() {
+    $this->assertSame(
+      ['fixed', 'estimate', 'hourly', 'on_site_quote'],
+      array_keys(myapi_services_offer_amount_types())
+    );
+  }
+
+  public function testOfferDurationUnitCatalogue() {
+    $this->assertSame(
+      ['hours', 'days'],
+      array_keys(myapi_services_offer_duration_units())
+    );
+  }
+
+  /**
+   * Same rule the status catalogues follow: English snake_case keys, which
+   * travel in the API, and Spanish labels, which never leave the back office.
+   */
+  public function testTheOfferQuoteCatalogueKeysAreStableEnglishIdentifiers() {
+    $keys = array_merge(
+      array_keys(myapi_services_offer_amount_types()),
+      array_keys(myapi_services_offer_duration_units())
+    );
+
+    foreach ($keys as $key) {
+      $this->assertMatchesRegularExpression('/^[a-z][a-z_]*$/', $key, $key . ' is not a stable snake_case key');
+    }
+  }
+
+  /**
+   * Every label is a non-empty string: the installer feeds these straight into
+   * allowed_values, and an empty one would render a blank option in the back
+   * office form with no clue as to which value it writes.
+   */
+  public function testTheOfferQuoteCataloguesCarryLabels() {
+    $catalogues = array_merge(
+      myapi_services_offer_amount_types(),
+      myapi_services_offer_duration_units()
+    );
+
+    foreach ($catalogues as $key => $label) {
+      $this->assertIsString($label, $key . ' must carry a string label');
+      $this->assertNotSame('', trim($label), $key . ' must carry a non-empty label');
+    }
+  }
+
+  /**
+   * 'on_site_quote' is the one amount type that carries NO amount, and the
+   * whole conditional half of the body validation hangs on that key existing
+   * under exactly this name. Naming it here is what makes renaming it a failing
+   * test instead of a silent 422 on every offer.
+   */
+  public function testTheAmountlessTypeIsCatalogued() {
+    $this->assertArrayHasKey('on_site_quote', myapi_services_offer_amount_types());
+  }
+
+  /**
+   * The two live offer statuses, as constants. They are the same values
+   * myapi_services_offer_statuses() catalogues — this asserts the pair cannot
+   * drift, which is the point of naming them at all.
+   */
+  public function testTheLiveOfferStatusConstantsMatchTheCatalogue() {
+    $this->assertSame('sent', MYAPI_SERVICES_OFFER_STATUS_SENT);
+    $this->assertSame('selected', MYAPI_SERVICES_OFFER_STATUS_SELECTED);
+
+    $catalogue = array_keys(myapi_services_offer_statuses());
+    $this->assertContains(MYAPI_SERVICES_OFFER_STATUS_SENT, $catalogue);
+    $this->assertContains(MYAPI_SERVICES_OFFER_STATUS_SELECTED, $catalogue);
+  }
+
+  /**
+   * The cancellation sweep of SPEC 95 asks the constants for the two live
+   * statuses instead of retyping them. A literal creeping back in here is the
+   * drift this spec removed, and it would only show up the day one of the keys
+   * changed — which is exactly when nobody is looking at this query.
+   */
+  public function testTheCancellationSweepReadsTheLiveStatusConstants() {
+    $source = file_get_contents(__DIR__ . '/../../resources/service_request.resource.inc');
+    $start = strpos($source, "\nfunction myapi_service_request_reject_live_offers(");
+    $this->assertNotFalse($start, 'myapi_service_request_reject_live_offers() must exist');
+
+    $end = strpos($source, "\n}\n", $start);
+    $body = substr($source, $start, $end - $start);
+
+    $this->assertStringContainsString('MYAPI_SERVICES_OFFER_STATUS_SENT', $body);
+    $this->assertStringContainsString('MYAPI_SERVICES_OFFER_STATUS_SELECTED', $body);
+    $this->assertStringNotContainsString("'sent', 'selected'", $body);
+  }
+
+  /* -------------------------------------------------------------------------
    * The transition graph.
    * ---------------------------------------------------------------------- */
 
