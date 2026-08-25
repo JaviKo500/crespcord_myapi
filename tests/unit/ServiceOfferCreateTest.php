@@ -968,4 +968,97 @@ class ServiceOfferCreateTest extends TestCase {
       myapi_service_offer_transaction_comment('Fontanería & Hijos')
     );
   }
+  /* -------------------------------------------------------------------------
+   * The twelve i18n keys (SPEC 100).
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * Every code this endpoint can answer resolves to a real message in BOTH
+   * languages. myapi_t() falls back to returning the key itself when it does
+   * not know it, so a missing translation is not an error anywhere — it is a
+   * response with 'service_offer_already_sent' where the message should be, and
+   * this is what catches it.
+   *
+   * I18nTest already holds the whole catalogue to parity, no duplicates and
+   * matching placeholders; this test pins these twelve BY NAME, so renaming one
+   * in the code without renaming it in the catalogue fails here.
+   *
+   * @dataProvider spec100Keys
+   */
+  public function testTheTwelveKeysResolveInBothLanguages($key) {
+    foreach (['es', 'en'] as $lang) {
+      $message = myapi_t($key, [], $lang);
+
+      $this->assertNotSame($key, $message, $key . ' has no ' . $lang . ' message');
+      $this->assertNotSame('', trim($message));
+      // No placeholder left unreplaced: none of the twelve takes one.
+      $this->assertStringNotContainsString('@', $message, $key . ' (' . $lang . ') must take no placeholder');
+    }
+
+    // And the two languages are actually different texts, not one pasted twice.
+    $this->assertNotSame(myapi_t($key, [], 'es'), myapi_t($key, [], 'en'), $key);
+  }
+
+  public function spec100Keys() {
+    return [
+      ['service_offer_created'],
+      ['service_offer_provider_not_owned'],
+      ['service_offer_provider_not_active'],
+      ['service_offer_own_request'],
+      ['service_request_not_offerable'],
+      ['service_offer_category_mismatch'],
+      ['service_offer_already_sent'],
+      ['service_offer_amount_required'],
+      ['service_offer_amount_not_allowed'],
+      ['service_offer_tax_without_amount'],
+      ['service_offer_dates_inconsistent'],
+      ['service_offer_duration_incomplete'],
+    ];
+  }
+
+  /**
+   * Every error_code the gate and the body validation can return has a message.
+   * Read off the FUNCTIONS rather than off a list written here: a seventh gate
+   * condition added tomorrow with no catalogue entry fails this test, which a
+   * hand-kept list never would.
+   */
+  public function testEveryCodeTheGateCanReturnIsTranslated() {
+    $codes = [];
+
+    foreach ($this->gateCases() as $case) {
+      if ($case[2] !== NULL) {
+        $codes[$case[2]] = TRUE;
+      }
+    }
+    foreach ($this->bodyCases() as $case) {
+      $codes[$case[1]] = TRUE;
+    }
+
+    $this->assertNotEmpty($codes);
+
+    foreach (array_keys($codes) as $code) {
+      foreach (['es', 'en'] as $lang) {
+        $this->assertNotSame(
+          $code,
+          myapi_t($code, ['@field' => 'x'], $lang),
+          $code . ' is answered by this endpoint and has no ' . $lang . ' message'
+        );
+      }
+    }
+  }
+
+  /**
+   * The four generic keys this endpoint REUSES are still there, untouched. The
+   * spec adds twelve and reuses seven; these are the ones a careless cleanup of
+   * the catalogue could take away without any SPEC 100 test noticing.
+   */
+  public function testTheReusedGenericKeysStillExist() {
+    foreach (['missing_authorization', 'invalid_token', 'method_not_allowed',
+      'missing_field', 'invalid_field', 'provider_role_required',
+      'service_request_not_found'] as $key) {
+      foreach (['es', 'en'] as $lang) {
+        $this->assertNotSame($key, myapi_t($key, ['@field' => 'x'], $lang), $key . ' (' . $lang . ')');
+      }
+    }
+  }
 }

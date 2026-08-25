@@ -181,6 +181,25 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       // (ask the operator for the provider role), and error_code exists so the
       // app can tell it apart without reading the message text.
       'provider_role_required'             => 'Your account does not have the provider role.',
+      // SPEC 100. Twelve keys and not one reuse: every 403 and every 409 of
+      // POST /api/v1/service-requests/%/offers has a DIFFERENT thing the
+      // provider can do about it — pick another company, renew the licence,
+      // look at another request — and error_code exists so the app can tell
+      // them apart without reading the message text. The four generic keys the
+      // endpoint does reuse (missing_field, invalid_field, method_not_allowed,
+      // service_request_not_found) are above, unchanged.
+      'service_offer_created'              => 'Offer sent successfully.',
+      'service_offer_provider_not_owned'   => 'The selected provider does not belong to your account.',
+      'service_offer_provider_not_active'  => 'Your provider is not active. Check the licence expiry date.',
+      'service_offer_own_request'          => 'You cannot bid on your own request.',
+      'service_request_not_offerable'      => 'This request no longer accepts offers.',
+      'service_offer_category_mismatch'    => "Your provider does not serve this request's category.",
+      'service_offer_already_sent'         => 'You already have an active offer on this request.',
+      'service_offer_amount_required'      => 'An amount is required for this price type.',
+      'service_offer_amount_not_allowed'   => 'An on-site quote carries no amount.',
+      'service_offer_tax_without_amount'   => 'Tax inclusion cannot be stated without an amount.',
+      'service_offer_dates_inconsistent'   => "Availability cannot be later than the offer's validity.",
+      'service_offer_duration_incomplete'  => 'Provide both the duration and its unit, or neither.',
     ],
     'es' => [
       'invalid_credentials'    => 'Usuario o contraseña incorrectos.',
@@ -280,6 +299,19 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'service_request_not_editable'       => 'Esta solicitud ya no se puede editar.',
       // SPEC 97 — see the note next to the English key.
       'provider_role_required'             => 'Tu cuenta no tiene el rol de proveedor.',
+      // SPEC 100 — see the note next to the English block.
+      'service_offer_created'              => 'Oferta enviada correctamente.',
+      'service_offer_provider_not_owned'   => 'El proveedor indicado no pertenece a su cuenta.',
+      'service_offer_provider_not_active'  => 'Su proveedor no está activo. Revise la vigencia de la licencia.',
+      'service_offer_own_request'          => 'No puede ofertar sobre su propia solicitud.',
+      'service_request_not_offerable'      => 'Esta solicitud ya no admite ofertas.',
+      'service_offer_category_mismatch'    => 'Su proveedor no atiende la categoría de esta solicitud.',
+      'service_offer_already_sent'         => 'Ya tiene una oferta activa en esta solicitud.',
+      'service_offer_amount_required'      => 'Indique el monto para este tipo de precio.',
+      'service_offer_amount_not_allowed'   => 'Una oferta a presupuestar en sitio no lleva monto.',
+      'service_offer_tax_without_amount'   => 'No puede indicar si el impuesto está incluido sin un monto.',
+      'service_offer_dates_inconsistent'   => 'La disponibilidad no puede ser posterior a la validez de la oferta.',
+      'service_offer_duration_incomplete'  => 'Indique la duración y su unidad, o ninguna de las dos.',
     ],
   ];
 
