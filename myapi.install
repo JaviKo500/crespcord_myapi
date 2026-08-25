@@ -4362,3 +4362,51 @@ function myapi_update_7034() {
     '@skipped' => $skipped,
   ));
 }
+
+/**
+ * SPEC 100: creates the ten quote fields of 'service_offer'.
+ *
+ * Re-runs the WHOLE services installer, exactly like myapi_update_7028()
+ * through 7032(), and unlike myapi_update_7033() IT NEEDS NOTHING ELSE. That
+ * update had to reach for field_update_field() and field_update_instance()
+ * because it MODIFIED two things that already existed — a wider allowed_values
+ * and a relaxed 'required' — and the idempotent _ensure_* helpers only ever
+ * create. Here all ten fields and all ten instances are NEW, so "only ever
+ * create" is precisely the behaviour wanted: everything already in place is
+ * found and left alone, and running this update twice is a no-op.
+ *
+ * NO BACKFILL, AND THAT IS THE DECISION, NOT AN OVERSIGHT. There are real
+ * offers stored on this site and not one of them is touched: they keep the
+ * eight fields SPEC 77 gave them and answer null on all ten new ones. Deducing
+ * an amount_type from the amount ("it has a number, so it is 'fixed'") would
+ * put in a provider's mouth a statement they never made, and a placeholder
+ * value in the catalogue would dirty it forever for a handful of historic rows.
+ * null says exactly what happened: that offer predates the field. Same
+ * discipline as myapi_update_7032().
+ *
+ * THE TEN INSTANCES ARE OPTIONAL, which is what makes this update safe to run
+ * on a site with data — the one hazard myapi_update_7032()'s docblock warns
+ * about. A required instance would leave every stored offer unsaveable from
+ * node/%/edit until a human filled the new field in.
+ *
+ * field_info_cache_clear() because the field definitions are cached for the
+ * rest of THIS request: without it the ten fields exist in the database and the
+ * Field API keeps answering the old bundle shape until the next request.
+ *
+ * @return string
+ *   A summary line, shown by drush and by update.php.
+ */
+function myapi_update_7035() {
+  // The installer reads myapi_services_offer_amount_types() and
+  // myapi_services_offer_duration_units() for the allowed_values of the two
+  // list_text fields, and update.php does not load this module's includes.
+  module_load_include('inc', 'myapi', 'includes/myapi.services_common');
+
+  _myapi_services_install();
+
+  field_info_cache_clear();
+
+  return t('SPEC 100: creados en @type los diez campos del presupuesto de una oferta (tipo de precio, validez, disponibilidad, duración y su unidad, qué incluye, qué no incluye, impuesto incluido, garantía y visita previa). Las diez instancias son opcionales. Sin backfill: las ofertas ya guardadas no se tocan y responden null en los diez.', [
+    '@type' => MYAPI_SERVICES_OFFER_TYPE,
+  ]);
+}

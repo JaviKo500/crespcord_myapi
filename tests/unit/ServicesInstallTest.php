@@ -987,10 +987,12 @@ class ServicesInstallTest extends TestCase {
     $this->assertStringContainsString('function myapi_update_7031()', $source);
     $this->assertStringContainsString('function myapi_update_7032()', $source);
     $this->assertStringContainsString('function myapi_update_7033()', $source);
-    // SPEC 91 appended 7034 (the file_managed.uri repair); the ceiling moves
-    // with it, so the guard keeps saying "nothing beyond the last spec".
+    // SPEC 91 appended 7034 (the file_managed.uri repair) and SPEC 100 appended
+    // 7035 (the ten quote fields); the ceiling moves with each of them, so the
+    // guard keeps saying "nothing beyond the last spec".
     $this->assertStringContainsString('function myapi_update_7034()', $source);
-    $this->assertStringNotContainsString('function myapi_update_7035()', $source);
+    $this->assertStringContainsString('function myapi_update_7035()', $source);
+    $this->assertStringNotContainsString('function myapi_update_7036()', $source);
     // 7028 is still SPEC 81's, not this spec's.
     $this->assertStringContainsString(
       '_myapi_services_install();',
@@ -1503,5 +1505,71 @@ class ServicesInstallTest extends TestCase {
 
     $field = $this->fieldDefinition('field_offer_amount');
     $this->assertStringContainsString("'settings' => ['precision' => 10, 'scale' => 2]", $field);
+  }
+  /* -------------------------------------------------------------------------
+   * myapi_update_7035 — the ten quote fields on an installed site (SPEC 100).
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * Re-running the installer is ALL this update needs, unlike
+   * myapi_update_7033(). That one modified two things that already existed, and
+   * the idempotent _ensure_* helpers only ever create; here all twenty
+   * creations are new, so "only ever create" is exactly the wanted behaviour
+   * and there is nothing for field_update_field() to do.
+   *
+   * field_info_cache_clear() is not optional: without it the ten fields exist
+   * in the database and the Field API keeps answering the old bundle shape for
+   * the rest of this request.
+   */
+  public function testTheUpdate7035ReRunsTheInstallerAndClearsTheFieldCache() {
+    $update = $this->functionSource('myapi_update_7035');
+
+    $this->assertStringContainsString("module_load_include('inc', 'myapi', 'includes/myapi.services_common');", $update);
+    $this->assertStringContainsString('_myapi_services_install();', $update);
+    $this->assertStringContainsString('field_info_cache_clear();', $update);
+
+    // Nothing that MODIFIES an existing field or instance: all ten are new, and
+    // a field_update_field() here would be rewriting somebody else's settings.
+    $this->assertStringNotContainsString('field_update_field(', $update);
+    $this->assertStringNotContainsString('field_update_instance(', $update);
+  }
+
+  /**
+   * NO BACKFILL, and this is the assertion that keeps it that way. There are
+   * real offers stored, and deducing an amount_type from the amount would put a
+   * statement in a provider's mouth they never made. Every stored offer answers
+   * null on all ten new fields, which says exactly what happened: it predates
+   * them. Same discipline myapi_update_7032() is held to.
+   */
+  public function testTheUpdate7035TouchesNoStoredOffer() {
+    $update = $this->functionSource('myapi_update_7035');
+
+    $this->assertStringNotContainsString('db_update(', $update);
+    $this->assertStringNotContainsString('db_insert(', $update);
+    $this->assertStringNotContainsString('node_save(', $update);
+    $this->assertStringNotContainsString('node_load(', $update);
+    $this->assertStringNotContainsString('field_delete_field(', $update);
+    $this->assertStringNotContainsString('field_delete_instance(', $update);
+  }
+
+  /**
+   * The update must not retype a single allowed value either: it delegates to
+   * the installer, which reads the catalogues. Same rule
+   * testTheUpdate7033TakesTheValuesFromTheCatalogue holds its own update to.
+   */
+  public function testTheUpdate7035RetypesNoCatalogue() {
+    $update = $this->functionSource('myapi_update_7035');
+
+    $keys = array_merge(
+      array_keys(myapi_services_offer_amount_types()),
+      array_keys(myapi_services_offer_duration_units())
+    );
+    foreach ($keys as $key) {
+      $this->assertStringNotContainsString(
+        "'" . $key . "'",
+        $update,
+        'the update must not retype a catalogue the installer already reads'
+      );
+    }
   }
 }
