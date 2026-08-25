@@ -8,7 +8,9 @@
  *
  *   - POST /api/v1/service-requests/%/offers — a provider bids on an open
  *     request of their category, with the eleven fields that turn "a text and a
- *     number" into a quote the resident can compare.
+ *     number" into a quote the resident can compare. SINCE SPEC 101 THE SAME
+ *     ROUTE ALSO CARRIES THE QUOTE OF AN AWARDED 'direct', where there is
+ *     nothing to bid for and everything to price.
  *
  * THE FIRST WRITE OF THIS MODULE THAT MOVES THE STATE OF SOMEBODY ELSE'S NODE.
  * The provider is not the field_requester of the request and still pushes it
@@ -133,12 +135,23 @@ function myapi_service_offer_dispatch($nid = NULL) {
  *       cannot be missing.
  *   9b. The request, ONLY IF IT MOVES. 'open' → 'offered', asked of
  *       myapi_services_transition_allowed(). Already 'offered' writes NOTHING.
- *   9c. The transaction, ONLY IF THE STATUS MOVED. 'service_transaction' has
- *       been "one entry per status change" since SPEC 77, and the third offer
- *       on an already-'offered' request changes none. Recording it would write
- *       a timeline row whose field_request_status repeats the one before it;
- *       the resident learns about the second and third offers from
- *       offers_count and from `offers`, not from the history.
+ *   9c. The transaction, IF THE STATUS MOVED — OR IF A 'direct' WAS QUOTED.
+ *       'service_transaction' has been "one entry per status change" since
+ *       SPEC 77, and the third offer on an already-'offered' request changes
+ *       none. Recording it would write a timeline row whose
+ *       field_request_status repeats the one before it; the resident learns
+ *       about the second and third offers from offers_count and from `offers`,
+ *       not from the history.
+ *
+ *       SPEC 101 RELAXES THAT RULE IN EXACTLY ONE CASE, on purpose. A quote on
+ *       a 'direct' writes a transaction whose field_request_status REPEATS the
+ *       'direct' the request already had, because the status did not move and
+ *       saying otherwise would be a lie. It is written anyway because it is the
+ *       one thing the 'open' → 'offered' move gave that would otherwise be
+ *       lost: the resident seeing "your provider sent you a quote" in their
+ *       timeline. The COMMENT is what tells the two entries apart, which is why
+ *       the two are different sentences — see
+ *       myapi_service_offer_direct_quote_comment().
  *
  * The order is SPEC 95's: first what the user asked for, then what follows from
  * it. IT IS NOT ATOMIC, and that is accepted: if 9b or 9c failed, an offer
@@ -150,7 +163,17 @@ function myapi_service_offer_dispatch($nid = NULL) {
  *
  * NEITHER field_assigned_offer NOR field_assigned_provider IS EVER TOUCHED:
  * bidding is not awarding, and awarding is another spec, on the resident's
- * side.
+ * side. That holds for a 'direct' too, and there it means something stronger —
+ * the request is NOT SAVED AT ALL. Its status, its awarded provider and its
+ * `changed` come out of this endpoint exactly as they went in.
+ *
+ * A 'direct' STAYS 'direct', AND THAT IS THE CENTRAL DECISION OF SPEC 101, not
+ * an omission. Moving it to 'offered' would let it be closed WITHOUT RATING the
+ * provider, silently and with no test going red, because
+ * myapi_services_close_requires_rating() answers TRUE for 'assigned' and
+ * 'direct' and not for 'offered'. Moving it to 'assigned' would record as
+ * agreed a price the resident never accepted. Standing still is the only option
+ * that breaks nothing.
  *
  * @param mixed $nid  The request nid, straight off the path.
  */
@@ -267,11 +290,21 @@ function myapi_service_offer_create($nid) {
     }
   }
 
-  // 9c. The transaction, ONLY IF THE STATUS ACTUALLY MOVED — see the docblock
-  // on why the second and third offers write nothing here. The four fields of
-  // SPEC 92; the title is NOT set, myapi_service_transaction_set_title() puts
-  // it in from hook_node_presave(), inside the node_save() below.
-  if ($moved) {
+  // 9c. The transaction, IF THE STATUS ACTUALLY MOVED — OR IF THIS WAS THE
+  // QUOTE OF A 'direct' (SPEC 101). See the docblock on why the second and
+  // third offers on an 'offered' request still write nothing here, and on why
+  // the 'direct' is the one case that writes an entry without a status change.
+  //
+  // $request_row->status and not a re-read: 9b did not save this request — a
+  // 'direct' never enters that branch — so the row still says what the database
+  // says. The two flags are mutually exclusive: $moved is only ever set from
+  // 'open'.
+  $direct_quote = ($request_row->status === MYAPI_SERVICES_REQUEST_STATUS_DIRECT);
+
+  // The four fields of SPEC 92; the title is NOT set,
+  // myapi_service_transaction_set_title() puts it in from hook_node_presave(),
+  // inside the node_save() below.
+  if ($moved || $direct_quote) {
     $transaction = (object) [
       'type' => MYAPI_SERVICES_TRANSACTION_TYPE,
       // The ACCOUNT that bid, which is who is behind the token — not the
@@ -282,13 +315,22 @@ function myapi_service_offer_create($nid) {
     node_object_prepare($transaction);
 
     $transaction->field_request[LANGUAGE_NONE][0]['target_id'] = $nid;
-    $transaction->field_request_status[LANGUAGE_NONE][0]['value'] = MYAPI_SERVICES_REQUEST_STATUS_OFFERED;
+    // On a 'direct' this REPEATS the status the request already had, and that
+    // is the truth: the status did not change. The comment below is what makes
+    // the entry legible.
+    $transaction->field_request_status[LANGUAGE_NONE][0]['value'] = $moved
+      ? MYAPI_SERVICES_REQUEST_STATUS_OFFERED
+      : MYAPI_SERVICES_REQUEST_STATUS_DIRECT;
     // 'Y-m-d H:i:00': the real instant with the seconds pinned, not that day at
     // midnight. field_status_date is 'datetime' and not 'datestamp' (SPEC 77),
     // so a string is written and not a timestamp.
     $transaction->field_status_date[LANGUAGE_NONE][0]['value'] = date('Y-m-d H:i:00');
     // Only 'value', no 'format': stored raw and escaped by whoever renders it.
-    $transaction->field_comment[LANGUAGE_NONE][0]['value'] = myapi_service_offer_transaction_comment($provider_name);
+    // Two sentences and not one — on a 'direct' the status column repeats, so
+    // the comment is the ONLY thing that tells this entry from the one before.
+    $transaction->field_comment[LANGUAGE_NONE][0]['value'] = $moved
+      ? myapi_service_offer_transaction_comment($provider_name)
+      : myapi_service_offer_direct_quote_comment($provider_name);
 
     node_save($transaction);
   }

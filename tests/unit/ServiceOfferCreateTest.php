@@ -425,12 +425,35 @@ class ServiceOfferCreateTest extends TestCase {
       'awarded a provider'         => [['assigned_provider_raw' => '41'], [], 'service_request_not_offerable'],
       'awarded, offered'           => [['status' => MYAPI_SERVICES_REQUEST_STATUS_OFFERED, 'assigned_offer_raw' => '900'], [], 'service_request_not_offerable'],
 
+      /* 5 — a 'direct' of my own IS offerable since SPEC 101. The awarded
+         provider quotes the job the resident already handed them, and the
+         status does NOT move: the resource is what keeps it in 'direct'. */
+      'direct awarded to me'       => [['status' => MYAPI_SERVICES_REQUEST_STATUS_DIRECT, 'assigned_provider_raw' => '41'], [], NULL],
+      // Awarded to somebody else: the SAME 409, and never a code of its own —
+      // a specific one would confirm to a stranger that the job is taken.
+      'direct awarded to another'  => [['status' => MYAPI_SERVICES_REQUEST_STATUS_DIRECT, 'assigned_provider_raw' => '99'], [], 'service_request_not_offerable'],
+      // Mine, but another provider of MINE is the one bidding.
+      'direct, my other provider'  => [['status' => MYAPI_SERVICES_REQUEST_STATUS_DIRECT, 'assigned_provider_raw' => '41'], ['nid' => '42'], 'service_request_not_offerable'],
+      // Mine, but it already carries an awarded offer: incoherent data, and
+      // not the case SPEC 101 opens.
+      'direct + awarded offer'     => [['status' => MYAPI_SERVICES_REQUEST_STATUS_DIRECT, 'assigned_provider_raw' => '41', 'assigned_offer_raw' => '900'], [], 'service_request_not_offerable'],
+      // The award is read RAW, so a '41' that arrives as an integer and one
+      // that arrives as a string are the same award.
+      'direct awarded as int'      => [['status' => MYAPI_SERVICES_REQUEST_STATUS_DIRECT, 'assigned_provider_raw' => 41], [], NULL],
+
       /* 6 — not my category. */
       'another category'           => [['category_id' => '99'], [], 'service_offer_category_mismatch'],
       'provider serves none'       => [[], ['category_ids' => []], 'service_offer_category_mismatch'],
       'request has no category'    => [['category_id' => NULL], [], 'service_offer_category_mismatch'],
       // Two categories, one of them the request's: through.
       'provider serves two'        => [[], ['category_ids' => [99, self::CATEGORY]], NULL],
+
+      /* 6 — SKIPPED on a 'direct' of my own (SPEC 101, decision 5). The
+         resident chose this company; losing the category afterwards does not
+         take the job away. */
+      'direct, other category'     => [['status' => MYAPI_SERVICES_REQUEST_STATUS_DIRECT, 'assigned_provider_raw' => '41', 'category_id' => '99'], [], NULL],
+      'direct, no category at all' => [['status' => MYAPI_SERVICES_REQUEST_STATUS_DIRECT, 'assigned_provider_raw' => '41', 'category_id' => NULL], [], NULL],
+      'direct, provider serves 0'  => [['status' => MYAPI_SERVICES_REQUEST_STATUS_DIRECT, 'assigned_provider_raw' => '41'], ['category_ids' => []], NULL],
     ];
   }
 
@@ -464,6 +487,15 @@ class ServiceOfferCreateTest extends TestCase {
       'cancelled + category'    => [['status' => MYAPI_SERVICES_REQUEST_STATUS_CANCELLED, 'category_id' => '99'], [], 'service_request_not_offerable'],
       // Awarded is condition 5 and the category is 6, so the award answers.
       'awarded + category'      => [['assigned_provider_raw' => '41', 'category_id' => '99'], [], 'service_request_not_offerable'],
+      // SPEC 101: a 'direct' of my own skips the category and NOTHING else.
+      // The licence is condition 2 and still answers first — an unpublished or
+      // expired provider gets 403 ..._not_active, never the 409 of a request
+      // that would in fact take their offer.
+      'my direct + unpublished' => [['status' => MYAPI_SERVICES_REQUEST_STATUS_DIRECT, 'assigned_provider_raw' => '41'], ['status' => '0'], 'service_offer_provider_not_active'],
+      'my direct + expired'     => [['status' => MYAPI_SERVICES_REQUEST_STATUS_DIRECT, 'assigned_provider_raw' => '41'], ['license_expiry' => (string) (self::NOW - 1)], 'service_offer_provider_not_active'],
+      // And so does condition 4: an account that is resident and provider at
+      // once does not quote itself, not even a 'direct' awarded to it.
+      'my direct + my request'  => [['status' => MYAPI_SERVICES_REQUEST_STATUS_DIRECT, 'assigned_provider_raw' => '41', 'requester_uid' => (string) self::UID], [], 'service_offer_own_request'],
     ];
   }
 
@@ -969,6 +1001,45 @@ class ServiceOfferCreateTest extends TestCase {
       '&amp;',
       myapi_service_offer_transaction_comment('Fontanería & Hijos')
     );
+  }
+
+  /**
+   * The comment of a quote on a 'direct' (SPEC 101): same three rules as its
+   * sister — never empty, names the provider, stored raw.
+   */
+  public function testTheDirectQuoteCommentIsNeverEmptyAndNamesTheProvider() {
+    $this->assertStringContainsString(
+      'Plomería Torres',
+      myapi_service_offer_direct_quote_comment('Plomería Torres')
+    );
+
+    foreach ([NULL, '', '   '] as $name) {
+      $this->assertNotSame('', trim(myapi_service_offer_direct_quote_comment($name)));
+    }
+
+    $this->assertStringNotContainsString(
+      '&amp;',
+      myapi_service_offer_direct_quote_comment('Fontanería & Hijos')
+    );
+    $this->assertStringContainsString(
+      'Fontanería & Hijos',
+      myapi_service_offer_direct_quote_comment('Fontanería & Hijos')
+    );
+  }
+
+  /**
+   * AND IT IS A DIFFERENT SENTENCE FROM ITS SISTER'S. On a 'direct' the
+   * transaction repeats the status it already had, so the comment is the ONLY
+   * thing that tells the two timeline entries apart — if both functions
+   * answered the same text, the resident would read the same line twice.
+   */
+  public function testTheTwoCommentsAreNotTheSameSentence() {
+    foreach (['Plomería Torres', NULL, ''] as $name) {
+      $this->assertNotSame(
+        myapi_service_offer_transaction_comment($name),
+        myapi_service_offer_direct_quote_comment($name)
+      );
+    }
   }
   /* -------------------------------------------------------------------------
    * The twelve i18n keys (SPEC 100).

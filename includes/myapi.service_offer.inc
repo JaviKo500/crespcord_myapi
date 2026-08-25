@@ -336,7 +336,8 @@ function myapi_service_offer_live_offer_exists($request_nid, $provider_id) {
  *                            yours is not bid on, it is worked on.
  *   5. request_not_offerable The request is not taking offers.
  *   6. category_mismatch     Last of the six because it is the only one that
- *                            depends on both rows at once.
+ *                            depends on both rows at once, and the ONLY one a
+ *                            'direct' of my own skips (SPEC 101).
  *
  * ALL SIX RUN BEFORE A SINGLE FIELD OF THE BODY IS VALIDATED, the criterion
  * step 6 of SPEC 95 set: WHO YOU ARE DOES NOT DEPEND ON WHAT YOU WROTE. An
@@ -349,10 +350,26 @@ function myapi_service_offer_live_offer_exists($request_nid, $provider_id) {
  * still an award. The raw read fails closed; the resolved one would quietly
  * reopen a request that is already somebody's job.
  *
- * A 'direct' request falls out of condition 5 with no rule of its own: it is
- * not one of the two biddable statuses AND it is born with
- * field_assigned_provider filled (SPEC 87). A 'direct' awarded TO ME falls the
- * same way, and that is right — a request that is already mine is not bid on.
+ * CONDITION 5 HAS A SECOND BRANCH SINCE SPEC 101, AND ONLY ONE: a 'direct'
+ * whose field_assigned_provider IS EXACTLY THE PROVIDER THAT IS BIDDING is
+ * offerable, because that provider is quoting a job the resident already gave
+ * them. field_assigned_offer must still be empty — a request that already has
+ * an awarded offer went through a round, and that is not the case this opens.
+ * A 'direct' awarded to ANYBODY ELSE answers the same 409 as before and gets no
+ * code of its own: a provider who is not the awarded one cannot even see that
+ * request, so the shared code hides nothing they did not already not know,
+ * while a specific one would confirm to them that it is taken.
+ *
+ * THE STATUS IS NOT MOVED BY THIS, and that is the whole point of SPEC 101 —
+ * see the docblock of resources/service_offer.resource.inc. This function only
+ * says who may bid.
+ *
+ * CONDITION 6 IS SKIPPED ON A 'direct' OF MY OWN, and on nothing else. SPEC 90
+ * already checked this provider against the category when the request was
+ * born; asking again here would lock a company out of a job the resident
+ * personally handed them, only because they stopped serving that category
+ * afterwards. Condition 2 is NOT skipped with it: the category says what you
+ * do, the licence says whether you may operate at all.
  *
  * An empty or corrupt field_request_status also falls out of condition 5, as a
  * 409 and never a 500: `in_array()` over the two keys says no, which is the
@@ -371,7 +388,8 @@ function myapi_service_offer_live_offer_exists($request_nid, $provider_id) {
  *                                    (REQUEST_TIME in production).
  *
  * @return string|NULL  The error_code of the first condition that fails, or
- *                      NULL when all six pass.
+ *                      NULL when all six pass — five of them, on a 'direct'
+ *                      of my own.
  */
 function myapi_service_offer_eligibility($request_row, $provider_row, $uid, $now) {
   // 1. Mine? A provider node that no longer exists is not owned by anybody,
@@ -402,28 +420,58 @@ function myapi_service_offer_eligibility($request_row, $provider_row, $uid, $now
   }
 
   // 5. Still taking offers — see the docblock on why the RAW columns.
-  $biddable = [
-    MYAPI_SERVICES_REQUEST_STATUS_OPEN,
-    MYAPI_SERVICES_REQUEST_STATUS_OFFERED,
-  ];
-
   $status = isset($request_row->status) ? $request_row->status : NULL;
+  $assigned_offer = isset($request_row->assigned_offer_raw) ? $request_row->assigned_offer_raw : NULL;
+  $assigned_provider = isset($request_row->assigned_provider_raw) ? $request_row->assigned_provider_raw : NULL;
 
-  if (!in_array($status, $biddable, TRUE)) {
-    return 'service_request_not_offerable';
+  // Set only on the one case SPEC 101 opens, and read once, by condition 6.
+  $own_direct = FALSE;
+
+  if ($status === MYAPI_SERVICES_REQUEST_STATUS_DIRECT) {
+    // The awarded provider quoting their own job (SPEC 101). A provider row
+    // with no nid compares as 0 and cannot match the non-empty column above
+    // it, so the branch fails closed on a broken row like every other read
+    // here does.
+    $bidder_id = isset($provider_row->nid) ? (int) $provider_row->nid : 0;
+
+    if (empty($assigned_provider) || (int) $assigned_provider !== $bidder_id) {
+      return 'service_request_not_offerable';
+    }
+
+    // Mine, but it already carries an awarded offer: that request went through
+    // a round and is not the case this branch is for.
+    if (!empty($assigned_offer)) {
+      return 'service_request_not_offerable';
+    }
+
+    $own_direct = TRUE;
+  }
+  else {
+    $biddable = [
+      MYAPI_SERVICES_REQUEST_STATUS_OPEN,
+      MYAPI_SERVICES_REQUEST_STATUS_OFFERED,
+    ];
+
+    if (!in_array($status, $biddable, TRUE)) {
+      return 'service_request_not_offerable';
+    }
+
+    if (!empty($assigned_offer) || !empty($assigned_provider)) {
+      return 'service_request_not_offerable';
+    }
   }
 
-  if (!empty($request_row->assigned_offer_raw) || !empty($request_row->assigned_provider_raw)) {
-    return 'service_request_not_offerable';
-  }
+  // 6. My category, UNLESS this is a 'direct' of my own — SPEC 90 already
+  //    asked it when the request was born, and the resident's choice outranks
+  //    the catalogue afterwards. An empty category on either side matches
+  //    nothing, which is the honest answer and needs no code of its own.
+  if (!$own_direct) {
+    $category_id = isset($request_row->category_id) ? (int) $request_row->category_id : 0;
+    $categories = isset($provider_row->category_ids) ? $provider_row->category_ids : [];
 
-  // 6. My category. An empty category on either side matches nothing, which is
-  //    the honest answer and needs no code of its own.
-  $category_id = isset($request_row->category_id) ? (int) $request_row->category_id : 0;
-  $categories = isset($provider_row->category_ids) ? $provider_row->category_ids : [];
-
-  if (!$category_id || !in_array($category_id, array_map('intval', $categories), TRUE)) {
-    return 'service_offer_category_mismatch';
+    if (!$category_id || !in_array($category_id, array_map('intval', $categories), TRUE)) {
+      return 'service_offer_category_mismatch';
+    }
   }
 
   return NULL;
@@ -810,6 +858,41 @@ function myapi_service_offer_transaction_comment($provider_name) {
   }
 
   return $provider_name . ' ' . t('envió una oferta.');
+}
+
+/**
+ * The field_comment of a quote sent on a 'direct' request (SPEC 101).
+ *
+ * SISTER OF myapi_service_offer_transaction_comment() AND NOT A REPLACEMENT OF
+ * IT. That one is the comment of the 'open' → 'offered' move and stays exactly
+ * as it was; this one belongs to a transaction whose field_request_status
+ * REPEATS the 'direct' the request already had, because the status did not
+ * move — see decision 3 of SPEC 101.
+ *
+ * AND THAT IS WHY THE TWO TEXTS MUST NOT BE THE SAME SENTENCE. The comment is
+ * the only thing that tells the two timeline entries of a 'direct' apart: the
+ * status column repeats, so the app has nothing else to render. "envió su
+ * presupuesto" says what happened — the company that already had the job put a
+ * price on it — where "envió una oferta" would read, on a job with no
+ * competition, as if somebody were still bidding for it.
+ *
+ * The provider's NAME and not the account's, never empty, no t() placeholder
+ * and no check_plain(): the same three rules as its sister, for the same three
+ * reasons — the resident reads this, SPEC 92 forbids a transaction with no
+ * comment, and field_comment is stored raw and escaped by whoever renders it.
+ *
+ * @param string|NULL $provider_name  The provider's node title.
+ *
+ * @return string  The comment to store, never empty.
+ */
+function myapi_service_offer_direct_quote_comment($provider_name) {
+  $provider_name = trim((string) $provider_name);
+
+  if ($provider_name === '') {
+    return t('Se recibió el presupuesto del proveedor asignado.');
+  }
+
+  return $provider_name . ' ' . t('envió su presupuesto.');
 }
 
 /**
