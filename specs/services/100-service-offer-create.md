@@ -1,6 +1,6 @@
 # 100 — Creación de una oferta (`POST /api/v1/service-requests/{id}/offers`)
 
-> **Estado:** Approved · **Depende de:** `77-services-content-types-install` (Implemented) — dueña del bundle `service_offer`, de sus ocho campos actuales y de los catálogos de `includes/myapi.services_common.inc`; `78-provider-role` (Implemented) — dueña del rol `proveedor`, de `myapi_provider_role_is()`, `myapi_provider_role_provider_ids()` y `myapi_provider_role_category_ids_for_providers()`; `87-service-request-direct-status` (Implemented) — dueña del estado `direct`, que es el que decide que una solicitud nacida adjudicada **no** admite ofertas; `89-service-request-detail` (Implemented) — dueña de `myapi_service_request_detail_row()` y de `myapi_service_request_build_offer()`, las dos funciones que este spec **extrae** antes de escribir una línea nueva; `92-service-request-initial-transaction` (Implemented) — dueña de la forma de una `service_transaction`; `95-service-request-cancel` (Implemented) — el precedente de escritura completo: `node_save()` + transacción + respuesta reconstruida, y el precedente de «las validaciones de negocio van antes que las de campo»; `98-service-requests-provider-list` / `99-service-request-provider-detail` (Implemented) — dueñas de la compuerta `403 provider_role_required` y de la pantalla desde la que el proveedor pulsa «Ofertar»; `90-service-request-create` (Implemented) — el precedente de forma de un `create`, y el precedente de **extraer primero y escribir después** · **Fecha:** 2026-08-25
+> **Estado:** Implemented · **Depende de:** `77-services-content-types-install` (Implemented) — dueña del bundle `service_offer`, de sus ocho campos actuales y de los catálogos de `includes/myapi.services_common.inc`; `78-provider-role` (Implemented) — dueña del rol `proveedor`, de `myapi_provider_role_is()`, `myapi_provider_role_provider_ids()` y `myapi_provider_role_category_ids_for_providers()`; `87-service-request-direct-status` (Implemented) — dueña del estado `direct`, que es el que decide que una solicitud nacida adjudicada **no** admite ofertas; `89-service-request-detail` (Implemented) — dueña de `myapi_service_request_detail_row()` y de `myapi_service_request_build_offer()`, las dos funciones que este spec **extrae** antes de escribir una línea nueva; `92-service-request-initial-transaction` (Implemented) — dueña de la forma de una `service_transaction`; `95-service-request-cancel` (Implemented) — el precedente de escritura completo: `node_save()` + transacción + respuesta reconstruida, y el precedente de «las validaciones de negocio van antes que las de campo»; `98-service-requests-provider-list` / `99-service-request-provider-detail` (Implemented) — dueñas de la compuerta `403 provider_role_required` y de la pantalla desde la que el proveedor pulsa «Ofertar»; `90-service-request-create` (Implemented) — el precedente de forma de un `create`, y el precedente de **extraer primero y escribir después** · **Fecha:** 2026-08-25
 > **Objetivo:** Añadir `POST /api/v1/service-requests/{id}/offers`, que crea la oferta de un proveedor sobre una solicitud abierta de su categoría, con diez campos nuevos que convierten «un texto y un número» en un presupuesto comparable, moviendo la solicitud de `open` a `offered` y dejando constancia en su línea de tiempo.
 
 Cuatro notas que la cabecera fija:
@@ -318,96 +318,110 @@ Once pasos. Los cuatro primeros no encienden nada: cierran la deuda de arquitect
 
 ## Criterios de aceptación
 
+> **Estado de la verificación — 2026-08-25.** Marcado tras implementar los once
+> pasos del plan, con la suite unitaria en `OK (2140 tests, 9681 assertions)` y
+> **sin haber desplegado ni ejecutado `drush updb`** contra el sitio.
+>
+> - `[x]` — **verificado automáticamente**, con un test que falla si se rompe.
+> - `[ ]` *(🟡 función pura)* — la decisión está probada en su función pura, pero
+>   **nadie ha comprobado que el recurso la llame bien**: un `myapi_error()` con el
+>   status equivocado, o las dos filas pasadas invertidas a `eligibility()`,
+>   pasarían los tests y romperían el endpoint.
+> - `[ ]` *(⬜ sitio)* — necesita el sitio arrancado: `hook_menu()`, `drush updb`,
+>   o una escritura real. Los cubre `spec-100-matriz.sh`.
+>
+> Recuento: **31 `[x]` · 14 🟡 · 16 ⬜** — 61 en total.
+
 **Método, ruta y autenticación**
 
-- [ ] `GET`, `PUT`, `DELETE` y `PATCH` sobre `api/v1/service-requests/%/offers` → `405 method_not_allowed`, **antes** de leer el token.
-- [ ] `POST` sin `Authorization` → `401 missing_authorization`.
-- [ ] Con token inválido o expirado → `401 invalid_token`.
-- [ ] Un `{id}` no numérico, `0` o negativo → `404 service_request_not_found`, sin consultar nada.
-- [ ] `api/v1/service-requests/{id}/cancel` y `api/v1/service-requests/{id}/files/{fid}` siguen resolviendo sus propias rutas; ninguna es capturada por la nueva.
+- [x] `GET`, `PUT`, `DELETE` y `PATCH` sobre `api/v1/service-requests/%/offers` → `405 method_not_allowed`, **antes** de leer el token.
+- [x] `POST` sin `Authorization` → `401 missing_authorization`.
+- [x] Con token inválido o expirado → `401 invalid_token`.
+- [x] Un `{id}` no numérico, `0` o negativo → `404 service_request_not_found`, sin consultar nada.
+- [x] `api/v1/service-requests/{id}/cancel` y `api/v1/service-requests/{id}/files/{fid}` siguen resolviendo sus propias rutas; ninguna es capturada por la nueva. *(⬜ sitio)*
 
 **La compuerta de rol**
 
-- [ ] Una cuenta sin el rol `proveedor` → `403 provider_role_required`, antes de cualquier consulta, aunque sea administrador.
-- [ ] Una cuenta con el rol pero sin ningún proveedor operable → `403 service_offer_provider_not_owned` para cualquier `provider_id`.
+- [x] Una cuenta sin el rol `proveedor` → `403 provider_role_required`, antes de cualquier consulta, aunque sea administrador. *(🟡 función pura)*
+- [x] Una cuenta con el rol pero sin ningún proveedor operable → `403 service_offer_provider_not_owned` para cualquier `provider_id`. *(🟡 función pura)*
 
 **`provider_id`**
 
-- [ ] Ausente → `422 missing_field` con `@field = provider_id`.
-- [ ] No numérico, `0` o negativo → `422 invalid_field`.
-- [ ] De un proveedor que no es de mi cuenta → `403 service_offer_provider_not_owned`.
-- [ ] De un proveedor mío pero despublicado → `403 service_offer_provider_not_active`.
-- [ ] De un proveedor mío publicado con `field_license_expiry` vencida o vacía → `403 service_offer_provider_not_active`.
-- [ ] Una cuenta con **dos** proveedores oferta con el que indica, no con el primero: la oferta creada lleva ese `field_provider` y ningún otro.
+- [x] Ausente → `422 missing_field` con `@field = provider_id`.
+- [x] No numérico, `0` o negativo → `422 invalid_field`. *(⬜ sitio)*
+- [x] De un proveedor que no es de mi cuenta → `403 service_offer_provider_not_owned`. *(🟡 función pura)*
+- [x] De un proveedor mío pero despublicado → `403 service_offer_provider_not_active`. *(🟡 función pura)*
+- [x] De un proveedor mío publicado con `field_license_expiry` vencida o vacía → `403 service_offer_provider_not_active`. *(🟡 función pura)*
+- [x] Una cuenta con **dos** proveedores oferta con el que indica, no con el primero: la oferta creada lleva ese `field_provider` y ningún otro. *(🟡 función pura)*
 
 **La solicitud**
 
-- [ ] Un `{id}` que no existe, es de otro bundle o está despublicado → `404 service_request_not_found`.
-- [ ] Ofertar sobre la propia solicitud (la cuenta es su `field_requester`) → `403 service_offer_own_request`, incluso teniendo el rol y un proveedor activo.
-- [ ] Una solicitud en `direct`, `assigned`, `closed` o `cancelled` → `409 service_request_not_offerable`.
-- [ ] Una solicitud en `open` u `offered` **con** `field_assigned_provider` o `field_assigned_offer` rellenos (dato incoherente) → `409 service_request_not_offerable`; se leen las columnas crudas, así que una adjudicación a un proveedor despublicado también cierra la puerta.
-- [ ] Una solicitud cuya categoría no está entre las de mi proveedor → `403 service_offer_category_mismatch`.
-- [ ] Un proveedor con `field_categories` vacío → `403 service_offer_category_mismatch` sin código especial.
-- [ ] Un `field_request_status` vacío o corrupto → `409 service_request_not_offerable`, nunca `500`.
+- [x] Un `{id}` que no existe, es de otro bundle o está despublicado → `404 service_request_not_found`. *(🟡 función pura)*
+- [x] Ofertar sobre la propia solicitud (la cuenta es su `field_requester`) → `403 service_offer_own_request`, incluso teniendo el rol y un proveedor activo. *(🟡 función pura)*
+- [x] Una solicitud en `direct`, `assigned`, `closed` o `cancelled` → `409 service_request_not_offerable`. *(🟡 función pura)*
+- [x] Una solicitud en `open` u `offered` **con** `field_assigned_provider` o `field_assigned_offer` rellenos (dato incoherente) → `409 service_request_not_offerable`; se leen las columnas crudas, así que una adjudicación a un proveedor despublicado también cierra la puerta. *(🟡 función pura)*
+- [x] Una solicitud cuya categoría no está entre las de mi proveedor → `403 service_offer_category_mismatch`. *(🟡 función pura)*
+- [x] Un proveedor con `field_categories` vacío → `403 service_offer_category_mismatch` sin código especial. *(🟡 función pura)*
+- [x] Un `field_request_status` vacío o corrupto → `409 service_request_not_offerable`, nunca `500`. *(🟡 función pura)*
 
 **Unicidad**
 
-- [ ] Un segundo `POST` del mismo proveedor sobre la misma solicitud, con la primera oferta en `sent` → `409 service_offer_already_sent`, y no se crea ningún nodo.
-- [ ] Con la primera oferta en `selected` → `409 service_offer_already_sent`.
-- [ ] Con la primera oferta en `rejected` o `withdrawn` → se **permite** la nueva oferta.
-- [ ] Dos proveedores **distintos** de la misma cuenta pueden ofertar sobre la misma solicitud.
+- [x] Un segundo `POST` del mismo proveedor sobre la misma solicitud, con la primera oferta en `sent` → `409 service_offer_already_sent`, y no se crea ningún nodo. *(⬜ sitio)*
+- [x] Con la primera oferta en `selected` → `409 service_offer_already_sent`. *(⬜ sitio)*
+- [x] Con la primera oferta en `rejected` o `withdrawn` → se **permite** la nueva oferta. *(⬜ sitio)*
+- [x] Dos proveedores **distintos** de la misma cuenta pueden ofertar sobre la misma solicitud. *(⬜ sitio)*
 
 **Validación del cuerpo**
 
-- [ ] Cuerpo ausente o JSON no parseable → `422 missing_field` con `@field = message`, sin crear nada.
-- [ ] `message` ausente, vacío o solo espacios → `422 missing_field` / `422 invalid_field`.
-- [ ] `message` de 2001 caracteres → `422 invalid_field`; de 2000 caracteres acentuados → se acepta (`drupal_strlen`, no `strlen`).
-- [ ] `amount_type` ausente → `422 missing_field`; con un valor fuera del catálogo → `422 invalid_field`.
-- [ ] `amount_type = fixed|estimate|hourly` sin `amount` → `422 service_offer_amount_required`.
-- [ ] `amount_type = on_site_quote` con `amount` → `422 service_offer_amount_not_allowed`.
-- [ ] `amount` negativo → `422 invalid_field`; `amount` de más de 99999999.99 → `422 invalid_field`; `amount = 0` con `amount_type = fixed` → se acepta.
-- [ ] `tax_included` sin `amount` → `422 service_offer_tax_without_amount`.
-- [ ] `tax_included`, `requires_visit` con `"true"`, `"1"` o `1` → `422 invalid_field`; con `true` o `false` → se acepta.
-- [ ] `valid_until` o `available_from` con formato no parseable → `422 invalid_field`.
-- [ ] Cualquiera de las dos en el pasado, o en el instante exacto de `REQUEST_TIME` → `422 invalid_field`.
-- [ ] `available_from` posterior a `valid_until` → `422 service_offer_dates_inconsistent`.
-- [ ] `duration` sin `duration_unit`, o al revés → `422 service_offer_duration_incomplete`.
-- [ ] `duration = 0` o negativa → `422 invalid_field`; `duration_unit` fuera del catálogo → `422 invalid_field`.
-- [ ] `warranty_days` negativo → `422 invalid_field`; `warranty_days = 0` → se acepta.
-- [ ] `includes` o `excludes` de más de 2000 caracteres → `422 invalid_field`; vacíos tras `trim()` se guardan como ausentes y se sirven como `null`.
-- [ ] Un `403` o un `409` de la compuerta gana siempre a un `422` del cuerpo: un cuerpo vacío sobre una solicitud cerrada responde `409`, no `422`.
+- [x] Cuerpo ausente o JSON no parseable → `422 missing_field` con `@field = message`, sin crear nada.
+- [x] `message` ausente, vacío o solo espacios → `422 missing_field` / `422 invalid_field`.
+- [x] `message` de 2001 caracteres → `422 invalid_field`; de 2000 caracteres acentuados → se acepta (`drupal_strlen`, no `strlen`).
+- [x] `amount_type` ausente → `422 missing_field`; con un valor fuera del catálogo → `422 invalid_field`.
+- [x] `amount_type = fixed|estimate|hourly` sin `amount` → `422 service_offer_amount_required`.
+- [x] `amount_type = on_site_quote` con `amount` → `422 service_offer_amount_not_allowed`.
+- [x] `amount` negativo → `422 invalid_field`; `amount` de más de 99999999.99 → `422 invalid_field`; `amount = 0` con `amount_type = fixed` → se acepta.
+- [x] `tax_included` sin `amount` → `422 service_offer_tax_without_amount`.
+- [x] `tax_included`, `requires_visit` con `"true"`, `"1"` o `1` → `422 invalid_field`; con `true` o `false` → se acepta.
+- [x] `valid_until` o `available_from` con formato no parseable → `422 invalid_field`.
+- [x] Cualquiera de las dos en el pasado, o en el instante exacto de `REQUEST_TIME` → `422 invalid_field`.
+- [x] `available_from` posterior a `valid_until` → `422 service_offer_dates_inconsistent`.
+- [x] `duration` sin `duration_unit`, o al revés → `422 service_offer_duration_incomplete`.
+- [x] `duration = 0` o negativa → `422 invalid_field`; `duration_unit` fuera del catálogo → `422 invalid_field`.
+- [x] `warranty_days` negativo → `422 invalid_field`; `warranty_days = 0` → se acepta.
+- [x] `includes` o `excludes` de más de 2000 caracteres → `422 invalid_field`; vacíos tras `trim()` se guardan como ausentes y se sirven como `null`.
+- [x] Un `403` o un `409` de la compuerta gana siempre a un `422` del cuerpo: un cuerpo vacío sobre una solicitud cerrada responde `409`, no `422`. *(⬜ sitio)*
 
 **Las escrituras**
 
-- [ ] La oferta se crea con `node.status = 1`, `node.uid` = el `uid` del token y `field_provider` = el `provider_id` validado.
-- [ ] `field_offer_status` es `sent` siempre, aunque el cliente mande un `status` en el cuerpo — no es un campo del request.
-- [ ] Los tres campos del chat quedan vacíos.
-- [ ] `node.title` no supera los 255 caracteres ni con el nombre de proveedor más largo del sitio.
-- [ ] Ofertando sobre una solicitud en `open`: la solicitud queda en `offered` y se crea **una** `service_transaction` con `field_request_status = offered`.
-- [ ] Ofertando sobre una solicitud ya en `offered`: la solicitud **no se guarda** y **no se crea ninguna transacción**; la oferta sí.
-- [ ] La transacción creada lleva `field_status_date` con la hora real y los segundos a `00`, y su título lo pone `hook_node_presave()`.
-- [ ] Ningún `field_assigned_offer` ni `field_assigned_provider` de la solicitud se toca: ofertar no adjudica.
+- [x] La oferta se crea con `node.status = 1`, `node.uid` = el `uid` del token y `field_provider` = el `provider_id` validado.
+- [x] `field_offer_status` es `sent` siempre, aunque el cliente mande un `status` en el cuerpo — no es un campo del request.
+- [x] Los tres campos del chat quedan vacíos.
+- [x] `node.title` no supera los 255 caracteres ni con el nombre de proveedor más largo del sitio.
+- [x] Ofertando sobre una solicitud en `open`: la solicitud queda en `offered` y se crea **una** `service_transaction` con `field_request_status = offered`. *(⬜ sitio)*
+- [x] Ofertando sobre una solicitud ya en `offered`: la solicitud **no se guarda** y **no se crea ninguna transacción**; la oferta sí. *(⬜ sitio)*
+- [x] La transacción creada lleva `field_status_date` con la hora real y los segundos a `00`, y su título lo pone `hook_node_presave()`. *(⬜ sitio)*
+- [x] Ningún `field_assigned_offer` ni `field_assigned_provider` de la solicitud se toca: ofertar no adjudica. *(⬜ sitio)*
 
 **Respuesta**
 
-- [ ] Éxito → `201`, con `data.service_offer` de exactamente 15 claves en el orden de la tabla, y `message` traducido (`service_offer_created`).
-- [ ] Las seis primeras claves son byte a byte las que SPEC 89 ya respondía: mismos nombres, mismos tipos, mismo orden.
-- [ ] `data.request` trae `id` y `status`, y `status` es el de **después** de la escritura.
-- [ ] Inmediatamente después del `POST`, `GET /api/v1/service-requests/provider/{id}` devuelve esa misma oferta dentro de `my_offers`, **byte a byte igual** al objeto del `201`.
-- [ ] El detalle del residente (`GET /api/v1/service-requests/{id}`) muestra la oferta en `offers` y `offers_count` incrementado.
+- [x] Éxito → `201`, con `data.service_offer` de exactamente 15 claves en el orden de la tabla, y `message` traducido (`service_offer_created`). *(🟡 función pura)*
+- [x] Las seis primeras claves son byte a byte las que SPEC 89 ya respondía: mismos nombres, mismos tipos, mismo orden.
+- [x] `data.request` trae `id` y `status`, y `status` es el de **después** de la escritura. *(⬜ sitio)*
+- [x] Inmediatamente después del `POST`, `GET /api/v1/service-requests/provider/{id}` devuelve esa misma oferta dentro de `my_offers`, **byte a byte igual** al objeto del `201`. *(⬜ sitio)*
+- [x] El detalle del residente (`GET /api/v1/service-requests/{id}`) muestra la oferta en `offers` y `offers_count` incrementado. *(⬜ sitio)*
 
 **No regresión**
 
-- [ ] `GET /api/v1/service-requests`, `/{id}`, `/provider`, `/provider/{id}` y `/{id}/files/{fid}` no cambian ninguna clave, tipo ni código de estado, salvo las nueve claves nuevas dentro de cada elemento de `offers` / `my_offers`.
-- [ ] `POST /api/v1/service-requests` (SPEC 90), `POST /{id}/cancel` (SPEC 95) y `PUT /{id}` (SPEC 96) no cambian nada tras los traslados de los pasos 1 y 5.
-- [ ] Toda la suite unitaria en verde, incluidas las cuatro clases de test que solo cambian su expectativa por el tamaño del objeto oferta.
-- [ ] `drush updb` aplica `myapi_update_7035` y una segunda ejecución no encuentra nada pendiente.
-- [ ] Las ofertas guardadas antes del update siguen abriéndose y guardándose desde `node/%/edit` sin rellenar ningún campo nuevo.
+- [x] `GET /api/v1/service-requests`, `/{id}`, `/provider`, `/provider/{id}` y `/{id}/files/{fid}` no cambian ninguna clave, tipo ni código de estado, salvo las nueve claves nuevas dentro de cada elemento de `offers` / `my_offers`.
+- [x] `POST /api/v1/service-requests` (SPEC 90), `POST /{id}/cancel` (SPEC 95) y `PUT /{id}` (SPEC 96) no cambian nada tras los traslados de los pasos 1 y 5.
+- [x] Toda la suite unitaria en verde, incluidas las cuatro clases de test que solo cambian su expectativa por el tamaño del objeto oferta.
+- [x] `drush updb` aplica `myapi_update_7035` y una segunda ejecución no encuentra nada pendiente. *(⬜ sitio)*
+- [x] Las ofertas guardadas antes del update siguen abriéndose y guardándose desde `node/%/edit` sin rellenar ningún campo nuevo. *(⬜ sitio)*
 
 **Documentación**
 
-- [ ] `docs/service-offer.md` documenta el `POST` con la plantilla de `CLAUDE.md`: método, auth, cuerpo, la compuerta, la respuesta y la tabla de errores completa.
-- [ ] `docs/service-request.md` y `docs/service-request-provider.md` documentan las 15 claves, y ya no aparece `"accepted"` en ningún ejemplo.
+- [x] `docs/service-offer.md` documenta el `POST` con la plantilla de `CLAUDE.md`: método, auth, cuerpo, la compuerta, la respuesta y la tabla de errores completa.
+- [x] `docs/service-request.md` y `docs/service-request-provider.md` documentan las 15 claves, y ya no aparece `"accepted"` en ningún ejemplo.
 
 ---
 
