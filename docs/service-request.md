@@ -10,7 +10,10 @@ route; `POST` **creates** one — see
 [`POST /api/v1/service-requests`](#post-apiv1service-requests) below. Editing a
 request that already exists is a `POST` on the **item** route
 ([`POST /api/v1/service-requests/{id}`](#post-apiv1service-requestsid)) and
-cancelling has a route of its own; closing, awarding and offering are still not
+cancelling has a route of its own. **Offering** has a route and a document of
+its own since SPEC 100 — see
+[service-offer.md](service-offer.md) — and it is the one write outside this
+document that changes a request's status. Closing and awarding are still not
 here.
 
 This is the **first route** of the `service_request` bundle, whose schema was
@@ -654,7 +657,16 @@ query**, not even the token's: the shape of the URL is wrong whoever is asking.
           "amount": 95.5,
           "message": "Puedo pasar el jueves por la mañana.",
           "status": "sent",
-          "created": "2026-08-15T18:40:02"
+          "created": "2026-08-15T18:40:02",
+          "amount_type": "fixed",
+          "valid_until": "2026-08-22T23:59:00",
+          "available_from": "2026-08-17T08:00:00",
+          "duration": { "value": 3, "unit": "hours" },
+          "includes": "Mano de obra, desplazamiento y sellado.",
+          "excludes": "El calentador de repuesto, si hiciera falta.",
+          "tax_included": true,
+          "warranty_days": 90,
+          "requires_visit": false
         },
         {
           "id": 45,
@@ -662,7 +674,16 @@ query**, not even the token's: the shape of the URL is wrong whoever is asking.
           "amount": null,
           "message": "Necesito ver la instalación antes de dar precio.",
           "status": "sent",
-          "created": "2026-08-15T11:03:17"
+          "created": "2026-08-15T11:03:17",
+          "amount_type": "on_site_quote",
+          "valid_until": null,
+          "available_from": null,
+          "duration": null,
+          "includes": null,
+          "excludes": null,
+          "tax_included": null,
+          "warranty_days": null,
+          "requires_visit": true
         }
       ],
       "transactions": [
@@ -703,17 +724,46 @@ trim above.
 ¹ Required on the bundle; the `LEFT JOIN`s leave them `NULL` if somebody deleted
 the row by hand, and the serialiser answers `null` instead of breaking.
 
-**Each offer:**
+#### Each offer: fifteen keys, always, in this order
 
-| Key | Source | Nullable | Notes |
-|-----|--------|:--------:|-------|
-| `id` | the offer's `nid` | No | JSON integer. |
-| `provider.id` / `.name` | `field_provider` → `node.title` | **Yes** (the whole object) | An unpublished or deleted provider leaves `provider: null` and **the offer stays in the list** — dropping it would make the list disagree with `offers_count`. |
-| `provider.logo` | `field_logo` → `file_create_url()` | **Yes** | An absolute, **direct** URL: `field_logo` is `public://` (SPEC 85), unlike the request's own images. Never an `api/v1/...` path. |
-| `amount` | `field_offer_amount` | **Yes** | **A number or `null`**, never `"95.50"`. `null` means *no price yet* — the field is optional because the price can be settled in the chat. `0` is a price somebody offered. |
-| `message` | `field_offer_message` | No¹ | As stored, with its line breaks, exactly like `description`. |
-| `status` | `field_offer_status` | No¹ | `sent` / `selected` / `rejected` / `withdrawn`. |
-| `created` | `node.created` | No | `Y-m-d\TH:i:s`. |
+The **first six are SPEC 89's, unchanged** — same names, same types, same order.
+SPEC 100 added nine after them and moved none, which is why a client written
+against the six-key shape keeps working untouched. `amount_type` would read
+better next to `amount`; order is contract here, and this table is where the
+legibility is paid for instead.
+
+| # | Key | Source | Nullable | Notes |
+|--:|-----|--------|:--------:|-------|
+| 1 | `id` | the offer's `nid` | No | JSON integer. |
+| 2 | `provider.id` / `.name` | `field_provider` → `node.title` | **Yes** (the whole object) | An unpublished or deleted provider leaves `provider: null` and **the offer stays in the list** — dropping it would make the list disagree with `offers_count`. |
+| 2 | `provider.logo` | `field_logo` → `file_create_url()` | **Yes** | An absolute, **direct** URL: `field_logo` is `public://` (SPEC 85), unlike the request's own images. Never an `api/v1/...` path. |
+| 3 | `amount` | `field_offer_amount` | **Yes** | **A number or `null`**, never `"95.50"`. `null` means *no price yet* — an `on_site_quote` carries none, and the price of any offer can still be settled in the chat. `0` is a price somebody offered. |
+| 4 | `message` | `field_offer_message` | No¹ | As stored, with its line breaks, exactly like `description`. |
+| 5 | `status` | `field_offer_status` | No¹ | `sent` / `selected` / `rejected` / `withdrawn`. |
+| 6 | `created` | `node.created` | No | `Y-m-d\TH:i:s`. |
+| 7 | `amount_type` | `field_offer_amount_type` | **Yes** | `fixed` / `estimate` / `hourly` / `on_site_quote` — how the number is to be read. **`null` on every offer stored before SPEC 100**, and nothing will ever backfill it: deducing a type from the amount would put in a provider's mouth a statement they never made. |
+| 8 | `valid_until` | `field_offer_valid_until` | **Yes** | `Y-m-d\TH:i:s`. **Informative only: no process expires an offer by this date.** A lapsed offer stays `sent` until somebody awards or the request is cancelled. |
+| 9 | `available_from` | `field_offer_available_from` | **Yes** | `Y-m-d\TH:i:s`. When the provider could start. |
+| 10 | `duration` | `field_offer_duration` + `field_offer_duration_unit` | **Yes** | `{"value": 3, "unit": "hours"}` — **one object or one whole `null`**, never `{"value": null, "unit": null}`. The two columns are coupled: one without the other means nothing. `unit` is `hours` or `days`. |
+| 11 | `includes` | `field_offer_includes` | **Yes** | What the quote covers, as stored, with its line breaks. |
+| 12 | `excludes` | `field_offer_excludes` | **Yes** | What it does not. |
+| 13 | `tax_included` | `field_offer_tax_included` | **Yes** | **Three-valued**: `true`, `false`, or `null` for *the provider never said*. A `null` is not a `false`. |
+| 14 | `warranty_days` | `field_offer_warranty_days` | **Yes** | JSON integer. `0` is a declaration — *no warranty* — and not an absence. |
+| 15 | `requires_visit` | `field_offer_requires_visit` | **No** | **Never `null`**: the absence of the claim *"I need to visit first"* reads as `false`. |
+
+An optional text that is empty is served as `null` and never as `""`. `message`
+is the exception and **is** `""` when empty, because it is required: an empty
+one there is a corrupt row, not an absence.
+
+**Nine of the fifteen are `null` on every offer stored before SPEC 100.**
+`myapi_update_7035()` creates the ten columns and backfills nothing, so a
+historic offer answers the six keys it always answered plus eight nulls and one
+`false`. See [services-install.md](services-install.md).
+
+**Where these values come from:** `POST /api/v1/service-requests/{id}/offers` —
+see [service-offer.md](service-offer.md). The object this endpoint serves and
+the one that `201` answers come out of the same serialiser, so they are byte for
+byte the same.
 
 **Which offers travel:** every **published** one, whatever its status —
 `withdrawn` and `rejected` included — which is exactly what `offers_count`
@@ -733,8 +783,9 @@ offers, not hundreds.
 
 The request's `service_transaction` entries: what happened to it and when. Every
 request created since SPEC 92 is born with one — the acknowledgement, carrying
-the status it was created with — and each future transition (offering,
-awarding, closing, cancelling) will add its own. See
+the status it was created with. **Offering** adds its own since SPEC 100, when
+an offer is the first one and moves the request `open → offered`; cancelling
+adds its own since SPEC 95. Awarding and closing still add none. See
 [service-transaction.md](service-transaction.md) for who writes them.
 
 **Each transaction:**
@@ -937,7 +988,8 @@ initial entry, which **does** already exist.
 
 Out of scope of this endpoint: editing, cancelling, closing or awarding a
 request already created — the first two have routes of their own, the other two
-do not exist yet; offering on a request; any notification on creation;
+do not exist yet; offering on a request, which has its own route
+([service-offer.md](service-offer.md)); any notification on creation;
 restricting a `direct` request's visibility to the provider it names — a
 provider not of the chosen category still cannot see it, but one of the same
 category the resident did **not** pick still can, exactly like every other
@@ -1270,11 +1322,13 @@ changed, and having later withdrawn or been rejected does not un-read it.
 
 > **The second condition is not redundant with the first**, however much the
 > graph suggests it is. The graph says the first offer moves `open → offered`,
-> but nothing executes that today: `hook_node_insert()` and `hook_node_update()`
-> have no `service_offer` branch, so an offer created from the back office leaves
-> the request in `open` with offers hanging off it. This condition covers that
-> hole, and the day the offers endpoint exists and syncs the status it will
-> simply stop being the one that fires.
+> and since SPEC 100 one path does execute it —
+> [`POST /api/v1/service-requests/{id}/offers`](service-offer.md) moves the
+> request itself — but **that is the endpoint's doing, not the node's**:
+> `hook_node_insert()` and `hook_node_update()` still have no `service_offer`
+> branch, so an offer created from the back office leaves the request in `open`
+> with offers hanging off it. This condition covers that hole, which is why it
+> counts offers instead of trusting the status.
 
 Both failures answer the **same** `409 service_request_not_editable`. For the
 resident the outcome is identical — they cannot edit — and two codes would force
@@ -1685,8 +1739,8 @@ curl -i -X PUT https://host/api/v1/service-requests/412/cancel \
 
 Written down so it is not looked for in this document:
 
-- **Every write except creation, editing and cancellation.** Closing, awarding
-  and offering **on a request that already exists**. All `405` — see
+- **Every write except creation, editing and cancellation.** Closing and
+  awarding **on a request that already exists**. All `405` — see
   [`POST /api/v1/service-requests`](#post-apiv1service-requests),
   [`POST /api/v1/service-requests/{id}`](#post-apiv1service-requestsid) and
   [`PUT /api/v1/service-requests/{id}/cancel`](#put-apiv1service-requestsidcancel)
@@ -1702,8 +1756,12 @@ Written down so it is not looked for in this document:
 - **Any trace of an edit.** No timeline entry, no notification, no history of
   what changed, and no concurrency control: two simultaneous edits, and the last
   one wins.
-- **Offers as a resource of their own** — creating them, withdrawing them,
-  `GET /api/v1/offers/{id}`. Here they are only **read**, inside one request.
+- **Everything about an offer except creating one.** Withdrawing it, editing
+  it, awarding it, and `GET /api/v1/offers/{id}`. Creating one has its own route
+  and its own document since SPEC 100 —
+  [`POST /api/v1/service-requests/{id}/offers`](service-offer.md) — and it is
+  what moves a request from `open` to `offered`. Here offers are still only
+  **read**, inside one request.
 - **The chat.** `field_firebase_path`, `field_chat_opened_at` and
   `field_last_message_at` do not travel: who opens the thread and when the path
   is generated is another spec, and a key served today is a contract that spec
@@ -1739,5 +1797,6 @@ Written down so it is not looked for in this document:
 > **Providers are still loaded by hand from the back office.** Creating a
 > `service_request` no longer needs data planted outside the API, but a `direct`
 > award still needs a real `provider` node to point at, and offering on a
-> request still needs a real one to bid — neither exists through this API yet.
-> That is the real state of the system, not a failure of this endpoint.
+> request still needs a real one to bid with — and a `provider` node is still
+> created only from the back office. That is the real state of the system, not a
+> failure of this endpoint.

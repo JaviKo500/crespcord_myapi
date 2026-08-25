@@ -174,7 +174,7 @@ The values it accepts are the `id` of each provider in
         "category": { "id": 12, "code": "plumbing", "name": "Plomería" },
         "unit": { "id": 55, "name": "A-301" },
         "offers_count": 3,
-        "assigned_offer": { "id": 901, "status": "accepted" },
+        "assigned_offer": { "id": 901, "status": "selected" },
         "assigned_provider": { "id": 41, "name": "Plomería Torres" },
         "created": "2026-08-12T09:14:00",
         "desired_start": "2026-08-20T08:00:00",
@@ -450,7 +450,7 @@ excludes it by definition and rule 2b points at somebody else. That is a
       "category": { "id": 12, "code": "plumbing", "name": "Plomería" },
       "unit": { "id": 55, "name": "A-301" },
       "offers_count": 4,
-      "assigned_offer": { "id": 901, "status": "accepted" },
+      "assigned_offer": { "id": 901, "status": "selected" },
       "assigned_provider": { "id": 41, "name": "Plomería Torres" },
       "created": "2026-08-12T09:14:00",
       "desired_start": "2026-08-20T08:00:00",
@@ -468,8 +468,17 @@ excludes it by definition and rule 2b points at somebody else. That is a
           "provider": { "id": 41, "name": "Plomería Torres", "logo": null },
           "amount": 150.5,
           "message": "Puedo pasar el jueves.",
-          "status": "accepted",
-          "created": "2026-08-13T11:02:00"
+          "status": "selected",
+          "created": "2026-08-13T11:02:00",
+          "amount_type": "fixed",
+          "valid_until": "2026-08-20T23:59:00",
+          "available_from": "2026-08-15T08:00:00",
+          "duration": { "value": 3, "unit": "hours" },
+          "includes": "Mano de obra, desplazamiento y sellado.",
+          "excludes": "El calentador de repuesto, si hiciera falta.",
+          "tax_included": true,
+          "warranty_days": 90,
+          "requires_visit": false
         }
       ],
       "transactions": [
@@ -504,7 +513,7 @@ The **thirteen of the listing item**, without a single difference, followed by
 | 15 | `images` | array | `{id, url, filename}` in upload order. **Always an array**, `[]` when there are none |
 | 16 | `attachment` | object \| null | `{id, url, filename}` |
 | 17 | `closed_at` | string \| null | `Y-m-d\TH:i:s`. `null` in every request that is not `closed` |
-| 18 | `my_offers` | array | **Only mine.** Always an array, `[]` when I have not bid |
+| 18 | `my_offers` | array | **Only mine.** Always an array, `[]` when I have not bid. Fifteen keys per offer since SPEC 100 — see below |
 | 19 | `transactions` | array | The **complete** timeline. Always an array |
 
 **The thirteen are byte for byte the listing's item for the same `{id}`** — same
@@ -529,8 +538,23 @@ the name says so. The trim is made by the query and never in PHP.
 | Four offers on the request, one of them mine | `my_offers` has **1** element, `offers_count` is **4** |
 | No offers of mine | `my_offers` is `[]`, and the response is still `200` |
 
-Each element is `{id, provider: {id, name, logo}, amount, message, status,
-created}` — the six keys of the resident's detail, under the honest name.
+**Each element is fifteen keys since SPEC 100**, and it is byte for byte the
+element the resident's detail serves in `offers` — same serialiser, under the
+honest name. The **first six are unchanged** — `{id, provider: {id, name, logo},
+amount, message, status, created}` — and the nine that follow are the quote:
+`amount_type`, `valid_until`, `available_from`, `duration`, `includes`,
+`excludes`, `tax_included`, `warranty_days` and `requires_visit`. See
+[the offer object in service-request.md](service-request.md#each-offer-fifteen-keys-always-in-this-order)
+for what each one means and how it is typed.
+
+**Nine of the fifteen are `null` on every offer stored before SPEC 100**
+(`requires_visit` answers `false`, never `null`): `myapi_update_7035()` creates
+the columns and backfills nothing.
+
+**This is the same object `POST /api/v1/service-requests/{id}/offers` answers
+under `service_offer`** — see [service-offer.md](service-offer.md). Immediately
+after bidding, the offer this endpoint returns in `my_offers` is byte for byte
+the one the `201` carried, because both come out of the same serialiser.
 
 **The competition's amounts never travel.** What does travel is the count, and
 the winner's name in `assigned_provider`, unmasked: masking them would create

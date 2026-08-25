@@ -262,10 +262,40 @@ does not validate — that the chosen `vivienda` belongs to the
 | `field_firebase_path` | text (255) | 1 | No | Reserved for the chat. Empty = no thread yet. |
 | `field_chat_opened_at` | datestamp | 1 | No | Reserved for the chat. |
 | `field_last_message_at` | datestamp | 1 | No | Reserved for the chat. |
+| `field_offer_amount_type` | list_text | 1 | **No** | SPEC 100. How the amount is to be read — see [`field_offer_amount_type`](#field_offer_amount_type). `on_site_quote` is the one value that carries **no** amount. |
+| `field_offer_valid_until` | datestamp | 1 | **No** | SPEC 100. **Informative: no process expires an offer by this date.** |
+| `field_offer_available_from` | datestamp | 1 | **No** | SPEC 100. When the provider could start. |
+| `field_offer_duration` | number_integer | 1 | **No** | SPEC 100. Meaningless without its unit; the endpoint takes the two or neither. `min` is **not** an SQL constraint — see the warning below. |
+| `field_offer_duration_unit` | list_text | 1 | **No** | SPEC 100. `hours` or `days` — see [`field_offer_duration_unit`](#field_offer_duration_unit). |
+| `field_offer_includes` | text_long | 1 | **No** | SPEC 100. **No `text_processing`**, unlike `field_offer_message`: no format column. |
+| `field_offer_excludes` | text_long | 1 | **No** | SPEC 100. Same. |
+| `field_offer_tax_included` | list_boolean | 1 | **No** | SPEC 100. `0 = No`, `1 = Sí`. **Three-valued in practice**: empty means *the provider never said*, which is a different answer from `No`. The widget is `options_select` and never a checkbox, precisely so it can be left empty. |
+| `field_offer_warranty_days` | number_integer | 1 | **No** | SPEC 100. `0` is a declaration — *no warranty* — and not an absence. |
+| `field_offer_requires_visit` | list_boolean | 1 | **No** | SPEC 100. `0 = No`, `1 = Sí`. The API always writes one of the two; an offer stored before SPEC 100 is empty and is read as `false`. |
 
 The **account** that offered is the node's native `uid`; `field_provider` is
 the provider node it belongs to. Two different things, because one provider can
 have several accounts.
+
+**The ten fields of SPEC 100 are all optional instances, and that is a
+decision.** There were real offers stored on the site when they were created, and
+a required instance would have left every one of them unsaveable from
+`node/%/edit` until a human filled the new field in. **The obligation lives in
+the endpoint**, where it can be reasoned about and changed without touching the
+database: `POST /api/v1/service-requests/{id}/offers` demands `amount_type`, and
+nothing else beyond the message and the provider. See
+[service-offer.md](service-offer.md).
+
+> ⚠️ **`min = 0` is NOT an SQL constraint** on `field_offer_duration` nor on
+> `field_offer_warranty_days`. In Drupal 7 a minimum is an `#element_validate`
+> the `number` widget adds, so a programmatic `node_save()` writes a `-15`
+> without a word. The endpoint repeats the cut — exactly as this document
+> already warns for [`field_hourly_rate`](#field_hourly_rate).
+
+> **`myapi_update_7035()` backfills nothing.** Every offer stored before it
+> answers `null` on the ten new columns for ever, and that is the answer, not a
+> gap: deducing an `amount_type` from the amount would put in a provider's mouth
+> a statement they never made. Same discipline as `myapi_update_7032()`.
 
 ### Calificación de servicio (`service_rating`)
 
@@ -367,6 +397,48 @@ A separate field from the request's status, not a shared one with a wider
 catalogue: the two lists have no value in common, and sharing would offer
 «Abierta» in the offer form. Same criterion SPEC 32 used to keep
 `field_area_status` and `field_reservation_status` apart.
+
+`sent` and `selected` are the two **live** statuses — the ones that mean *still
+in play* — and they are named as constants in
+`includes/myapi.services_common.inc` (`MYAPI_SERVICES_OFFER_STATUS_SENT`,
+`..._SELECTED`) because two different places read them together: the uniqueness
+gate of SPEC 100 and the rejection sweep of SPEC 95. `rejected` and `withdrawn`
+are dead offers and block nothing.
+
+### `field_offer_amount_type`
+
+```
+fixed|Precio cerrado
+estimate|Estimado
+hourly|Por hora
+on_site_quote|A presupuestar en sitio
+```
+
+SPEC 100. The catalogue that turns *a number* into a quote: the same `150` means
+a closed price, a guess, an hourly rate or nothing at all, and without this the
+resident is comparing figures that do not mean the same thing. It is the one new
+field the API makes **mandatory** beyond the message, precisely because the
+number is unreadable without it.
+
+`on_site_quote` is the value that carries **no** amount, and the endpoint
+enforces both halves: an amount is required for the other three and forbidden
+for this one.
+
+### `field_offer_duration_unit`
+
+```
+hours|Horas
+days|Días
+```
+
+SPEC 100. Two values and no more: below an hour nothing in this marketplace is
+worth quoting, and above a handful of days the honest answer is a date, which is
+what `field_offer_available_from` already carries. Adding a third later is a
+value in this list plus an update, and it changes no caller.
+
+Meaningless on its own — a duration without its unit says nothing and a unit
+without its duration says less — so the API takes the two together or neither,
+and serves them as **one object**.
 
 ---
 
@@ -542,7 +614,7 @@ hand on the site survives the update untouched.
 | Site | What runs |
 |---|---|
 | Fresh install | `myapi_install()` → `_myapi_services_install()`, after `_myapi_claims_install()` (which creates the borrowed fields and makes them private) and before `_myapi_building_admin_install()`. |
-| Already installed | `drush updb` → `myapi_update_7025()` (SPEC 77), `myapi_update_7028()` (SPEC 81), `myapi_update_7029()` (SPEC 82), `myapi_update_7030()` (SPEC 84), `myapi_update_7031()` (SPEC 85), `myapi_update_7032()` (SPEC 86) and `myapi_update_7033()` (SPEC 87) → the same `_myapi_services_install()` in all seven, plus two `field_update_*()` calls in `7033` (see below). |
+| Already installed | `drush updb` → `myapi_update_7025()` (SPEC 77), `myapi_update_7028()` (SPEC 81), `myapi_update_7029()` (SPEC 82), `myapi_update_7030()` (SPEC 84), `myapi_update_7031()` (SPEC 85), `myapi_update_7032()` (SPEC 86), `myapi_update_7033()` (SPEC 87) and `myapi_update_7035()` (SPEC 100) → the same `_myapi_services_install()` in all eight, plus two `field_update_*()` calls in `7033` (see below). |
 
 `drush cc all` afterwards. Update history of this feature:
 
@@ -555,6 +627,7 @@ hand on the site survives the update untouched.
 | `myapi_update_7031` | 85 | `field_logo` on `provider` — public, one image, born **empty** for every existing provider. |
 | `myapi_update_7032` | 86 | The borrowed `field_unit` instance on `service_request` — the first one of this feature that is **required**. |
 | `myapi_update_7033` | 87 | The `direct` status in `field_request_status` (both bundles at once), and `field_rating_offer` relaxed to optional. The first services update that does **more** than re-run the installer. |
+| `myapi_update_7035` | 100 | The ten quote fields of `service_offer` — price type, validity, availability, duration and its unit, what is and is not included, tax, warranty and prior visit. All ten instances **optional**, and **no backfill**: the offers already stored are not touched and answer `null` on all ten. Back to just re-running the installer, because all twenty creations are new and the idempotent `_ensure_*` helpers only ever create. |
 
 All of them create **structure only** — no permission, no role and no node, so
 running them changes nothing any user already has. **`7029` is different in two
