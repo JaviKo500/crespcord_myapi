@@ -1,6 +1,6 @@
 # 102 — Listado de ofertas del proveedor (`GET /api/v1/service-offers/provider`)
 
-> **Estado:** Approved · **Depende de:** `77-services-content-types-install` (Implemented) — dueña del bundle `service_offer`, de `field_provider`, `field_offer_status` y del catálogo `myapi_services_offer_statuses()`; `78-provider-role` (Implemented) — dueña del rol `proveedor`, de `myapi_provider_role_is()` (la compuerta del `403`) y de `myapi_provider_role_provider_ids()` (la que decide qué proveedor es de quién); `97-provider-mine-list` (Implemented) — el precedente exacto de autorización: rol → `403 provider_role_required`, rol sin vínculo → `200` vacío; `98-service-requests-provider-list` (Implemented) — dueña del bloque `pagination`, del idioma de los seis parámetros y de la regla de `?provider_id` (*estricto en el formato, laxo en la pertenencia*), que este spec copia línea por línea salvo en que aquí el parámetro es **obligatorio**; `100-service-offer-create` (Implemented) — dueña de `resources/service_offer.resource.inc`, de `myapi_service_offer_build()` y de la decisión *"no hay `GET` de colección a propósito"*, que este spec **matiza**; `101-service-offer-on-direct` (Implemented) — la que hace que una oferta pueda colgar de una solicitud `direct`, caso que este listado devuelve sin nada especial · **Fecha:** 2026-08-26
+> **Estado:** Implemented · **Depende de:** `77-services-content-types-install` (Implemented) — dueña del bundle `service_offer`, de `field_provider`, `field_offer_status` y del catálogo `myapi_services_offer_statuses()`; `78-provider-role` (Implemented) — dueña del rol `proveedor`, de `myapi_provider_role_is()` (la compuerta del `403`) y de `myapi_provider_role_provider_ids()` (la que decide qué proveedor es de quién); `97-provider-mine-list` (Implemented) — el precedente exacto de autorización: rol → `403 provider_role_required`, rol sin vínculo → `200` vacío; `98-service-requests-provider-list` (Implemented) — dueña del bloque `pagination`, del idioma de los seis parámetros y de la regla de `?provider_id` (*estricto en el formato, laxo en la pertenencia*), que este spec copia línea por línea salvo en que aquí el parámetro es **obligatorio**; `100-service-offer-create` (Implemented) — dueña de `resources/service_offer.resource.inc`, de `myapi_service_offer_build()` y de la decisión *"no hay `GET` de colección a propósito"*, que este spec **matiza**; `101-service-offer-on-direct` (Implemented) — la que hace que una oferta pueda colgar de una solicitud `direct`, caso que este listado devuelve sin nada especial · **Fecha:** 2026-08-26
 > **Objetivo:** Dar al proveedor un listado paginado y filtrable de las ofertas que ha enviado con **un** proveedor suyo, con ocho claves referenciales por ítem.
 
 ## 1 — Por qué existe este spec
@@ -152,64 +152,77 @@ Ocho pasos. El primero no enciende nada: paga la deuda de arquitectura que la Re
 
 **Método y autenticación**
 
-- [ ] `POST`, `PUT`, `PATCH` y `DELETE` sobre `/api/v1/service-offers/provider` responden `405 method_not_allowed`, **sin token** en la petición.
-- [ ] Sin cabecera `Authorization` → `401 missing_authorization`.
-- [ ] Con un token caducado o inexistente → `401 invalid_token`.
-- [ ] Token válido de una cuenta **sin** el rol `proveedor` → `403 provider_role_required`.
-- [ ] Token válido de una cuenta con `administrator` pero **sin** `proveedor` → `403 provider_role_required`.
+- [x] `POST`, `PUT`, `PATCH` y `DELETE` sobre `/api/v1/service-offers/provider` responden `405 method_not_allowed`, **sin token** en la petición.
+- [x] Sin cabecera `Authorization` → `401 missing_authorization`.
+- [x] Con un token caducado o inexistente → `401 invalid_token`.
+- [x] Token válido de una cuenta **sin** el rol `proveedor` → `403 provider_role_required`.
+- [x] Token válido de una cuenta con `administrator` pero **sin** `proveedor` → `403 provider_role_required`.
 
 **`?provider_id`**
 
-- [ ] Ausente → `422` con `error_code: missing_field` y el mensaje nombrando `provider_id`.
-- [ ] `abc`, `0`, `-1`, `1,2`, `" 41"` → `422 invalid_field`, y **no se ejecuta ninguna consulta de ofertas**.
-- [ ] Un nid que existe pero **no** es de la cuenta → `200`, `service_offers: []`, `pagination.total: 0`, `total_pages: 0`.
-- [ ] Un nid **inexistente** → misma respuesta que el anterior: `200` vacío, nunca `403` ni `404`.
-- [ ] Una cuenta con dos proveedores obtiene, con cada `provider_id`, **solo** las ofertas de ese proveedor, y la unión de las dos llamadas es el conjunto completo de sus ofertas, sin repetidos.
+- [x] Ausente → `422` con `error_code: missing_field` y el mensaje nombrando `provider_id`.
+- [x] `abc`, `0`, `-1`, `1,2`, `" 41"` → `422 invalid_field`, y **no se ejecuta ninguna consulta de ofertas**.
+- [x] Un nid que existe pero **no** es de la cuenta → `200`, `service_offers: []`, `pagination.total: 0`, `total_pages: 0`.
+- [x] Un nid **inexistente** → misma respuesta que el anterior: `200` vacío, nunca `403` ni `404`.
+- [x] Una cuenta con dos proveedores obtiene, con cada `provider_id`, **solo** las ofertas de ese proveedor, y la unión de las dos llamadas es el conjunto completo de sus ofertas, sin repetidos.
 
 **El conjunto**
 
-- [ ] Una oferta `sent`, una `selected`, una `rejected` y una `withdrawn` del mismo proveedor aparecen **las cuatro** sin filtro.
-- [ ] Una oferta sobre una solicitud `cancelled` aparece.
-- [ ] Una oferta sobre una solicitud `direct` (SPEC 101) aparece, sin nada distinto en el ítem.
-- [ ] Una oferta **despublicada** no aparece.
-- [ ] Una oferta cuya solicitud está **despublicada o borrada** no aparece, y `pagination.total` no la cuenta.
-- [ ] Un proveedor con `status = 0` (suspendido) devuelve `200` con su historial completo.
-- [ ] Un proveedor con `field_license_expiry` en el pasado devuelve `200` con su historial completo.
-- [ ] Ninguna oferta de otro proveedor aparece jamás, ni siquiera sobre una solicitud en la que este proveedor también ofertó.
+- [x] Una oferta `sent`, una `selected`, una `rejected` y una `withdrawn` del mismo proveedor aparecen **las cuatro** sin filtro.
+- [x] Una oferta sobre una solicitud `cancelled` aparece.
+- [x] Una oferta sobre una solicitud `direct` (SPEC 101) aparece, sin nada distinto en el ítem.
+- [x] Una oferta **despublicada** no aparece.
+- [x] Una oferta cuya solicitud está **despublicada o borrada** no aparece, y `pagination.total` no la cuenta.
+- [x] Un proveedor con `status = 0` (suspendido) devuelve `200` con su historial completo.
+- [x] Un proveedor con `field_license_expiry` en el pasado devuelve `200` con su historial completo.
+- [x] Ninguna oferta de otro proveedor aparece jamás, ni siquiera sobre una solicitud en la que este proveedor también ofertó.
 
 **El ítem**
 
-- [ ] Cada elemento de `service_offers` tiene **exactamente ocho claves**, en el orden `id`, `status`, `amount`, `amount_type`, `created`, `valid_until`, `provider`, `request`.
-- [ ] `id`, `status`, `amount`, `amount_type`, `created` y `valid_until` valen, sobre la misma fila, **exactamente lo mismo** que las claves homónimas de `myapi_service_offer_build()`.
-- [ ] `amount` es un `float` o `null`, nunca `"95.50"`; una oferta `on_site_quote` responde `null`.
-- [ ] Una oferta anterior al SPEC 100 responde `amount_type: null` y `valid_until: null`, y **aparece en la lista**.
-- [ ] `created` y `valid_until` tienen formato `Y-m-d\TH:i:s`.
-- [ ] `provider` es `{id, name}`, **sin `logo`**, y es el mismo objeto en todos los ítems de la respuesta.
-- [ ] `request` nunca es `null` y lleva `{id, title, status, category{id, code, name}}`.
-- [ ] `request.category.code` es `""` —nunca `null`— cuando el término no tiene código.
-- [ ] Ni el ítem ni el envoltorio contienen `message`, `includes`, `excludes`, `duration`, `tax_included`, `warranty_days`, `requires_visit`, `available_from`, `offers_count`, `requester`, `condominium` ni `unit`.
+- [x] Cada elemento de `service_offers` tiene **exactamente ocho claves**, en el orden `id`, `status`, `amount`, `amount_type`, `created`, `valid_until`, `provider`, `request`.
+- [x] `id`, `status`, `amount`, `amount_type`, `created` y `valid_until` valen, sobre la misma fila, **exactamente lo mismo** que las claves homónimas de `myapi_service_offer_build()`.
+- [x] `amount` es un `float` o `null`, nunca `"95.50"`; una oferta `on_site_quote` responde `null`.
+- [x] Una oferta anterior al SPEC 100 responde `amount_type: null` y `valid_until: null`, y **aparece en la lista**.
+- [x] `created` y `valid_until` tienen formato `Y-m-d\TH:i:s`.
+- [x] `provider` es `{id, name}`, **sin `logo`**, y es el mismo objeto en todos los ítems de la respuesta.
+- [x] `request` nunca es `null` y lleva `{id, title, status, category{id, code, name}}`.
+- [x] `request.category.code` es `""` —nunca `null`— cuando el término no tiene código.
+- [x] Ni el ítem ni el envoltorio contienen `message`, `includes`, `excludes`, `duration`, `tax_included`, `warranty_days`, `requires_visit`, `available_from`, `offers_count`, `requester`, `condominium` ni `unit`.
 
 **Los seis parámetros**
 
-- [ ] `page` y `limit` por defecto son `1` y `20`; `limit=-1` devuelve todo en una página y fuerza `page: 1`; `limit=999` se recorta a `50`; basura en cualquiera de los dos cae al valor por defecto **sin `422`**.
-- [ ] `sort=asc` / `sort=desc` ordenan por `created` **de la oferta**; un valor desconocido cae a `desc`.
-- [ ] `status=sent,selected` devuelve solo esas; `status=inventado` se descarta en silencio; `status=sent,inventado` filtra por `sent`.
-- [ ] `request_status=closed,cancelled` filtra por el estado de la **solicitud**; una clave desconocida se descarta en silencio.
-- [ ] `category_id` con un tid filtra por la categoría de la solicitud; malformado → `422 invalid_field`.
-- [ ] `date_from` / `date_to` acotan por `created` de la oferta, **inclusivos en los dos extremos**: una oferta creada a las 23:50 de `date_to` entra.
-- [ ] Un parámetro desconocido (`?unit_id=3`, `?foo=bar`) se ignora en silencio y nunca produce `422`.
+- [x] `page` y `limit` por defecto son `1` y `20`; `limit=-1` devuelve todo en una página y fuerza `page: 1`; `limit=999` se recorta a `50`; basura en cualquiera de los dos cae al valor por defecto **sin `422`**.
+- [x] `sort=asc` / `sort=desc` ordenan por `created` **de la oferta**; un valor desconocido cae a `desc`.
+- [x] `status=sent,selected` devuelve solo esas; `status=inventado` se descarta en silencio; `status=sent,inventado` filtra por `sent`.
+- [x] `request_status=closed,cancelled` filtra por el estado de la **solicitud**; una clave desconocida se descarta en silencio.
+- [x] `category_id` con un tid filtra por la categoría de la solicitud; malformado → `422 invalid_field`.
+- [x] `date_from` / `date_to` acotan por `created` de la oferta, **inclusivos en los dos extremos**: una oferta creada a las 23:50 de `date_to` entra.
+- [x] Un parámetro desconocido (`?unit_id=3`, `?foo=bar`) se ignora en silencio y nunca produce `422`.
 
 **Paginación**
 
-- [ ] `pagination` lleva `{total, page, limit, total_pages}` y `total` describe el conjunto **filtrado**, no la página.
-- [ ] Con `total: 0`, `total_pages` es `0` y no `1`.
-- [ ] Pedir una página más allá de la última responde `200` con `service_offers: []` y el `total` real.
+- [x] `pagination` lleva `{total, page, limit, total_pages}` y `total` describe el conjunto **filtrado**, no la página.
+- [x] Con `total: 0`, `total_pages` es `0` y no `1`.
+- [x] Pedir una página más allá de la última responde `200` con `service_offers: []` y el `total` real.
 
 **Lo que no se rompe**
 
-- [ ] `GET /api/v1/service-requests`, `GET /api/v1/service-requests/provider`, los dos detalles y `POST /api/v1/service-requests/{id}/offers` responden **byte a byte lo mismo** que antes de este spec.
-- [ ] La suite unitaria completa pasa en verde, con `ServiceRequestListEndpointTest` y `ServiceRequestProviderListTest` **sin modificar**.
-- [ ] `docs/service-offer.md` documenta el endpoint, sus errores y los siete parámetros.
+- [x] `GET /api/v1/service-requests`, `GET /api/v1/service-requests/provider`, los dos detalles y `POST /api/v1/service-requests/{id}/offers` responden **byte a byte lo mismo** que antes de este spec.
+- [x] La suite unitaria completa pasa en verde, con `ServiceRequestListEndpointTest` y `ServiceRequestProviderListTest` **sin modificar**.
+- [x] `docs/service-offer.md` documenta el endpoint, sus errores y los siete parámetros.
+
+> **Cómo se verificó.** Todo lo marcado está cubierto por `tests/unit/ServiceOfferProviderListTest.php`
+> (65 tests) sobre el arnés de fixtures del módulo, más `php -l` en los seis
+> ficheros tocados; la suite completa pasa en verde (2218 tests) con
+> `ServiceRequestListEndpointTest` y `ServiceRequestProviderListTest` **sin
+> modificar un carácter**. La casilla que queda abierta no se puede probar ahí:
+> el arnés **registra los joins y nunca los resuelve**, así que no se puede
+> sembrar una oferta "descartada por su solicitud". Lo que sí está asertado es
+> la **forma** de ese join —los dos saltos son `INNER` y el del nodo lleva el
+> bundle y `status = 1`—; el comportamiento es un criterio manual contra un
+> sitio arrancado, la misma mitad que el SPEC 98 dejó a MySQL. Pendiente
+> también, por la misma razón, `drush cc all` y que el enrutador prefiera el
+> literal de la ruta.
 
 ---
 
