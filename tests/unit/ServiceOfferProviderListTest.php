@@ -715,6 +715,126 @@ class ServiceOfferProviderListTest extends TestCase {
     $this->assertSame([901], $this->ids($result));
   }
 
+  /**
+   * The request's INNER JOIN, asserted by its SHAPE.
+   *
+   * The fixture records joins and never resolves them, so it cannot make a
+   * recorded join fail to match — an offer whose request is unpublished or
+   * deleted cannot be seeded as "dropped". What CAN be asserted, and is, is
+   * that the two hops to the request are INNER and that the node hop carries
+   * both the bundle and status = 1, which is what makes the database drop it.
+   * The behaviour itself is a manual acceptance criterion against a booted
+   * site, the same half api/v1/service-requests/provider leaves to MySQL.
+   */
+  public function testTheRequestIsReachedByTwoInnerJoinsCarryingBundleAndStatus() {
+    $this->archive([$this->offerRow()]);
+
+    $joins = [];
+    foreach (myapi_test_db_queries('node') as $query) {
+      foreach ($query['joins'] as $join) {
+        $joins[$join['alias']] = $join;
+      }
+    }
+
+    $this->assertArrayHasKey('fq', $joins);
+    $this->assertSame('INNER', $joins['fq']['type'], 'the reference to the request');
+    $this->assertSame('field_data_field_request', $joins['fq']['table']);
+
+    $this->assertArrayHasKey('nr', $joins);
+    $this->assertSame('INNER', $joins['nr']['type'], 'the request node itself');
+    $this->assertSame('node', $joins['nr']['table']);
+    $this->assertStringContainsString('nr.status = 1', $joins['nr']['condition']);
+    $this->assertStringContainsString(':request_type', $joins['nr']['condition']);
+  }
+
+  /**
+   * The count runs over the SAME query the page does, joins included, so a
+   * request the page cannot list is a request the total cannot count.
+   */
+  public function testTheCountAndThePageShareTheirJoins() {
+    $this->archive([$this->offerRow()]);
+
+    $queries = myapi_test_db_queries('node');
+    $count = NULL;
+    $page = NULL;
+    foreach ($queries as $query) {
+      if (!empty($query['count'])) {
+        $count = $query;
+      }
+      elseif (in_array('nid', $query['fields'], TRUE) && $query['joins']) {
+        $page = $query;
+      }
+    }
+
+    $this->assertNotNull($count, 'the count query ran');
+    $this->assertNotNull($page, 'the page query ran');
+    $this->assertSame(
+      array_column($page['joins'], 'alias'),
+      array_column($count['joins'], 'alias'),
+      'the total describes exactly the set the page slices'
+    );
+  }
+
+  public function testAProviderWithAnExpiredLicenceReadsItsWholeArchive() {
+    // field_license_expiry is not read anywhere on this path: the licence
+    // governs the market, not the archive.
+    $result = $this->archive([$this->offerRow(901), $this->offerRow(902)], [
+      'node' => [$this->providerNode()],
+      'field_data_field_license_expiry' => [[
+        'entity_id'                  => (string) self::PROVIDER_NID,
+        'entity_type'                => 'node',
+        'deleted'                    => '0',
+        'field_license_expiry_value' => (string) (REQUEST_TIME - 86400),
+      ]],
+    ]);
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame([902, 901], $this->ids($result));
+  }
+
+  public function testAForeignOfferOnTheSameRequestNeverAppears() {
+    // Both offers hang off REQUEST_NID: the competition bid on the very
+    // request this provider bid on, and still never travels.
+    $result = $this->archive([
+      $this->offerRow(901),
+      $this->offerRow(902, ['fp.field_provider_target_id' => (string) self::FOREIGN_PROVIDER]),
+    ]);
+
+    $this->assertSame([901], $this->ids($result));
+    $this->assertSame(1, $this->pagination($result)['total']);
+    $this->assertSame(self::REQUEST_NID, $this->items($result)[0]['request']['id']);
+  }
+
+  public function testTheUnionOfTheTwoProvidersCallsIsTheWholeArchiveWithNoRepeats() {
+    $this->authenticate();
+    $this->seed(
+      [
+        $this->offerRow(901),
+        $this->offerRow(902),
+        $this->offerRow(903, ['fp.field_provider_target_id' => (string) self::PROVIDER_B]),
+      ],
+      [
+        'field_data_' . MYAPI_PROVIDER_USERS_FIELD => [
+          $this->link(self::PROVIDER_NID),
+          $this->link(self::PROVIDER_B),
+        ],
+        'node' => [$this->providerNode(), $this->providerNode(self::PROVIDER_B, '1', 'Eléctrica Beta')],
+      ]
+    );
+
+    $_GET['provider_id'] = (string) self::PROVIDER_NID;
+    $first = $this->ids($this->dispatch());
+
+    $_GET['provider_id'] = (string) self::PROVIDER_B;
+    $second = $this->ids($this->dispatch());
+
+    $union = array_merge($first, $second);
+    sort($union);
+
+    $this->assertSame([901, 902, 903], $union, 'the union is the whole archive');
+    $this->assertSame($union, array_values(array_unique($union)), 'and carries no repeats');
+  }
+
   public function testASuspendedProviderReadsItsWholeArchive() {
     $result = $this->archive([$this->offerRow(901)], [
       'node' => [$this->providerNode(self::PROVIDER_NID, '0')],
