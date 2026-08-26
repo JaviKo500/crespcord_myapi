@@ -1314,3 +1314,129 @@ function myapi_service_offer_reject_live($request_nid, $except_nid = NULL) {
 
   return $rejected;
 }
+
+/**
+ * The four conditions of the AWARD that need no query (SPEC 106).
+ *
+ * Conditions 6 to 9 of PUT /api/v1/service-offers/{id}/accept:
+ *
+ *   6. service_offer_not_acceptable      This offer is not 'sent' any more.
+ *   7. service_request_not_assignable    Its request cannot be awarded from
+ *                                        the status it is in.
+ *   8. service_offer_expired             The provider's quote has lapsed.
+ *   9. service_offer_provider_not_active The provider may not operate today.
+ *
+ * The first five are the RESOURCE'S: the nid, the token, the two rows existing
+ * and the reader being the requester. They cost queries and HTTP output, and
+ * this function does neither — the caller has already paid for the three rows
+ * and decides what to answer with the code this returns. That split is what
+ * puts the whole matrix inside tests/unit with no site booted, the same shape
+ * as myapi_service_offer_eligibility() and the two gates of SPEC 105.
+ *
+ * THE GRAPH IS ASKED, NOT TRANSCRIBED. Condition 7 does not write 'offered'
+ * anywhere: it asks myapi_services_transition_allowed(), which has owned the
+ * graph since SPEC 77. Copying the list of awardable statuses here would be a
+ * second truth, drifting the day somebody adds a status. And because that
+ * function answers FALSE for an unknown or empty value BY DESIGN, a corrupt
+ * field_request_status is a 409 and never a 500 — which is also why a request
+ * row that did not load fails closed through the same line.
+ *
+ * A CONSEQUENCE OF ASKING THE GRAPH, and it is known and accepted: a request
+ * sitting in 'open' with offers hanging off it answers 409. Nothing syncs
+ * 'open' -> 'offered' when an offer is created from the back office (the hole
+ * SPEC 100 left, documented in myapi_service_request_update_gate()), and
+ * 'open' -> 'assigned' is not an edge of the graph. SPEC 106 does not invent
+ * that edge and does not fix that hook — decision 3.
+ *
+ * valid_until ABSENT MEANS "DOES NOT EXPIRE". It is optional since SPEC 100 and
+ * most offers do not carry one; reading an empty column as "lapsed" would block
+ * almost the whole catalogue. The comparison is >=, exactly like
+ * myapi_services_provider_is_active(): the quote is good THROUGHOUT its expiry
+ * instant and not one second less. A non-numeric value is read as lapsed rather
+ * than as absent, the same fail-closed reading that function gives a corrupt
+ * licence — a deadline nobody can parse is not a deadline that has been met.
+ *
+ * WHY THE AWARD VALIDATES valid_until WHEN SPECS 100 AND 105 DID NOT
+ * (decision 7). Here the date means something it did not mean for the other two
+ * verbs: it is the provider saying "this price holds until then", and awarding
+ * work at a price they already declared lapsed commits them to something they
+ * did not offer. What this does NOT do is sweep expired offers — they keep
+ * saying 'sent' everywhere, and the 409 is the last line of defence and not the
+ * first.
+ *
+ * THE LICENCE IS LAST, AND THAT IS DELIBERATE (decision 8). Conditions 6, 7 and
+ * 8 ask "is this offer awardable?" and 9 asks "may this provider still work?".
+ * The second only means anything once the first has passed, so a rejected offer
+ * from an unpublished provider answers 409 and not 403 — the same order SPEC
+ * 105 fixed for editing. The rule itself is not rewritten here either:
+ * myapi_services_provider_is_active() owns what "active" means and reads both
+ * columns.
+ *
+ * @param object|FALSE $row
+ *   A row of myapi_service_offer_detail_row() (SPEC 103) for the offer being
+ *   awarded. Only `status` is read.
+ * @param object|FALSE $request_row
+ *   A row of myapi_service_request_detail_row() (SPEC 89) for its request. Only
+ *   `status` is read — `requester_uid` is condition 5 and belongs to the
+ *   caller.
+ * @param object|FALSE $provider_row
+ *   A row of myapi_service_offer_provider_row() (SPEC 100) for the offer's
+ *   provider, read off `provider_raw` and never off `provider_id` — the joined
+ *   column carries status = 1 inside it, so an unpublished provider would
+ *   arrive as NULL and slip under condition 9 instead of failing it. FALSE
+ *   fails closed.
+ * @param mixed $now
+ *   The clock, as a Unix timestamp (REQUEST_TIME in production). Explicit so
+ *   the matrix does not depend on the wall clock.
+ *
+ * @return string|NULL
+ *   The error_code of the first condition that fails, or NULL when all four
+ *   pass.
+ */
+function myapi_service_offer_accept_gate($row, $request_row, $provider_row, $now) {
+  // 6. Still 'sent'? 'selected' says it was already awarded, 'rejected' that it
+  //    lost, 'withdrawn' that the provider took it back — none of the three is
+  //    awardable, and a row that did not load has no status and fails closed
+  //    through the same comparison.
+  $status = ($row && isset($row->status)) ? $row->status : NULL;
+
+  if ($status !== MYAPI_SERVICES_OFFER_STATUS_SENT) {
+    return 'service_offer_not_acceptable';
+  }
+
+  // 7. May its request be awarded from where it stands? Asked of the graph —
+  //    see the docblock. A missing row, an empty status and a status that is
+  //    not in the catalogue all answer FALSE here, which is a 409 and never an
+  //    exception.
+  $request_status = ($request_row && isset($request_row->status)) ? $request_row->status : NULL;
+
+  if (!myapi_services_transition_allowed($request_status, MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED)) {
+    return 'service_request_not_assignable';
+  }
+
+  // 8. Has the quote lapsed? Absent means it does not expire; the column
+  //    carries a Unix timestamp, so this costs an integer comparison and not a
+  //    strtotime().
+  $valid_until = ($row && isset($row->valid_until)) ? $row->valid_until : NULL;
+
+  if ($valid_until !== NULL && $valid_until !== '') {
+    if (!is_numeric($valid_until) || (int) $valid_until < (int) $now) {
+      return 'service_offer_expired';
+    }
+  }
+
+  // 9. May this provider operate today? A provider row that no longer loads is
+  //    not active either, and fails closed like every other read of this gate.
+  if (!$provider_row) {
+    return 'service_offer_provider_not_active';
+  }
+
+  $license_expiry = isset($provider_row->license_expiry) ? $provider_row->license_expiry : NULL;
+  $provider_status = isset($provider_row->status) ? (int) $provider_row->status : 0;
+
+  if (!myapi_services_provider_is_active($provider_status, $license_expiry, $now)) {
+    return 'service_offer_provider_not_active';
+  }
+
+  return NULL;
+}

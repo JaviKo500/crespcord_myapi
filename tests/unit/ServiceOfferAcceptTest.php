@@ -228,6 +228,282 @@ class ServiceOfferAcceptTest extends TestCase {
   }
 
   /* -------------------------------------------------------------------------
+   * The pure gate, myapi_service_offer_accept_gate() — conditions 6 to 9.
+   * ---------------------------------------------------------------------- */
+
+  const NOW = 1800000000;
+
+  const NOT_ACCEPTABLE = 'service_offer_not_acceptable';
+  const NOT_ASSIGNABLE = 'service_request_not_assignable';
+  const EXPIRED        = 'service_offer_expired';
+  const NOT_ACTIVE     = 'service_offer_provider_not_active';
+
+  /**
+   * A row of myapi_service_offer_detail_row(), trimmed to the two columns the
+   * gate reads. Everything else on that row belongs to the response, not here.
+   */
+  private function offer(array $overrides = []) {
+    return (object) ($overrides + [
+      'status'      => MYAPI_SERVICES_OFFER_STATUS_SENT,
+      'valid_until' => NULL,
+    ]);
+  }
+
+  /**
+   * A row of myapi_service_request_detail_row(), trimmed the same way:
+   * requester_uid is condition 5 and belongs to the resource.
+   */
+  private function request(array $overrides = []) {
+    return (object) ($overrides + ['status' => MYAPI_SERVICES_REQUEST_STATUS_OFFERED]);
+  }
+
+  /**
+   * A row of myapi_service_offer_provider_row(), trimmed to the licence pair.
+   * `owned` and `category_ids` travel on the real row and are never read here.
+   */
+  private function provider(array $overrides = []) {
+    return (object) ($overrides + [
+      'status'         => 1,
+      'license_expiry' => self::NOW + 86400,
+    ]);
+  }
+
+  private function gate($row = NULL, $request_row = NULL, $provider_row = NULL) {
+    return myapi_service_offer_accept_gate(
+      $row === NULL ? $this->offer() : $row,
+      $request_row === NULL ? $this->request() : $request_row,
+      $provider_row === NULL ? $this->provider() : $provider_row,
+      self::NOW
+    );
+  }
+
+  /**
+   * The happy path: a 'sent' offer, an 'offered' request, no expiry and an
+   * active provider. NULL means the resource may write.
+   */
+  public function testAllFourConditionsPassing() {
+    $this->assertNull($this->gate());
+  }
+
+  /**
+   * CONDITION 6 — THE FOUR OFFER STATUSES. Only 'sent' is awardable: 'selected'
+   * says it was already awarded, 'rejected' that it lost, 'withdrawn' that the
+   * provider took it back.
+   */
+  public function testOnlyASentOfferIsAcceptable() {
+    $this->assertNull($this->gate($this->offer(['status' => 'sent'])));
+
+    foreach (['selected', 'rejected', 'withdrawn'] as $status) {
+      $this->assertSame(self::NOT_ACCEPTABLE, $this->gate($this->offer(['status' => $status])), $status);
+    }
+  }
+
+  /**
+   * A corrupt, empty or absent offer status is NOT acceptable and never an
+   * exception — the same fail-closed reading a row that did not load gets.
+   */
+  public function testACorruptOfferStatusFailsClosed() {
+    $rows = [
+      'empty'    => $this->offer(['status' => '']),
+      'null'     => $this->offer(['status' => NULL]),
+      'unknown'  => $this->offer(['status' => 'not_a_status']),
+      'absent'   => (object) [],
+      'no row'   => FALSE,
+    ];
+
+    foreach ($rows as $label => $row) {
+      $this->assertSame(self::NOT_ACCEPTABLE, $this->gate($row), $label);
+    }
+  }
+
+  /**
+   * CONDITION 7 — THE GRAPH ANSWERS, AND ONLY 'offered' LEADS TO 'assigned'.
+   * The list below is not this gate's: it is myapi_services_request_transitions()
+   * read from the outside, which is the point of asking instead of transcribing.
+   *
+   * 'open' IS IN THE FAILING LIST ON PURPOSE. A request with offers still
+   * sitting in 'open' — the hole SPEC 100 left, since nothing syncs
+   * 'open' -> 'offered' from the back office — cannot be awarded from the app,
+   * and SPEC 106 does not invent that edge (decision 3).
+   */
+  public function testOnlyAnOfferedRequestIsAssignable() {
+    $this->assertNull($this->gate(NULL, $this->request(['status' => 'offered'])));
+
+    foreach (['open', 'direct', 'assigned', 'closed', 'cancelled'] as $status) {
+      $this->assertSame(
+        self::NOT_ASSIGNABLE,
+        $this->gate(NULL, $this->request(['status' => $status])),
+        $status
+      );
+    }
+  }
+
+  /**
+   * A field_request_status that is empty, absent or not in the catalogue is a
+   * 409 AND NEVER AN EXCEPTION: myapi_services_transition_allowed() answers
+   * FALSE for an unknown key by design, and this gate leans on that rather than
+   * branching on it. Same for a request row that did not load.
+   */
+  public function testACorruptRequestStatusIsA409AndNotAnException() {
+    $rows = [
+      'empty'   => $this->request(['status' => '']),
+      'null'    => $this->request(['status' => NULL]),
+      'unknown' => $this->request(['status' => 'not_a_status']),
+      'absent'  => (object) [],
+      'no row'  => FALSE,
+    ];
+
+    foreach ($rows as $label => $row) {
+      $this->assertSame(self::NOT_ASSIGNABLE, $this->gate(NULL, $row), $label);
+    }
+  }
+
+  /**
+   * CONDITION 8 — ABSENT valid_until MEANS "DOES NOT EXPIRE". It is optional
+   * since SPEC 100 and most offers do not carry one; reading an empty column as
+   * lapsed would block almost the whole catalogue.
+   */
+  public function testAnOfferWithoutAnExpiryNeverLapses() {
+    foreach ([NULL, ''] as $valid_until) {
+      $this->assertNull($this->gate($this->offer(['valid_until' => $valid_until])), var_export($valid_until, TRUE));
+    }
+
+    // The column absent from the row entirely, the way an offer created before
+    // myapi_update_7035() arrives.
+    $this->assertNull($this->gate((object) ['status' => MYAPI_SERVICES_OFFER_STATUS_SENT]));
+  }
+
+  /**
+   * A quote whose deadline has passed is 409 service_offer_expired: awarding
+   * work at a price the provider already declared lapsed commits them to
+   * something they did not offer.
+   */
+  public function testAPastExpiryLapses() {
+    foreach ([self::NOW - 1, self::NOW - 86400, 0, '0'] as $valid_until) {
+      $this->assertSame(
+        self::EXPIRED,
+        $this->gate($this->offer(['valid_until' => $valid_until])),
+        var_export($valid_until, TRUE)
+      );
+    }
+  }
+
+  /**
+   * THE COMPARISON IS >=, exactly like myapi_services_provider_is_active(): the
+   * quote is good THROUGHOUT its expiry instant and not one second less. The
+   * boundary is the case worth pinning — off by one here silently rejects every
+   * offer that expires this very second.
+   */
+  public function testTheExpiryBoundaryIsInclusive() {
+    $this->assertNull($this->gate($this->offer(['valid_until' => self::NOW])), 'exactly now still holds');
+    $this->assertNull($this->gate($this->offer(['valid_until' => self::NOW + 1])));
+    $this->assertSame(self::EXPIRED, $this->gate($this->offer(['valid_until' => self::NOW - 1])));
+  }
+
+  /**
+   * The timestamp arrives off a query column, so it is a string; it must be
+   * read as the integer it is and not compared as text.
+   */
+  public function testTheExpiryReadsTheSameAsStringOrInteger() {
+    $this->assertNull($this->gate($this->offer(['valid_until' => (string) (self::NOW + 86400)])));
+    $this->assertSame(self::EXPIRED, $this->gate($this->offer(['valid_until' => (string) (self::NOW - 86400)])));
+  }
+
+  /**
+   * A deadline nobody can parse is not a deadline that has been met: a
+   * non-numeric value is read as LAPSED and not as absent, the same fail-closed
+   * reading myapi_services_provider_is_active() gives a corrupt licence.
+   */
+  public function testANonNumericExpiryFailsClosed() {
+    foreach (['abc', '2026-08-26', []] as $valid_until) {
+      $this->assertSame(
+        self::EXPIRED,
+        $this->gate($this->offer(['valid_until' => $valid_until])),
+        var_export($valid_until, TRUE)
+      );
+    }
+  }
+
+  /**
+   * CONDITION 9 — THE PROVIDER MUST STILL BE ABLE TO WORK. Unpublished, licence
+   * expired, or no licence row at all: all three are 403, and the rule is
+   * myapi_services_provider_is_active()'s, not this gate's.
+   */
+  public function testAnInactiveProviderIsRejected() {
+    $rows = [
+      'unpublished'      => $this->provider(['status' => 0]),
+      'licence expired'  => $this->provider(['license_expiry' => self::NOW - 1]),
+      'licence empty'    => $this->provider(['license_expiry' => '']),
+      'licence null'     => $this->provider(['license_expiry' => NULL]),
+      'licence corrupt'  => $this->provider(['license_expiry' => 'abc']),
+      'no licence row'   => (object) ['status' => 1],
+      'no provider row'  => FALSE,
+    ];
+
+    foreach ($rows as $label => $row) {
+      $this->assertSame(self::NOT_ACTIVE, $this->gate(NULL, NULL, $row), $label);
+    }
+  }
+
+  /**
+   * The licence boundary is inclusive too, and it is the same function's rule.
+   */
+  public function testTheLicenceBoundaryIsInclusive() {
+    $this->assertNull($this->gate(NULL, NULL, $this->provider(['license_expiry' => self::NOW])));
+    $this->assertSame(
+      self::NOT_ACTIVE,
+      $this->gate(NULL, NULL, $this->provider(['license_expiry' => self::NOW - 1]))
+    );
+  }
+
+  /**
+   * THE ORDER IS THE CONTRACT, AND IT IS ASSERTED HERE AND NOT ASSUMED.
+   * Conditions 6, 7 and 8 ask "is this offer awardable?" and 9 asks "may this
+   * provider still work?"; the second only means anything once the first has
+   * passed. So a rejected offer from an unpublished provider answers 409
+   * service_offer_not_acceptable and NOT 403 — the same order SPEC 105 fixed
+   * for editing.
+   */
+  public function testTheFirstFailingConditionIsTheOneThatAnswers() {
+    // Everything wrong at once: the offer status wins.
+    $this->assertSame(self::NOT_ACCEPTABLE, $this->gate(
+      $this->offer(['status' => 'rejected', 'valid_until' => self::NOW - 1]),
+      $this->request(['status' => 'cancelled']),
+      $this->provider(['status' => 0])
+    ));
+
+    // Offer fine: the request's status wins over the expiry and the licence.
+    $this->assertSame(self::NOT_ASSIGNABLE, $this->gate(
+      $this->offer(['valid_until' => self::NOW - 1]),
+      $this->request(['status' => 'assigned']),
+      $this->provider(['status' => 0])
+    ));
+
+    // Offer and request fine: the expiry wins over the licence.
+    $this->assertSame(self::EXPIRED, $this->gate(
+      $this->offer(['valid_until' => self::NOW - 1]),
+      NULL,
+      $this->provider(['status' => 0])
+    ));
+  }
+
+  /**
+   * PURE: the gate reads the three rows it is handed and asks nothing of the
+   * database, which is what lets the whole matrix above run with no site
+   * booted. A query creeping in here would make the resource pay twice for what
+   * it already read.
+   */
+  public function testTheGateCostsNoQuery() {
+    myapi_test_db_seed();
+
+    $this->gate();
+    $this->gate($this->offer(['status' => 'rejected']));
+
+    $this->assertSame([], myapi_test_db_queries());
+    $this->assertSame([], myapi_test_node_saves());
+  }
+
+  /* -------------------------------------------------------------------------
    * The timeline entry, myapi_service_transaction_record() (SPECS 95, 106).
    * ---------------------------------------------------------------------- */
 
