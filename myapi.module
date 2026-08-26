@@ -529,6 +529,35 @@ function myapi_menu() {
     'file'             => 'resources/service_offer.resource.inc',
   ];
 
+  // The provider's own archive of quotes (SPEC 102): "what have I quoted?",
+  // across every request, for ONE of the token's providers — '?provider_id' is
+  // mandatory here, unlike in the board above. Same gate and same 403
+  // 'provider_role_required' as the two provider routes before it; read-only,
+  // so every write answers 405 before the token.
+  //
+  // THE FIRST ROUTE OF THE 'service-offers' PREFIX, and it does not compete
+  // with 'api/v1/service-requests/%/offers' above: that one has FIVE
+  // components and this one FOUR, and Drupal 7 compares the number of
+  // components before anything else. The third component differs too.
+  //
+  // A LITERAL FOURTH COMPONENT, chosen so the prefix stays open. The day
+  // 'api/v1/service-offers/%' arrives for the detail of one offer, Drupal 7
+  // resolves the literal before falling back to '%' — the same core behaviour
+  // api/v1/providers/mine has relied on since SPEC 97 and SPEC 98 wrote down
+  // for api/v1/service-requests/provider. Nothing about this route will have
+  // to change that day.
+  //
+  // Its callback is the SECOND dispatcher of resources/service_offer.resource.inc,
+  // and that is Rule 2 rather than an exception to it: the offer is one
+  // resource whether it is written or read, and a second file would be two
+  // files sharing myapi_service_offer_build().
+  $items['api/v1/service-offers/provider'] = [
+    'page callback'    => 'myapi_service_offer_provider_dispatch',
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/service_offer.resource.inc',
+  ];
+
   // Back-office reservation calendar (SPEC 47). The only route of this module
   // that is not an api/v1 endpoint: it renders HTML for an operator, not the
   // JSON envelope for the app, which is why its callback lives in includes/
