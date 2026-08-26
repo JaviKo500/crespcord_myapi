@@ -199,6 +199,16 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'service_offer_amount_not_allowed'   => 'An on-site quote carries no amount.',
       'service_offer_tax_without_amount'   => 'Tax inclusion cannot be stated without an amount.',
       'service_offer_duration_incomplete'  => 'Provide both the duration and its unit, or neither.',
+      // SPEC 105. Two verbs on an offer that already exists, and FOUR keys and
+      // not two: the two 409s say the same rule with different words because
+      // the provider can do a different thing about each one — an offer that
+      // can no longer be edited may still be withdrawn, and that asymmetry is
+      // the whole of decision 9. Everything else this spec answers is reused
+      // above, unchanged.
+      'service_offer_updated'              => 'Offer updated successfully.',
+      'service_offer_withdrawn'            => 'Offer withdrawn successfully.',
+      'service_offer_not_editable'         => 'This offer can no longer be edited.',
+      'service_offer_not_withdrawable'     => 'This offer can no longer be withdrawn.',
     ],
     'es' => [
       'invalid_credentials'    => 'Usuario o contraseña incorrectos.',
@@ -310,6 +320,11 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'service_offer_amount_not_allowed'   => 'Una oferta a presupuestar en sitio no lleva monto.',
       'service_offer_tax_without_amount'   => 'No puede indicar si el impuesto está incluido sin un monto.',
       'service_offer_duration_incomplete'  => 'Indique la duración y su unidad, o ninguna de las dos.',
+      // SPEC 105 — see the note next to the English block.
+      'service_offer_updated'              => 'Oferta actualizada correctamente.',
+      'service_offer_withdrawn'            => 'Oferta retirada correctamente.',
+      'service_offer_not_editable'         => 'Esta oferta ya no se puede modificar.',
+      'service_offer_not_withdrawable'     => 'Esta oferta ya no se puede retirar.',
     ],
   ];
 
