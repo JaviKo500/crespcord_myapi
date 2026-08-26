@@ -1045,3 +1045,181 @@ function myapi_service_offer_requester_detail($nid) {
     'service_offer' => myapi_service_offer_build_detail($row, $request_row, FALSE, TRUE),
   ], 200);
 }
+
+/* ---------------------------------------------------------------------------
+ * PUT /api/v1/service-offers/%/withdraw — the provider takes a quote back
+ * (SPEC 105).
+ *
+ * THE STATE 'withdrawn' HAS BEEN IN myapi_services_offer_statuses() SINCE
+ * SPEC 77 AND UNTIL TODAY NOBODY WROTE IT. That is the whole of this endpoint:
+ * no new field, no new table, no hook_update_N, and no change to the graph of
+ * request transitions.
+ *
+ * A PUT AND NOT A DELETE, because nothing disappears — see the route's comment
+ * in myapi.module and decision 5.
+ *
+ * NOTHING ELSE MOVES. The request keeps its status even when this was its last
+ * live offer (decision 6), no service_transaction is written (decision 7), and
+ * offers_count still counts this offer, because "how many offers did I receive"
+ * includes the ones that were taken back (SPEC 88).
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Routes /api/v1/service-offers/%/withdraw by HTTP method (SPEC 105).
+ *
+ * PUT AND NOTHING ELSE, and the 405 before the token and before any query —
+ * the criterion of every dispatcher in this module. GET is not a read of a
+ * withdrawal: there is nothing there to read, the offer is read by its own two
+ * detail routes.
+ */
+function myapi_service_offer_withdraw_dispatch($nid = NULL) {
+  if (myapi_request_method() === 'PUT') {
+    myapi_service_offer_withdraw($nid);
+    return;
+  }
+
+  myapi_error('method_not_allowed', 405);
+}
+
+/**
+ * PUT /api/v1/service-offers/%/withdraw — withdraw my own offer (SPEC 105).
+ *
+ * WHAT IT UNBLOCKS. Since SPEC 101 a provider who quoted a 'direct' with one
+ * zero too many had no way back, and the resident's only exit was to cancel the
+ * job. Withdrawing alone already fixes that case, because condition 7 of
+ * SPEC 100 — myapi_service_offer_live_offer_exists() — never counted a
+ * 'withdrawn' offer: take the wrong quote back and the same provider may POST a
+ * new one on the same request.
+ *
+ * SEVEN NUMBERED STEPS, AND THE ORDER IS THE CONTRACT:
+ *
+ *   1. The nid.        404 not_found when it is not a positive integer, before
+ *                      the token and before any query.
+ *   2. Authentication. 401 missing_authorization / invalid_token.
+ *   3. The role.       403 provider_role_required, BEFORE the offer is read: an
+ *                      account with no standing here learns nothing about which
+ *                      offer nids exist.
+ *   4. The two rows.   The offer and its request, the same two the edit reads.
+ *   5. The gate.       myapi_service_offer_write_gate(), conditions 4 to 7.
+ *   6. The write.      field_offer_status = 'withdrawn', and NOTHING ELSE.
+ *   7. 200.
+ *
+ * THE LICENCE IS NOT CHECKED, AND THAT IS DECISION 9. The edit calls
+ * myapi_service_offer_update_gate() and this calls the shared one directly.
+ * Withdrawing commits to nothing, and forcing a provider to leave a wrong offer
+ * alive because their licence expired is exactly the damage this spec came to
+ * repair. A suspended provider withdraws with 200.
+ *
+ * THE BODY IS NOT READ AT ALL. There is no reason field (decision 8) and no key
+ * this endpoint would know what to do with, so a body with keys and a body that
+ * is malformed JSON are the same thing: ignored. Nothing is parsed, so nothing
+ * can fail.
+ *
+ * NOT IDEMPOTENT, ON PURPOSE — the literal precedent of SPEC 95's cancellation.
+ * A second PUT on an offer that is already 'withdrawn' answers 409
+ * service_offer_not_withdrawable, which is the truth; a 200 would pretend it
+ * had done something.
+ *
+ * THREE QUERIES AND ONE SAVE, fixed: the offer, its request, the account the
+ * token layer loads, and the node_load()/node_save() of the offer itself. The
+ * answer costs no query of its own — the row the gate already read is reused,
+ * with its status swapped, which is SPEC 100's criterion: a SELECT here would
+ * cost a round trip to learn what this function already knows.
+ *
+ * @param mixed $nid  The OFFER's nid, from the route.
+ */
+function myapi_service_offer_withdraw($nid) {
+  // 1. The nid, before anything else — including the token. Byte for byte the
+  // guard both detail routes open with.
+  if (!is_scalar($nid) || !ctype_digit((string) $nid) || (int) $nid <= 0) {
+    myapi_error('not_found', 404);
+  }
+  $nid = (int) $nid;
+
+  // 2. Authentication. Answers 401 on its own and never returns on failure.
+  $token = myapi_auth_require_access_token();
+  $uid = (int) $token->uid;
+
+  // 3. The role gate, shared with SPECS 98, 99, 100 and 102 — same code, same
+  // function, decided in one place. BEFORE the offer is read: who you are does
+  // not depend on which nid you asked for.
+  $account = user_load($uid);
+  if (!myapi_provider_role_is($account)) {
+    myapi_error('provider_role_required', 403);
+  }
+
+  // 4. The two rows the gate decides over. The request is only asked for when
+  // there is an offer to hang it on; without one the gate answers 404 and the
+  // second query would have been a query about nothing.
+  $row = myapi_service_offer_detail_row($nid);
+  $request_row = $row ? myapi_service_request_detail_row($row->request_id) : FALSE;
+
+  // 5. The gate — four conditions, in order, first failure answers. The mapping
+  // from code to HTTP status is the ONE thing this file adds to it: WHO may
+  // touch the offer is a 403, WHETHER it may still be touched is a 409, and
+  // "there is no such offer" is the 404 the four indistinguishable ways in
+  // share.
+  $error = myapi_service_offer_write_gate(
+    $row,
+    myapi_provider_role_provider_ids($account),
+    $request_row,
+    'service_offer_not_withdrawable'
+  );
+  if ($error !== NULL) {
+    $statuses = [
+      'not_found'                        => 404,
+      'service_offer_provider_not_owned' => 403,
+      'service_offer_not_withdrawable'   => 409,
+      'service_request_not_offerable'    => 409,
+    ];
+    myapi_error($error, isset($statuses[$error]) ? $statuses[$error] : 409);
+  }
+
+  // 6. The write, and it is ONE field. node_load() and not an UPDATE on the
+  // field table: a write goes through the entity so hook_node_presave() and
+  // hook_node_update() see it, the same argument step 3 of SPEC 95 makes.
+  $offer = node_load($nid);
+
+  // The row above proves the offer exists and is of this bundle, so this can
+  // only fail on a race. Nothing has been written yet, so the honest answer is
+  // a 500 and not a 200 over a save that did not happen.
+  if (!$offer || $offer->type !== MYAPI_SERVICES_OFFER_TYPE) {
+    watchdog(
+      'myapi',
+      'SPEC 105: la oferta @offer pasó la compuerta del retiro pero no se pudo cargar como nodo @type.',
+      ['@offer' => $nid, '@type' => MYAPI_SERVICES_OFFER_TYPE],
+      WATCHDOG_ERROR
+    );
+    myapi_error('server_error', 500);
+  }
+
+  // The literal, exactly as SPEC 95's rejection sweep writes 'rejected': the
+  // value is an allowed_value of field_offer_status and a key of
+  // myapi_services_offer_statuses() since SPEC 77, and it has never had a
+  // constant of its own.
+  $offer->field_offer_status[LANGUAGE_NONE][0]['value'] = 'withdrawn';
+  node_save($offer);
+
+  // 7. The answer. THE OBJECT UNDER 'service_offer' IS BYTE FOR BYTE what the
+  // offer's own detail answers for this nid a second later, because it comes
+  // out of the SAME serialiser over the SAME row. The only column touched is
+  // the one that was just written.
+  //
+  // The provider's logo DOES travel here, unlike in the 201 of SPEC 100, and
+  // that is not an inconsistency: there it would have cost a query, and here it
+  // came free in the row the gate needed anyway (decision 17).
+  $row->status = 'withdrawn';
+
+  // `request` is a SIBLING of 'service_offer' and not a sixteenth key of it,
+  // and it carries the request's status WITHOUT MOVING IT — decision 6. It
+  // travels because the provider's screen is the same one the 201 of SPEC 100
+  // fills, and a client that reads the same shape everywhere has nothing to
+  // branch on.
+  myapi_respond([
+    'service_offer' => myapi_service_offer_build($row),
+    'request'       => [
+      'id'     => (int) $row->request_id,
+      'status' => isset($request_row->status) ? $request_row->status : NULL,
+    ],
+  ], 200, 'service_offer_withdrawn');
+}
