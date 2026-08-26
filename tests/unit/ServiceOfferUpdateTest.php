@@ -203,4 +203,168 @@ class ServiceOfferUpdateTest extends TestCase {
     $this->assertSame(['value'], array_keys($node->field_offer_message[LANGUAGE_NONE][0]));
     $this->assertSame(['value'], array_keys($node->field_offer_includes[LANGUAGE_NONE][0]));
   }
+
+  /* -------------------------------------------------------------------------
+   * The gate of the edit (step 2) — the shared four PLUS the licence.
+   * ---------------------------------------------------------------------- */
+
+  /** The account's providers, as myapi_provider_role_provider_ids() answers. */
+  private const OWNED = [41, 55];
+
+  /** The clock every licence case below is read against. */
+  private const NOW = 1787000000;
+
+  private function offer(array $values = []) {
+    return (object) ($values + [
+      'nid'          => '901',
+      'provider_id'  => '41',
+      'provider_raw' => '41',
+      'request_id'   => '128',
+      'status'       => 'sent',
+      'created'      => '1787000000',
+    ]);
+  }
+
+  private function request(array $values = []) {
+    return (object) ($values + ['nid' => '128', 'status' => 'offered']);
+  }
+
+  /** A row of myapi_service_offer_provider_row(): active by default. */
+  private function provider(array $values = []) {
+    return (object) ($values + [
+      'nid'            => '41',
+      'title'          => 'Plomería Torres',
+      'status'         => '1',
+      'license_expiry' => (string) (self::NOW + 86400),
+      'owned'          => TRUE,
+      'category_ids'   => [9],
+    ]);
+  }
+
+  private function updateGate($row = NULL, $request_row = NULL, $provider_row = NULL, array $owned = self::OWNED) {
+    return myapi_service_offer_update_gate(
+      $row === NULL ? $this->offer() : $row,
+      $owned,
+      $request_row === NULL ? $this->request() : $request_row,
+      $provider_row === NULL ? $this->provider() : $provider_row,
+      self::NOW
+    );
+  }
+
+  /**
+   * All five pass: the gate answers NULL and the body is validated next.
+   */
+  public function testAnActiveProvidersOwnSentOfferPasses() {
+    $this->assertNull($this->updateGate());
+  }
+
+  /**
+   * THE EDIT REALLY DELEGATES the shared four instead of asking its own
+   * questions: every one of them answers here, with the EDIT's code on 6.
+   *
+   * @dataProvider sharedFailures
+   */
+  public function testTheSharedFourAnswerThroughTheEditsGate($offer, $request, $expected) {
+    $row = $offer === FALSE ? FALSE : $this->offer($offer);
+    $request_row = $request === FALSE ? FALSE : $this->request($request);
+
+    $this->assertSame($expected, $this->updateGate($row, $request_row));
+  }
+
+  public function sharedFailures() {
+    return [
+      'no such offer'      => [FALSE, [], 'not_found'],
+      'somebody elses'     => [['provider_raw' => '77'], [], 'service_offer_provider_not_owned'],
+      'no provider at all' => [['provider_raw' => NULL], [], 'service_offer_provider_not_owned'],
+      'already selected'   => [['status' => 'selected'], [], 'service_offer_not_editable'],
+      'already withdrawn'  => [['status' => 'withdrawn'], [], 'service_offer_not_editable'],
+      'already rejected'   => [['status' => 'rejected'], [], 'service_offer_not_editable'],
+      'request assigned'   => [[], ['status' => 'assigned'], 'service_request_not_offerable'],
+      'request closed'     => [[], ['status' => 'closed'], 'service_request_not_offerable'],
+      'no request row'     => [[], FALSE, 'service_request_not_offerable'],
+    ];
+  }
+
+  /**
+   * The offer's status answers with THE EDIT'S WORDS and never the
+   * withdrawal's: same rule, two messages, and the code travels from the call
+   * site.
+   */
+  public function testConditionSixSpeaksTheEditsLanguage() {
+    $this->assertSame('service_offer_not_editable', $this->updateGate($this->offer(['status' => 'withdrawn'])));
+  }
+
+  /**
+   * 8, AND THE ASYMMETRY THAT IS DECISION 9: a lapsed licence blocks EDITING.
+   * Editing is sending a new quote, and whoever may not operate does not quote.
+   *
+   * @dataProvider inactiveProviders
+   */
+  public function testALapsedOrSuspendedProviderMayNotEdit($provider) {
+    $row = $provider === FALSE ? FALSE : $this->provider($provider);
+
+    $this->assertSame('service_offer_provider_not_active', $this->updateGate(NULL, NULL, $row));
+  }
+
+  public function inactiveProviders() {
+    return [
+      'licence expired yesterday' => [['license_expiry' => (string) (self::NOW - 86400)]],
+      'no licence row at all'     => [['license_expiry' => NULL]],
+      'empty licence'             => [['license_expiry' => '']],
+      'unparseable licence'       => [['license_expiry' => 'soon']],
+      'node unpublished'          => [['status' => '0']],
+      'no provider row'           => [FALSE],
+    ];
+  }
+
+  /**
+   * 8, the other half of decision 9, asserted where it can be: THAT SAME lapsed
+   * licence passes the SHARED gate untouched — which is what lets the
+   * withdrawal answer 200 where the edit answers 403.
+   */
+  public function testTheSameLapsedLicencePassesTheSharedGate() {
+    $this->assertSame('service_offer_provider_not_active', $this->updateGate(NULL, NULL, $this->provider(['license_expiry' => (string) (self::NOW - 1)])));
+
+    $this->assertNull(myapi_service_offer_write_gate(
+      $this->offer(),
+      self::OWNED,
+      $this->request(),
+      'service_offer_not_withdrawable'
+    ));
+  }
+
+  /**
+   * A licence that expires EXACTLY now is still valid — the rule is
+   * myapi_services_provider_is_active()'s and this gate does not restate it.
+   */
+  public function testTheLicenceRuleIsNotRestatedHere() {
+    $this->assertNull($this->updateGate(NULL, NULL, $this->provider(['license_expiry' => (string) self::NOW])));
+    $this->assertSame(
+      'service_offer_provider_not_active',
+      $this->updateGate(NULL, NULL, $this->provider(['license_expiry' => (string) (self::NOW - 1)]))
+    );
+  }
+
+  /**
+   * THE 409 OF THE REQUEST WINS OVER THE 403 OF THE LICENCE, because condition
+   * 7 runs before condition 8: "may anything be written on this offer at all?"
+   * has to pass before "may you send a new quote?" means anything.
+   */
+  public function testTheStateOfTheRequestAnswersBeforeTheLicence() {
+    $this->assertSame(
+      'service_request_not_offerable',
+      $this->updateGate(NULL, $this->request(['status' => 'closed']), $this->provider(['license_expiry' => (string) (self::NOW - 86400)]))
+    );
+  }
+
+  /**
+   * And so does every condition above it: a stranger's offer with a lapsed
+   * licence answers 403 not_owned, never not_active.
+   */
+  public function testOwnershipAnswersBeforeTheLicence() {
+    $this->assertSame(
+      'service_offer_provider_not_owned',
+      $this->updateGate($this->offer(['provider_raw' => '77']), NULL, $this->provider(['status' => '0']))
+    );
+  }
 }

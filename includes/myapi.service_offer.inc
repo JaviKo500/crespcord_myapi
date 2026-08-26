@@ -1022,3 +1022,178 @@ function myapi_service_offer_apply_values($node, array $values) {
   return $node;
 }
 
+
+/* ---------------------------------------------------------------------------
+ * Writing on an offer that already exists (SPEC 105).
+ *
+ * PUT /api/v1/service-offers/% and PUT /api/v1/service-offers/%/withdraw ask
+ * the SAME four questions about who may touch an offer, and the edit asks one
+ * more. That "one more" is added from OUTSIDE, by the second function calling
+ * the first — a single function with an $is_edit inside would be two functions
+ * badly glued, and the flag would grow the day a third verb arrives.
+ *
+ * NEITHER OF THEM IS myapi_service_offer_eligibility(). That gate answers "may
+ * this account bid on this request?" and asks two things this pair must not:
+ * whether the provider serves the category — already asked the day the offer
+ * was born, and asking again would lock a company out of correcting a price
+ * only because it stopped serving that category (decision 12) — and whether the
+ * request is free of an awarded offer. Reordering that function with a flag was
+ * the alternative; writing these two short ones was the decision.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * The four conditions editing and withdrawing an offer SHARE (SPEC 105).
+ *
+ * Conditions 1 to 3 of the spec's gate — the id, the token and the 'proveedor'
+ * role — are the dispatcher's, and are answered before this is ever called.
+ * What is left is everything that depends on the two rows:
+ *
+ *   4. not_found                        No such offer.
+ *   5. service_offer_provider_not_owned The offer is somebody else's.
+ *   6. $not_writable_code               The offer is no longer 'sent'.
+ *   7. service_request_not_offerable    Its request is not taking offers.
+ *
+ * CONDITION 5 READS `provider_raw` AND NEVER `provider_id`, the same split
+ * myapi_service_offer_detail_row() documents on the two columns: the joined one
+ * is what gets painted and the raw one is what decides. Gating on the joined
+ * column would answer 403 to an account FOR ITS OWN OFFER the day its provider
+ * node is unpublished — and leaving a wrong offer alive because somebody
+ * suspended your listing is exactly the damage this spec exists to undo.
+ *
+ * CONDITION 5 IS field_provider AND NEVER node.uid (decision 4). It is the
+ * criterion SPEC 89 already fixed for the resident: the domain field rules, not
+ * the author. A company with two employees cannot be left with an offer frozen
+ * because the one who sent it is on holiday.
+ *
+ * CONDITION 6 IS WHY THIS FUNCTION TAKES A CODE. Only 'sent' may be written on:
+ * 'selected' means the resident already chose that price and changing it behind
+ * their back is the worst thing this endpoint could do, while 'rejected' and
+ * 'withdrawn' are dead and have nothing left to correct (decision 10). The two
+ * verbs say so with different words — "can no longer be edited" and "can no
+ * longer be withdrawn" — so the code travels as DATA from the call site. It is
+ * not a mode: nothing in here branches on it.
+ *
+ * WITHDRAWING TWICE THEREFORE ANSWERS 409 AND NOT 200, on purpose and by the
+ * literal precedent of SPEC 95's cancellation: the second call did nothing, and
+ * a 200 would pretend otherwise.
+ *
+ * A 'cancelled' REQUEST NEEDS NO RULE OF ITS OWN. Cancelling ran
+ * myapi_service_request_reject_live_offers() (SPEC 95), which left this offer
+ * 'rejected', so condition 6 answers before condition 7 has anything to say.
+ * Condition 7 is only ever reached on statuses that today none but the back
+ * office writes, and it fails closed: a status nobody can name is not offerable.
+ *
+ * PURE, like every other gate in this file: it reads the two rows it is handed
+ * and asks nothing of the database, so the whole matrix is assertable with no
+ * site booted.
+ *
+ * @param object|FALSE $row       A row of myapi_service_offer_detail_row(), or
+ *                                FALSE when there is no such offer.
+ * @param array $provider_ids     myapi_provider_role_provider_ids()'s answer
+ *                                for the authenticated account.
+ * @param object|FALSE $request_row  A row of myapi_service_request_detail_row()
+ *                                for $row->request_id, or FALSE.
+ * @param string $not_writable_code  The error_code condition 6 answers with:
+ *                                'service_offer_not_editable' for the PUT,
+ *                                'service_offer_not_withdrawable' for the
+ *                                withdrawal.
+ *
+ * @return string|NULL  The error_code of the first condition that fails, or
+ *                      NULL when all four pass.
+ */
+function myapi_service_offer_write_gate($row, array $provider_ids, $request_row, $not_writable_code) {
+  // 4. Does the offer exist? The detail row already answers "no such offer"
+  //    for the four indistinguishable reasons — missing, unpublished, another
+  //    bundle, or its request unpublished — so there is nothing to add here.
+  if (!$row) {
+    return 'not_found';
+  }
+
+  // 5. Mine? The RAW column, and field_provider and not node.uid — see the
+  //    docblock. An offer with no provider at all is nobody's and fails closed.
+  $provider_raw = isset($row->provider_raw) ? (int) $row->provider_raw : 0;
+  $owned = array_map('intval', $provider_ids);
+
+  if ($provider_raw <= 0 || !in_array($provider_raw, $owned, TRUE)) {
+    return 'service_offer_provider_not_owned';
+  }
+
+  // 6. Still 'sent'? The code is the caller's, the rule is not.
+  $status = isset($row->status) ? $row->status : NULL;
+
+  if ($status !== MYAPI_SERVICES_OFFER_STATUS_SENT) {
+    return $not_writable_code;
+  }
+
+  // 7. Is its request still taking offers? A missing row fails closed, exactly
+  //    as an unnameable status does.
+  $request_status = ($request_row && isset($request_row->status)) ? $request_row->status : NULL;
+
+  $writable_on = [
+    MYAPI_SERVICES_REQUEST_STATUS_OPEN,
+    MYAPI_SERVICES_REQUEST_STATUS_OFFERED,
+    MYAPI_SERVICES_REQUEST_STATUS_DIRECT,
+  ];
+
+  if (!in_array($request_status, $writable_on, TRUE)) {
+    return 'service_request_not_offerable';
+  }
+
+  return NULL;
+}
+
+/**
+ * The shared four PLUS the licence: the gate of the EDIT alone (SPEC 105).
+ *
+ * Condition 8, and it belongs to the PUT only:
+ *
+ *   8. service_offer_provider_not_active  The provider may not operate today.
+ *
+ * WHY EDITING IS BLOCKED BY A LAPSED LICENCE AND WITHDRAWING IS NOT
+ * (decision 9). Editing is sending a NEW quote, and whoever may not operate
+ * does not quote: it is condition 2 of SPEC 100, unchanged. Withdrawing commits
+ * to nothing, and forcing a provider to leave a wrong offer alive because their
+ * licence expired is precisely the damage this spec came to repair.
+ *
+ * IT COMES AFTER THE STATE OF THE REQUEST, AND THAT IS DELIBERATE. Conditions 5
+ * to 7 ask "may anything be written on this offer at all?", and 8 asks "may you
+ * send a new quote?". The second only means anything once the first has passed,
+ * so a 409 over a closed request wins over the 403 of a lapsed licence.
+ *
+ * THE RULE ITSELF IS NOT REWRITTEN HERE. myapi_services_provider_is_active()
+ * owns what "active" means and reads both columns; reading `status` and
+ * `license_expiry` in this file would be a second copy of it.
+ *
+ * @param object|FALSE $row          A row of myapi_service_offer_detail_row().
+ * @param array $provider_ids        myapi_provider_role_provider_ids()'s answer.
+ * @param object|FALSE $request_row  A row of myapi_service_request_detail_row().
+ * @param object|FALSE $provider_row A row of myapi_service_offer_provider_row()
+ *                                   for the offer's provider, or FALSE.
+ * @param mixed $now                 The clock, as a Unix timestamp
+ *                                   (REQUEST_TIME in production).
+ *
+ * @return string|NULL  The error_code of the first condition that fails, or
+ *                      NULL when all five pass.
+ */
+function myapi_service_offer_update_gate($row, array $provider_ids, $request_row, $provider_row, $now) {
+  $shared = myapi_service_offer_write_gate($row, $provider_ids, $request_row, 'service_offer_not_editable');
+
+  if ($shared !== NULL) {
+    return $shared;
+  }
+
+  // 8. May this provider operate today? A provider row that no longer loads is
+  //    not active either, and fails closed like every other read of this gate.
+  if (!$provider_row) {
+    return 'service_offer_provider_not_active';
+  }
+
+  $license_expiry = isset($provider_row->license_expiry) ? $provider_row->license_expiry : NULL;
+  $status = isset($provider_row->status) ? (int) $provider_row->status : 0;
+
+  if (!myapi_services_provider_is_active($status, $license_expiry, $now)) {
+    return 'service_offer_provider_not_active';
+  }
+
+  return NULL;
+}
