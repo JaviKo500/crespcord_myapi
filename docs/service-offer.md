@@ -7,7 +7,7 @@ from the start**, which is the same body on the same route and the only place in
 this module where the price of that job can live. And each side can then open
 **one** of those quotes on a route of its own.
 
-Six routes:
+Seven routes:
 
 - [`POST /api/v1/service-requests/{id}/offers`](#post-apiv1service-requestsidoffers) — create an offer. It hangs off the request because **an offer does not exist outside its request**.
 - [`GET /api/v1/service-offers/provider`](#get-apiv1service-offersprovider) — **the provider's own archive**: *what have I quoted?*, across every request, paginated and filtered.
@@ -15,6 +15,7 @@ Six routes:
 - [`GET /api/v1/service-offers/{id}`](#get-apiv1service-offersid) — **one of the offers I received**, for the resident who received it.
 - [`PUT /api/v1/service-offers/{id}`](#put-apiv1service-offersid) — **correct my own offer**, by total replacement, while it is still `sent`.
 - [`PUT /api/v1/service-offers/{id}/withdraw`](#put-apiv1service-offersidwithdraw) — **take my own offer back**, which is what finally writes `withdrawn`.
+- [`PUT /api/v1/service-offers/{id}/accept`](#put-apiv1service-offersidaccept) — **the resident awards one of the offers on their request**, which is what finally writes `selected` and `assigned`.
 
 > ⚠️ **`/api/v1/service-offers/{id}` carries two different actors.** The `GET`
 > is the **resident's** — it answers `403` to a provider, even to the one who
@@ -1258,6 +1259,204 @@ Identical in shape to the edit's, with `status` answering `withdrawn`:
 
 ---
 
+## PUT /api/v1/service-offers/{id}/accept
+
+The resident awards one of the offers on their own request. **This is the only
+thing in the module that writes the `selected` status, the `assigned` status,
+`field_assigned_offer` and `field_assigned_provider`** — four things that have
+been in the catalogues and on the bundle since it was installed, waiting for
+this route.
+
+**Authentication:** required — Bearer token. **No role is needed:** this is the
+resident's endpoint, and a resident holds no `proveedor` role. Who may award is
+a fact about the data, not about roles.
+
+**Headers**
+
+| Header | Value |
+|--------|-------|
+| Authorization | Bearer &lt;access_token&gt; |
+| Accept-Language | `es` (default) or `en` |
+
+### Request body
+
+**None.** Any body is ignored entirely — with keys, empty, or malformed JSON.
+Nothing is parsed, so nothing can fail, exactly like the withdrawal above.
+
+> **Why a `PUT` on the OFFER and not a `POST` on the request.** Nothing is born,
+> so there is no `201`. And the object whose state changes by the resident's
+> decision **is the offer**; the request turning `assigned` is the consequence,
+> not the action. The URL identifies the offer on its own, which is also why the
+> error *"the offer you sent is not of this request"* cannot exist.
+
+### Who may award: nine conditions, in this order
+
+The first one that fails answers.
+
+| # | Condition | If it fails |
+|---|-----------|-------------|
+| 1 | `{id}` is a positive integer | `404 not_found` — **before the token, with no query** |
+| 2 | The token is valid | `401 missing_authorization` / `401 invalid_token` |
+| 3 | The offer exists and is servable | `404 not_found` |
+| 4 | Its request exists and is servable | `404 not_found` |
+| 5 | The reader **is** the request's `field_requester` | `403 service_request_forbidden` |
+| 6 | The offer is still `sent` | `409 service_offer_not_acceptable` |
+| 7 | Its request can go to `assigned` (only from `offered`) | `409 service_request_not_assignable` |
+| 8 | `valid_until` is absent, or has not passed | `409 service_offer_expired` |
+| 9 | The offer's provider may still operate | `403 service_offer_provider_not_active` |
+
+> **Condition 5 is `field_requester` exactly** — never `node.uid`. A request an
+> operator registered on a resident's behalf belongs to the resident. And not
+> the rest of the unit either, unlike a payment: a service request is signed by
+> one person, and the household does not inherit the right to award it. **A
+> provider never awards, not even their own offer.**
+
+> **A request sitting in `open` cannot be awarded.** The graph has no
+> `open → assigned` edge, and nothing yet syncs `open → offered` when an offer
+> is created from the back office. So a request in `open` **with offers hanging
+> off it** answers `409 service_request_not_assignable`, and the resident cannot
+> award it from the app. Known, and the spec that closes it is another one.
+
+> **`valid_until` absent means the quote does not expire.** It is optional and
+> most offers do not carry one. The comparison is `>=`: an offer is good
+> **throughout** its expiry instant and not one second less. **Nothing sweeps
+> expired offers** — they keep saying `sent` in every listing and in both
+> details, so the app must compare `valid_until` with the clock and disable the
+> button itself. The `409` is the last line of defence, not the first.
+
+> **The licence is checked last, and that is deliberate.** Conditions 6, 7 and 8
+> ask *"is this offer awardable?"*; condition 9 asks *"may this provider still
+> work?"*. The second only means anything once the first has passed — so a
+> `rejected` offer from a suspended provider answers `409` and not `403`.
+
+**NOT IDEMPOTENT, ON PURPOSE.** A second `PUT` answers
+`409 service_offer_not_acceptable` — the offer says `selected` now — and
+**reassigns nothing**. A `PUT` on **another** offer of the same, already awarded
+request answers the same `409`, because that one is `rejected` by now. Awarding
+twice, or changing the winner, is a different operation and another spec.
+
+### What it writes: four nodes, in this order
+
+| # | What | Detail |
+|---|------|--------|
+| 1 | **The request** | `field_request_status = "assigned"`, `field_assigned_offer = {id}`, `field_assigned_provider` = the offer's provider. One `node_save()`. |
+| 2 | **The transaction** | One timeline entry: `assigned`, the resident as `node.uid`, and a comment naming the provider and the amount. |
+| 3 | **The winning offer** | `field_offer_status = "selected"`. |
+| 4 | **The losing offers** | Every offer of that request that was `sent` becomes `rejected`. |
+
+**The order is a contract and not a style.** The request is written **first** so
+that the status sync — which runs on the transaction's `hook_node_insert()` —
+compares two equal statuses and does **not** save the request a second time.
+
+**The winner is excluded from the sweep by its nid, not by its status.** By the
+time step 4 runs it already says `selected`, which the sweep considers *live*;
+without the exception it would reject itself.
+
+**What is NOT touched:** offers already `withdrawn` or `rejected` (the first is
+the provider's own retreat, the second is already terminal), the request's unit,
+category, description, files, `node.uid`, `node.created` and `node.title`, and
+the winning offer's twelve quote fields. The request **stays published**, and
+`offers_count` does not change: awarding deletes no offer.
+
+**The four writes are NOT atomic.** No database transaction is opened, for the
+same reason cancelling does not open one: `node_save()` with the Field API and
+its hooks inside one is a known source of lock-ups. A failure halfway through
+leaves a state that is inconsistent but harmless — nothing can be awarded or
+charged from it — and is repaired by hand from the back office.
+
+**The timeline text**, with no currency symbol, because the module stores none:
+
+| Case | Text |
+|------|------|
+| With an amount | `Oferta adjudicada a Plomería Torres por 150,50.` |
+| `on_site_quote`, or no amount | `Oferta adjudicada a Plomería Torres.` |
+| No provider name | `Oferta adjudicada.` |
+
+### Success response (200)
+
+**The resident's whole request detail** — the very object
+`GET /api/v1/service-requests/{id}` answers, rebuilt from the database *after*
+the four writes — plus `offers_rejected` as a **sibling key** and not a twentieth
+key of it, so the app can swap the object in with no special case.
+
+```json
+{
+  "success": true,
+  "data": {
+    "service_request": {
+      "id": 128,
+      "title": "Fuga en el calentador",
+      "description": "El calentador gotea desde el martes.",
+      "status": "assigned",
+      "category": { "id": 9, "code": "plumbing", "name": "Plomería" },
+      "unit": { "id": 57, "name": "Casa 12" },
+      "offers_count": 3,
+      "assigned_offer": 901,
+      "assigned_provider": { "id": 41, "name": "Plomería Torres" },
+      "created": "2026-08-24T09:14:00",
+      "desired_start": "2026-08-28T00:00:00",
+      "viewer": "requester",
+      "requester": { "id": 314, "name": "Ana Pérez" },
+      "condominium": { "id": 3, "name": "Altos del Bosque" },
+      "images": [],
+      "attachment": null,
+      "closed_at": null,
+      "offers": [
+        { "id": 901, "status": "selected", "…": "the fifteen keys" },
+        { "id": 902, "status": "rejected", "…": "the fifteen keys" },
+        { "id": 903, "status": "rejected", "…": "the fifteen keys" }
+      ],
+      "transactions": [
+        { "id": 700, "status": "open", "…": "the five keys" },
+        { "id": 742, "status": "assigned", "comment": "Oferta adjudicada a Plomería Torres por 150,50.", "…": "" }
+      ]
+    },
+    "offers_rejected": 2
+  },
+  "message": "Oferta adjudicada correctamente."
+}
+```
+
+- **`200` and not `201`:** no resource is born that the client would address.
+  The transaction is an effect, not the answer.
+- **Six queries, paid on purpose.** The app repaints the screen it is already on
+  — the new status, `assigned_offer`, every offer with its freshly written
+  status and the timeline with the entry already in it — with no second round
+  trip. And the response **cannot** disagree with what a `GET` would say,
+  because it is what a `GET` answers.
+- **`viewer` is always `requester`:** condition 5 already proved who got here.
+- **`offers_rejected` is the count of offers *this call* moved to `rejected`** —
+  not counting the winner, and not counting the ones that were already rejected.
+  It is the one thing the client cannot deduce from what it just received:
+  `offers` shows which offers are rejected **now**, not which ones this call
+  rejected.
+
+> **A degraded body, in one case only.** If the request's category term was
+> deleted between the gate and the response, the detail cannot be built. The
+> award **is** written and it is correct, so the answer is still `200`, and the
+> body falls back to `{"service_request": {"id": …, "status": "assigned"},
+> "offers_rejected": N}`. The client tells the two shapes apart by `viewer`,
+> which only the full object carries. This is nearly unreachable — the same join
+> already ran in condition 4.
+
+### Possible errors
+
+| Code | `error_code` | When |
+|------|--------------|------|
+| 405 | `method_not_allowed` | Any method but `PUT`. Answered **before the token and with no query**. |
+| 404 | `not_found` | `{id}` is not a positive integer. **No query runs.** |
+| 401 | `missing_authorization` | No `Authorization` header. |
+| 401 | `invalid_token` | Invented, revoked or expired token. |
+| 404 | `not_found` | The offer does not exist, is unpublished, is of another bundle, or its request is not published. |
+| 404 | `not_found` | The request cannot be resolved — its category term was deleted. **Nothing is written.** |
+| 403 | `service_request_forbidden` | The reader is not the request's `field_requester`. The provider who owns the offer lands here too. |
+| 409 | `service_offer_not_acceptable` | The offer is `selected`, `rejected` or `withdrawn`. |
+| 409 | `service_request_not_assignable` | The request is `open`, `direct`, `assigned`, `closed`, `cancelled`, or its status is empty or unknown. |
+| 409 | `service_offer_expired` | The offer's `valid_until` has passed. |
+| 403 | `service_offer_provider_not_active` | The offer's provider is unpublished or its licence has expired. |
+
+---
+
 ## What is still not here
 
 Written down so it is not looked for in this document:
@@ -1273,13 +1472,22 @@ Written down so it is not looked for in this document:
 - **A reason for a withdrawal**, and therefore no `field_offer_withdraw_reason`.
 - **The request going back to `open`** when its last live offer is withdrawn.
   The transition graph gains no `offered → open` edge.
-- **A resident rejecting or withdrawing an offer.** `rejected` is still written
-  only by the sweep that runs when a request is cancelled. Withdrawing is the
+- **A resident rejecting ONE offer, or withdrawing one.** `rejected` is written
+  only by the sweep, which runs on two events and neither is a resident picking
+  a single offer to refuse: cancelling a request, and awarding one of its offers
+  — the latter rejects every other live one in the same pass. Withdrawing is the
   provider's, by definition.
-- **Awarding one.** `selected`, `field_assigned_offer` and the transition
-  `offered → assigned` are the resident's side and another spec. Nothing in this
-  module writes `selected` yet — **including on a `direct`**, where the resident
-  accepting the quote is a verb this endpoint does not have.
+- **Un-awarding, or changing the winner.** A second `accept` answers `409` and
+  reassigns nothing. Undoing an award has to decide what happens to the offers
+  it rejected and to the timeline entry it already wrote, and that is a spec of
+  its own. There is also no record of *which* offers a given award rejected —
+  `offers_rejected` is a counter and it leaves with the response.
+- **The resident accepting the quote on a `direct`.** Awarding needs the
+  `offered → assigned` edge, and a `direct` request does not have it: it awards
+  at birth and has no offers to accept.
+- **Anything expiring an offer.** `valid_until` is *read* by the award, but no
+  sweep changes the status of a lapsed offer — it keeps saying `sent` in all
+  three places it travels.
 - **Files on an offer.** Photos of previous jobs and a PDF quote. Hanging a file
   off an offer breaks the ownership chain the private-file route resolves by
   `n.type = service_request`, and it forces a decision about whether the

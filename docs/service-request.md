@@ -12,9 +12,11 @@ request that already exists is a `POST` on the **item** route
 ([`POST /api/v1/service-requests/{id}`](#post-apiv1service-requestsid)) and
 cancelling has a route of its own. **Offering** has a route and a document of
 its own since SPEC 100 — see
-[service-offer.md](service-offer.md) — and it is the one write outside this
-document that changes a request's status. Closing and awarding are still not
-here.
+[service-offer.md](service-offer.md). **Awarding** lives there too, since
+SPEC 106: `PUT /api/v1/service-offers/{id}/accept` is the write outside this
+document that moves a request to `assigned` and writes `field_assigned_offer`
+and `field_assigned_provider` — the resident acts on the offer, and the request
+changes as a consequence. **Closing** is still not here.
 
 This is the **first route** of the `service_request` bundle, whose schema was
 built by SPEC 77, 86 and 87 without one. Three more routes live in this same
@@ -1766,8 +1768,11 @@ curl -i -X PUT https://host/api/v1/service-requests/412/cancel \
 
 Written down so it is not looked for in this document:
 
-- **Every write except creation, editing and cancellation.** Closing and
-  awarding **on a request that already exists**. All `405` — see
+- **Every write except creation, editing and cancellation.** Closing **on a
+  request that already exists**, and awarding **through a route of this prefix**
+  — awarding does exist since SPEC 106, but as a `PUT` on the *offer*
+  ([service-offer.md](service-offer.md)), because the object the resident acts
+  on is the offer. All `405` — see
   [`POST /api/v1/service-requests`](#post-apiv1service-requests),
   [`POST /api/v1/service-requests/{id}`](#post-apiv1service-requestsid) and
   [`PUT /api/v1/service-requests/{id}/cancel`](#put-apiv1service-requestsidcancel)
