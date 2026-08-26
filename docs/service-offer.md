@@ -6,16 +6,22 @@ resident can compare — **or prices a `direct` request that was awarded to them
 from the start**, which is the same body on the same route and the only place in
 this module where the price of that job can live.
 
-One route, and it hangs off the request because **an offer does not exist
-outside its request**:
+Two routes:
 
-- [`POST /api/v1/service-requests/{id}/offers`](#post-apiv1service-requestsidoffers) — create an offer.
+- [`POST /api/v1/service-requests/{id}/offers`](#post-apiv1service-requestsidoffers) — create an offer. It hangs off the request because **an offer does not exist outside its request**.
+- [`GET /api/v1/service-offers/provider`](#get-apiv1service-offersprovider) — **the provider's own archive**: *what have I quoted?*, across every request, paginated and filtered.
 
-Offers are **read** elsewhere: whole, inside
+**The offers *of a request* are read elsewhere**, whole: inside
 [the resident's detail](service-request.md) (`offers`) and inside
 [the provider's detail](service-request-provider.md) (`my_offers`). There is no
-`GET` of the collection here, and that is deliberate — a third place to read
+`GET` of **that** collection, and that is deliberate — a third place to read
 them would be a third thing to keep in agreement with `offers_count`.
+
+**The listing below does not contradict that.** It answers a different question:
+its set **crosses** requests instead of living inside one, it counts nothing of
+anybody else and it publishes no counter, so there is nothing it can fall out of
+step with. Each of its items carries **eight referential keys** — enough to paint
+the row and open the detail, never half a detail.
 
 ---
 
@@ -416,6 +422,222 @@ Standing still is the only option that breaks nothing. So after your quote:
 
 ---
 
+## GET /api/v1/service-offers/provider
+
+The provider's own archive: **every offer one of your providers has sent**,
+whatever request it hangs off and whatever became of it. Paginated, filtered and
+**referential** — eight keys per item, enough to paint the row and open the
+detail.
+
+It answers the one question no other endpoint answers: ***what have I
+quoted?***. Without it, a provider reviewing the fifteen quotes they sent this
+month has to open fifteen request details, and only if they remember which ones
+they were.
+
+**Authentication:** required. And the `proveedor` role.
+
+**Headers**
+
+| Header | Value |
+|--------|-------|
+| Authorization | `Bearer <access_token>` |
+| Accept-Language | `es` (default) or `en` |
+
+**Example**
+
+```bash
+curl -i -G https://host/api/v1/service-offers/provider \
+  -H 'Authorization: Bearer <access_token>' \
+  -d provider_id=41 \
+  -d status=sent,selected \
+  -d limit=20
+```
+
+### Query parameters
+
+`provider_id` is **mandatory**. Everything else is optional, and only
+`category_id` can be *wrong* rather than merely unknown.
+
+| Parameter | Type | Required | Default | Notes |
+|-----------|------|:--------:|---------|-------|
+| `provider_id` | int > 0 | **Yes** | — | Which of *your* providers you are asking about. |
+| `page` | int > 0 | No | `1` | Garbage falls back to `1`, never a `422`. |
+| `limit` | int > 0, or `-1` | No | `20` | Trimmed to **50**. `-1` returns everything on one page and forces `page: 1`. Garbage falls back to `20`. |
+| `sort` | `asc` \| `desc` | No | `desc` | Over the **offer's** `created` — when *you* quoted, never when the request was asked for. An unknown value falls back to `desc`. |
+| `status` | comma-separated | No | — | The **offer's** status: `sent`, `selected`, `rejected`, `withdrawn`. Unknown keys are dropped in silence; `status=sent,inventado` filters by `sent`. |
+| `request_status` | comma-separated | No | — | The **request's** status: `open`, `direct`, `offered`, `assigned`, `closed`, `cancelled`. Same laxity. |
+| `category_id` | int > 0 | No | — | The tid of the **request's** category. **The one filter that answers `422 invalid_field`** when malformed, because the same parameter name already does so in [`GET /api/v1/providers`](provider.md) and in both request listings. |
+| `date_from` / `date_to` | `YYYY-MM-DD` | No | — | Over the **offer's** `created`, **inclusive at both ends**: an offer sent at 23:50 of `date_to` is inside the range. A malformed bound is dropped in silence, and an inverted pair drops the whole range. |
+
+**`status` and `request_status` are two parameters and not one**, because they
+are two catalogues with **no value in common**: `sent` is not a state a request
+can be in, and `cancelled` is not a state an offer can be in. Sending one to the
+other's filter simply matches nothing.
+
+**Any parameter this endpoint does not read is ignored in silence.**
+`?unit_id=3` or `?foo=bar` never produce a `422`.
+
+### Why `provider_id` is mandatory
+
+An account may operate several providers. Asking without saying which is asking
+something this endpoint does not answer, and *"both mixed together"* would be
+inventing an aggregate format nobody designed.
+
+**It is not derived even for an account that operates a single provider.**
+Choosing in silence works until the day there are two, and then a client that
+never sent the field starts reading the wrong list without anything failing —
+the same decision the creation endpoint made about the `provider_id` in its
+body. It is born strict because relaxing it later is compatible and tightening
+it is not.
+
+**Strict in the format, lax in the ownership.** `abc`, `0`, `-1`, `1,2` or
+`" 41"` is a broken client and earns its `422` **before a single query runs**;
+a nid that belongs to somebody else, or to no node at all, is **not an error**
+and answers `200` with an empty list. A `403` there would only turn a listing
+into an oracle for *"this nid exists and is not yours"*.
+
+### What is in the list, and what is not
+
+An offer appears when **all four** hold:
+
+1. The offer is **published**.
+2. Its `field_provider` is the `provider_id` asked for.
+3. That `provider_id` is one of the account's providers.
+4. Its request **exists and is published**.
+
+**And nothing else filters.**
+
+| | |
+|---|---|
+| Every **offer status** | `sent`, `selected`, `rejected` and `withdrawn` all appear. |
+| Every **request status** | `cancelled` included. A `direct` (quoted with the same route above) appears with nothing special in the item. |
+| A **suspended** provider | Reads its whole archive. |
+| A provider with an **expired licence** | Reads its whole archive. |
+| An **unpublished** offer | Never appears. |
+| An offer whose **request was unpublished or deleted** | Never appears, and `pagination.total` does not count it. |
+| An offer of **another provider** | Never appears, not even on a request this provider also bid on. |
+
+**The licence governs the market — being able to quote — and not the archive of
+what was already quoted.** A company that lost access to its own quotes would
+lose the proof of work it did.
+
+**The request is `INNER JOIN`ed on purpose.** Every item of this list has to be
+openable; an offer whose request disappeared is a row that answers `404` the
+moment it is touched. The alternative — listing it with `request: null` — would
+make the client paint a row that leads nowhere and tell two classes of row apart.
+
+**`valid_until` is never compared with today.** An expired offer travels just the
+same, with its date, and **the client decides** whether it is lapsed: expiry
+depends on the instant it is read, and a list cached ten minutes would lie at
+the edge.
+
+### Success response (200)
+
+```json
+{
+  "success": true,
+  "data": {
+    "service_offers": [
+      {
+        "id": 901,
+        "status": "sent",
+        "amount": 95.5,
+        "amount_type": "fixed",
+        "created": "2026-08-25T10:14:00",
+        "valid_until": "2026-09-01T23:59:59",
+        "provider": { "id": 41, "name": "Plomería Torres" },
+        "request": {
+          "id": 128,
+          "title": "Fuga en el calentador",
+          "status": "assigned",
+          "category": { "id": 12, "code": "plumbing", "name": "Plomería" }
+        }
+      }
+    ],
+    "pagination": { "total": 1, "page": 1, "limit": 20, "total_pages": 1 }
+  }
+}
+```
+
+### Each item: eight keys, always, in this order
+
+| Key | Type | Notes |
+|-----|------|-------|
+| `id` | int | The **offer's** nid. |
+| `status` | string \| null | `sent`, `selected`, `rejected`, `withdrawn`. `null` only on a corrupt row. |
+| `amount` | float \| null | Never `"95.50"` and never `0.0` for an absence — `0` is a price somebody offered. `null` when `amount_type` is `on_site_quote`. |
+| `amount_type` | string \| null | `null` on **every offer stored before the quote fields existed**. Nothing backfilled them and nothing will. |
+| `created` | string | `Y-m-d\TH:i:s`. |
+| `valid_until` | string \| null | `Y-m-d\TH:i:s`. Not compared with today — see above. |
+| `provider` | object | `{id, name}`. **Never `null`.** |
+| `request` | object | `{id, title, status, category}`. **Never `null`**, by the `INNER JOIN`. |
+| `request.category` | object | `{id, code, name}`. `code` is `""` — never `null` — when the term carries none. |
+
+**The first six keys are byte for byte the ones the fifteen-key offer object
+answers**, because they come out of **the same serialiser**. This item is that
+object *trimmed*, never a second one: the day the format of `amount` changes, it
+changes in both places or in neither.
+
+**`provider` is `{id, name}` and not `{id, name, logo}`**, unlike `offers` and
+`my_offers`. The logo is the reader's **own**, which the app already has, and
+fetching it would cost a join to `file_managed` on every row to paint the same
+image twenty times. It is resolved **once** for the whole page and copied into
+each item, so the response never joins per row.
+
+**`request` carries no `description`, no `unit`, no `offers_count` and no
+`assigned_provider`.** It is the label that lets the client paint the row and
+open the detail, not half a detail.
+
+**Not one datum of the competition or of the customer travels.** No resident, no
+condominium, no flat, no count of rival offers and no amount of theirs. What a
+provider reads here is its own archive.
+
+**The seven long keys are not here either** — `message`, `includes`, `excludes`,
+`duration`, `tax_included`, `warranty_days`, `requires_visit`,
+`available_from`. They are read where they are already read: inside
+[`GET /api/v1/service-requests/provider/{id}`](service-request-provider.md), in
+`my_offers`, with all fifteen. Multiplied by fifty rows they would turn a
+listing into a download.
+
+### Pagination
+
+`{total, page, limit, total_pages}`, byte for byte the block both request
+listings answer.
+
+- `total` describes the **filtered set**, not the page.
+- `total_pages` is **`0`** when `total` is `0` — never `1`.
+- Asking for a page past the last one answers `200` with `service_offers: []`
+  and the real `total`.
+- `limit: -1` answers `total_pages: 1` (or `0`) and forces `page: 1`.
+- An empty answer **echoes the `limit` the caller asked for**, so a client that
+  sent `?limit=50` is not told it got `20`.
+
+### Possible errors
+
+| Code | `error_code` | When |
+|------|--------------|------|
+| 405 | `method_not_allowed` | Any method but `GET`. Answered **before the token** and before any query. |
+| 401 | `missing_authorization` | No `Authorization` header. |
+| 401 | `invalid_token` | Invented, revoked or expired token. |
+| 403 | `provider_role_required` | The account does not hold the `proveedor` role. **No exception for administrators.** |
+| 422 | `missing_field` | `provider_id` absent — `@field` names it. |
+| 422 | `invalid_field` | `provider_id` or `category_id` present and malformed — `@field` names which. Answered **before any offer query**. |
+
+**The order is the contract:** method → token → role → `provider_id` → the rest.
+The role is checked **before** `provider_id`, so a reader who may not be here
+does not learn whether their parameter was well formed; `provider_id` is checked
+**before** any query, so a `422` costs nothing.
+
+**An account that holds the role and is linked to no provider is not a `403`.**
+It reaches the parameter, and whatever nid it sends is not its own, so it reads
+`200` with an empty list: having the role and being linked to nothing is missing
+data, not a missing permission.
+
+**A foreign or non-existent `provider_id` is `200` with an empty list** — never
+`403`, never `404`.
+
+---
+
 ## What is still not here
 
 Written down so it is not looked for in this document:
@@ -434,8 +656,18 @@ Written down so it is not looked for in this document:
   `n.type = service_request`, and it forces a decision about whether the
   competition sees your quote. Its own spec, and it must add an **upload route**
   rather than change this body's format.
-- **A `GET` of the offers of a request.** They already travel inside the two
-  details. Any method but `POST` here is `405`.
+- **A `GET` of the offers of a *request*.** They already travel inside the two
+  details. Any method but `POST` on the bidding route is `405`. (The provider's
+  own archive, which crosses requests, **is** here — see
+  [`GET /api/v1/service-offers/provider`](#get-apiv1service-offersprovider).)
+- **The detail of one offer** (`GET /api/v1/service-offers/{id}`). The archive
+  below is referential by decision; the fifteen keys are already served inside
+  the provider's request detail, in `my_offers`.
+- **Several providers in one call** (`?provider_id=41,42`, or the aggregate of a
+  whole account). If it is ever needed it is a spec and a format of its own, not
+  a patch on the parameter.
+- **Counters and aggregates** over the archive — *"you have 3 quotes pending"*,
+  the total amount quoted this month.
 - **The chat.** The three fields stay empty, as they have since SPEC 77.
 - **Notifying the resident.** There is no notification infrastructure for
   services at all yet.
