@@ -1,15 +1,18 @@
 # Service offers
 
-The provider's side of the marketplace: a provider bids on an open request of
+The marketplace's quote, from both sides: a provider bids on an open request of
 their category, with the fields that turn *a text and a number* into a quote the
 resident can compare — **or prices a `direct` request that was awarded to them
 from the start**, which is the same body on the same route and the only place in
-this module where the price of that job can live.
+this module where the price of that job can live. And each side can then open
+**one** of those quotes on a route of its own.
 
-Two routes:
+Four routes:
 
 - [`POST /api/v1/service-requests/{id}/offers`](#post-apiv1service-requestsidoffers) — create an offer. It hangs off the request because **an offer does not exist outside its request**.
 - [`GET /api/v1/service-offers/provider`](#get-apiv1service-offersprovider) — **the provider's own archive**: *what have I quoted?*, across every request, paginated and filtered.
+- [`GET /api/v1/service-offers/provider/{id}`](#get-apiv1service-offersproviderid) — **one of my offers, whole**: the fifteen keys plus the context of its request.
+- [`GET /api/v1/service-offers/{id}`](#get-apiv1service-offersid) — **one of the offers I received**, for the resident who received it.
 
 **The offers *of a request* are read elsewhere**, whole: inside
 [the resident's detail](service-request.md) (`offers`) and inside
@@ -17,11 +20,13 @@ Two routes:
 `GET` of **that** collection, and that is deliberate — a third place to read
 them would be a third thing to keep in agreement with `offers_count`.
 
-**The listing below does not contradict that.** It answers a different question:
-its set **crosses** requests instead of living inside one, it counts nothing of
-anybody else and it publishes no counter, so there is nothing it can fall out of
-step with. Each of its items carries **eight referential keys** — enough to paint
-the row and open the detail, never half a detail.
+**Neither the listing nor the two details below contradict that.** The listing
+answers a different question: its set **crosses** requests instead of living
+inside one, and each of its items carries **eight referential keys** — enough to
+paint the row and open the detail, never half a detail. The two details serve
+**one** offer to somebody who already had the right to read it. None of the
+three publishes a counter of anybody, so there is nothing any of them can fall
+out of step with.
 
 ---
 
@@ -638,6 +643,306 @@ data, not a missing permission.
 
 ---
 
+## GET /api/v1/service-offers/provider/{id}
+
+**One of my offers, whole**: the fifteen keys of the offer plus the referential
+context of the request it hangs off. It is what makes a row of the archive
+*openable*.
+
+Until it existed, reading the fifteen keys of **one** offer meant downloading
+the entire detail of its request —
+[`GET /api/v1/service-requests/provider/{id}`](service-request-provider.md) —
+with its images, its timeline, the count of the competition and the rest of your
+own offers, in order to keep one of them.
+
+**Authentication:** required. And the `proveedor` role.
+
+**Headers**
+
+| Header | Value |
+|--------|-------|
+| Authorization | `Bearer <access_token>` |
+| Accept-Language | `es` (default) or `en` |
+
+**Example**
+
+```bash
+curl -i https://host/api/v1/service-offers/provider/901 \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+**Success response (200)**
+
+```json
+{
+  "success": true,
+  "data": {
+    "service_offer": {
+      "id": 901,
+      "provider": { "id": 41, "name": "Plomería Torres", "logo": "https://host/sites/default/files/logo.png" },
+      "amount": 95.5,
+      "message": "Cambio de resistencia y purgado del circuito.",
+      "status": "selected",
+      "created": "2026-08-25T10:14:00",
+      "amount_type": "fixed",
+      "valid_until": "2026-09-01T23:59:59",
+      "available_from": "2026-08-27T09:00:00",
+      "duration": { "value": 2, "unit": "hours" },
+      "includes": "Material y desplazamiento.",
+      "excludes": null,
+      "tax_included": true,
+      "warranty_days": 30,
+      "requires_visit": false,
+
+      "request": {
+        "id": 128,
+        "title": "Fuga en el calentador",
+        "status": "assigned",
+        "category":    { "id": 12, "code": "plumbing", "name": "Plomería" },
+        "condominium": { "id": 7,  "name": "Residencial Los Álamos" },
+        "unit":        { "id": 55, "name": "Apto 302" },
+        "requester":   { "id": 314, "name": "María Crespo" }
+      }
+    }
+  }
+}
+```
+
+### Sixteen keys, and `request` is the sixteenth
+
+**The first fifteen are the offer object, whole and untouched** — the same
+fifteen `offers` and `my_offers` answer, from the same serialiser. The `(float)`
+of `amount`, the `Y-m-d\TH:i:s` of the three dates, the rule that an empty
+optional text is `null`, the rule that `message` stays `""` because it is
+*required*, and the rule that `requires_visit` is **never** `null` are written
+once and read from four places. The day the format of `amount` changes, it
+changes in all four or in none.
+
+See the [item table of the archive](#each-item-eight-keys-always-in-this-order)
+for the six shared keys, and the
+[creation response](#post-apiv1service-requestsidoffers) for all fifteen.
+
+**`request` is a key *of the offer*, not a sibling of it in `data`.** In the
+creation response it travels outside the object because there it reports the
+**effect** of the write on the request; here it is the **context** of the offer
+being read, and an offer without its request cannot be painted.
+
+### `request`: seven keys, always the seven
+
+| Key | Type | Notes |
+|-----|------|-------|
+| `id` | int | The **request's** nid. |
+| `title` | string | `""` if missing, never `null`. |
+| `status` | string \| null | `open`, `offered`, `direct`, `assigned`, `closed`, `cancelled`. |
+| `category` | object | `{id, code, name}`. `code` is `""` — never `null` — when the term carries none. |
+| `condominium` | object \| null | `{id, name}`. `name` is the **node title**: the `condominio` bundle has no name field. A **whole** `null`, never `{id: null, name: null}`. |
+| `unit` | object \| null | `{id, name}`. `name` is `field_nombre_vivienda` and **not** the node title. |
+| `requester` | object \| null | `{id, name}`. **No phone, no email, no address.** |
+
+**It carries no `description`, no `desired_start`, no `closed_at`, no
+`offers_count` and no `assigned_offer`.** It is *referential by decision*, not
+half a detail: the whole request is read where it is already read.
+
+### Who sees the unit and the requester
+
+**The seven keys always travel; two change what they carry.** A client that
+reads the same seven keys in both routes has nothing to branch on.
+
+| Key | `/provider/{id}` | `/{id}` |
+|-----|------------------|---------|
+| the fifteen of the offer | identical | identical |
+| `request.condominium` | **always** | **always** |
+| `request.unit` | **only if the job is yours**, `null` otherwise | **always** — it is their home |
+| `request.requester` | **only if the job is yours**, `null` otherwise | **always `null`** — it is them |
+
+**"The job is yours"** means the *request* is awarded to one of your providers —
+`field_assigned_provider` — and **not** that your offer is `selected`. Normally
+the two agree; when they diverge the **award** wins, because it is the one that
+says which house you are going to:
+
+- Your offer is `selected` but the request ended up awarded to somebody else →
+  `unit: null`, `requester: null`.
+- Your offer is `rejected` or `withdrawn` and the request is awarded to you →
+  **both travel**. The work is yours either way.
+- The award points at a provider node that was deleted or unpublished →
+  `unit: null`, `requester: null`. A broken reference **closes** the address, it
+  does not open it.
+
+**`condominium` travels always and for everyone**, with no condition. It names
+the residential complex, not a person and not a door, and without it a provider
+does not know which city it is quoting for.
+
+**`unit` and `requester` are a whole `null`**, never `{id: null, name: null}`.
+You cannot tell *"not awarded to me"* from *"the unit was deleted"*, and there is
+no reason to: in both cases there is no address to paint.
+
+### What is served, and what is not
+
+**Three conditions and no more.** An offer is servable when it is published, is
+of the `service_offer` bundle, and **its request is published**. There is no
+condition on the offer's status, on the request's status, on the provider's
+published flag, or on `field_license_expiry`:
+
+- An offer `withdrawn` on a request `cancelled` from a **suspended** provider is
+  served **whole**. The licence governs the *market* — being able to quote — and
+  not the record of what was already quoted.
+- A suspended provider's offer answers `provider: null`, exactly as `offers`
+  already answers it for the same row. The offer itself is served.
+- An offer stored **before the quote fields existed** answers `amount_type`,
+  `valid_until`, `available_from`, `duration`, `includes`, `excludes`,
+  `tax_included` and `warranty_days` as `null`, `requires_visit` as `false`, and
+  is served with `200`.
+- An offer on a `direct` request is served with nothing different about it.
+
+**`is_expired` is not here, nor any field computed over `valid_until`.** The date
+travels; the server and the client share neither a clock nor a timezone, and a
+boolean computed on the server expires in transit.
+
+### Possible errors
+
+| Code | `error_code` | When |
+|------|--------------|------|
+| 405 | `method_not_allowed` | Any method but `GET`. Answered **before the token** and before any query. |
+| 404 | `not_found` | `{id}` is not a positive integer (`abc`, `0`, `-1`, `1,2`, `" 41"`). **No query runs.** |
+| 401 | `missing_authorization` | No `Authorization` header. |
+| 401 | `invalid_token` | Invented, revoked or expired token. |
+| 403 | `provider_role_required` | The account does not hold the `proveedor` role. **No exception for administrators**, and answered **before any offer query**. |
+| 404 | `not_found` | The offer does not exist, is unpublished, is of another bundle, or **its request is not published**. |
+| 403 | `forbidden` | The offer is not one of the account's providers', or the account is linked to no provider at all. |
+
+**The order is the contract:** id → token → role → the offer → ownership.
+
+**The four `404`s are indistinguishable**: same `error_code`, same message. You
+are not told which of the four it was.
+
+**A foreign offer is `403` and not `404`.** The module already answers `403` to a
+foreign request, and a provider debugging an integration has to be able to tell
+*"not yours"* from *"does not exist"*. What the `403` leaks — that an offer with
+that nid exists — says nothing about whose it is, for how much, or on what.
+
+**The requester of the request does not get in here** even if they also hold the
+`proveedor` role, unless the offer belongs to one of *their* providers. Being the
+customer is [the other route](#get-apiv1service-offersid).
+
+---
+
+## GET /api/v1/service-offers/{id}
+
+**One of the offers I received**, for the resident who received it.
+
+The offers of a request already reach the resident inside
+[`GET /api/v1/service-requests/{id}`](service-request.md), in `offers`, with all
+fifteen keys, and **that does not change**. What had no answer was **opening one
+offer from a notification or a deep link**: the client knows the nid of the offer
+and not the nid of the request, and to paint a screen about *one* offer it had to
+download the whole request — the rival offers, their amounts and their messages —
+in order to keep one of them.
+
+**Authentication:** required. **No role.**
+
+**Headers**
+
+| Header | Value |
+|--------|-------|
+| Authorization | `Bearer <access_token>` |
+| Accept-Language | `es` (default) or `en` |
+
+**Example**
+
+```bash
+curl -i https://host/api/v1/service-offers/901 \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+**Success response (200)**
+
+The same sixteen keys as the route above. Two of them carry something else:
+
+```json
+{
+  "success": true,
+  "data": {
+    "service_offer": {
+      "id": 901,
+      "provider": { "id": 41, "name": "Plomería Torres", "logo": "https://host/sites/default/files/logo.png" },
+      "amount": 95.5,
+      "message": "Cambio de resistencia y purgado del circuito.",
+      "status": "selected",
+      "created": "2026-08-25T10:14:00",
+      "amount_type": "fixed",
+      "valid_until": "2026-09-01T23:59:59",
+      "available_from": "2026-08-27T09:00:00",
+      "duration": { "value": 2, "unit": "hours" },
+      "includes": "Material y desplazamiento.",
+      "excludes": null,
+      "tax_included": true,
+      "warranty_days": 30,
+      "requires_visit": false,
+
+      "request": {
+        "id": 128,
+        "title": "Fuga en el calentador",
+        "status": "assigned",
+        "category":    { "id": 12, "code": "plumbing", "name": "Plomería" },
+        "condominium": { "id": 7,  "name": "Residencial Los Álamos" },
+        "unit":        { "id": 55, "name": "Apto 302" },
+        "requester":   null
+      }
+    }
+  }
+}
+```
+
+> ### `requester` is **always** `null` here, and that is deliberate
+>
+> **It is not a bug and not a missing datum.** The reader *is* the requester, so
+> the key would be telling them their own name. It still travels, as one of the
+> seven, because a client that reads the same seven keys in both routes has
+> nothing to branch on — a key that sometimes exists forces a check of its
+> presence *on top of* a check of its value.
+>
+> If you need the requester's name on this screen, it is the authenticated
+> account's own.
+
+**`unit` travels always** — or a whole `null` when the request has no unit. The
+*"only if the job is yours"* rule exists to keep a resident's address away from a
+provider who is not going to that house; the resident lives there.
+
+Everything else — the fifteen keys, the seven keys of `request`, the servable
+set, the typing rules — is
+[exactly as described above](#get-apiv1service-offersproviderid).
+
+### No role is demanded
+
+There is **no `residente` role** in this module, and what grants access is not a
+label on the account but a **fact about the data**: being the requester of the
+request the offer hangs off. It is resolved by the same function the request's
+own detail uses, so the two can never disagree about who the resident is.
+
+### Possible errors
+
+| Code | `error_code` | When |
+|------|--------------|------|
+| 405 | `method_not_allowed` | Any method but `GET`. Answered **before the token**. |
+| 404 | `not_found` | `{id}` is not a positive integer. **No query runs.** |
+| 401 | `missing_authorization` | No `Authorization` header. |
+| 401 | `invalid_token` | Invented, revoked or expired token. |
+| 404 | `not_found` | The offer does not exist, is unpublished, is of another bundle, or **its request is not published**. The **same** four cases as the provider's route: which offers exist cannot depend on who is asking. |
+| 403 | `forbidden` | The account is not the requester of the request this offer hangs off. |
+
+**The order is the contract:** id → token → the offer → the request → who is
+asking.
+
+**A provider who bid gets `403` here, and so does the awarded one.** For them
+there is [the other route](#get-apiv1service-offersproviderid), which is where
+the role gate and the ownership gate live.
+
+**A building administrator gets `403` too.** The request's own detail does not
+let them in either; making the offer the first exception would be an exception
+that starts at the leaf and not at the root. If it is ever needed, it is a spec.
+
+---
+
 ## What is still not here
 
 Written down so it is not looked for in this document:
@@ -659,13 +964,18 @@ Written down so it is not looked for in this document:
 - **A `GET` of the offers of a *request*.** They already travel inside the two
   details. Any method but `POST` on the bidding route is `405`. (The provider's
   own archive, which crosses requests, **is** here — see
-  [`GET /api/v1/service-offers/provider`](#get-apiv1service-offersprovider).)
-- **The detail of one offer** (`GET /api/v1/service-offers/{id}`). The archive
-  below is referential by decision; the fifteen keys are already served inside
-  the provider's request detail, in `my_offers`.
+  [`GET /api/v1/service-offers/provider`](#get-apiv1service-offersprovider) —
+  and so is the detail of **one** offer, on each side.)
 - **Several providers in one call** (`?provider_id=41,42`, or the aggregate of a
   whole account). If it is ever needed it is a spec and a format of its own, not
   a patch on the parameter.
+- **A listing of the offers a *resident* has received** — *"everything I have
+  been quoted"*, across their requests, the sibling of the provider's archive.
+  The two detail routes serve **one** offer, not a set.
+- **The building administrator on either detail route.** The request's own
+  detail does not let them in either, and giving them the offer would be the
+  first exception — one that starts at the leaf and not at the root. If it is
+  needed, it is a spec.
 - **Counters and aggregates** over the archive — *"you have 3 quotes pending"*,
   the total amount quoted this month.
 - **The chat.** The three fields stay empty, as they have since SPEC 77.

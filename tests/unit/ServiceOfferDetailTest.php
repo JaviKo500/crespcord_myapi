@@ -1396,6 +1396,13 @@ class ServiceOfferDetailTest extends TestCase {
     // rule 2b of the viewer — the strongest 'provider' verdict there is.
     $this->seed($this->scenario(), [], NULL, self::UID);
 
+    // Precondition: the verdict really is 'provider' and not NULL, so the 403
+    // below is the awarded provider's and not a stranger's.
+    $this->assertSame(
+      'provider',
+      myapi_service_request_viewer(myapi_service_request_detail_row(self::REQUEST_NID), self::UID)
+    );
+
     $result = $this->requesterDetail();
 
     $this->assertSame(403, $result['status']);
@@ -1411,6 +1418,11 @@ class ServiceOfferDetailTest extends TestCase {
     $this->seed($this->scenario(), [
       'field_data_' . MYAPI_PROVIDER_USERS_FIELD => [],
     ], ['authenticated user'], 999);
+
+    // Precondition: no rule of the viewer fits this reader at all.
+    $this->assertNull(
+      myapi_service_request_viewer(myapi_service_request_detail_row(self::REQUEST_NID), 999)
+    );
 
     $result = $this->requesterDetail();
 
@@ -1565,6 +1577,236 @@ class ServiceOfferDetailTest extends TestCase {
       $this->assertStringContainsString("'type'             => MENU_CALLBACK", $block, $route);
       $this->assertStringContainsString("'file'             => 'resources/service_offer.resource.inc'", $block, $route);
     }
+  }
+
+
+  /* -------------------------------------------------------------------------
+   * The remaining acceptance criteria of section 5.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * A PROVIDER WHOSE `field_license_expiry` IS IN THE PAST READS ITS OWN OFFER:
+   * 200. The licence governs the market — being able to quote — and not the
+   * record of what was already quoted. Neither the query nor the gate reads
+   * that field, and this is what holds that true.
+   */
+  public function testAnExpiredLicenceStillReadsItsOwnOffer() {
+    $this->authenticate();
+    $this->seed(
+      $this->scenario(),
+      ['field_data_field_license_expiry' => [[
+        'entity_id'                  => (string) self::PROVIDER_NID,
+        'entity_type'                => 'node',
+        'deleted'                    => '0',
+        'field_license_expiry_value' => (string) (REQUEST_TIME - 86400),
+      ]]]
+    );
+
+    $result = $this->providerDetail();
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame(self::DETAIL_KEYS, array_keys($this->offer($result)));
+  }
+
+  /**
+   * THE REQUESTER OF THE REQUEST, EVEN HOLDING THE 'proveedor' ROLE, DOES NOT
+   * GET IN THROUGH THE PROVIDER'S ROUTE to an offer that is not one of their
+   * providers'. Being the customer is the other route; this one asks whose
+   * offer it is and nothing else.
+   */
+  public function testTheRequesterWithTheRoleIsStill403OnAForeignOffer() {
+    $this->authenticate();
+    $this->seed(
+      $this->scenario([
+        'fp.field_provider_target_id' => (string) self::FOREIGN_PROVIDER,
+        'np.nid'                      => (string) self::FOREIGN_PROVIDER,
+      ]),
+      ['field_data_' . MYAPI_PROVIDER_USERS_FIELD => []],
+      ['authenticated user', MYAPI_PROVIDER_ROLE],
+      self::REQUESTER_UID
+    );
+
+    $result = $this->providerDetail();
+
+    $this->assertSame(403, $result['status']);
+    $this->assertSame('forbidden', $result['json']['error_code']);
+  }
+
+  /**
+   * A PROVIDER WHO MERELY BID — no award anywhere — IS 403 ON THE RESIDENT'S
+   * ROUTE. myapi_service_request_viewer() answers 'provider' by its rule 2, and
+   * 'provider' is not 'requester'.
+   */
+  public function testAProviderWhoOnlyBidIs403OnTheResidentsRoute() {
+    $this->authenticate();
+    $this->seed(
+      $this->scenario([], [
+        'np.nid' => NULL,
+        'fap.field_assigned_provider_target_id' => NULL,
+        'frs.field_request_status_value' => 'offered',
+      ]),
+      // The offer of one of my providers on that request: rule 2 of the viewer.
+      ['field_data_field_request' => [[
+        'entity_id'                   => (string) self::OFFER_NID,
+        'entity_type'                 => 'node',
+        'deleted'                     => '0',
+        'field_request_target_id'     => (string) self::REQUEST_NID,
+        'fp.field_provider_target_id' => (string) self::PROVIDER_NID,
+      ]]]
+    );
+
+    // Precondition: this reader really is a 'provider' by rule 2 — having bid,
+    // with no award anywhere. Without it the 403 below could be the 403 of a
+    // stranger, which is a different criterion.
+    $this->assertSame(
+      'provider',
+      myapi_service_request_viewer(myapi_service_request_detail_row(self::REQUEST_NID), self::UID)
+    );
+
+    $result = $this->requesterDetail();
+
+    $this->assertSame(403, $result['status']);
+    $this->assertSame('forbidden', $result['json']['error_code']);
+  }
+
+  /**
+   * `message` IS "" WHEN EMPTY AND NEVER null. It is the one REQUIRED text of
+   * the fifteen: an empty message is a corrupt row, not an absence, and the two
+   * must not read alike — every other optional text answers null for "".
+   */
+  public function testAnEmptyMessageIsAnEmptyStringAndNeverNull() {
+    $detail = myapi_service_offer_build_detail(
+      $this->offerObject(['message' => '', 'includes' => '']),
+      $this->contextRow(),
+      TRUE,
+      TRUE
+    );
+
+    $this->assertSame('', $detail['message'], 'required: "" is not an absence');
+    $this->assertNull($detail['includes'], 'optional: "" IS an absence');
+  }
+
+  /**
+   * `tax_included` TELLS THE THREE APART: true, false and "never declared". It
+   * is the only three-valued key of the fifteen.
+   */
+  public function testTaxIncludedTellsTrueFalseAndUndeclaredApart() {
+    $cases = ['1' => TRUE, '0' => FALSE, NULL => NULL];
+
+    foreach (['1', '0', NULL] as $stored) {
+      $detail = myapi_service_offer_build_detail(
+        $this->offerObject(['tax_included' => $stored]),
+        $this->contextRow(),
+        TRUE,
+        TRUE
+      );
+
+      $this->assertSame($cases[$stored], $detail['tax_included'], var_export($stored, TRUE));
+    }
+  }
+
+  /**
+   * `duration` IS A WHOLE OBJECT OR A WHOLE null, NEVER {value: null,
+   * unit: null}. The two columns are coupled — one without the other means
+   * nothing — so a row carrying only one of them answers null.
+   */
+  public function testHalfADurationIsAWholeNull() {
+    foreach ([['2', NULL], [NULL, 'hours'], [NULL, NULL]] as $case) {
+      $detail = myapi_service_offer_build_detail(
+        $this->offerObject(['duration' => $case[0], 'duration_unit' => $case[1]]),
+        $this->contextRow(),
+        TRUE,
+        TRUE
+      );
+
+      $this->assertNull($detail['duration'], var_export($case, TRUE));
+    }
+
+    $whole = myapi_service_offer_build_detail(
+      $this->offerObject(),
+      $this->contextRow(),
+      TRUE,
+      TRUE
+    );
+    $this->assertSame(['value' => 2, 'unit' => 'hours'], $whole['duration']);
+  }
+
+  /**
+   * THE THREE DATES ARE 'Y-m-d\TH:i:s', with no timezone suffix and no
+   * milliseconds — the same shape every other date of this module answers.
+   */
+  public function testTheThreeDatesShareTheOneFormat() {
+    $detail = myapi_service_offer_build_detail(
+      $this->offerObject(),
+      $this->contextRow(),
+      TRUE,
+      TRUE
+    );
+
+    foreach (['created', 'valid_until', 'available_from'] as $key) {
+      $this->assertMatchesRegularExpression(
+        '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/',
+        $detail[$key],
+        $key
+      );
+    }
+  }
+
+  /**
+   * AN OFFER 'withdrawn' ON A REQUEST 'cancelled' IS SERVED WHOLE, through the
+   * endpoint: no condition of the servable set looks at either status key.
+   */
+  public function testAWithdrawnOfferOnACancelledRequestIsServedThroughTheEndpoint() {
+    $this->authenticate();
+    $this->seed($this->scenario(
+      ['fost.field_offer_status_value' => 'withdrawn'],
+      ['frs.field_request_status_value' => 'cancelled']
+    ));
+
+    $result = $this->providerDetail();
+    $offer = $this->offer($result);
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame(self::DETAIL_KEYS, array_keys($offer));
+    $this->assertSame('withdrawn', $offer['status']);
+    $this->assertSame('cancelled', $offer['request']['status']);
+  }
+
+  /**
+   * AN OFFER ON A 'direct' REQUEST IS SERVED WITH NOTHING DIFFERENT ABOUT IT.
+   * A direct request has a provider and no bidding round; that changes what the
+   * request says about itself, and nothing about how this endpoint answers.
+   */
+  public function testAnOfferOnADirectRequestIsServedLikeAnyOther() {
+    $this->authenticate();
+    $this->seed($this->scenario([], ['frs.field_request_status_value' => 'direct']));
+
+    $result = $this->providerDetail();
+    $offer = $this->offer($result);
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame(self::DETAIL_KEYS, array_keys($offer));
+    $this->assertSame(self::CONTEXT_KEYS, array_keys($offer['request']));
+    $this->assertSame('direct', $offer['request']['status']);
+    $this->assertSame(['id' => 55, 'name' => 'Apto 302'], $offer['request']['unit']);
+  }
+
+  /**
+   * `request.id` IS THE NID OF THE JOINED NODE and never the raw target_id of
+   * field_request. An offer whose reference points at a deleted node answered
+   * 404 long before this, in the INNER JOIN.
+   */
+  public function testTheRequestIdIsTheJoinedNodesNid() {
+    $this->seedNodes([$this->offerRow([
+      // The raw reference says one thing, the joined node says another. Only
+      // MySQL could produce this, and the point is which column is read.
+      'fq.field_request_target_id' => '999',
+      'nr.nid'                     => (string) self::REQUEST_NID,
+    ])]);
+
+    $row = myapi_service_offer_detail_row(self::OFFER_NID);
+
+    $this->assertSame((string) self::REQUEST_NID, (string) $row->request_id);
   }
 
   /* -------------------------------------------------------------------------
