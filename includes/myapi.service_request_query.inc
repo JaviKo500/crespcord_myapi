@@ -2,15 +2,27 @@
 
 /**
  * @file
- * The two queries every service_request read starts from (SPEC 100).
+ * The two queries every service_request read starts from (SPEC 100), plus the
+ * shared item serialiser and the access rule (SPEC 103).
  *
  * Extracted VERBATIM from resources/service_request.resource.inc, where they
- * lived since SPECS 88 and 89, and NOT renamed: both keep the names their
+ * lived since SPECS 88 and 89, and NOT renamed: all four keep the names their
  * callers already use, so the move is a change of file and nothing else. The
  * existing suite — ServiceRequestDetailEndpointTest, ServiceRequestCancelTest,
  * ServiceRequestUpdateTest, ServiceRequestProviderDetailTest and
  * ServiceRequestProviderListTest — passes without a single test being touched,
  * and that is the proof the extraction moved no behaviour.
+ *
+ * SPEC 103 ADDED THE OTHER TWO, for the same reason and by the same move.
+ * GET /api/v1/service-offers/{id} has to answer "is this reader the requester
+ * of the request this offer hangs on", and the ONE function that answers it is
+ * myapi_service_request_viewer(); its context block reuses the five keys
+ * myapi_service_request_build_item() already shapes. Reimplementing either in
+ * the offer would be a second definition of "who is the requester" and of
+ * "what a request item looks like" — and the symptom of them drifting is a
+ * reader who can open the offer but not the request, with nothing failing
+ * loudly. Neither was renamed and neither changed a line, so every call site
+ * inside the request resource is the one it always was.
  *
  * WHY THEY LEFT THE RESOURCE. Rule 5 of CLAUDE.md forbids a resource calling
  * another resource's internals, and SPEC 100 gives the offer a resource of its
@@ -43,6 +55,12 @@
 // MYAPI_SERVICES_PROVIDER_TYPE and the two request status keys: neither a
 // bundle machine name nor a status key is ever written as a literal here.
 module_load_include('inc', 'myapi', 'includes/myapi.services_common');
+// SPEC 103: the four questions the provider's half of
+// myapi_service_request_viewer() hangs on — which providers the reader
+// operates, their categories, whether any of them is active, and whether one
+// of them already offered. It travelled here with the function, so this file
+// answers "who is asking" without depending on whoever loaded it.
+module_load_include('inc', 'myapi', 'includes/myapi.provider_role');
 
 /**
  * Builds the query every request read starts from: the scope plus the optional
@@ -412,4 +430,325 @@ function myapi_service_request_detail_row($nid) {
   $query->range(0, 1);
 
   return $query->execute()->fetchObject();
+}
+
+/**
+ * Shapes one request row into the item of the listing (SPEC 88).
+ *
+ * ALWAYS THE SAME ELEVEN KEYS, IN THIS ORDER — id, title, description, status,
+ * category, unit, offers_count, assigned_offer, assigned_provider, created,
+ * desired_start — because that order is the one drupal_json_encode() prints and
+ * the one docs/service-request.md shows. No key is ever added or dropped by the
+ * data: a request with no offers and no award answers all eleven just the same.
+ *
+ * `unit` SITS BESIDE `category` AND NOT AT THE END (SPEC 91). The two answer
+ * the same question — WHAT the request is and WHERE it is — while
+ * offers_count, assigned_offer and assigned_provider are the market's state and
+ * stay contiguous. The position matters twice: it is the order the JSON is
+ * printed in, and the detail merges this item first, so `unit` reached the
+ * detail's response through here too and moved with it.
+ *
+ * PURE: no database, no node_load(), no $_GET. Everything it needs arrives in
+ * $row and $offer_counts, which is what lets a test exercise every shape of
+ * the response — the direct request, the broken reference, the empty count —
+ * with no site booted at all.
+ *
+ * THE AWARD IS TWO SIBLING KEYS AND NOT ONE OBJECT, and the reason is the
+ * 'direct' status of SPEC 87: a request whose resident picked a provider with
+ * no bidding round has a provider and NO offer. An awarded: {offer, provider}
+ * would have to answer either a whole null — losing the provider — or an object
+ * with half of it empty. The two keys go null independently:
+ *
+ *   open / offered / cancelled : null      + null
+ *   assigned                   : {id,…}    + {id,…}
+ *   direct                     : NULL      + {id,…}
+ *   closed                     : whatever it carried when it closed
+ *
+ * Four typing decisions live here, each with a symptom behind it:
+ *
+ * - Ids are JSON integers, never strings: the database hands every column back
+ *   as a string, and a Flutter client comparing 128 to "128" fails silently.
+ *   Same rule myapi_claim_build_item() follows.
+ * - `offers_count` is an int and 0 when there is nothing to count, never NULL
+ *   and never an absent key: "how many offers did I get" always has a numeric
+ *   answer, and 0 is the honest one for a request nobody bid on — every
+ *   'direct' request included.
+ * - `description` travels AS STORED, without myapi_text_to_plain(): that helper
+ *   collapses the line breaks the resident typed. It is also exactly what
+ *   myapi_claim_build_item() does with this very same shared field, so the same
+ *   datum travels the same way in both endpoints. The instance pins the
+ *   'plain_text' format (SPEC 77), so no markup travels — see the note in
+ *   docs/service-request.md.
+ * - `created` and `desired_start` are real timestamps — field_desired_start is
+ *   a datestamp with tz_handling, NOT the tz_handling = 'none' of
+ *   field_reception_date — so both get format_date() in the site's timezone,
+ *   identical to `created` in GET /api/v1/claims.
+ *
+ * The isset() guards are not decoration. `category.id` and `category.name` come
+ * from two INNER JOINs and cannot be missing in practice, and description and
+ * desired_start are required at the instance level; but they are LEFT-joined, so
+ * a field row deleted by hand would hand a NULL in here, and answering "" or
+ * null beats a PHP notice in the middle of a listing. `category.code` is the one
+ * whose guard fires in real data: its join IS left, and a term with no
+ * field_category_code answers "" — the same "" /api/v1/service-categories and
+ * /api/v1/providers already answer for that same term.
+ *
+ * @param object $row
+ *   One row of myapi_service_request_fetch(), carrying the aliases `nid`,
+ *   `title`, `description`, `status`, `category_id`, `category_code`,
+ *   `category_name`, `unit_id`, `unit_name`, `assigned_offer_id`,
+ *   `assigned_offer_status`, `assigned_provider_id`, `assigned_provider_name`,
+ *   `created` and `desired_start`.
+ * @param array $offer_counts
+ *   The map myapi_service_request_offer_counts_by_nid() returns for the WHOLE
+ *   page, keyed by nid. Passed in and not looked up: resolving it here would
+ *   mean one query per request, and the whole page is meant to cost three.
+ *
+ * @return array
+ *   The eleven keys above, in that order.
+ */
+function myapi_service_request_build_item($row, array $offer_counts) {
+  $nid = (int) $row->nid;
+
+  // Resolved from the JOINED 'vivienda' node, never from the field's raw
+  // target_id, and for the same reason the award below is: a reference to a
+  // unit that was deleted or unpublished leaves this NULL instead of handing
+  // the client an id it cannot open. See myapi_service_request_fetch().
+  $unit = NULL;
+  if (isset($row->unit_id) && $row->unit_id !== '') {
+    $unit = [
+      'id'   => (int) $row->unit_id,
+      'name' => isset($row->unit_name) ? $row->unit_name : NULL,
+    ];
+  }
+
+  // The offer is resolved from the JOINED node, never from the field's raw
+  // target_id: a field row pointing at an offer that was deleted or unpublished
+  // leaves this NULL, and the request keeps its place in the listing.
+  $assigned_offer = NULL;
+  if (isset($row->assigned_offer_id) && $row->assigned_offer_id !== '') {
+    $assigned_offer = [
+      'id'     => (int) $row->assigned_offer_id,
+      'status' => isset($row->assigned_offer_status) ? $row->assigned_offer_status : NULL,
+    ];
+  }
+
+  // Same rule, and independently: this is the key a 'direct' request answers
+  // with the one above left NULL.
+  $assigned_provider = NULL;
+  if (isset($row->assigned_provider_id) && $row->assigned_provider_id !== '') {
+    $assigned_provider = [
+      'id'   => (int) $row->assigned_provider_id,
+      'name' => isset($row->assigned_provider_name) ? $row->assigned_provider_name : NULL,
+    ];
+  }
+
+  return [
+    'id'          => $nid,
+    'title'       => isset($row->title) ? $row->title : '',
+    // As stored — see the docblock: myapi_text_to_plain() would eat the line
+    // breaks, and claims already answers this same field this same way.
+    'description' => isset($row->description) ? $row->description : '',
+    'status'      => isset($row->status) ? $row->status : NULL,
+    // Three keys, in the same order /api/v1/service-categories prints them —
+    // id, code, name. `code` is the stable identifier the app hangs its
+    // per-category logic on (the tid changes if the vocabulary is reimported;
+    // the code does not), and "" when the term has none, never NULL: the field
+    // is required on the vocabulary, so an empty one is corrupt data and the
+    // client still has a string to compare.
+    'category'    => [
+      'id'   => isset($row->category_id) ? (int) $row->category_id : NULL,
+      'code' => isset($row->category_code) ? $row->category_code : '',
+      'name' => isset($row->category_name) ? $row->category_name : '',
+    ],
+    // The unit the service goes to (SPEC 91). A WHOLE null, never {id: null,
+    // name: null}: "this request has no unit I can paint" is one answer and not
+    // two half-answers, the same shape assigned_offer and assigned_provider
+    // already use above. It is null in exactly two cases — a request older than
+    // the SPEC 86 requirement, and a reference whose 'vivienda' was deleted or
+    // unpublished — and the request keeps its place in the listing in both.
+    //
+    // `name` is field_nombre_vivienda and NOT the node title: the title is an
+    // internal label and the field is the name the resident knows their flat
+    // by, which is what GET /api/v1/units answers as `name` too.
+    'unit'        => $unit,
+    // (int) of a missing entry is 0, which is exactly the answer wanted: the
+    // fallback is the rule, not a coincidence to be tidied away later.
+    'offers_count'      => isset($offer_counts[$nid]) ? (int) $offer_counts[$nid] : 0,
+    'assigned_offer'    => $assigned_offer,
+    'assigned_provider' => $assigned_provider,
+    'created'           => isset($row->created)
+      ? format_date((int) $row->created, 'custom', 'Y-m-d\TH:i:s')
+      : NULL,
+    // NULL and not format_date(0), which would answer a 1970 nobody typed.
+    'desired_start'     => isset($row->desired_start) && $row->desired_start !== ''
+      ? format_date((int) $row->desired_start, 'custom', 'Y-m-d\TH:i:s')
+      : NULL,
+  ];
+}
+
+/**
+ * WHO IS ASKING: 'requester', 'provider', or NULL for a 403 (SPEC 89).
+ *
+ * The access rule of the detail and of its file endpoint, written ONCE. Both
+ * routes call this same function; neither reimplements a condition of it. That
+ * is not tidiness: a rule copied in two places drifts, and the shape the drift
+ * takes here is a 403 on the detail that still lets the photos be downloaded,
+ * or the reverse.
+ *
+ * Three rules, evaluated in this order, first hit wins:
+ *
+ *   1. THE REQUESTER — field_requester = uid. Whatever the status, whatever the
+ *      reader's roles: a resident who also holds 'proveedor' reads their own
+ *      request of a category they do not attend, complete.
+ *   2. ALREADY OFFERED — one of the reader's providers has an offer on this
+ *      request. Whatever the status, and whatever the category is TODAY: whoever
+ *      has a live offer needs to see what became of it, and losing the detail
+ *      the moment it is awarded to somebody else would leave an offer in their
+ *      app with nothing behind it and a 403 as the only explanation.
+ *   2b. AWARDED TO ME (SPEC 98) — field_assigned_provider points at one of the
+ *      reader's providers. Whatever the status: 'direct', 'assigned', 'closed'
+ *      and 'cancelled' all included. It is set C of
+ *      myapi_service_request_provider_scope() — see the comment on the rule
+ *      itself, and keep the two in step.
+ *   3. AN ELIGIBLE PROVIDER — the request is still biddable AND of one of the
+ *      reader's categories AND at least one of their providers is active:
+ *        status ∈ ('open', 'offered')
+ *        AND field_assigned_offer is empty AND field_assigned_provider is empty
+ *        AND field_category_tid ∈ myapi_provider_role_category_ids()
+ *        AND myapi_provider_role_any_provider_active()
+ *
+ * Anything else is NULL, and the caller answers 403. NULL never means "not
+ * found": a request that does not exist or is unpublished never reaches this
+ * function — myapi_service_request_detail_row() answered 404 first.
+ *
+ * WHY THIS DOES NOT CALL myapi_provider_role_broadcast_statuses(), even though
+ * that function exists and looks like exactly this list: it includes 'direct',
+ * and rule 3 must not. They are TWO POLICIES OVER THE SAME DATUM — "what do I
+ * hide from this provider in the back office" versus "what may they still bid
+ * on in the app" — and they have to be able to diverge. A 'direct' request is
+ * born with a provider already chosen, which is precisely what "unawarded"
+ * excludes. SPEC 89 left the consequence written in its Riesgos — the provider
+ * of a 'direct' request could not read its own detail — and SPEC 98 is the
+ * spec that knew what relation that provider has with the request: rule 2b,
+ * above rule 3 rather than a fourth clause inside it, because "awarded to me"
+ * is the opposite of "unawarded" and cannot be a condition of the same rule.
+ *
+ * BOTH AWARD KEYS ARE CHECKED, NOT JUST THE STATUS, and they are read from the
+ * RAW target_id and not from the joined node: a request left in 'offered' with
+ * field_assigned_offer already filled in — an incoherent datum nothing prevents
+ * today — stops being biddable, which is the safe reading. Reading the joined
+ * nid instead would make an award pointing at an unpublished offer look like no
+ * award at all, and reopen the request to every provider of the category.
+ *
+ * The account handed to myapi_provider_role_* is built from the uid alone. Those
+ * four functions read ->uid and nothing else — provider_ids is a REVERSE lookup
+ * over field_provider_users, not a role read — so this costs no user_load(), and
+ * the reader's ROLE is never consulted: what makes somebody a provider here is a
+ * 'provider' node pointing at them, not the label on their account. A user
+ * holding the 'proveedor' role with no provider node behind it gets an empty
+ * provider_ids and falls straight through to NULL. If a future change made those
+ * functions read roles, a synthetic account with none would deny, never grant.
+ *
+ * Costs NO query for the requester — rule 1 is decided on a column already in
+ * $row. The provider's path costs the provider_role queries, all statically
+ * cached per uid.
+ *
+ * @param object $row
+ *   The row of myapi_service_request_detail_row(), carrying `nid`,
+ *   `requester_uid`, `status`, `category_id` and the two RAW award columns
+ *   `assigned_offer_raw` and `assigned_provider_raw`.
+ * @param mixed $uid
+ *   The authenticated reader's uid, from the token row.
+ *
+ * @return string|NULL
+ *   'requester', 'provider', or NULL when neither rule applies.
+ */
+function myapi_service_request_viewer($row, $uid) {
+  $uid = (int) $uid;
+
+  if ($uid <= 0 || !is_object($row)) {
+    return NULL;
+  }
+
+  // Rule 1. field_requester and NOT node.uid, the same criterion the listing
+  // scope uses: node.uid is the operator who loaded the request.
+  if (isset($row->requester_uid) && (int) $row->requester_uid === $uid) {
+    return 'requester';
+  }
+
+  // From here on the reader can only get in as a provider, and everything below
+  // needs the providers they operate. None: nothing else to ask.
+  $account = (object) ['uid' => $uid];
+  $provider_ids = myapi_provider_role_provider_ids($account);
+
+  if (!$provider_ids) {
+    return NULL;
+  }
+
+  // Rule 2. Status-independent and category-independent, on purpose.
+  if (myapi_provider_role_has_offered(isset($row->nid) ? $row->nid : 0, $provider_ids)) {
+    return 'provider';
+  }
+
+  // Rule 2b (SPEC 98). The request is awarded to one of my providers: it is my
+  // job, and it is my job in ANY status — 'direct', 'assigned', 'closed' and
+  // 'cancelled' included. This closes the 403 SPEC 89 left written in its
+  // Riesgos: until today the provider of a 'direct' request could not read its
+  // own detail, because rule 3 requires the request to be UNAWARDED, which is
+  // the exact opposite of this.
+  //
+  // It reads assigned_provider_raw, the raw column
+  // myapi_service_request_detail_row() already projects and rule 3 below
+  // already reads: NO new query and NO new column. It goes BEFORE rule 3 for
+  // the reason just given, and it is STRICTLY ADDITIVE — it can only turn a
+  // NULL (403) into 'provider', never the reverse, so no reader loses access
+  // and the requester never reaches it.
+  //
+  // THIS IS SET C OF myapi_service_request_provider_scope(), WRITTEN AS A
+  // PER-ROW DECISION. The two forms live side by side because neither can be
+  // derived from the other without losing the pagination or the loaded row; if
+  // one of them ever grows a condition the other does not, the symptom is an
+  // item in the provider listing that answers 403 when opened, and nothing
+  // fails loudly. ServiceRequestProviderListTest holds the equivalence.
+  if (!empty($row->assigned_provider_raw)
+    && in_array((int) $row->assigned_provider_raw, array_map('intval', $provider_ids), TRUE)) {
+    return 'provider';
+  }
+
+  // Rule 3, condition by condition. The list of statuses is built from the
+  // catalogue constants, never typed as strings, and is deliberately NOT
+  // myapi_provider_role_broadcast_statuses() — see the docblock.
+  $biddable = [
+    MYAPI_SERVICES_REQUEST_STATUS_OPEN,
+    MYAPI_SERVICES_REQUEST_STATUS_OFFERED,
+  ];
+
+  if (!isset($row->status) || !in_array($row->status, $biddable, TRUE)) {
+    return NULL;
+  }
+
+  // Awarded by either key — even inconsistently — is awarded.
+  if (!empty($row->assigned_offer_raw) || !empty($row->assigned_provider_raw)) {
+    return NULL;
+  }
+
+  if (!isset($row->category_id) || $row->category_id === '') {
+    return NULL;
+  }
+
+  $categories = array_map('intval', myapi_provider_role_category_ids($account));
+
+  if (!in_array((int) $row->category_id, $categories, TRUE)) {
+    return NULL;
+  }
+
+  // Last because it is the most expensive of the three and the least likely to
+  // be the one that fails: a suspended provider — unpublished node or expired
+  // licence — loses the marketplace, which is what suspending them means.
+  if (!myapi_provider_role_any_provider_active($account)) {
+    return NULL;
+  }
+
+  return 'provider';
 }

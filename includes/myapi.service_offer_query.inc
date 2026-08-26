@@ -2,7 +2,8 @@
 
 /**
  * @file
- * The queries GET /api/v1/service-offers/provider is made of (SPEC 102).
+ * The queries GET /api/v1/service-offers/provider is made of (SPEC 102), plus
+ * the row and the serialisers its two detail routes are made of (SPEC 103).
  *
  * "WHAT HAVE I QUOTED?" — a set that CROSSES requests instead of living inside
  * one, which is exactly what makes it a file of its own and not one more
@@ -28,6 +29,15 @@
  * offer is in this set when its field_provider IS the provider asked for. What
  * decides whether that provider may be asked for at all is
  * myapi_service_offer_provider_scope(), below, in PHP, in one place.
+ *
+ * SPEC 103 ADDED THE DETAIL OF ONE OFFER, at the bottom of this file and
+ * behind its own banner. It is the same set seen one row at a time: the same
+ * INNER JOIN to the published request, the same fifteen aliases, and the same
+ * myapi_service_offer_provider_scope() as the gate — never a copy of it, which
+ * is what keeps a row that the listing shows from answering 403 when opened
+ * (riesgo 5). Its two pure serialisers live here too, beside the listing's,
+ * because a file that owns the query of a resource owns the shape of its
+ * answer as well.
  *
  * Like the rest of this module's read paths, these read the field_data_* tables
  * directly instead of going through node_load(), with the trade-off
@@ -508,4 +518,177 @@ function myapi_service_offer_provider_build_item($row, array $provider) {
       ],
     ],
   ];
+}
+
+/* ---------------------------------------------------------------------------
+ * The detail of ONE offer (SPEC 103).
+ *
+ * Its two routes — the provider's and the resident's — read the SAME row and
+ * differ only in who they let in and in two keys of the context block. What
+ * follows is the query, and nothing above it changes.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * The row GET /api/v1/service-offers/provider/% and GET /api/v1/service-offers/%
+ * are both built on: one offer, whole, with its request's nid (SPEC 103).
+ *
+ * ONE QUERY AND THE SERVABLE SET IS THREE CONDITIONS, no more:
+ *
+ *   offer.status = 1  AND  offer.type = 'service_offer'
+ *   AND request.status = 1        (INNER JOIN through field_request)
+ *
+ * NOTHING ELSE. Not the offer's status key, not the request's, not
+ * np.status and not field_license_expiry: an offer 'withdrawn' on a request
+ * 'cancelled' from a suspended provider is served whole. Whoever misses one of
+ * the three gets FALSE, and the caller answers 404 without saying which — the
+ * four ways in are indistinguishable on purpose.
+ *
+ * THE INNER JOIN TO THE REQUEST NODE IS NOT A CONVENIENCE. field_request is
+ * SHARED with 'service_transaction' (SPEC 77) — the same warning
+ * myapi_service_offer_provider_base_query() carries above — so a join that
+ * stopped at the field table would serve a timeline entry as if it were a
+ * request. `nr.type` is what keeps the other bundle out, and `nr.status = 1`
+ * is what makes a request that was unpublished answer 404 instead of a 200
+ * with half a context nobody can paint (decision 7).
+ *
+ * THE FIFTEEN ALIASES ARE myapi_service_request_load_offers()'s, JOIN FOR JOIN.
+ * They are copied and not invented: the same offer read through `offers`,
+ * through `my_offers` and through this detail has to answer the same fifteen
+ * keys, and it only does while both queries hand myapi_service_offer_build()
+ * the same columns. All fourteen field joins are LEFT for the reason that file
+ * spells out — an offer older than myapi_update_7035() has no row in ANY of the
+ * ten quote tables, and a single INNER would 404 the whole archive.
+ *
+ * TWO COLUMNS FOR THE PROVIDER, AND THE DIFFERENCE IS THE WHOLE POINT:
+ *
+ *   provider_id   from the JOINED node, which carries status = 1. This is what
+ *                 myapi_service_offer_build() paints, so a suspended provider
+ *                 answers `provider: null` here exactly as it already does
+ *                 inside `offers` — one datum, one answer, in every route.
+ *   provider_raw  the RAW field_provider_target_id. This is what the GATE
+ *                 reads, and it has to be the raw one: SPEC 102 decided that a
+ *                 suspended provider still reads its own archive — the licence
+ *                 governs the market, not the record of what was already quoted
+ *                 — and myapi_service_offer_provider_scope() carries no
+ *                 status condition for that reason. Gating on the joined column
+ *                 would answer 403 to an account for its OWN offer the day its
+ *                 provider node is unpublished.
+ *
+ * It is the same split myapi_service_request_detail_row() already makes with
+ * `assigned_provider_id` and `assigned_provider_raw`: the joined column is what
+ * the client is shown, the raw column is what the access rule decides over.
+ *
+ * ONLY `nr.nid` IS PROJECTED OFF THE REQUEST, as `request_id`, and that is a
+ * decision and not an oversight (decision 9). The context block is built from
+ * myapi_service_request_detail_row(), which OWNS what a condominium, a unit and
+ * a category are; projecting them here would be a second definition of all
+ * three inside a file that is not their home. Two queries in the detail of one
+ * item, against zero duplicated definitions.
+ *
+ * NO JOIN CAN MULTIPLY THE ROW: every field is cardinality 1 and joined on
+ * entity_id, which is the primary key of those tables, and node.nid is a
+ * primary key. So range(0, 1) is a guard and not a trim.
+ *
+ * @param mixed $nid
+ *   The OFFER's nid, already validated as a positive integer by
+ *   myapi_parse_id_param(). A value that is not one still answers FALSE.
+ *
+ * @return object|FALSE
+ *   The row, carrying the fifteen aliases myapi_service_offer_build() reads —
+ *   `nid`, `provider_id`, `provider_name`, `provider_logo_uri`, `amount`,
+ *   `message`, `status`, `created`, `amount_type`, `valid_until`,
+ *   `available_from`, `duration`, `duration_unit`, `includes`, `excludes`,
+ *   `tax_included`, `warranty_days` and `requires_visit` — plus `provider_raw`
+ *   for the gate and `request_id` for the context. FALSE when the offer does
+ *   not exist, is unpublished, is of another bundle, or its request is not a
+ *   published 'service_request'.
+ */
+function myapi_service_offer_detail_row($nid) {
+  $nid = (int) $nid;
+
+  if ($nid <= 0) {
+    return FALSE;
+  }
+
+  $query = db_select('node', 'n')
+    ->condition('n.nid', $nid)
+    ->condition('n.type', MYAPI_SERVICES_OFFER_TYPE)
+    ->condition('n.status', 1);
+  $query->addField('n', 'nid', 'nid');
+  $query->addField('n', 'created', 'created');
+
+  // The request, in two INNER hops. The bundle condition on the node join is
+  // what keeps field_request's OTHER bundle out — see the docblock — and only
+  // nr.nid travels.
+  $query->innerJoin('field_data_field_request', 'fq', "fq.entity_id = n.nid AND fq.entity_type = 'node' AND fq.deleted = 0");
+  $query->innerJoin('node', 'nr', 'nr.nid = fq.field_request_target_id AND nr.type = :request_type AND nr.status = 1', [':request_type' => MYAPI_SERVICES_REQUEST_TYPE]);
+  $query->addField('nr', 'nid', 'request_id');
+
+  // The provider, in three LEFT hops: the reference, the node, its logo file.
+  // Byte for byte myapi_service_request_load_offers()'s, status = 1 included:
+  // an unpublished provider leaves provider_id NULL and the offer is STILL
+  // served, which is what `offers` already answers for the same row.
+  $query->leftJoin('field_data_field_provider', 'fp', "fp.entity_id = n.nid AND fp.entity_type = 'node' AND fp.deleted = 0");
+  $query->leftJoin('node', 'np', 'np.nid = fp.field_provider_target_id AND np.type = :provider_type AND np.status = 1', [':provider_type' => MYAPI_SERVICES_PROVIDER_TYPE]);
+  $query->addField('np', 'nid', 'provider_id');
+  $query->addField('np', 'title', 'provider_name');
+
+  // The raw target_id, for the GATE only — see the docblock. Read off the field
+  // row, so an offer whose provider node was unpublished is still its owner's.
+  $query->addField('fp', 'field_provider_target_id', 'provider_raw');
+
+  // The logo is public:// (SPEC 85), so what travels is the uri and the
+  // serialiser turns it into a direct URL. Both hops LEFT: no logo, or a
+  // file_managed row that no longer exists, answers null.
+  $query->leftJoin('field_data_field_logo', 'lg', "lg.entity_id = np.nid AND lg.entity_type = 'node' AND lg.deleted = 0");
+  $query->leftJoin('file_managed', 'fml', 'fml.fid = lg.field_logo_fid');
+  $query->addField('fml', 'uri', 'provider_logo_uri');
+
+  $query->leftJoin('field_data_field_offer_amount', 'foa', "foa.entity_id = n.nid AND foa.entity_type = 'node' AND foa.deleted = 0");
+  $query->addField('foa', 'field_offer_amount_value', 'amount');
+
+  $query->leftJoin('field_data_field_offer_message', 'fom', "fom.entity_id = n.nid AND fom.entity_type = 'node' AND fom.deleted = 0");
+  $query->addField('fom', 'field_offer_message_value', 'message');
+
+  $query->leftJoin('field_data_field_offer_status', 'fost', "fost.entity_id = n.nid AND fost.entity_type = 'node' AND fost.deleted = 0");
+  $query->addField('fost', 'field_offer_status_value', 'status');
+
+  // The ten quote columns of SPEC 100, ALL LEFT and for that file's reason: an
+  // offer created before myapi_update_7035() has no row in any of these ten
+  // tables, and one INNER here would 404 every historic offer.
+  $query->leftJoin('field_data_field_offer_amount_type', 'fat', "fat.entity_id = n.nid AND fat.entity_type = 'node' AND fat.deleted = 0");
+  $query->addField('fat', 'field_offer_amount_type_value', 'amount_type');
+
+  $query->leftJoin('field_data_field_offer_valid_until', 'fvu', "fvu.entity_id = n.nid AND fvu.entity_type = 'node' AND fvu.deleted = 0");
+  $query->addField('fvu', 'field_offer_valid_until_value', 'valid_until');
+
+  $query->leftJoin('field_data_field_offer_available_from', 'faf', "faf.entity_id = n.nid AND faf.entity_type = 'node' AND faf.deleted = 0");
+  $query->addField('faf', 'field_offer_available_from_value', 'available_from');
+
+  $query->leftJoin('field_data_field_offer_duration', 'fdu', "fdu.entity_id = n.nid AND fdu.entity_type = 'node' AND fdu.deleted = 0");
+  $query->addField('fdu', 'field_offer_duration_value', 'duration');
+
+  $query->leftJoin('field_data_field_offer_duration_unit', 'fdn', "fdn.entity_id = n.nid AND fdn.entity_type = 'node' AND fdn.deleted = 0");
+  $query->addField('fdn', 'field_offer_duration_unit_value', 'duration_unit');
+
+  $query->leftJoin('field_data_field_offer_includes', 'fin', "fin.entity_id = n.nid AND fin.entity_type = 'node' AND fin.deleted = 0");
+  $query->addField('fin', 'field_offer_includes_value', 'includes');
+
+  $query->leftJoin('field_data_field_offer_excludes', 'fex', "fex.entity_id = n.nid AND fex.entity_type = 'node' AND fex.deleted = 0");
+  $query->addField('fex', 'field_offer_excludes_value', 'excludes');
+
+  $query->leftJoin('field_data_field_offer_tax_included', 'fti', "fti.entity_id = n.nid AND fti.entity_type = 'node' AND fti.deleted = 0");
+  $query->addField('fti', 'field_offer_tax_included_value', 'tax_included');
+
+  $query->leftJoin('field_data_field_offer_warranty_days', 'fwd', "fwd.entity_id = n.nid AND fwd.entity_type = 'node' AND fwd.deleted = 0");
+  $query->addField('fwd', 'field_offer_warranty_days_value', 'warranty_days');
+
+  $query->leftJoin('field_data_field_offer_requires_visit', 'frv', "frv.entity_id = n.nid AND frv.entity_type = 'node' AND frv.deleted = 0");
+  $query->addField('frv', 'field_offer_requires_visit_value', 'requires_visit');
+
+  $query->range(0, 1);
+
+  $row = $query->execute()->fetchObject();
+
+  return $row ? $row : FALSE;
 }
