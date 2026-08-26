@@ -2207,10 +2207,13 @@ class ServiceRequestDetailEndpointTest extends TestCase {
    * revision table and the entity cache lying.
    */
   public function testNoReadPathCallsNodeLoad() {
-    // The writes: they load what they are about to save.
+    // The writes: they load what they are about to save. The live-offer sweep
+    // was the third name here until SPEC 106 moved it to
+    // includes/myapi.service_offer.inc as myapi_service_offer_reject_live();
+    // neither file below holds it any more, so the entry went with it rather
+    // than staying on as a permission for a function that is not here.
     $allowed = [
       'myapi_service_request_cancel',
-      'myapi_service_request_reject_live_offers',
       'myapi_service_request_update',
     ];
 

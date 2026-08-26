@@ -2248,7 +2248,7 @@ function myapi_service_request_cancel_dispatch($nid) {
  *     status would save one line and make the cancellation stop cancelling, in
  *     silence, the day somebody edits that sync.
  *   - Offers last, and NOT atomically: see
- *     myapi_service_request_reject_live_offers().
+ *     myapi_service_offer_reject_live().
  *
  * field_assigned_offer AND field_assigned_provider ARE KEPT, even when the
  * offer they point at is now 'rejected'. A cancellation with no trace of who
@@ -2352,7 +2352,7 @@ function myapi_service_request_cancel($nid) {
 
   // 7c. The offers. Last, and the only step that can leave the data half
   // written — see the function's own docblock for why that is accepted.
-  $offers_rejected = myapi_service_request_reject_live_offers($node->nid);
+  $offers_rejected = myapi_service_offer_reject_live($node->nid);
 
   // 8. The answer: THE SAME NINETEEN-KEY OBJECT the detail serves, rebuilt from
   // the database AFTER the three writes, reusing SPEC 89's own loaders and
@@ -2521,85 +2521,6 @@ function myapi_service_request_cancel_comment($reason) {
   }
 
   return t('El residente canceló la solicitud.');
-}
-
-/**
- * Rejects every live offer of a cancelled request (SPEC 95).
- *
- * A request that is dead must not leave providers working on it, and that is
- * the whole reason this spec exists. 'sent' and 'selected' are the two statuses
- * that mean "still in play", so those are the two this rewrites to 'rejected'.
- * 'withdrawn' and 'rejected' are left alone: the first is the provider's own
- * retreat and overwriting it would erase who walked away by themselves, and the
- * second is already terminal.
- *
- * `no.type = MYAPI_SERVICES_OFFER_TYPE` IS NOT DECORATION. field_request is
- * SHARED with 'service_transaction' (SPEC 77), so without the bundle condition
- * this would pick up the request's own timeline entries and try to write an
- * offer status onto them. The INNER JOIN to field_data_field_offer_status is
- * deliberate too: an offer with no status row has nothing to rewrite.
- *
- * WHY node_load()/node_save() PER OFFER AND NOT ONE db_update(). A direct
- * UPDATE on field_data_field_offer_status would be one query instead of N, and
- * it would leave the revision table and the entity cache lying. The number of
- * offers a request can hold is small and bounded, so the correct write wins
- * over the cheap one.
- *
- * NOT ATOMIC, ON PURPOSE. The caller writes the request's status FIRST, so a
- * failure halfway through this loop leaves live offers pointing at a request
- * that is already 'cancelled' — inconsistent but harmless, because 'cancelled'
- * is terminal in the graph and no flow can award them. No explicit database
- * transaction is opened: node_save() with the Field API and its hooks inside
- * one is a known source of lock-ups in Drupal 7.
- *
- * @param mixed $nid  The cancelled request's nid.
- *
- * @return int  How many offers actually changed status. 0 when the nid is not
- *              a positive integer and 0 when there was nothing live.
- */
-function myapi_service_request_reject_live_offers($nid) {
-  if (!is_scalar($nid) || !ctype_digit((string) $nid) || (int) $nid <= 0) {
-    return 0;
-  }
-  $nid = (int) $nid;
-
-  $query = db_select('field_data_field_request', 'fq');
-  $query->condition('fq.entity_type', 'node');
-  $query->condition('fq.deleted', 0);
-  $query->condition('fq.field_request_target_id', $nid);
-
-  $query->innerJoin('node', 'no', 'no.nid = fq.entity_id');
-  $query->condition('no.type', MYAPI_SERVICES_OFFER_TYPE);
-  $query->condition('no.status', 1);
-
-  $query->innerJoin('field_data_field_offer_status', 'fos', "fos.entity_id = no.nid AND fos.entity_type = 'node' AND fos.deleted = 0");
-  // The two live statuses, off the constants of services_common (SPEC 100) and
-  // not the literals this line carried since SPEC 95: it is the same value
-  // written where the offer's lifecycle is defined, so the day one of the two
-  // keys changes, this sweep and the uniqueness gate of the offer endpoint move
-  // together instead of one of them being forgotten.
-  $query->condition('fos.field_offer_status_value', [
-    MYAPI_SERVICES_OFFER_STATUS_SENT,
-    MYAPI_SERVICES_OFFER_STATUS_SELECTED,
-  ], 'IN');
-
-  $query->addField('no', 'nid', 'nid');
-
-  $offer_nids = $query->execute()->fetchCol();
-
-  $rejected = 0;
-  foreach ($offer_nids as $offer_nid) {
-    $offer = node_load($offer_nid);
-    if (!$offer) {
-      continue;
-    }
-
-    $offer->field_offer_status[LANGUAGE_NONE][0]['value'] = 'rejected';
-    node_save($offer);
-    $rejected++;
-  }
-
-  return $rejected;
 }
 
 /**

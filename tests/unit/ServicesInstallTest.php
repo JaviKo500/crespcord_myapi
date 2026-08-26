@@ -297,15 +297,20 @@ class ServicesInstallTest extends TestCase {
   }
 
   /**
-   * The cancellation sweep of SPEC 95 asks the constants for the two live
-   * statuses instead of retyping them. A literal creeping back in here is the
-   * drift this spec removed, and it would only show up the day one of the keys
-   * changed — which is exactly when nobody is looking at this query.
+   * The live-offer sweep asks the constants for the two live statuses instead of
+   * retyping them. A literal creeping back in here is the drift SPEC 100
+   * removed, and it would only show up the day one of the keys changed — which
+   * is exactly when nobody is looking at this query.
+   *
+   * IT LIVES IN THE OFFERS' INCLUDE SINCE SPEC 106, which needed the same sweep
+   * for the award and renamed it myapi_service_offer_reject_live() on the way
+   * out of resources/service_request.resource.inc. The guard follows the
+   * function; what it asserts about it has not changed.
    */
   public function testTheCancellationSweepReadsTheLiveStatusConstants() {
-    $source = file_get_contents(__DIR__ . '/../../resources/service_request.resource.inc');
-    $start = strpos($source, "\nfunction myapi_service_request_reject_live_offers(");
-    $this->assertNotFalse($start, 'myapi_service_request_reject_live_offers() must exist');
+    $source = file_get_contents(__DIR__ . '/../../includes/myapi.service_offer.inc');
+    $start = strpos($source, "\nfunction myapi_service_offer_reject_live(");
+    $this->assertNotFalse($start, 'myapi_service_offer_reject_live() must exist');
 
     $end = strpos($source, "\n}\n", $start);
     $body = substr($source, $start, $end - $start);

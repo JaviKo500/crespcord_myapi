@@ -230,7 +230,7 @@ class ServiceOfferWithdrawTest extends TestCase {
 
   /**
    * A CANCELLED REQUEST NEEDS NO RULE OF ITS OWN. Cancelling ran
-   * myapi_service_request_reject_live_offers() (SPEC 95), which left the offer
+   * myapi_service_offer_reject_live() (SPEC 95), which left the offer
    * 'rejected', so condition 6 answers before condition 7 is reached.
    */
   public function testACancelledRequestAnswersThroughTheOfferStatus() {
