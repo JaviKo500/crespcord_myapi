@@ -558,6 +558,54 @@ function myapi_menu() {
     'file'             => 'resources/service_offer.resource.inc',
   ];
 
+  // The detail of ONE offer, to the provider who sent it (SPEC 103). It closes
+  // what the listing above left open by design: those items are referential —
+  // eight keys — and until today a row of that listing could not be opened
+  // without downloading the whole detail of its request.
+  //
+  // FIVE COMPONENTS, so it competes with nothing already here: the listing
+  // above has four and 'api/v1/service-requests/%/offers' has five but a
+  // different third component. Against the wildcard route below — which has
+  // four — Drupal 7 separates them by count before anything else.
+  //
+  // 'page arguments' => [4] and NOT [3]: the wildcard is the FIFTH component
+  // — api / v1 / service-offers / provider / % — and [3] would hand the
+  // dispatcher the literal 'provider'. Same trap, same answer, as
+  // 'api/v1/service-requests/provider/%' above.
+  $items['api/v1/service-offers/provider/%'] = [
+    'page callback'    => 'myapi_service_offer_provider_item_dispatch',
+    'page arguments'   => [4],
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/service_offer.resource.inc',
+  ];
+
+  // The detail of ONE offer, to the resident who received it (SPEC 103). No
+  // role is demanded on this one: there is no 'residente' role in this module,
+  // and what grants access is a fact about the data — being the requester of
+  // the request the offer hangs on — resolved by
+  // myapi_service_request_viewer(), the same function the request's own detail
+  // calls (decisions 10 and 13).
+  //
+  // THE WILDCARD ROUTE OF THE PREFIX, AND IT IS THE LAST ONE ON PURPOSE. It
+  // has four components, exactly like 'api/v1/service-offers/provider' above,
+  // and the two are told apart by the LITERAL: Drupal 7 resolves a literal
+  // component before falling back to '%', which is the core behaviour SPEC 102
+  // wrote down when it chose a literal fourth component precisely so this day
+  // would cost nothing. So '/service-offers/provider' still answers the
+  // listing, '/service-offers/provider/41' answers the route above, and
+  // '/service-offers/901' answers this one.
+  //
+  // The three of them are read-only and answer 405 before the token to every
+  // other method.
+  $items['api/v1/service-offers/%'] = [
+    'page callback'    => 'myapi_service_offer_item_dispatch',
+    'page arguments'   => [3],
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/service_offer.resource.inc',
+  ];
+
   // Back-office reservation calendar (SPEC 47). The only route of this module
   // that is not an api/v1 endpoint: it renders HTML for an operator, not the
   // JSON envelope for the app, which is why its callback lives in includes/

@@ -1476,6 +1476,97 @@ class ServiceOfferDetailTest extends TestCase {
     $this->assertNull($resident_view['request']['requester']);
   }
 
+
+  /* =========================================================================
+   * THE ROUTES, as hook_menu() declares them (step 8).
+   *
+   * Drupal's router is not run in tests/unit, so what is asserted is the
+   * DECLARATION. That the literal 'provider' wins over the wildcard is core
+   * behaviour and a MANUAL criterion of the spec, verified with `drush cc all` in
+   * between; what a test can hold is that the declaration says what it must.
+   * ====================================================================== */
+
+  private function moduleSource() {
+    return file_get_contents(__DIR__ . '/../../myapi.module');
+  }
+
+  /**
+   * THE PROVIDER'S ROUTE TAKES THE FIFTH COMPONENT. 'page arguments' => [4] and
+   * never [3]: the wildcard is api / v1 / service-offers / provider / %, and a
+   * [3] would hand the dispatcher the literal 'provider' — which would try to
+   * resolve a provider nid as if it were an offer.
+   */
+  public function testTheProvidersRouteIsDeclaredWithTheFifthComponent() {
+    $this->assertMatchesRegularExpression(
+      '/\$items\[\'api\/v1\/service-offers\/provider\/%\'\]\s*=\s*\[\s*'
+      . '\'page callback\'\s*=>\s*\'myapi_service_offer_provider_item_dispatch\',\s*'
+      . '\'page arguments\'\s*=>\s*\[4\],/',
+      $this->moduleSource()
+    );
+  }
+
+  /**
+   * THE RESIDENT'S ROUTE TAKES THE FOURTH. 'page arguments' => [3]: the
+   * wildcard is api / v1 / service-offers / %.
+   */
+  public function testTheResidentsRouteIsDeclaredWithTheFourthComponent() {
+    $this->assertMatchesRegularExpression(
+      '/\$items\[\'api\/v1\/service-offers\/%\'\]\s*=\s*\[\s*'
+      . '\'page callback\'\s*=>\s*\'myapi_service_offer_item_dispatch\',\s*'
+      . '\'page arguments\'\s*=>\s*\[3\],/',
+      $this->moduleSource()
+    );
+  }
+
+  /**
+   * THE THREE ROUTES OF THE PREFIX COEXIST, AND THE LISTING KEEPS ITS OWN
+   * CALLBACK. The symptom of an error here is not a 404 — it is the listing
+   * starting to answer a detail, which is riesgo 2 of the spec.
+   */
+  public function testTheThreeRoutesOfThePrefixCoexist() {
+    $module = $this->moduleSource();
+
+    $routes = [
+      "\$items['api/v1/service-offers/provider']"   => 'myapi_service_offer_provider_dispatch',
+      "\$items['api/v1/service-offers/provider/%']" => 'myapi_service_offer_provider_item_dispatch',
+      "\$items['api/v1/service-offers/%']"          => 'myapi_service_offer_item_dispatch',
+    ];
+
+    foreach ($routes as $route => $callback) {
+      $this->assertStringContainsString($route, $module, $route . ' is declared');
+      $this->assertStringContainsString("'page callback'    => '" . $callback . "'", $module);
+    }
+
+    // The listing has NO 'page arguments': it takes no component.
+    $this->assertMatchesRegularExpression(
+      '/\$items\[\'api\/v1\/service-offers\/provider\'\]\s*=\s*\[\s*'
+      . '\'page callback\'\s*=>\s*\'myapi_service_offer_provider_dispatch\',\s*'
+      . '\'access callback\'/',
+      $module,
+      'the listing takes no page argument'
+    );
+  }
+
+  /**
+   * BOTH ROUTES ARE MENU_CALLBACK WITH 'access callback' => TRUE and point at
+   * the offer resource: Drupal's access layer is not the one deciding here —
+   * the token is checked inside the dispatcher, and who may read this offer is
+   * decided by the two gates of the spec.
+   */
+  public function testBothRoutesDeferAccessToTheDispatcher() {
+    $module = $this->moduleSource();
+
+    foreach (['api/v1/service-offers/provider/%', 'api/v1/service-offers/%'] as $route) {
+      $start = strpos($module, "\$items['" . $route . "']");
+      $this->assertNotFalse($start, $route);
+      $block = substr($module, $start, strpos($module, '];', $start) - $start);
+
+      $this->assertStringContainsString("'access callback'  => TRUE", $block, $route);
+      $this->assertStringContainsString("'type'             => MENU_CALLBACK", $block, $route);
+      $this->assertStringContainsString("'file'             => 'resources/service_offer.resource.inc'", $block, $route);
+    }
+  }
+
   /* -------------------------------------------------------------------------
    * The two provider columns: the joined one is painted, the raw one gates.
    * ---------------------------------------------------------------------- */
