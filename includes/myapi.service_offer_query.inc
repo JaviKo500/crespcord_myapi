@@ -197,3 +197,216 @@ function myapi_service_offer_provider_base_query($provider_id, array $filters = 
 
   return $query;
 }
+
+/**
+ * Counts the provider's offers under the current filters, unpaginated
+ * (SPEC 102).
+ *
+ * Nothing but myapi_service_offer_provider_base_query()->countQuery(): the
+ * total and the page are, by construction, the same set — which is what makes
+ * `pagination.total` describe the FILTERED set and not the page.
+ *
+ * IT COUNTS WHAT THE PAGE WOULD LIST, INCLUDING THE INNER JOIN TO THE REQUEST.
+ * An offer whose request was unpublished or deleted is absent from both, and
+ * that agreement is not a detail: a total that counted it would send the client
+ * looking for a row no page ever returns.
+ *
+ * Every table the base joins is cardinality 1 (or a primary key), so there is
+ * one row per offer and the count needs no DISTINCT. The four LEFT-joined offer
+ * columns and the category code add columns, never rows, so counting with them
+ * answers the same number the fetch's set has.
+ *
+ * @param mixed $provider_id
+ *   The provider nid, already validated and already confirmed to be the
+ *   reader's by the caller.
+ * @param array $filters
+ *   Same shape as myapi_service_offer_provider_base_query().
+ *
+ * @return int  Number of matching offers.
+ */
+function myapi_service_offer_provider_count($provider_id, array $filters = []) {
+  return (int) myapi_service_offer_provider_base_query($provider_id, $filters)
+    ->countQuery()
+    ->execute()
+    ->fetchField();
+}
+
+/**
+ * Fetches one page of the provider's offers, with every column the item needs
+ * (SPEC 102).
+ *
+ * Starts from the same myapi_service_offer_provider_base_query() the count uses
+ * — so the page is always a slice of the counted set — and adds ONLY
+ * projection. Not a join and not a condition: every table it reads from is
+ * already in the base query, because the base joined them for the filters and
+ * for the request the INNER JOIN guarantees. That is the frontier SPEC 88 drew
+ * between a base and a fetch, kept here.
+ *
+ * THE SIX OFFER ALIASES ARE THE NAMES myapi_service_offer_build() READS —
+ * `nid`, `created`, `status`, `amount`, `amount_type`, `valid_until` — and they
+ * are not a coincidence: myapi_service_offer_provider_build_item() runs that
+ * serialiser over this row and picks six of its fifteen keys, so the day the
+ * format of `amount` changes it changes in both listings or in neither. The
+ * nine keys of that serialiser this query does not project answer their
+ * documented absence (null, "" for `message`, FALSE for `requires_visit`), and
+ * the item drops all nine.
+ *
+ * THE REQUEST'S STATUS IS `request_status` AND THE OFFER'S IS `status`. Two
+ * catalogues with no value in common (SPEC 77) travelling in the same row: one
+ * alias each, and the pair that decides which is which lives here rather than
+ * in the builder.
+ *
+ * `request_id` IS nr.nid — THE JOINED NODE — AND NEVER fq.field_request_target_id.
+ * With an INNER JOIN the two agree by construction today; projecting the joined
+ * node is what keeps them agreeing the day somebody relaxes that join, and it
+ * is the rule every id of this module's read paths follows.
+ *
+ * The category code is LEFT-joined by the base, so a term with no
+ * field_category_code answers "" through the builder and keeps its offer —
+ * exactly what /api/v1/service-categories, /api/v1/providers and both request
+ * listings already do with this same field.
+ *
+ * THE ORDERING IS TWO CRITERIA ON THE OFFER'S OWN created, AND THE SECOND IS
+ * NOT DECORATION. `n.created` is "the last thing I quoted, on top" — never the
+ * request's date, which would sort the provider's work by somebody else's
+ * clock — and `n.nid` breaks the tie. Without it, two offers sent in the same
+ * second can swap places between page 1 and page 2, so the app shows one twice
+ * and never shows the other: the trap SPEC 83 documented with rating_avg and
+ * SPEC 88 with this same pair. Both take the SAME direction, so '?sort=asc'
+ * reverses the listing coherently.
+ *
+ * @param mixed  $provider_id  The provider nid, already validated and owned.
+ * @param array  $filters      Same shape as the base query.
+ * @param int    $page         1-based page number. Ignored when $limit is -1.
+ * @param int    $limit        Rows per page, or -1 for "all matching rows,
+ *                             unpaginated" (SPEC 15).
+ * @param string $sort         'asc' or 'desc' on the OFFER's creation date.
+ *
+ * @return array  Rows carrying `nid`, `created`, `status`, `amount`,
+ *                `amount_type`, `valid_until`, `request_id`, `request_title`,
+ *                `request_status`, `category_id`, `category_name` and
+ *                `category_code`.
+ */
+function myapi_service_offer_provider_fetch($provider_id, array $filters, $page, $limit, $sort) {
+  $query = myapi_service_offer_provider_base_query($provider_id, $filters);
+
+  // The offer, under the six aliases the shared serialiser reads.
+  $query->addField('n', 'nid', 'nid');
+  $query->addField('n', 'created', 'created');
+  $query->addField('fos', 'field_offer_status_value', 'status');
+  $query->addField('foa', 'field_offer_amount_value', 'amount');
+  $query->addField('fat', 'field_offer_amount_type_value', 'amount_type');
+  $query->addField('fvu', 'field_offer_valid_until_value', 'valid_until');
+
+  // The request: the joined node, never the raw target_id — see the docblock.
+  $query->addField('nr', 'nid', 'request_id');
+  $query->addField('nr', 'title', 'request_title');
+  $query->addField('frs', 'field_request_status_value', 'request_status');
+
+  // Its category, off the three joins the base already made.
+  $query->addField('fcat', 'field_category_tid', 'category_id');
+  $query->addField('td', 'name', 'category_name');
+  $query->addField('cc', 'field_category_code_value', 'category_code');
+
+  $direction = ($sort === 'asc') ? 'ASC' : 'DESC';
+  $query->orderBy('n.created', $direction);
+  $query->orderBy('n.nid', $direction);
+
+  // limit = -1 means "no pagination" (SPEC 15): no ->range() at all, and the
+  // caller has already forced page = 1.
+  if ($limit !== -1) {
+    $query->range(($page - 1) * $limit, $limit);
+  }
+
+  return $query->execute()->fetchAll();
+}
+
+/**
+ * The provider this listing is about, resolved ONCE (SPEC 102).
+ *
+ * TWO QUESTIONS AND ONE ANSWER: "may this account ask about this nid" and
+ * "what is this provider called". They are resolved together because the
+ * response needs both and neither is worth a call of its own — and they answer
+ * FALSE together, because the endpoint does exactly the same thing in both
+ * cases: a 200 with an empty list.
+ *
+ * THE OWNERSHIP IS NOT DECIDED HERE. It is read from
+ * myapi_provider_role_provider_ids() (SPEC 78), which is the ONE place this
+ * module decides whose provider a node is, over field_provider_users, and
+ * which is statically cached per uid so asking it costs nothing the second
+ * time. A query of our own would be a second definition of ownership, drifting
+ * the day SPEC 78's changes. Same reason myapi_service_offer_provider_row()
+ * defers to it.
+ *
+ * OWNERSHIP IS CHECKED FIRST, AND THAT IS WHAT MAKES A FOREIGN NID COST NO
+ * QUERY. A nid that is not the account's is refused off the cached list, so
+ * nobody can probe which provider nodes exist by timing this endpoint — and a
+ * foreign nid and a nid of no node at all reach the same FALSE by two different
+ * routes on purpose. This is the rule of SPEC 98 applied to a mandatory
+ * parameter: STRICT IN THE FORMAT, LAX IN THE OWNERSHIP. The format was already
+ * refused with a 422 by myapi_parse_id_param() before this function ran; from
+ * here on, "not yours" and "does not exist" are the same empty list, never a
+ * 403 that would turn a listing into an oracle for "this nid exists and is not
+ * yours".
+ *
+ * NO status = 1 CONDITION ON THE PROVIDER, deliberately, and it is the one
+ * place in this module where that absence is the FEATURE. A suspended provider
+ * reads its whole archive: the licence governs the MARKET — being able to quote
+ * — and not the record of what was already quoted, and an account that lost its
+ * own quotes would lose the proof of work it did. field_license_expiry is not
+ * read here either, for the same reason. The bundle condition IS there: a nid
+ * of another bundle is not a provider, whoever it belongs to.
+ *
+ * `name` IS THE NODE TITLE, which is what the 'provider' bundle carries and
+ * what `offers` and `my_offers` already paint as provider.name — never a field.
+ * It is resolved once and copied into every item of the page, so the listing
+ * never joins file_managed or node per row to repeat the same string.
+ *
+ * @param mixed $provider_id
+ *   The provider nid, already validated as a positive integer by
+ *   myapi_parse_id_param(). A value that is not one answers FALSE rather than
+ *   querying.
+ * @param mixed $uid
+ *   The authenticated reader's uid.
+ *
+ * @return array|FALSE
+ *   ['id' => int, 'name' => string] when the nid is one of the account's
+ *   providers AND the node exists; FALSE in every other case — foreign,
+ *   non-existent, of another bundle, or a malformed uid.
+ */
+function myapi_service_offer_provider_scope($provider_id, $uid) {
+  $provider_id = (int) $provider_id;
+
+  if ($provider_id <= 0) {
+    return FALSE;
+  }
+
+  // (object) ['uid' => n] is enough: myapi_provider_role_provider_ids() does
+  // not read ->roles. Same lightweight account the rest of the services domain
+  // builds when all it needs is the link.
+  $account = (object) ['uid' => (int) $uid];
+
+  $owned = array_map('intval', myapi_provider_role_provider_ids($account));
+
+  // Not yours: no query, and the same answer a nid of no node gets.
+  if (!in_array($provider_id, $owned, TRUE)) {
+    return FALSE;
+  }
+
+  $row = db_select('node', 'np')
+    ->condition('np.nid', $provider_id)
+    ->condition('np.type', MYAPI_SERVICES_PROVIDER_TYPE)
+    ->fields('np', ['nid', 'title'])
+    ->range(0, 1)
+    ->execute()
+    ->fetchObject();
+
+  if (!$row) {
+    return FALSE;
+  }
+
+  return [
+    'id'   => (int) $row->nid,
+    'name' => isset($row->title) ? $row->title : NULL,
+  ];
+}
