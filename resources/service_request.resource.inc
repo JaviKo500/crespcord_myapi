@@ -600,22 +600,20 @@ function myapi_service_request_parse_provider_id() {
 }
 
 /**
- * The strict parser BOTH '?category_id' and '?unit_id' are made of (SPEC 91).
+ * The strict parser the three '?*_id' wrappers of this file are made of.
  *
- * ONE FUNCTION AND NOT TWO COPIES. The two parameters refuse the same three
- * malformations — a non-scalar, a non-digit string, a zero or negative — and
- * answer the same 422 invalid_field naming themselves; what differs between
- * them is only the REASON each one is strict, and that is written in the
- * wrapper that carries its name. Regla 3 de CLAUDE.md applied inside a file
- * rather than between two of them.
+ * THE PARSING IS NO LONGER WRITTEN HERE (SPEC 102). It moved verbatim to
+ * myapi_parse_id_param() in includes/myapi.request.inc the day a second
+ * resource needed the same three refusals — a non-scalar, a non-digit string,
+ * a zero or negative — and Regla 5 de CLAUDE.md forbade it from reaching into
+ * this file for them. The reason each of the three parameters is strict stays
+ * written in the wrapper that carries its name; the shape they all refuse is
+ * written once, where request parsing lives.
  *
- * is_scalar() COMES FIRST, so '?category_id[]=1' answers 422 without ever
- * reaching a string cast of an array — a PHP notice in the middle of a JSON
- * body is not an answer. Same guard, in the same order, as myapi_provider_list().
- *
- * The empty string is a malformation and not an absence: '?unit_id=' is a
- * present-and-broken value, and ctype_digit('') is FALSE, which is what makes
- * it a 422 rather than a silent "no filter".
+ * THIS NAME STAYS AS A ONE-LINE DELEGATION on purpose. Renaming the three call
+ * sites would have been the same change with a bigger diff, and the '@field'
+ * of the 422 message of three endpoints already in production is exactly what
+ * the move was not allowed to touch.
  *
  * @param string $name
  *   The query-string parameter to read, which is also the '@field' the error
@@ -626,16 +624,7 @@ function myapi_service_request_parse_provider_id() {
  *   The positive integer, or NULL when the parameter is absent.
  */
 function myapi_service_request_parse_id_param($name) {
-  if (!isset($_GET[$name])) {
-    return NULL;
-  }
-
-  $raw = $_GET[$name];
-  if (!is_scalar($raw) || !ctype_digit((string) $raw) || (int) $raw <= 0) {
-    myapi_error('invalid_field', 422, ['@field' => $name]);
-  }
-
-  return (int) $raw;
+  return myapi_parse_id_param($name);
 }
 
 /**
