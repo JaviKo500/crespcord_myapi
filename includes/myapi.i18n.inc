@@ -209,6 +209,18 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'service_offer_withdrawn'            => 'Offer withdrawn successfully.',
       'service_offer_not_editable'         => 'This offer can no longer be edited.',
       'service_offer_not_withdrawable'     => 'This offer can no longer be withdrawn.',
+      // SPEC 106. Awarding an offer, and FOUR keys: one success and three
+      // distinct refusals, because the resident can do a different thing about
+      // each — an offer that is no longer acceptable means picking another one,
+      // a request that can no longer be awarded means the round is over, and a
+      // lapsed quote means asking the provider for a fresh one. Everything else
+      // this endpoint answers — not_found, missing_authorization, invalid_token,
+      // method_not_allowed, service_request_forbidden and
+      // service_offer_provider_not_active — is reused above, unchanged.
+      'service_offer_accepted'             => 'Offer awarded successfully.',
+      'service_offer_not_acceptable'       => 'This offer can no longer be accepted.',
+      'service_offer_expired'              => 'This offer has expired.',
+      'service_request_not_assignable'     => 'This request can no longer be awarded.',
     ],
     'es' => [
       'invalid_credentials'    => 'Usuario o contraseña incorrectos.',
@@ -325,6 +337,11 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'service_offer_withdrawn'            => 'Oferta retirada correctamente.',
       'service_offer_not_editable'         => 'Esta oferta ya no se puede modificar.',
       'service_offer_not_withdrawable'     => 'Esta oferta ya no se puede retirar.',
+      // SPEC 106 — see the note next to the English block.
+      'service_offer_accepted'             => 'Oferta adjudicada correctamente.',
+      'service_offer_not_acceptable'       => 'Esta oferta ya no se puede aceptar.',
+      'service_offer_expired'              => 'Esta oferta ha caducado.',
+      'service_request_not_assignable'     => 'Esta solicitud ya no admite adjudicar una oferta.',
     ],
   ];
 
