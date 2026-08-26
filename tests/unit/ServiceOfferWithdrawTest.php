@@ -737,7 +737,11 @@ class ServiceOfferWithdrawTest extends TestCase {
     $start = strpos($code, 'function myapi_service_offer_withdraw($nid)');
     $this->assertNotFalse($start, 'the endpoint exists');
 
-    return substr($code, $start);
+    // Bounded at the NEXT function: this file grows, and a scan that ran to
+    // the end of it would read the neighbours' code as if it were this one's.
+    $end = strpos($code, "\nfunction ", $start + 1);
+
+    return $end === FALSE ? substr($code, $start) : substr($code, $start, $end - $start);
   }
 
   /**

@@ -928,16 +928,36 @@ function myapi_service_offer_provider_detail($nid) {
  * Routes /api/v1/service-offers/% by HTTP method (SPEC 103).
  *
  * A SIBLING of myapi_service_offer_provider_item_dispatch(), and the reason
- * they are two and not one is the role: this route demands none, and that one
- * demands 'proveedor' before it queries anything. A shared dispatcher would
- * either demand it of a resident or stop demanding it of the provider.
+ * they are two and not one is the role: this route demands none of its GET, and
+ * that one demands 'proveedor' before it queries anything. A shared dispatcher
+ * would either demand it of a resident or stop demanding it of the provider.
  *
- * GET AND NOTHING ELSE, and the 405 before the token — the criterion of every
- * dispatcher in this module.
+ * TWO DIFFERENT ACTORS LIVE ON THIS URL SINCE SPEC 105, and it is worth reading
+ * twice: the GET is the RESIDENT'S — it answers 403 to a provider, even to the
+ * one who bid — and the PUT is the PROVIDER'S, and answers 403 to a resident.
+ * Each of them reads their own offer through the route the other cannot use:
+ * the provider's is GET /api/v1/service-offers/provider/%.
+ *
+ * THAT IS EXACTLY WHAT ROUTING BY METHOD BUYS. Each branch carries its own
+ * gate, which is what lets the read demand no role and the write demand one; a
+ * single gate above the switch could only be the stricter of the two, and would
+ * lock the resident out of their own offer.
+ *
+ * GET AND PUT, and the 405 before the token — the criterion of every dispatcher
+ * in this module. POST and DELETE stay refused: creating an offer is the other
+ * route of this file, and a DELETE would promise a disappearance that
+ * withdrawing does not perform (decision 5).
  */
 function myapi_service_offer_item_dispatch($nid = NULL) {
-  if (myapi_request_method() === 'GET') {
+  $method = myapi_request_method();
+
+  if ($method === 'GET') {
     myapi_service_offer_requester_detail($nid);
+    return;
+  }
+
+  if ($method === 'PUT') {
+    myapi_service_offer_update($nid);
     return;
   }
 
@@ -1222,4 +1242,214 @@ function myapi_service_offer_withdraw($nid) {
       'status' => isset($request_row->status) ? $request_row->status : NULL,
     ],
   ], 200, 'service_offer_withdrawn');
+}
+
+/* ---------------------------------------------------------------------------
+ * PUT /api/v1/service-offers/% — the provider corrects their own offer
+ * (SPEC 105).
+ *
+ * WHY IT EXISTS EVEN THOUGH WITHDRAWING DOES (decision 2). Withdrawing and
+ * bidding again leaves TWO nodes in the resident's listing, loses the original
+ * `created` and makes offers_count count two offers from one company. What the
+ * resident has to see is ONE CORRECTED OFFER, not a trail of attempts.
+ *
+ * A TOTAL REPLACEMENT AND NOT A PATCH (decision 3). Every optional field the
+ * body leaves out is DELETED — a PUT without warranty_days leaves the offer
+ * with no warranty, even if it had 90 days yesterday. The app must send the
+ * WHOLE form, pre-filled with what the offer holds today, which is byte for
+ * byte what this endpoint answers.
+ *
+ * A partial body would force this file to tell "absent" from "delete it" and to
+ * evaluate the three conditional rules — amount x amount_type, tax_included
+ * without amount, duration without duration_unit — against a mixture of what is
+ * stored and what was sent. That is where the bugs live, and it is why this is
+ * the same shape SPEC 96 gave the edit of a request.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * PUT /api/v1/service-offers/% — edit my own offer (SPEC 105).
+ *
+ * NINE NUMBERED STEPS, AND THE ORDER IS THE CONTRACT:
+ *
+ *   1. The nid.        404 not_found when it is not a positive integer, before
+ *                      the token and before any query.
+ *   2. Authentication. 401 missing_authorization / invalid_token.
+ *   3. The role.       403 provider_role_required, BEFORE the offer is read.
+ *   4. The three rows. The offer, its request and the offer's provider.
+ *   5. The gate.       myapi_service_offer_update_gate() — the shared four of
+ *                      the withdrawal PLUS the licence.
+ *   6. provider_id.    422 invalid_field, refused explicitly.
+ *   7. The body.       The ten rules of SPEC 100, unchanged, all 422.
+ *   8. The write.      The twelve values, absences included.
+ *   9. 200.
+ *
+ * EVERY 422 ARRIVES AFTER THE WHOLE GATE, the criterion step 6 of SPEC 95 set
+ * and SPEC 100 repeated: WHO YOU ARE DOES NOT DEPEND ON WHAT YOU WROTE. A
+ * stranger's offer with an invalid body answers 403, never 422.
+ *
+ * THE BODY IS THE TWELVE FIELDS OF SPEC 100, validated by
+ * myapi_service_offer_validate_body() WITHOUT A LINE CHANGED — same ten rules,
+ * same order, same error_codes. That reuse is the whole reason this is a
+ * replacement and not a patch.
+ *
+ * provider_id IS NOT A FIELD OF THIS BODY AND IS REFUSED EXPLICITLY
+ * (decision 13). The offer already knows whose it is, and a provider_id here
+ * can only contradict the URL. It is refused WITH ANY VALUE, the correct one
+ * included: myapi_service_offer_validate_body() ignores keys it does not know,
+ * so silence is what would happen by default — and a client that sends
+ * provider_id believes it changed something, which silence would confirm.
+ *
+ * THE CATEGORY IS NOT CHECKED (decision 12). The offer exists and its category
+ * was checked the day it was born; asking again would leave a company unable to
+ * correct a price only because it stopped serving that category afterwards —
+ * the same mistake SPEC 101 identified when it skipped that condition on a
+ * 'direct' of the provider's own.
+ *
+ * WHAT THE PUT NEVER TOUCHES, whatever the body says: node.uid (the account
+ * that created it, NOT the one editing — history is not rewritten),
+ * node.created, node.title, field_request, field_provider, field_offer_status
+ * (it stays 'sent') and the three chat fields. node.changed DOES move, and
+ * node_save() is what moves it.
+ *
+ * NOTHING ELSE MOVES EITHER: the request keeps its status, no
+ * service_transaction is written — editing writes no timeline entry, exactly
+ * like SPEC 96 (decision 7) — and offers_count is untouched.
+ *
+ * FOUR QUERIES AND ONE SAVE, fixed: the offer, its request, its provider, the
+ * account the token layer loads, and the node_load()/node_save() of the offer.
+ * The answer costs no query of its own — the row the gate already read is
+ * reused with the twelve validated values written over it.
+ *
+ * @param mixed $nid  The OFFER's nid, from the route.
+ */
+function myapi_service_offer_update($nid) {
+  // 1. The nid, before anything else — including the token. Byte for byte the
+  // guard the GET of this same route opens with.
+  if (!is_scalar($nid) || !ctype_digit((string) $nid) || (int) $nid <= 0) {
+    myapi_error('not_found', 404);
+  }
+  $nid = (int) $nid;
+
+  // 2. Authentication. Answers 401 on its own and never returns on failure.
+  $token = myapi_auth_require_access_token();
+  $uid = (int) $token->uid;
+
+  // 3. The role gate, shared with SPECS 98, 99, 100, 102 and the withdrawal.
+  // BEFORE the offer is read: this is where a RESIDENT who PUTs the URL of an
+  // offer they received is answered, and they learn nothing else.
+  $account = user_load($uid);
+  if (!myapi_provider_role_is($account)) {
+    myapi_error('provider_role_required', 403);
+  }
+
+  // 4. The three rows the gate decides over. Two of them are only asked for
+  // when there is an offer to hang them on; without one the gate answers 404
+  // and both would have been queries about nothing.
+  //
+  // The provider is read from `provider_raw` and never from `provider_id`: the
+  // raw column is what says whose the offer is, and the joined one is NULL the
+  // day the provider node is unpublished. Reading the joined column here would
+  // hand the licence check a FALSE row and turn a suspended provider's
+  // ..._not_owned into a ..._not_active by accident.
+  $row = myapi_service_offer_detail_row($nid);
+  $request_row = $row ? myapi_service_request_detail_row($row->request_id) : FALSE;
+  $provider_row = $row ? myapi_service_offer_provider_row($row->provider_raw, $uid) : FALSE;
+
+  // 5. The gate — five conditions, in order, first failure answers. The mapping
+  // from code to HTTP status is the ONE thing this file adds to it, and it is
+  // the withdrawal's with the licence added and one word changed on the 409.
+  $error = myapi_service_offer_update_gate(
+    $row,
+    myapi_provider_role_provider_ids($account),
+    $request_row,
+    $provider_row,
+    REQUEST_TIME
+  );
+  if ($error !== NULL) {
+    $statuses = [
+      'not_found'                         => 404,
+      'service_offer_provider_not_owned'  => 403,
+      'service_offer_not_editable'        => 409,
+      'service_request_not_offerable'     => 409,
+      'service_offer_provider_not_active' => 403,
+    ];
+    myapi_error($error, isset($statuses[$error]) ? $statuses[$error] : 409);
+  }
+
+  // 6. provider_id, refused explicitly and with any value — see the docblock.
+  // Read before the validator because the validator would silently drop it.
+  $body = myapi_request_body();
+  if (is_array($body) && array_key_exists('provider_id', $body)) {
+    myapi_error('invalid_field', 422, ['@field' => 'provider_id']);
+  }
+
+  // 7. The body, and only now. Every failure here is a 422, which is why the
+  // status is written once instead of mapped. The validator is SPEC 100's,
+  // untouched: same ten rules, same order, same codes.
+  $validated = myapi_service_offer_validate_body($body);
+  if (!$validated['ok']) {
+    myapi_error($validated['error_code'], 422, $validated['replacements']);
+  }
+  $values = $validated['values'];
+
+  // 8. The write. node_load() and not an UPDATE per field table: a write goes
+  // through the entity so hook_node_presave() and hook_node_update() see it.
+  $offer = node_load($nid);
+
+  // The row above proves the offer exists and is of this bundle, so this can
+  // only fail on a race. Nothing has been written yet, so the honest answer is
+  // a 500 and not a 200 over a save that did not happen.
+  if (!$offer || $offer->type !== MYAPI_SERVICES_OFFER_TYPE) {
+    watchdog(
+      'myapi',
+      'SPEC 105: la oferta @offer pasó la compuerta de edición pero no se pudo cargar como nodo @type.',
+      ['@offer' => $nid, '@type' => MYAPI_SERVICES_OFFER_TYPE],
+      WATCHDOG_ERROR
+    );
+    myapi_error('server_error', 500);
+  }
+
+  // The TWELVE values and nothing else, absences included: the shared writer,
+  // the same one myapi_service_offer_build_node() calls when the offer is born.
+  // Duplicating those twelve assignments here would be guaranteeing that the
+  // POST and the PUT store an offer differently within three months
+  // (decision 16).
+  myapi_service_offer_apply_values($offer, $values);
+  node_save($offer);
+
+  // 9. The answer. THE OBJECT UNDER 'service_offer' IS BYTE FOR BYTE what the
+  // offer's own detail answers for this nid a second later, because it comes
+  // out of the SAME serialiser. The row the gate already read is reused with
+  // the twelve validated values written over its aliases: a SELECT here would
+  // cost a round trip to learn what this function already knows.
+  //
+  // `status` and the four columns above it are NOT touched: the offer stays
+  // 'sent', on the same request, from the same provider, created when it was
+  // created.
+  $row->message        = $values['message'];
+  $row->amount_type    = $values['amount_type'];
+  $row->amount         = $values['amount'];
+  $row->valid_until    = $values['valid_until'];
+  $row->available_from = $values['available_from'];
+  $row->duration       = $values['duration'];
+  $row->duration_unit  = $values['duration'] === NULL ? NULL : $values['duration_unit'];
+  $row->includes       = $values['includes'];
+  $row->excludes       = $values['excludes'];
+  // The 0/1 a list_boolean column holds, so the serialiser reads back exactly
+  // what a re-read of this row would hand it.
+  $row->tax_included   = $values['tax_included'] === NULL ? NULL : ($values['tax_included'] ? 1 : 0);
+  $row->warranty_days  = $values['warranty_days'];
+  $row->requires_visit = $values['requires_visit'] ? 1 : 0;
+
+  // `request` is a SIBLING of 'service_offer' and not a sixteenth key of it,
+  // and it carries the request's status WITHOUT MOVING IT — decision 6. Same
+  // shape the 201 of SPEC 100 and the withdrawal answer, so the provider's
+  // screen has nothing to branch on.
+  myapi_respond([
+    'service_offer' => myapi_service_offer_build($row),
+    'request'       => [
+      'id'     => (int) $row->request_id,
+      'status' => isset($request_row->status) ? $request_row->status : NULL,
+    ],
+  ], 200, 'service_offer_updated');
 }

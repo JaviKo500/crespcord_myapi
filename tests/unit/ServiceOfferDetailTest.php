@@ -1287,12 +1287,19 @@ class ServiceOfferDetailTest extends TestCase {
   }
 
   /**
-   * EVERY METHOD BUT GET IS 405, WITHOUT A TOKEN IN THE REQUEST.
+   * EVERY METHOD BUT GET AND PUT IS 405, WITHOUT A TOKEN IN THE REQUEST.
+   *
+   * PUT LEFT THIS LIST IN SPEC 105, and it is the one line of this suite that
+   * spec changed: the route now carries TWO ACTORS — the GET is the resident's,
+   * unchanged and still asserted whole below, and the PUT is the provider's
+   * edit. What the PUT answers is ServiceOfferUpdateTest's, gate included;
+   * what stays here is that the other three are still refused, and still
+   * before the token.
    */
-  public function testTheResidentsRouteRefusesEveryMethodButGetBeforeTheToken() {
+  public function testTheResidentsRouteRefusesEveryMethodButGetAndPutBeforeTheToken() {
     $this->seedAsRequester();
 
-    foreach (['POST', 'PUT', 'PATCH', 'DELETE'] as $method) {
+    foreach (['POST', 'PATCH', 'DELETE'] as $method) {
       $_SERVER['REQUEST_METHOD'] = $method;
       $result = $this->requesterDetail();
 
