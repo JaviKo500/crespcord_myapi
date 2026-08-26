@@ -257,6 +257,103 @@ class ServiceOfferDetailTest extends TestCase {
   }
 
   /* -------------------------------------------------------------------------
+   * The visibility rule: "is this job already mine?" (step 3).
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * A request row as myapi_service_request_detail_row() delivers it, of which
+   * this rule reads exactly one column.
+   */
+  private function requestRow(array $overrides = []) {
+    return (object) ($overrides + [
+      'nid'                   => self::REQUEST_NID,
+      'assigned_provider_id'  => NULL,
+      'assigned_provider_raw' => NULL,
+    ]);
+  }
+
+  /**
+   * NOT AWARDED: nobody's job yet, so nobody's address.
+   */
+  public function testAnUnawardedRequestIsNobodysJob() {
+    $this->assertFalse(myapi_service_offer_detail_is_mine(
+      $this->requestRow(),
+      [self::PROVIDER_NID]
+    ));
+  }
+
+  /**
+   * AWARDED TO SOMEBODY ELSE: false, and it stays false whatever my own offer's
+   * status says. The award decides, not the offer (decision 5).
+   */
+  public function testARequestAwardedToAnotherProviderIsNotMine() {
+    $this->assertFalse(myapi_service_offer_detail_is_mine(
+      $this->requestRow([
+        'assigned_provider_id'  => '77',
+        'assigned_provider_raw' => '77',
+      ]),
+      [self::PROVIDER_NID]
+    ));
+  }
+
+  /**
+   * AWARDED TO ME: true. The columns come back as strings from the database and
+   * the list as ints, so the comparison has to survive that — a strict
+   * in_array() without the intval() would answer false on real data.
+   */
+  public function testARequestAwardedToMyProviderIsMine() {
+    $this->assertTrue(myapi_service_offer_detail_is_mine(
+      $this->requestRow([
+        'assigned_provider_id'  => (string) self::PROVIDER_NID,
+        'assigned_provider_raw' => (string) self::PROVIDER_NID,
+      ]),
+      [self::PROVIDER_NID]
+    ));
+  }
+
+  /**
+   * AN ACCOUNT WITH TWO PROVIDERS owns the job of either one.
+   */
+  public function testAnAccountWithTwoProvidersOwnsBothJobs() {
+    $row = $this->requestRow([
+      'assigned_provider_id'  => '42',
+      'assigned_provider_raw' => '42',
+    ]);
+
+    $this->assertTrue(myapi_service_offer_detail_is_mine($row, [self::PROVIDER_NID, 42]));
+  }
+
+  /**
+   * A BROKEN AWARD CLOSES THE ADDRESS, and this is riesgo 7 of the spec. The
+   * award points at a provider node that was deleted or unpublished: the raw
+   * column still names it, the joined column is NULL, and the rule reads the
+   * JOINED one. A datum written wrong must not send a resident's street address
+   * to a provider who is not going to that house.
+   */
+  public function testABrokenAwardIsNotMineEvenWhenTheRawColumnNamesMe() {
+    $this->assertFalse(myapi_service_offer_detail_is_mine(
+      $this->requestRow([
+        'assigned_provider_id'  => NULL,
+        'assigned_provider_raw' => (string) self::PROVIDER_NID,
+      ]),
+      [self::PROVIDER_NID]
+    ));
+  }
+
+  /**
+   * NO REQUEST AND NO PROVIDERS ARE BOTH FALSE, never NULL: two keys of the
+   * response hang on this boolean, and a null would make them a third thing.
+   */
+  public function testTheDegenerateCasesAreFalseAndNotNull() {
+    $this->assertFalse(myapi_service_offer_detail_is_mine(FALSE, [self::PROVIDER_NID]));
+    $this->assertFalse(myapi_service_offer_detail_is_mine(NULL, [self::PROVIDER_NID]));
+    $this->assertFalse(myapi_service_offer_detail_is_mine(
+      $this->requestRow(['assigned_provider_id' => (string) self::PROVIDER_NID]),
+      []
+    ));
+  }
+
+  /* -------------------------------------------------------------------------
    * The two provider columns: the joined one is painted, the raw one gates.
    * ---------------------------------------------------------------------- */
 

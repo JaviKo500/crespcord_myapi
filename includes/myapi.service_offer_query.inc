@@ -692,3 +692,71 @@ function myapi_service_offer_detail_row($nid) {
 
   return $row ? $row : FALSE;
 }
+
+/**
+ * "IS THIS JOB ALREADY MINE?" — one boolean, over the request's award
+ * (SPEC 103).
+ *
+ * THE RULE OF SPEC 98, MOVED FROM THE REQUEST TO THE OFFER, and unchanged:
+ *
+ *   mine  ⟺  request.field_assigned_provider ∈ myapi_provider_role_provider_ids(uid)
+ *
+ * IT IS DECIDED ON THE AWARD AND NOT ON THE OFFER'S OWN STATUS (decision 5).
+ * Normally the two agree — the awarded provider is the one whose offer was
+ * selected — and when they diverge the AWARD wins, because it is the one that
+ * says which house I am going to. An offer sitting at 'selected' on a request
+ * that ended up awarded to somebody else gives no right to anybody's address;
+ * an offer at 'rejected' or 'withdrawn' on a request awarded to me does, and
+ * for the same reason: the work is mine either way.
+ *
+ * IT READS `assigned_provider_id` — THE COLUMN OF THE JOINED NODE — AND NEVER
+ * `assigned_provider_raw`, and that is the whole of riesgo 7. The joined column
+ * carries the bundle and status = 1 of myapi_service_request_detail_row(), so
+ * an award pointing at a provider that was deleted or unpublished leaves it
+ * NULL and this answers FALSE: a broken reference CLOSES the address instead of
+ * opening it. The raw column is what myapi_service_request_viewer() reads,
+ * deliberately and for the opposite reason — there a broken award still reads
+ * as "awarded", because losing access to your own job over corrupt data is
+ * worse than seeing it. Here what is at stake is a resident's street address,
+ * so the two readings differ on purpose.
+ *
+ * PURE: no database, no node_load(), no account. Both arguments arrive already
+ * resolved — the row from myapi_service_request_detail_row(), the list from
+ * myapi_provider_role_provider_ids() — which is what lets a test fix all four
+ * cases with no site booted.
+ *
+ * IT IS THE SAME COMPARISON myapi_service_request_provider_build_item() MAKES,
+ * written once. That one compares the BUILT key `assigned_provider.id`; this
+ * one compares the column that key is built from, which is the same value one
+ * level down. If the two ever disagree, the symptom is a provider reading an
+ * address in one endpoint and a null in the other for the same request.
+ *
+ * @param object|FALSE $request_row
+ *   A row of myapi_service_request_detail_row(), of which only
+ *   `assigned_provider_id` is read. FALSE or anything that is not an object
+ *   answers FALSE — a caller that has no request has no job either.
+ * @param array $owned_provider_ids
+ *   The reader's provider nids, from myapi_provider_role_provider_ids(). An
+ *   empty list answers FALSE: an account with no provider owns no job.
+ *
+ * @return bool  TRUE when the request is awarded to one of the reader's
+ *               providers. Never NULL — this is the boolean two keys of the
+ *               response hang on, and a null would make them a third thing.
+ */
+function myapi_service_offer_detail_is_mine($request_row, array $owned_provider_ids) {
+  if (!is_object($request_row) || !$owned_provider_ids) {
+    return FALSE;
+  }
+
+  // The JOINED column — see the docblock. A broken or unpublished award reads
+  // NULL here and closes the address.
+  if (!isset($request_row->assigned_provider_id) || $request_row->assigned_provider_id === '') {
+    return FALSE;
+  }
+
+  return in_array(
+    (int) $request_row->assigned_provider_id,
+    array_map('intval', $owned_provider_ids),
+    TRUE
+  );
+}
