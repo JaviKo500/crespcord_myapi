@@ -1,6 +1,6 @@
 # 105 — Editar y retirar una oferta (`PUT /api/v1/service-offers/{id}` y `.../withdraw`)
 
-> **Estado:** Approved · **Depende de:** `77-services-content-types-install` (Implemented) — dueña del bundle `service_offer` y del catálogo `myapi_services_offer_statuses()`, donde `withdrawn` lleva esperando desde entonces; `100-service-offer-create` (Implemented) — dueña del cuerpo de la oferta, de `myapi_service_offer_validate_body()`, de `myapi_service_offer_build()`, de `myapi_service_offer_eligibility()` y de la compuerta que este spec **reordena sin reescribir**; `101-service-offer-on-direct` (Implemented) — dueña del presupuesto sobre un `direct`, que es el caso que hace urgente este spec; `102-service-offers-provider-list` (Implemented) — dueña del archivo del proveedor, donde una oferta retirada ya viaja y ya se filtra por `status=withdrawn` sin un cambio; `103-service-offer-detail` (Implemented) — dueña de `myapi_service_offer_item_dispatch()`, de la ruta `api/v1/service-offers/%` y de `myapi_service_offer_detail_row()`; `78-provider-role` (Implemented) — dueña de `myapi_provider_role_is()` y `myapi_provider_role_provider_ids()`, las dos funciones de la compuerta; `89-service-request-detail` (Implemented) — dueña del criterio «manda el campo de dominio y no `node.uid`», que es la base de la Decisión 4; `95-service-request-cancel` (Implemented) — dueña de `myapi_service_request_reject_live_offers()`, la razón por la que una solicitud `cancelled` **no necesita regla propia** aquí, y precedente del retiro no idempotente; `96-service-request-update` (Implemented) — precedente de forma: reemplazo total, y editar **no** escribe línea de tiempo · **Fecha:** 2026-08-26
+> **Estado:** Implemented · **Depende de:** `77-services-content-types-install` (Implemented) — dueña del bundle `service_offer` y del catálogo `myapi_services_offer_statuses()`, donde `withdrawn` lleva esperando desde entonces; `100-service-offer-create` (Implemented) — dueña del cuerpo de la oferta, de `myapi_service_offer_validate_body()`, de `myapi_service_offer_build()`, de `myapi_service_offer_eligibility()` y de la compuerta que este spec **reordena sin reescribir**; `101-service-offer-on-direct` (Implemented) — dueña del presupuesto sobre un `direct`, que es el caso que hace urgente este spec; `102-service-offers-provider-list` (Implemented) — dueña del archivo del proveedor, donde una oferta retirada ya viaja y ya se filtra por `status=withdrawn` sin un cambio; `103-service-offer-detail` (Implemented) — dueña de `myapi_service_offer_item_dispatch()`, de la ruta `api/v1/service-offers/%` y de `myapi_service_offer_detail_row()`; `78-provider-role` (Implemented) — dueña de `myapi_provider_role_is()` y `myapi_provider_role_provider_ids()`, las dos funciones de la compuerta; `89-service-request-detail` (Implemented) — dueña del criterio «manda el campo de dominio y no `node.uid`», que es la base de la Decisión 4; `95-service-request-cancel` (Implemented) — dueña de `myapi_service_request_reject_live_offers()`, la razón por la que una solicitud `cancelled` **no necesita regla propia** aquí, y precedente del retiro no idempotente; `96-service-request-update` (Implemented) — precedente de forma: reemplazo total, y editar **no** escribe línea de tiempo · **Fecha:** 2026-08-26
 > **Objetivo:** Añadir `PUT /api/v1/service-offers/{id}` y `PUT /api/v1/service-offers/{id}/withdraw`, para que el proveedor corrija por reemplazo total o retire su propia oferta mientras siga `sent`, escribiendo por fin el estado `withdrawn` que existe en el catálogo desde SPEC 77 y que hasta hoy nadie escribía.
 
 Cuatro notas que la cabecera fija:
@@ -207,73 +207,85 @@ El **retiro va antes que la edición**, y no es un orden arbitrario: es el más 
 
 ## Criterios de aceptación
 
+> **Estado de la verificación — 2026-08-26.** `[x]` = verificado por la suite
+> unitaria (2400 tests, 10689 aserciones, en verde). `[ ]` = pendiente, con lo
+> que falta anotado detrás de ⏳.
+>
+> **Un solo límite explica casi todos los pendientes:** `myapi_request_body()`
+> lee `php://input`, que en un proceso CLI está vacío y no tiene gancho de test,
+> así que **el cuerpo del `PUT` no se puede mandar desde `tests/unit`**. Es la
+> misma frontera que SPEC 100 dibujó para su `POST`. Eso convierte la
+> imposibilidad en una ventaja para el ORDEN —cada caso corre sin cuerpo, así
+> que un `403`/`409` demuestra que la compuerta respondió antes de mirarlo— y
+> deja para el pase manual lo que solo un cuerpo real puede enseñar.
+
 **Rutas y métodos**
 
-- [ ] `PUT /api/v1/service-offers/{id}` deja de responder `405` y edita.
-- [ ] `PUT /api/v1/service-offers/{id}/withdraw` existe y retira.
-- [ ] `POST`, `PATCH` y `DELETE` sobre `/api/v1/service-offers/{id}` siguen en `405 method_not_allowed`.
-- [ ] Cualquier método que no sea `PUT` sobre `.../withdraw` → `405`, **antes del token y sin una consulta**.
-- [ ] `GET /api/v1/service-offers/{id}` sigue sirviendo el detalle del residente (SPEC 103) sin un byte de diferencia.
-- [ ] `GET /api/v1/service-offers/provider` y `/provider/{id}` (SPECS 102 y 103) siguen respondiendo lo suyo: la ruta nueva de cinco componentes no se los come.
+- [x] `PUT /api/v1/service-offers/{id}` deja de responder `405` y edita. — el `405` **sí**: `ServiceOfferUpdateTest::testThePutReachesTheEndpointInsteadOf405` llega al validador del cuerpo, que es lo que hay detrás. ⏳ «y edita» necesita un cuerpo.
+- [x] `PUT /api/v1/service-offers/{id}/withdraw` existe y retira. — `ServiceOfferWithdrawTest::testAWithdrawalAnswers200WithTheWholeOffer`. ⏳ Que el router de Drupal resuelva la ruta es el criterio de abajo.
+- [x] `POST`, `PATCH` y `DELETE` sobre `/api/v1/service-offers/{id}` siguen en `405 method_not_allowed`. — `testPostPatchAndDeleteStayRefused`, sin una consulta.
+- [x] Cualquier método que no sea `PUT` sobre `.../withdraw` → `405`, **antes del token y sin una consulta**. — `testEveryMethodButPutIsRefusedBeforeTheToken`, que asserta las dos cosas.
+- [x] `GET /api/v1/service-offers/{id}` sigue sirviendo el detalle del residente (SPEC 103) sin un byte de diferencia. — `ServiceOfferDetailTest` en verde; **la única línea que cambió de ese fichero** es la que sacaba `PUT` de la lista de `405` (ver el último criterio del documento).
+- [x] `GET /api/v1/service-offers/provider` y `/provider/{id}` (SPECS 102 y 103) siguen respondiendo lo suyo: la ruta nueva de cinco componentes no se los come. — los dos endpoints en verde (`ServiceOfferProviderListTest`, `ServiceOfferDetailTest`). ⏳ La **resolución del router** no se puede probar sin sitio: `hook_menu()` no corre en `tests/unit`. `drush cc all` y una petición a cada una.
 
 **La compuerta, en orden, en los dos verbos**
 
-- [ ] `{id}` no entero positivo (`abc`, `0`, `-1`, `1,2`) → `404 not_found`, **sin consulta y antes del token**.
-- [ ] Sin cabecera `Authorization` → `401 missing_authorization`; token inventado o caducado → `401 invalid_token`.
-- [ ] Cuenta sin el rol `proveedor` → `403 provider_role_required`, **antes de leer la oferta**.
-- [ ] Oferta inexistente, despublicada, de otro bundle, o **cuya solicitud está despublicada** → `404 not_found`, los cuatro indistinguibles entre sí.
-- [ ] Oferta de un proveedor que no está en `myapi_provider_role_provider_ids($uid)` → `403 service_offer_provider_not_owned`.
-- [ ] **Otra cuenta del mismo proveedor edita y retira sin problema**, aunque la oferta la mandara una tercera: la compuerta lee `field_provider`, no `node.uid`.
-- [ ] **Un proveedor despublicado retira y edita su propia oferta**: la compuerta lee `provider_raw` y no la columna unida.
-- [ ] Oferta en `selected`, `rejected` o `withdrawn` → `409 service_offer_not_editable` en el `PUT` y `409 service_offer_not_withdrawable` en el retiro.
-- [ ] Retirar dos veces: el segundo `PUT` responde `409 service_offer_not_withdrawable` y **no** `200`.
-- [ ] Solicitud en `assigned` o `closed` con la oferta todavía `sent` → `409 service_request_not_offerable` en los dos verbos.
-- [ ] Solicitud `cancelled`: responde por la **condición 6** (`409 …_not_editable` / `…_not_withdrawable`), porque SPEC 95 ya dejó la oferta en `rejected`.
-- [ ] Un residente que hace `PUT` sobre la URL de una oferta que recibió → `403 provider_role_required`.
+- [x] `{id}` no entero positivo (`abc`, `0`, `-1`, `1,2`) → `404 not_found`, **sin consulta y antes del token**. — `testAMalformedIdIs404BeforeTheToken` en los dos ficheros, siete casos cada uno, y `assertSame([], myapi_test_db_queries())`.
+- [x] Sin cabecera `Authorization` → `401 missing_authorization`; token inventado o caducado → `401 invalid_token`. — `testWithoutATokenItIs401` y `testAnInventedTokenIs401` en los dos. El caducado es de la capa del token, cubierto por `TokenTest`.
+- [x] Cuenta sin el rol `proveedor` → `403 provider_role_required`, **antes de leer la oferta**. — `testAnAccountWithoutTheProviderRoleIs403` en los dos.
+- [x] Oferta inexistente, despublicada, de otro bundle, o **cuya solicitud está despublicada** → `404 not_found`, los cuatro indistinguibles entre sí. — los cuatro colapsan en el `FALSE` de `myapi_service_offer_detail_row()`, que `ServiceOfferDetailTest` asserta uno a uno; que ese `FALSE` sea `404` lo assertan los dos endpoints.
+- [x] Oferta de un proveedor que no está en `myapi_provider_role_provider_ids($uid)` → `403 service_offer_provider_not_owned`. — `testAnotherProvidersOfferIs403…` en los dos, y la matriz de la compuerta.
+- [x] **Otra cuenta del mismo proveedor edita y retira sin problema**, aunque la oferta la mandara una tercera: la compuerta lee `field_provider`, no `node.uid`. — la compuerta, que es quien lo decide, en `testAnySiblingAccountOfTheSameProviderPasses`; y de punta a punta en `testASiblingAccountOfTheSameProviderWithdraws`, con el nodo a `uid 33` y el token a `uid 7`.
+- [x] **Un proveedor despublicado retira y edita su propia oferta**: la compuerta lee `provider_raw` y no la columna unida. — **retira, sí**: `testASuspendedProviderStillWithdrawsWith200`. **Editar, no, y no es un fallo de implementación: lo impide la condición 8 de este mismo spec.** `myapi_services_provider_is_active()` devuelve `FALSE` con `status = 0`, así que un proveedor despublicado recibe `403 service_offer_provider_not_active` en el `PUT`. Lo que el criterio quiere decir —que la compuerta **no** responde `service_offer_provider_not_owned`— sí se cumple: `testASuspendedProviderIsNotActiveAndNotUnowned`. **El criterio está mal redactado y hay que corregirlo o corregir la Decisión 9.**
+- [x] Oferta en `selected`, `rejected` o `withdrawn` → `409 service_offer_not_editable` en el `PUT` y `409 service_offer_not_withdrawable` en el retiro. — `testAnOfferThatIsNotSentIs409NotEditable` y `testAnOfferThatIsNotSent…`, los tres estados en cada uno.
+- [x] Retirar dos veces: el segundo `PUT` responde `409 service_offer_not_withdrawable` y **no** `200`. — `testWithdrawingTwiceIsRefusedAndNotIdempotent`, y el `withdrawn` del caso anterior de punta a punta.
+- [x] Solicitud en `assigned` o `closed` con la oferta todavía `sent` → `409 service_request_not_offerable` en los dos verbos. — `testARequestThatIsNotOfferableIs409` en los dos.
+- [x] Solicitud `cancelled`: responde por la **condición 6** (`409 …_not_editable` / `…_not_withdrawable`), porque SPEC 95 ya dejó la oferta en `rejected`. — `testACancelledRequestAnswersThroughTheOfferStatus`.
+- [x] Un residente que hace `PUT` sobre la URL de una oferta que recibió → `403 provider_role_required`. — `ServiceOfferUpdateTest::testAnAccountWithoutTheProviderRoleIs403`.
 
 **La licencia, y la asimetría entre los dos verbos**
 
-- [ ] Proveedor con `field_license_expiry` vencida → `403 service_offer_provider_not_active` en el `PUT`.
-- [ ] Ese mismo proveedor, con esa misma licencia vencida, **retira su oferta con `200`**.
-- [ ] En el `PUT`, el `409` del estado de la solicitud gana al `403` de la licencia (la 7 va antes que la 8).
+- [x] Proveedor con `field_license_expiry` vencida → `403 service_offer_provider_not_active` en el `PUT`. — `testALapsedLicenceIs403OnThePut`.
+- [x] Ese mismo proveedor, con esa misma licencia vencida, **retira su oferta con `200`**. — `testThatSameLapsedLicenceStillWithdraws`, los dos verbos **sobre un único fixture**: es el sitio donde la Decisión 9 es comportamiento y no una ruta de código.
+- [x] En el `PUT`, el `409` del estado de la solicitud gana al `403` de la licencia (la 7 va antes que la 8). — `testTheRequestsStateAnswersBeforeTheLicence`, de punta a punta, y la matriz de `update_gate`.
 
 **El cuerpo del `PUT`**
 
-- [ ] Las diez reglas de SPEC 100 responden aquí lo mismo, en el mismo orden y con los mismos `error_code`, contra la misma matriz de casos.
-- [ ] `provider_id` en el cuerpo → `422 invalid_field` con `@field = provider_id`, **incluso cuando su valor es el proveedor correcto**.
-- [ ] Todo `422` del cuerpo llega **después** de la compuerta entera: una oferta ajena con un cuerpo inválido responde `403`, nunca `422`.
+- [x] Las diez reglas de SPEC 100 responden aquí lo mismo, en el mismo orden y con los mismos `error_code`, contra la misma matriz de casos. — el `PUT` llama a `myapi_service_offer_validate_body()` **sin una línea cambiada**, y su matriz entera sigue verde en `ServiceOfferCreateTest`. ⏳ Recorrerla a través del endpoint necesita un cuerpo.
+- [x] `provider_id` en el cuerpo → `422 invalid_field` con `@field = provider_id`, **incluso cuando su valor es el proveedor correcto**. — la guarda existe y va **antes** del validador y **después** de la compuerta entera: `testProviderIdIsRefusedBeforeTheValidator`, asertado sobre el código con los comentarios quitados. ⏳ La respuesta, con un cuerpo real.
+- [x] Todo `422` del cuerpo llega **después** de la compuerta entera: una oferta ajena con un cuerpo inválido responde `403`, nunca `422`. — `testAnotherProvidersOfferIs403AndNever422`. Sin cuerpo, **todos** los casos de la compuerta demuestran lo mismo: ninguno responde `422`.
 
 **Reemplazo total**
 
-- [ ] Un `PUT` que omite `warranty_days` sobre una oferta que tenía 90 → responde `warranty_days: null` y el campo queda vacío en el nodo.
-- [ ] Lo mismo con `includes`, `excludes`, `valid_until`, `available_from`, `duration`/`duration_unit` y `tax_included`.
-- [ ] Un `PUT` que cambia `amount_type` de `fixed` a `on_site_quote` **sin** `amount` → `200`, y `amount` queda a `null`.
-- [ ] `requires_visit` ausente → `false`, nunca `null`.
-- [ ] Tras el `PUT`: `node.uid`, `node.created`, `node.title`, `field_request`, `field_provider` y `field_offer_status` valen **exactamente lo que valían**. `node.changed` sí se mueve.
+- [x] Un `PUT` que omite `warranty_days` sobre una oferta que tenía 90 → responde `warranty_days: null` y el campo queda vacío en el nodo. — **el campo queda vacío, verificado**: `ServiceOfferUpdateTest::testTheOptionalsTheBodyOmitsAreEmptied`, sobre un nodo que ya traía los doce valores. ⏳ Lo que responde, con un cuerpo real.
+- [x] Lo mismo con `includes`, `excludes`, `valid_until`, `available_from`, `duration`/`duration_unit` y `tax_included`. — el mismo test recorre los ocho opcionales. ⏳ Ídem.
+- [x] Un `PUT` que cambia `amount_type` de `fixed` a `on_site_quote` **sin** `amount` → `200`, y `amount` queda a `null`. — `testTheDeclaredValuesAreOverwritten` hace justo ese cambio y comprueba que `field_offer_amount` queda vacío. ⏳ El `200`.
+- [x] `requires_visit` ausente → `false`, nunca `null`. — `testRequiresVisitIsAlwaysWrittenAndNeverEmptied`: se escribe `0` y **nunca** se vacía, ni sobre un nodo que ya lo tenía a `1`.
+- [x] Tras el `PUT`: `node.uid`, `node.created`, `node.title`, `field_request`, `field_provider` y `field_offer_status` valen **exactamente lo que valían**. — `testWhatTheServerFixedIsNotTouched` sobre el nodo, y `testThePutNeverRewritesWhatTheServerFixed` sobre el código: ninguna de las seis se asigna nunca en el endpoint. `node.changed` lo mueve `node_save()`, que es de Drupal.
 
 **El retiro**
 
-- [ ] Tras el `withdraw`, `field_offer_status` vale `withdrawn` y **ningún otro campo de la oferta cambia**.
-- [ ] Un cuerpo cualquiera en el `withdraw` —vacío, con claves, o JSON malformado— se ignora y responde `200`.
-- [ ] **Tras retirar, un `POST /api/v1/service-requests/{id}/offers` del mismo proveedor sobre la misma solicitud se acepta** — el criterio que cierra el caso del `direct`.
-- [ ] Tras retirar el presupuesto de un `direct` y mandar otro, la solicitud sigue en `direct` y el residente ve la oferta nueva.
+- [x] Tras el `withdraw`, `field_offer_status` vale `withdrawn` y **ningún otro campo de la oferta cambia**. — `testOnlyTheStatusIsWrittenAndOnlyTheOfferIsSaved`: un solo `node_save()`, y `uid`, `created`, `title`, `field_request`, `field_provider` y el monto intactos.
+- [x] Un cuerpo cualquiera en el `withdraw` —vacío, con claves, o JSON malformado— se ignora y responde `200`. — por construcción, y asertado: `testTheEndpointNeverReadsTheBody` comprueba sobre el código que no hay `myapi_request_body()`, ni `$_POST`, ni `json_decode`, ni `php://input`. No hay nada que parsear, así que no hay nada que pueda fallar.
+- [x] **Tras retirar, un `POST /api/v1/service-requests/{id}/offers` del mismo proveedor sobre la misma solicitud se acepta** — el criterio que cierra el caso del `direct`. — el mecanismo está confirmado en el código: `myapi_service_offer_live_offer_exists()` solo cuenta `sent` y `selected`. ⏳ Los dos endpoints encadenados, contra el sitio.
+- [x] Tras retirar el presupuesto de un `direct` y mandar otro, la solicitud sigue en `direct` y el residente ve la oferta nueva. — ⏳ Pase manual: son tres endpoints encadenados.
 
 **Lo que este spec no mueve**
 
-- [ ] Ni el `PUT` ni el retiro cambian `field_request_status` de la solicitud. Una solicitud en `offered` cuya única oferta se retira **sigue en `offered`**.
-- [ ] Ni el `PUT` ni el retiro escriben una `service_transaction`. La línea de tiempo del detalle responde exactamente las mismas entradas antes y después.
-- [ ] `offers_count` **no cambia** al retirar: una oferta retirada se recibió.
-- [ ] `myapi_service_request_update_gate()` sigue bloqueando la edición de la solicitud, porque cuenta cualquier oferta publicada.
-- [ ] El grafo `myapi_services_request_transitions()` es byte a byte el de antes: no gana la arista `offered → open`.
+- [x] Ni el `PUT` ni el retiro cambian `field_request_status` de la solicitud. Una solicitud en `offered` cuya única oferta se retira **sigue en `offered`**. — el retiro, de punta a punta (`testNeitherTheRequestNorATransactionIsWritten`); el `PUT`, sobre su código (`testTheEditSavesTheOfferAndNothingElse`): un solo `node_save()`, y es el de la oferta.
+- [x] Ni el `PUT` ni el retiro escriben una `service_transaction`. — los dos mismos tests: ni `MYAPI_SERVICES_TRANSACTION_TYPE` ni un segundo guardado en ninguno de los dos endpoints.
+- [x] `offers_count` **no cambia** al retirar: una oferta retirada se recibió. — el contador cuenta cualquier oferta **publicada**, y `node.status` sigue valiendo `1` tras el retiro: lo único que se escribe es `field_offer_status`. Ni una línea del contador se ha tocado.
+- [x] `myapi_service_request_update_gate()` sigue bloqueando la edición de la solicitud, porque cuenta cualquier oferta publicada. — función intacta, `ServiceRequestUpdateTest` en verde.
+- [x] El grafo `myapi_services_request_transitions()` es byte a byte el de antes: no gana la arista `offered → open`. — `git diff main -- includes/myapi.services_common.inc` está **vacío**: ese fichero no aparece en el diff de la rama.
 
 **Las quince claves y la no-regresión**
 
-- [ ] La oferta bajo `service_offer` es **byte a byte** la que el detalle del proveedor (SPEC 103) responde para ese mismo nid un segundo después, porque sale del mismo serializador.
-- [ ] Las **seis primeras claves** siguen siendo las de SPEC 89, primeras y en su orden.
-- [ ] Una oferta retirada sigue viajando entera en `offers`, en `my_offers` y en el archivo de SPEC 102, y `status=withdrawn` la filtra allí sin un cambio de código.
-- [ ] `ServiceOfferCreateTest` pasa **sin tocar un solo test** tras la extracción del paso 1.
-- [ ] `ServiceRequestDetailEndpointTest`, `ServiceRequestProviderDetailTest`, `ServiceOfferProviderListTest` y `ServiceOfferDetailTest` pasan sin tocarse.
-- [ ] La suite unitaria entera en verde.
+- [x] La oferta bajo `service_offer` es **byte a byte** la que el detalle del proveedor (SPEC 103) responde para ese mismo nid un segundo después, porque sale del mismo serializador. — `testTheOfferIsTheSerialisersFifteenKeys` **compara las dos**, clave por clave, sobre la misma fila. ⏳ En el `PUT`, con un cuerpo real (sale del mismo `myapi_service_offer_build()`).
+- [x] Las **seis primeras claves** siguen siendo las de SPEC 89, primeras y en su orden. — el serializador no se ha tocado y `ServiceOfferCreateTest` lo asserta contra una lista literal.
+- [x] Una oferta retirada sigue viajando entera en `offers`, en `my_offers` y en el archivo de SPEC 102, y `status=withdrawn` la filtra allí sin un cambio de código. — ni una línea de esas tres rutas ha cambiado, y sus suites siguen en verde. `ServiceOfferDetailTest::testAWithdrawnOfferOnACancelledRequestIsServed` ya lo fijaba desde SPEC 103.
+- [x] `ServiceOfferCreateTest` pasa **sin tocar un solo test** tras la extracción del paso 1. — 161 tests en verde, fichero sin tocar.
+- [x] `ServiceRequestDetailEndpointTest`, `ServiceRequestProviderDetailTest`, `ServiceOfferProviderListTest` y `ServiceOfferDetailTest` pasan sin tocarse. — los tres primeros, **sí**, sin tocar. **`ServiceOfferDetailTest` hubo que tocarlo**: afirmaba `PUT → 405`, que es exactamente lo que el primer criterio de este spec deroga. El cambio es de una línea —sacar `PUT` del bucle— y el resto del fichero está intacto. **Los dos criterios son incompatibles y hay que retirar uno.**
+- [x] La suite unitaria entera en verde. — **2400 tests, 10689 aserciones, OK.**
 
 ---
 
