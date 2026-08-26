@@ -12,6 +12,7 @@ require_once __DIR__ . '/../../includes/myapi.provider_role.inc';
 require_once __DIR__ . '/../../includes/myapi.service_offer.inc';
 require_once __DIR__ . '/../../includes/myapi.service_offer_query.inc';
 require_once __DIR__ . '/../../includes/myapi.service_request_query.inc';
+require_once __DIR__ . '/../../includes/myapi.service_request_detail.inc';
 require_once __DIR__ . '/../../resources/service_offer.resource.inc';
 // SPEC 103, decision 4: `condominium` and `requester` are built in THREE places
 // on purpose. This suite is what keeps the three in agreement, so it has to be

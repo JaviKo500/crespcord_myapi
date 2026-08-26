@@ -13,6 +13,7 @@ require_once __DIR__ . '/../../includes/myapi.building_admin.inc';
 require_once __DIR__ . '/../../includes/myapi.service_request_files.inc';
 require_once __DIR__ . '/../../includes/myapi.service_offer.inc';
 require_once __DIR__ . '/../../includes/myapi.service_request_query.inc';
+require_once __DIR__ . '/../../includes/myapi.service_request_detail.inc';
 require_once __DIR__ . '/../../resources/service_request.resource.inc';
 require_once __DIR__ . '/../../myapi.module';
 
@@ -449,17 +450,26 @@ class ServiceRequestDetailEndpointTest extends TestCase {
   }
 
   /**
-   * The resource file split into one entry per top-level function, comments
-   * already stripped. Lets a structural guard say "no READ path does X" instead
-   * of "this file never says X", which is what SPEC 95 forced apart: the write
+   * One file split into one entry per top-level function, comments already
+   * stripped. Lets a structural guard say "no READ path does X" instead of
+   * "this file never says X", which is what SPEC 95 forced apart: the write
    * paths it added legitimately load entities, and the read paths still must
    * not.
+   *
+   * TAKES A PATH SINCE SPEC 106, which moved the six loaders and serialisers of
+   * this detail out to includes/myapi.service_request_detail.inc. The guard
+   * below reads BOTH files: leaving it pointed at the resource alone would have
+   * kept it green while silently dropping the six functions it was written to
+   * watch, which is the one way an extraction can move something without a
+   * single assertion failing.
+   *
+   * @param string $path  Relative to this directory, like codeWithoutComments().
    *
    * @return array  Function name => its source, from its signature to the one
    *                before it.
    */
-  private function functionBodies() {
-    $code = $this->codeWithoutComments();
+  private function functionBodies($path = '/../../resources/service_request.resource.inc') {
+    $code = $this->codeWithoutComments($path);
     $parts = preg_split(
       '/^function\s+([a-z0-9_]+)\s*\(/mi',
       $code,
@@ -2204,14 +2214,24 @@ class ServiceRequestDetailEndpointTest extends TestCase {
       'myapi_service_request_update',
     ];
 
-    $checked = 0;
-    foreach ($this->functionBodies() as $name => $body) {
-      if (in_array($name, $allowed, TRUE)) {
-        continue;
-      }
+    // BOTH halves of the detail: the endpoints left in the resource and the six
+    // loaders and serialisers SPEC 106 moved to the include. The ban follows
+    // the code, not the file it happens to live in.
+    $files = [
+      '/../../resources/service_request.resource.inc',
+      '/../../includes/myapi.service_request_detail.inc',
+    ];
 
-      $this->assertStringNotContainsString('node_load', $body, $name . '() must not call node_load()');
-      $checked++;
+    $checked = 0;
+    foreach ($files as $file) {
+      foreach ($this->functionBodies($file) as $name => $body) {
+        if (in_array($name, $allowed, TRUE)) {
+          continue;
+        }
+
+        $this->assertStringNotContainsString('node_load', $body, $name . '() must not call node_load()');
+        $checked++;
+      }
     }
 
     // Sanity: the splitter actually found the file's functions. A regex that
