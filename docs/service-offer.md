@@ -7,12 +7,22 @@ from the start**, which is the same body on the same route and the only place in
 this module where the price of that job can live. And each side can then open
 **one** of those quotes on a route of its own.
 
-Four routes:
+Six routes:
 
 - [`POST /api/v1/service-requests/{id}/offers`](#post-apiv1service-requestsidoffers) — create an offer. It hangs off the request because **an offer does not exist outside its request**.
 - [`GET /api/v1/service-offers/provider`](#get-apiv1service-offersprovider) — **the provider's own archive**: *what have I quoted?*, across every request, paginated and filtered.
 - [`GET /api/v1/service-offers/provider/{id}`](#get-apiv1service-offersproviderid) — **one of my offers, whole**: the fifteen keys plus the context of its request.
 - [`GET /api/v1/service-offers/{id}`](#get-apiv1service-offersid) — **one of the offers I received**, for the resident who received it.
+- [`PUT /api/v1/service-offers/{id}`](#put-apiv1service-offersid) — **correct my own offer**, by total replacement, while it is still `sent`.
+- [`PUT /api/v1/service-offers/{id}/withdraw`](#put-apiv1service-offersidwithdraw) — **take my own offer back**, which is what finally writes `withdrawn`.
+
+> ⚠️ **`/api/v1/service-offers/{id}` carries two different actors.** The `GET`
+> is the **resident's** — it answers `403` to a provider, even to the one who
+> bid — and the `PUT` is the **provider's**, and answers `403` to a resident.
+> Each side reads its own copy on its own route: the provider's is
+> [`GET /api/v1/service-offers/provider/{id}`](#get-apiv1service-offersproviderid).
+> A client that discovers this with the wrong token will conclude the endpoint
+> is broken; it is not, it is one URL with a gate per method.
 
 **The offers *of a request* are read elsewhere**, whole: inside
 [the resident's detail](service-request.md) (`offers`) and inside
@@ -214,16 +224,22 @@ different providers of the same account may both bid on the same request**: they
 are two companies in this data model, with separate licences, categories and
 ratings, and the resident contracts the provider, not the account.
 
-> ⚠️ **You cannot correct an offer you already sent.** There is no `PUT` and no
-> `DELETE` here, and condition 7 blocks a second one while the first is `sent`.
-> A zero too many in the amount stays written until the resident awards somebody
-> else or cancels. Confirm the send in the app with a summary of what is going
-> out. Editing and withdrawing are the next spec.
+> ⚠️ **A zero too many is fixable, but not from this route.** Condition 7 blocks
+> a second offer while the first is `sent`, so the way back is one of the two
+> routes that write on an offer that already exists:
+> [`PUT /api/v1/service-offers/{id}`](#put-apiv1service-offersid) corrects it in
+> place, and [`PUT /api/v1/service-offers/{id}/withdraw`](#put-apiv1service-offersidwithdraw)
+> takes it back and frees the request for a new one.
 >
-> **On a `direct` this hurts more**, because there is no competing offer to
-> absorb the mistake: the resident's only way out of a wrong price is cancelling
-> the job. Nothing is recorded as *agreed*, so the damage stops there — but the
-> app must show the amount **in large type** on the confirmation screen.
+> **Correcting is what the app should offer**, not withdrawing and re-sending:
+> the second leaves **two nodes** in the resident's listing, loses the original
+> `created` and makes `offers_count` count two offers from one company.
+>
+> **On a `direct` this used to be fatal**, because there is no competing offer
+> to absorb the mistake and the resident's only exit was cancelling the job.
+> That is exactly the case the two routes above opened. Confirm the send in the
+> app with a summary of what is going out, and show the amount **in large type**
+> on the confirmation screen anyway.
 
 ### What the server decides, and the client never sends
 
@@ -950,15 +966,316 @@ that starts at the leaf and not at the root. If it is ever needed, it is a spec.
 
 ---
 
+## PUT /api/v1/service-offers/{id}
+
+Corrects one of the authenticated account's offers, **by total replacement**,
+while it is still `sent`. It is the answer to *"I sent a zero too many"* that
+did not exist until now.
+
+**Authentication:** required — Bearer token, and the account must hold the
+`proveedor` role.
+
+**This is the provider's verb on a URL whose `GET` belongs to the resident.**
+See the warning at the top of this document.
+
+**Headers**
+
+| Header | Value |
+|--------|-------|
+| Content-Type | application/json |
+| Authorization | Bearer &lt;access_token&gt; |
+| Accept-Language | `es` (default) or `en` |
+
+### Request body
+
+**The twelve fields of the create route, no more and no fewer**, with the same
+ten rules, in the same order, answering the same `error_code`s — see
+[the create body](#request-body) for each one. What changes here is not the
+validation, it is what an absence means.
+
+> ⚠️ **THIS IS A TOTAL REPLACEMENT. AN OPTIONAL FIELD YOU LEAVE OUT IS DELETED.**
+> A `PUT` without `warranty_days` leaves the offer **with no warranty**, even if
+> it had 90 days yesterday. The same goes for `includes`, `excludes`,
+> `valid_until`, `available_from`, `duration`/`duration_unit` and
+> `tax_included`.
+>
+> **The app must send the whole form**, pre-filled with what the offer holds
+> today — which is byte for byte what this endpoint answers and what
+> [the detail](#get-apiv1service-offersproviderid) serves.
+
+**`provider_id` is not a field of this body.** The offer already knows whose it
+is, and a `provider_id` here can only contradict the URL. If it arrives — **with
+any value, the correct one included** — the answer is `422 invalid_field` with
+`@field = provider_id`. It is refused out loud rather than dropped in silence,
+because a client that sends it believes it changed something.
+
+```json
+{
+  "message": "Puedo pasar el jueves por la mañana.",
+  "amount_type": "fixed",
+  "amount": 150.5,
+  "tax_included": true,
+  "valid_until": "2026-09-01 23:59",
+  "available_from": "2026-08-27 08:00",
+  "duration": 3,
+  "duration_unit": "hours",
+  "includes": "Mano de obra, desplazamiento y sellado.",
+  "excludes": "El calentador de repuesto, si hiciera falta.",
+  "warranty_days": 90,
+  "requires_visit": false
+}
+```
+
+### What the `PUT` never touches
+
+| Field | Still worth |
+|-------|-------------|
+| `node.uid` | The account that **created** it — not the one editing. History is not rewritten. |
+| `node.created` | The instant it was quoted. `node.changed` **does** move. |
+| `node.title` | The one it was born with: it names the provider and the request, and neither changes. |
+| `field_request` | Editing does not move an offer to another request. |
+| `field_provider` | Changing it would be another offer, not this one. |
+| `field_offer_status` | Stays `sent`. |
+| The three chat fields | Still empty, as they have been since the bundle was installed. |
+
+**Nothing outside the offer moves either:** the request keeps its status, no
+timeline entry is written, and `offers_count` is untouched.
+
+### Who may edit: eight conditions, in this order
+
+The first one that fails answers.
+
+| # | Condition | If it fails |
+|---|-----------|-------------|
+| 1 | `{id}` is a positive integer | `404 not_found` — **before the token, with no query** |
+| 2 | The token is valid | `401 missing_authorization` / `401 invalid_token` |
+| 3 | The account holds the `proveedor` role | `403 provider_role_required` — **before the offer is read** |
+| 4 | The offer exists and is servable | `404 not_found` |
+| 5 | The offer belongs to one of the account's providers | `403 service_offer_provider_not_owned` |
+| 6 | The offer is still `sent` | `409 service_offer_not_editable` |
+| 7 | Its request still takes offers (`open`, `offered`, `direct`) | `409 service_request_not_offerable` |
+| 8 | The provider may operate today | `403 service_offer_provider_not_active` |
+
+**Ownership is `field_provider` and never `node.uid`.** Any account of the same
+provider may correct an offer a colleague sent: a company with two employees
+cannot be left with a frozen offer because the one who sent it is on holiday.
+
+**Condition 8 comes after condition 7, and that is deliberate.** Conditions 5 to
+7 ask *"may anything be written on this offer at all?"*, and 8 asks *"may you
+send a new quote?"*. So a `409` over a closed request wins over the `403` of a
+lapsed licence.
+
+**The category is not checked.** It was checked the day the offer was born.
+Asking again would leave a company unable to correct a price only because it
+stopped serving that category afterwards.
+
+**Every `422` of the body arrives after the whole gate.** A stranger's offer
+with an invalid body answers `403`, never `422`: who you are does not depend on
+what you wrote.
+
+### Success response (200)
+
+```json
+{
+  "success": true,
+  "data": {
+    "service_offer": {
+      "id": 901,
+      "provider": { "id": 41, "name": "Plomería Torres", "logo": "https://…/logo.png" },
+      "amount": 150.5,
+      "message": "Puedo pasar el jueves por la mañana.",
+      "status": "sent",
+      "created": "2026-08-25T11:02:00",
+      "amount_type": "fixed",
+      "valid_until": "2026-09-01T23:59:00",
+      "available_from": "2026-08-27T08:00:00",
+      "duration": { "value": 3, "unit": "hours" },
+      "includes": "Mano de obra, desplazamiento y sellado.",
+      "excludes": "El calentador de repuesto, si hiciera falta.",
+      "tax_included": true,
+      "warranty_days": 90,
+      "requires_visit": false
+    },
+    "request": { "id": 128, "status": "offered" }
+  },
+  "message": "Oferta actualizada correctamente."
+}
+```
+
+**`200` and not `201`:** nothing is born. **`status` is still `sent`** — editing
+does not change what state an offer is in.
+
+**The fifteen keys are the same serialiser's**, so the object under
+`service_offer` is byte for byte what
+[the detail](#get-apiv1service-offersproviderid) answers for this nid a second
+later. **`provider.logo` does travel here**, unlike in the `201` of the create
+route: there it would have cost a query, here it comes free in the row the gate
+needed anyway.
+
+**`request` is a sibling and not a sixteenth key**, and it carries the request's
+status **without moving it**.
+
+### Possible errors
+
+| Code | `error_code` | When |
+|------|--------------|------|
+| 405 | `method_not_allowed` | `POST`, `PATCH` or `DELETE` on this route. Answered **before the token**. |
+| 404 | `not_found` | `{id}` is not a positive integer. **No query runs.** |
+| 401 | `missing_authorization` | No `Authorization` header. |
+| 401 | `invalid_token` | Invented, revoked or expired token. |
+| 403 | `provider_role_required` | The account has no `proveedor` role. **A resident who `PUT`s the URL of an offer they received lands here.** |
+| 404 | `not_found` | The offer does not exist, is unpublished, is of another bundle, or **its request is not published**. The four are indistinguishable on purpose. |
+| 403 | `service_offer_provider_not_owned` | The offer belongs to a provider that is not the account's. |
+| 409 | `service_offer_not_editable` | The offer is `selected`, `rejected` or `withdrawn`. |
+| 409 | `service_request_not_offerable` | The request is `assigned`, `closed` or `cancelled`. |
+| 403 | `service_offer_provider_not_active` | The provider is unpublished or its licence has expired. |
+| 422 | `invalid_field` | `provider_id` in the body (`@field = provider_id`), or any of the ten body rules. |
+| 422 | `missing_field` | `message` or `amount_type` absent — including when the body is missing or unparseable. |
+| 422 | `service_offer_amount_required`, `service_offer_amount_not_allowed`, `service_offer_tax_without_amount`, `service_offer_duration_incomplete` | The four conditional rules of the body. |
+
+---
+
+## PUT /api/v1/service-offers/{id}/withdraw
+
+Takes one of the authenticated account's offers back while it is still `sent`.
+**This is the only thing in the module that writes the `withdrawn` status**,
+which has been in the catalogue since the bundle was installed.
+
+**Authentication:** required — Bearer token, and the account must hold the
+`proveedor` role.
+
+**Headers**
+
+| Header | Value |
+|--------|-------|
+| Authorization | Bearer &lt;access_token&gt; |
+| Accept-Language | `es` (default) or `en` |
+
+### Request body
+
+**None.** Any body is ignored entirely — with keys, empty, or malformed JSON.
+Nothing is parsed, so nothing can fail. There is **no `reason`**: it would be a
+new column that no response serves.
+
+> **Why a `PUT` and not a `DELETE`.** Nothing disappears. The offer stays
+> published, travels whole in both details, shows up in the provider's archive
+> and **still counts in `offers_count`** — *"how many offers did I receive"*
+> includes the ones that were taken back. A `DELETE` would promise a
+> disappearance that does not happen.
+
+### Who may withdraw: seven conditions, in this order
+
+The gate is the edit's **without condition 8**.
+
+| # | Condition | If it fails |
+|---|-----------|-------------|
+| 1 | `{id}` is a positive integer | `404 not_found` — **before the token, with no query** |
+| 2 | The token is valid | `401 missing_authorization` / `401 invalid_token` |
+| 3 | The account holds the `proveedor` role | `403 provider_role_required` |
+| 4 | The offer exists and is servable | `404 not_found` |
+| 5 | The offer belongs to one of the account's providers | `403 service_offer_provider_not_owned` |
+| 6 | The offer is still `sent` | `409 service_offer_not_withdrawable` |
+| 7 | Its request still takes offers (`open`, `offered`, `direct`) | `409 service_request_not_offerable` |
+
+> **A lapsed licence does NOT block withdrawing**, and that is the one asymmetry
+> between the two verbs. Editing is sending a new quote, and whoever may not
+> operate does not quote. Withdrawing commits to nothing, and forcing a provider
+> to leave a wrong offer alive because their licence expired is exactly the
+> damage these two routes exist to undo. **A suspended provider withdraws with
+> `200`.**
+
+**NOT IDEMPOTENT, ON PURPOSE.** A second `PUT` on an offer that is already
+`withdrawn` answers `409 service_offer_not_withdrawable`, which is the truth. A
+`200` would pretend it had done something. The app can show it without alarm.
+
+**A `cancelled` request needs no rule of its own.** Cancelling already left the
+offer `rejected`, so condition 6 answers before condition 7 has anything to say.
+
+### What it writes, and what it does not
+
+**One field, `field_offer_status = "withdrawn"`, and nothing else on the offer.**
+
+**Nothing outside the offer moves:**
+
+- **The request keeps its status.** A request in `offered` whose only live offer
+  is withdrawn **stays in `offered`**, with zero live offers. That is a known
+  inconsistency, not an oversight: the resident does not recover the right to
+  edit their request by this route either, because that gate counts **any**
+  published offer.
+- **No timeline entry is written**, not even on a `direct`.
+- **`offers_count` does not change.** An offer that was taken back was received.
+
+**After withdrawing, the same provider may bid again on the same request**: the
+uniqueness rule of the create route counts only `sent` and `selected`, so a
+`withdrawn` offer blocks nothing. That is the way out of a wrong price on a
+`direct` — although **correcting in place is the better one**, since re-bidding
+leaves two nodes in the resident's listing.
+
+### Success response (200)
+
+Identical in shape to the edit's, with `status` answering `withdrawn`:
+
+```json
+{
+  "success": true,
+  "data": {
+    "service_offer": {
+      "id": 901,
+      "provider": { "id": 41, "name": "Plomería Torres", "logo": "https://…/logo.png" },
+      "amount": 150.5,
+      "message": "Puedo pasar el jueves por la mañana.",
+      "status": "withdrawn",
+      "created": "2026-08-25T11:02:00",
+      "amount_type": "fixed",
+      "valid_until": "2026-09-01T23:59:00",
+      "available_from": "2026-08-27T08:00:00",
+      "duration": { "value": 3, "unit": "hours" },
+      "includes": "Mano de obra, desplazamiento y sellado.",
+      "excludes": "El calentador de repuesto, si hiciera falta.",
+      "tax_included": true,
+      "warranty_days": 90,
+      "requires_visit": false
+    },
+    "request": { "id": 128, "status": "offered" }
+  },
+  "message": "Oferta retirada correctamente."
+}
+```
+
+### Possible errors
+
+| Code | `error_code` | When |
+|------|--------------|------|
+| 405 | `method_not_allowed` | Any method but `PUT`. Answered **before the token and with no query**. |
+| 404 | `not_found` | `{id}` is not a positive integer. **No query runs.** |
+| 401 | `missing_authorization` | No `Authorization` header. |
+| 401 | `invalid_token` | Invented, revoked or expired token. |
+| 403 | `provider_role_required` | The account has no `proveedor` role. |
+| 404 | `not_found` | The offer does not exist, is unpublished, is of another bundle, or **its request is not published**. |
+| 403 | `service_offer_provider_not_owned` | The offer belongs to a provider that is not the account's. |
+| 409 | `service_offer_not_withdrawable` | The offer is `selected`, `rejected` or already `withdrawn`. |
+| 409 | `service_request_not_offerable` | The request is `assigned`, `closed` or `cancelled`. |
+
+---
+
 ## What is still not here
 
 Written down so it is not looked for in this document:
 
-- **Editing or withdrawing an offer.** No `PUT`, no `DELETE`, and no way to
-  reach the `withdrawn` status, which exists in the catalogue and nothing writes.
-  This is the real limitation of this endpoint — see the warning above — and
-  **the `direct` quote makes it the next required spec**, not one more on the
-  list.
+- **A history of an offer's changes.** A `PUT` overwrites and does not version:
+  what the resident saw yesterday and what they see today cannot be compared,
+  and the fifteen keys **do not include `changed`**. Making a change visible and
+  notifying somebody of it are the same problem, so the sixteenth key belongs
+  with the notifications spec.
+- **A `PATCH`.** The edit is a **total replacement** and nothing else. A partial
+  body would have to tell *"absent"* from *"delete it"*, and evaluate the three
+  conditional rules against a mixture of what is stored and what was sent.
+- **A reason for a withdrawal**, and therefore no `field_offer_withdraw_reason`.
+- **The request going back to `open`** when its last live offer is withdrawn.
+  The transition graph gains no `offered → open` edge.
+- **A resident rejecting or withdrawing an offer.** `rejected` is still written
+  only by the sweep that runs when a request is cancelled. Withdrawing is the
+  provider's, by definition.
 - **Awarding one.** `selected`, `field_assigned_offer` and the transition
   `offered → assigned` are the resident's side and another spec. Nothing in this
   module writes `selected` yet — **including on a `direct`**, where the resident
