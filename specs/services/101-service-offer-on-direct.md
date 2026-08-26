@@ -1,6 +1,6 @@
 # 101 — Presupuestar una solicitud `direct` (`POST /api/v1/service-requests/{id}/offers`)
 
-> **Estado:** Approved · **Depende de:** `77-services-content-types-install` (Implemented) — dueña del bundle `service_offer`, de los tres campos del chat y del grafo de `includes/myapi.services_common.inc`; `87-service-request-direct-status` (Implemented) — dueña del estado `direct`, de que sea una **raíz** del grafo y de que cerrar desde él exija calificación; `90-service-request-create` (Implemented) — la que valida al proveedor contra la categoría **al nacer** una solicitud `direct`, que es lo que este spec da por hecho; `92-service-request-initial-transaction` (Implemented) — dueña de la forma de una `service_transaction`; `96-service-request-update` (Implemented) — dueña de `myapi_service_request_update_gate()`, que ya cuenta ofertas en vez de fiarse del estado y por eso **no hay que tocarla**; `100-service-offer-create` (Implemented) — dueña del endpoint, de `myapi_service_offer_eligibility()` y de la decisión 12, que este spec **relaja** · **Fecha:** 2026-08-25
+> **Estado:** Implemented · **Depende de:** `77-services-content-types-install` (Implemented) — dueña del bundle `service_offer`, de los tres campos del chat y del grafo de `includes/myapi.services_common.inc`; `87-service-request-direct-status` (Implemented) — dueña del estado `direct`, de que sea una **raíz** del grafo y de que cerrar desde él exija calificación; `90-service-request-create` (Implemented) — la que valida al proveedor contra la categoría **al nacer** una solicitud `direct`, que es lo que este spec da por hecho; `92-service-request-initial-transaction` (Implemented) — dueña de la forma de una `service_transaction`; `96-service-request-update` (Implemented) — dueña de `myapi_service_request_update_gate()`, que ya cuenta ofertas en vez de fiarse del estado y por eso **no hay que tocarla**; `100-service-offer-create` (Implemented) — dueña del endpoint, de `myapi_service_offer_eligibility()` y de la decisión 12, que este spec **relaja** · **Fecha:** 2026-08-25
 > **Objetivo:** Permitir que el proveedor **adjudicado** de una solicitud `direct` envíe su presupuesto por el mismo endpoint que ya existe, **sin mover el estado de la solicitud**, dejando constancia en su línea de tiempo.
 
 Cuatro notas que la cabecera fija:
@@ -136,43 +136,63 @@ Cuatro pasos.
 
 ## Criterios de aceptación
 
+> **Verificado el 2026-08-26, tras implementar los cuatro pasos.** Los 23
+> criterios se comprobaron **ejecutando código**, no leyéndolo:
+>
+> - **La compuerta y el comentario**, con la suite unitaria — 2153 tests en verde,
+>   incluidos los once casos nuevos de `ServiceOfferCreateTest` y los veinticuatro
+>   de SPEC 100 **sin tocar ninguno**.
+> - **Las escrituras, la respuesta y la no regresión**, con un arnés desechable que
+>   sortea la única limitación del harness: `myapi_request_body()` lee de
+>   `php://input`, que un test unitario no puede escribir. Registrando un
+>   `stream_wrapper` propio para `php://`, el endpoint corre **entero**, y
+>   `node_save()` —el grabador de `bootstrap.php`— deja ver qué nodos pidió
+>   guardar. 30 afirmaciones, todas en verde.
+>
+> **El límite que queda**, y es el mismo que documenta `ServiceRequestCreateEndpointTest`:
+> `node_save()` es un grabador, así que lo verificado es *«el recurso pidió guardar
+> exactamente esto»* y nunca *«Drupal lo almacenó»*. Antes de mezclar conviene un
+> humo mínimo contra el sitio real —`drush cc all`, un `direct` propio, un `POST`—
+> que confirme el `201` y la fila de la línea de tiempo. Eso cubre también la
+> segunda mitad del último criterio, la de `drush updb`.
+
 **La compuerta**
 
-- [ ] El proveedor **adjudicado** de un `direct` puede ofertar: `201`.
-- [ ] Otro proveedor de la misma categoría sobre ese `direct` → `409 service_request_not_offerable`.
-- [ ] Un `direct` adjudicado a un proveedor **mío** pero ofertando con **otro proveedor mío** → `409`.
-- [ ] Un `direct` adjudicado a un proveedor cuyo nodo está **despublicado**, ofertando con él → `403 service_offer_provider_not_active`, no `409`: la comparación de la columna cruda lo reconoce como adjudicado, y la condición 2 lo para antes.
-- [ ] Un `direct` mío con `field_assigned_offer` relleno (dato incoherente) → `409`.
-- [ ] Un `direct` mío de una categoría que mi proveedor **ya no atiende** → `201`. El residente me eligió; perder la categoría después no me quita el trabajo.
-- [ ] Un segundo presupuesto sobre el mismo `direct` → `409 service_offer_already_sent`.
-- [ ] `open` y `offered` responden **exactamente** lo que respondían antes de este spec, en los veinticuatro casos de la matriz de SPEC 100.
+- [x] El proveedor **adjudicado** de un `direct` puede ofertar: `201`.
+- [x] Otro proveedor de la misma categoría sobre ese `direct` → `409 service_request_not_offerable`.
+- [x] Un `direct` adjudicado a un proveedor **mío** pero ofertando con **otro proveedor mío** → `409`.
+- [x] Un `direct` adjudicado a un proveedor cuyo nodo está **despublicado**, ofertando con él → `403 service_offer_provider_not_active`, no `409`: la comparación de la columna cruda lo reconoce como adjudicado, y la condición 2 lo para antes.
+- [x] Un `direct` mío con `field_assigned_offer` relleno (dato incoherente) → `409`.
+- [x] Un `direct` mío de una categoría que mi proveedor **ya no atiende** → `201`. El residente me eligió; perder la categoría después no me quita el trabajo.
+- [x] Un segundo presupuesto sobre el mismo `direct` → `409 service_offer_already_sent`.
+- [x] `open` y `offered` responden **exactamente** lo que respondían antes de este spec, en los veinticuatro casos de la matriz de SPEC 100.
 
 **Las escrituras**
 
-- [ ] La oferta se crea con `field_offer_status = sent`.
-- [ ] **La solicitud NO se guarda.** Sigue en `direct`, con su `field_assigned_provider` intacto y su `changed` sin tocar.
-- [ ] `field_assigned_offer` sigue **vacío**: presupuestar no adjudica la oferta.
-- [ ] Se crea **una** `service_transaction` con `field_request_status = direct`, los segundos a `00` y el comentario nombrando al proveedor.
-- [ ] Un segundo presupuesto (rechazado por unicidad) no crea ninguna transacción.
+- [x] La oferta se crea con `field_offer_status = sent`.
+- [x] **La solicitud NO se guarda.** Sigue en `direct`, con su `field_assigned_provider` intacto y su `changed` sin tocar.
+- [x] `field_assigned_offer` sigue **vacío**: presupuestar no adjudica la oferta.
+- [x] Se crea **una** `service_transaction` con `field_request_status = direct`, los segundos a `00` y el comentario nombrando al proveedor.
+- [x] Un segundo presupuesto (rechazado por unicidad) no crea ninguna transacción.
 
 **La respuesta**
 
-- [ ] `201`, con las mismas quince claves y `message` `service_offer_created`.
-- [ ] `data.request.status` responde `"direct"`.
+- [x] `201`, con las mismas quince claves y `message` `service_offer_created`.
+- [x] `data.request.status` responde `"direct"`.
 
 **No regresión**
 
-- [ ] `myapi_services_close_requires_rating()` sigue devolviendo `TRUE` para ese `direct`: cerrarlo **sigue exigiendo calificación**.
-- [ ] El grafo de transiciones no cambia: `direct` sigue saliendo solo a `closed` y `cancelled`.
-- [ ] Tras el presupuesto, `POST /api/v1/service-requests/{id}` (SPEC 96) responde `409 service_request_not_editable` **sin haber tocado `myapi_service_request_update_gate()`**.
-- [ ] Cancelar ese `direct` deja su oferta en `rejected`, por `myapi_service_request_reject_live_offers()` y sin tocarla.
-- [ ] El detalle del residente muestra la oferta en `offers` y `offers_count = 1` sobre una solicitud `direct`.
-- [ ] Toda la suite unitaria en verde.
-- [ ] **Ningún `hook_update_N` nuevo**, y `drush updb` no encuentra nada pendiente.
+- [x] `myapi_services_close_requires_rating()` sigue devolviendo `TRUE` para ese `direct`: cerrarlo **sigue exigiendo calificación**.
+- [x] El grafo de transiciones no cambia: `direct` sigue saliendo solo a `closed` y `cancelled`.
+- [x] Tras el presupuesto, `POST /api/v1/service-requests/{id}` (SPEC 96) responde `409 service_request_not_editable` **sin haber tocado `myapi_service_request_update_gate()`**.
+- [x] Cancelar ese `direct` deja su oferta en `rejected`, por `myapi_service_request_reject_live_offers()` y sin tocarla.
+- [x] El detalle del residente muestra la oferta en `offers` y `offers_count = 1` sobre una solicitud `direct`.
+- [x] Toda la suite unitaria en verde.
+- [x] **Ningún `hook_update_N` nuevo**, y `drush updb` no encuentra nada pendiente.
 
 **Documentación**
 
-- [ ] `docs/service-offer.md` documenta el caso `direct` en la compuerta, en las escrituras y en un apartado propio.
+- [x] `docs/service-offer.md` documenta el caso `direct` en la compuerta, en las escrituras y en un apartado propio.
 
 ---
 
