@@ -130,6 +130,12 @@ module_load_include('inc', 'myapi', 'includes/myapi.service_offer');
 // includes/myapi.service_request_query.inc — see the @file docblock of the
 // include.
 module_load_include('inc', 'myapi', 'includes/myapi.service_request_detail');
+// SPEC 106: myapi_service_transaction_record(), the four fields of a timeline
+// entry, which myapi_service_request_cancel() wrote inline since SPEC 95 until
+// the award needed the identical block from the offers' resource. Cancelling
+// writes the same node it always wrote; what changed is that one function now
+// writes it for both.
+module_load_include('inc', 'myapi', 'includes/myapi.service_transaction');
 
 /**
  * Dispatcher for /api/v1/service-requests (SPECS 88 and 90).
@@ -2328,27 +2334,19 @@ function myapi_service_request_cancel($nid) {
   $node->field_request_status[LANGUAGE_NONE][0]['value'] = MYAPI_SERVICES_REQUEST_STATUS_CANCELLED;
   node_save($node);
 
-  // 7b. The transaction. The four fields of SPEC 92, written the same way; the
-  // title is NOT set here — myapi_service_transaction_set_title() puts it in
-  // from hook_node_presave(), inside the node_save() below.
-  $transaction = (object) [
-    'type' => MYAPI_SERVICES_TRANSACTION_TYPE,
+  // 7b. The transaction. The four fields of SPEC 92, written by the one function
+  // that writes a timeline entry — extracted to
+  // includes/myapi.service_transaction.inc by SPEC 106, where the award needs
+  // the identical block. The title is NOT set here or there:
+  // myapi_service_transaction_set_title() puts it in from hook_node_presave(),
+  // inside that node_save().
+  myapi_service_transaction_record(
+    $node->nid,
+    MYAPI_SERVICES_REQUEST_STATUS_CANCELLED,
     // The resident who cancelled, which is who is behind the token.
-    'uid' => $uid,
-    'status' => 1,
-  ];
-  node_object_prepare($transaction);
-
-  $transaction->field_request[LANGUAGE_NONE][0]['target_id'] = $node->nid;
-  $transaction->field_request_status[LANGUAGE_NONE][0]['value'] = MYAPI_SERVICES_REQUEST_STATUS_CANCELLED;
-  // 'Y-m-d H:i:00': the real instant with the seconds pinned, not that day at
-  // midnight. The field is 'datetime' and not 'datestamp' (SPEC 77), so a
-  // string is written and not a timestamp.
-  $transaction->field_status_date[LANGUAGE_NONE][0]['value'] = date('Y-m-d H:i:00');
-  // Only 'value', no 'format': stored raw and escaped by whoever renders it.
-  $transaction->field_comment[LANGUAGE_NONE][0]['value'] = myapi_service_request_cancel_comment($reason['value']);
-
-  node_save($transaction);
+    $uid,
+    myapi_service_request_cancel_comment($reason['value'])
+  );
 
   // 7c. The offers. Last, and the only step that can leave the data half
   // written — see the function's own docblock for why that is accepted.

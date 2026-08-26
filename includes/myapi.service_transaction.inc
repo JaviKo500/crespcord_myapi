@@ -360,3 +360,152 @@ function myapi_service_transaction_create_initial($node) {
 
   node_save($transaction);
 }
+
+/**
+ * Writes one entry on a request's timeline (SPECS 95, 106).
+ *
+ * The Field API half of "record what just happened to this request": builds a
+ * 'service_transaction' with its four fields of SPEC 77 and saves it. Every
+ * endpoint that CHANGES A REQUEST'S STATUS calls this and nothing else — that
+ * is the criterion, and it is what separates SPEC 95 from SPEC 105: cancelling
+ * changes the status and writes here, editing an offer and withdrawing one do
+ * not change it and write nothing.
+ *
+ * EXTRACTED FROM myapi_service_request_cancel() BY SPEC 106, where these same
+ * lines were written inline since SPEC 95. The award needs the identical block
+ * from resources/service_offer.resource.inc, and Rule 5 of CLAUDE.md forbids
+ * one resource reaching into another for it; a second copy would be a second
+ * answer to "what does a timeline entry look like", drifting the day one of
+ * them changed. Nothing about the block changed on the way here — the
+ * cancellation writes the same node it always wrote.
+ *
+ * THE TITLE IS NOT SET HERE, AND THAT IS NOT AN OMISSION.
+ * myapi_service_transaction_set_title() puts it in from hook_node_presave(),
+ * inside the node_save() below, which is the one place that can title a
+ * transaction whatever created it — this function, the back office, or a
+ * programmatic save. Setting it here too would be a second title for the same
+ * node, and the hook's would win anyway.
+ *
+ * THE CALLER WRITES THE REQUEST'S STATUS FIRST, and that ordering is a contract
+ * this function depends on without being able to enforce.
+ * myapi_service_transaction_sync_request_status() (SPEC 94) fires on the
+ * hook_node_insert() of the node saved below and rewrites the request's
+ * field_request_status from $status; when the caller already wrote the same
+ * value, it compares two equal statuses and returns WITHOUT saving the request
+ * a second time. Calling this before writing the request would still end up
+ * with the right status — through the hook, invisibly — and would save the
+ * request twice. Whoever touches either side has to keep that property.
+ *
+ * NOT PURE, unlike the two comment builders in this file: it is the Field API
+ * half, the same split as myapi_service_transaction_create_initial() above.
+ * What the unit layer can prove about it is the object handed to node_save();
+ * that the save persists and that the hooks fire stays with tests/integration.
+ *
+ * @param mixed  $request_nid  The request this entry hangs on — field_request.
+ * @param string $status       The status to record, already written onto the
+ *                             request by the caller. Stored as-is: recording
+ *                             what there was is the point, so nothing here
+ *                             validates it against the catalogue or the graph.
+ * @param mixed  $uid          node.uid of the entry: whoever is behind the
+ *                             token. field_requester answers a different
+ *                             question and lives on the request.
+ * @param string $comment      field_comment, already composed by one of this
+ *                             file's builders. Written with 'value' only and no
+ *                             'format': the column is stored raw and whoever
+ *                             renders it escapes it.
+ *
+ * @return object  The saved transaction node, carrying the nid node_save()
+ *                 assigned it.
+ */
+function myapi_service_transaction_record($request_nid, $status, $uid, $comment) {
+  $transaction = (object) array(
+    'type' => MYAPI_SERVICES_TRANSACTION_TYPE,
+    // Who is behind the token — the resident who cancelled, the resident who
+    // awarded. The same fact node.uid records on every other node of the site.
+    'uid' => $uid,
+    'status' => 1,
+  );
+  node_object_prepare($transaction);
+
+  $transaction->field_request[LANGUAGE_NONE][0]['target_id'] = $request_nid;
+  $transaction->field_request_status[LANGUAGE_NONE][0]['value'] = $status;
+  // 'Y-m-d H:i:00': the real instant with the seconds pinned, not that day at
+  // midnight. The field is 'datetime' and not 'datestamp' (SPEC 77), so a
+  // string is written and not a timestamp.
+  $transaction->field_status_date[LANGUAGE_NONE][0]['value'] = date('Y-m-d H:i:00');
+  // Only 'value', no 'format': stored raw and escaped by whoever renders it.
+  $transaction->field_comment[LANGUAGE_NONE][0]['value'] = $comment;
+
+  node_save($transaction);
+
+  return $transaction;
+}
+
+/**
+ * The timeline text of an award (SPEC 106).
+ *
+ * Three variants, because the three cases say three different things and one
+ * text would be wrong in two of them:
+ *   - there is an amount: the resident awarded a priced job, and the price is
+ *     the part of the decision worth recording;
+ *   - the offer is an 'on_site_quote', or carries no amount at all: there is no
+ *     price yet to record, so naming the provider is the whole entry;
+ *   - there is no provider name: the entry still has to read as a sentence.
+ *
+ * THE AMOUNT CARRIES NO CURRENCY SYMBOL. field_offer_amount stores a number and
+ * nothing else — the module has no currency anywhere — so writing one here by
+ * hand would invent a datum the data does not have. number_format($amount, 2,
+ * ',', '.') and that is all: two decimals, comma for the decimal separator and
+ * dot for the thousands, which is how this product's residents read a figure.
+ *
+ * THE THIRD CASE CANNOT HAPPEN TODAY and exists anyway. Condition 9 of the gate
+ * requires an active provider, and an active provider is published and
+ * therefore has a title, so the award never reaches here without a name. It is
+ * written because a pure function handed NULL must answer a whole sentence and
+ * not half of one — the same hole SPEC 61 closed for claims, where a missing
+ * value produced a comment that stopped mid-word.
+ *
+ * Pure by design (t() and number_format() only), like
+ * myapi_service_transaction_initial_comment() above: the comments of a
+ * transaction belong to the transactions' file, and being pure is what puts the
+ * whole matrix inside tests/unit with no site booted.
+ *
+ * @param string|null $provider_name
+ *   node.title of the provider that won. Empty or NULL degrades to the
+ *   nameless variant.
+ * @param mixed $amount
+ *   field_offer_amount as stored, or NULL. A non-numeric value is treated as no
+ *   amount rather than printed raw.
+ * @param string|null $amount_type
+ *   field_offer_amount_type as stored. 'on_site_quote' is the one type that
+ *   carries no amount (SPEC 100), so it never prints one even if a stray value
+ *   sits in the column.
+ *
+ * @return string
+ *   Never empty.
+ */
+function myapi_service_transaction_accept_comment($provider_name, $amount, $amount_type) {
+  $provider_name = ($provider_name === NULL) ? '' : trim((string) $provider_name);
+
+  if ($provider_name === '') {
+    return t('Oferta adjudicada.');
+  }
+
+  // 'on_site_quote' is the amountless type (SPEC 100) and wins over whatever
+  // the column holds: an offer to be quoted on site has no price to record,
+  // and printing one left over from an earlier edit would record a figure
+  // nobody agreed to.
+  $priced = $amount_type !== 'on_site_quote'
+    && $amount !== NULL
+    && $amount !== ''
+    && is_numeric($amount);
+
+  if (!$priced) {
+    return t('Oferta adjudicada a @proveedor.', array('@proveedor' => $provider_name));
+  }
+
+  return t('Oferta adjudicada a @proveedor por @importe.', array(
+    '@proveedor' => $provider_name,
+    '@importe'   => number_format((float) $amount, 2, ',', '.'),
+  ));
+}

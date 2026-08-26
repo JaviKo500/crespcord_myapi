@@ -10,6 +10,7 @@ require_once __DIR__ . '/../../includes/myapi.auth.inc';
 require_once __DIR__ . '/../../includes/myapi.services_common.inc';
 require_once __DIR__ . '/../../includes/myapi.provider_role.inc';
 require_once __DIR__ . '/../../includes/myapi.service_offer.inc';
+require_once __DIR__ . '/../../includes/myapi.service_transaction.inc';
 
 /**
  * Unit tests for PUT /api/v1/service-offers/{id}/accept (SPEC 106).
@@ -224,6 +225,178 @@ class ServiceOfferAcceptTest extends TestCase {
 
     $this->assertSame(1, $rejected);
     $this->assertSame([901 => 'rejected'], $this->savedStatuses());
+  }
+
+  /* -------------------------------------------------------------------------
+   * The timeline entry, myapi_service_transaction_record() (SPECS 95, 106).
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * The four fields of SPEC 77, plus node.uid and the bundle. This is the whole
+   * contract of the extraction: the cancellation writes the same node it wrote
+   * inline since SPEC 95, and the award writes one of the same shape.
+   */
+  public function testTheRecordedTransactionCarriesTheFourFields() {
+    $saved = myapi_service_transaction_record(self::REQUEST_NID, 'assigned', 77, 'Oferta adjudicada a Fontanería Ruiz.');
+
+    $this->assertCount(1, myapi_test_node_saves());
+    $this->assertSame($saved, myapi_test_node_saves()[0]);
+
+    $this->assertSame(MYAPI_SERVICES_TRANSACTION_TYPE, $saved->type);
+    $this->assertSame(77, $saved->uid);
+    $this->assertSame(1, $saved->status);
+    $this->assertSame(self::REQUEST_NID, $saved->field_request[LANGUAGE_NONE][0]['target_id']);
+    $this->assertSame('assigned', $saved->field_request_status[LANGUAGE_NONE][0]['value']);
+    $this->assertSame('Oferta adjudicada a Fontanería Ruiz.', $saved->field_comment[LANGUAGE_NONE][0]['value']);
+  }
+
+  /**
+   * field_status_date is the REAL instant with the seconds pinned to 00, and a
+   * string and not a timestamp: the field is 'datetime' and not 'datestamp'
+   * (SPEC 77). Midnight of that day would be the bug SPEC 58 already paid for
+   * once in claims.
+   */
+  public function testTheStatusDateIsTheRealInstantWithSecondsPinned() {
+    $saved = myapi_service_transaction_record(self::REQUEST_NID, 'assigned', 77, 'x');
+    $value = $saved->field_status_date[LANGUAGE_NONE][0]['value'];
+
+    $this->assertMatchesRegularExpression('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:00$/', $value);
+    $this->assertSame(date('Y-m-d H:i:00'), $value);
+  }
+
+  /**
+   * field_comment is written with 'value' ONLY and no 'format': the column is
+   * stored raw and whoever renders it escapes it, exactly like claims.
+   */
+  public function testTheCommentCarriesNoTextFormat() {
+    $saved = myapi_service_transaction_record(self::REQUEST_NID, 'assigned', 77, 'x');
+
+    $this->assertSame(['value' => 'x'], $saved->field_comment[LANGUAGE_NONE][0]);
+  }
+
+  /**
+   * THE TITLE IS NOT SET HERE. myapi_service_transaction_set_title() puts it in
+   * from hook_node_presave(), inside the node_save() above — the one place that
+   * titles a transaction whatever created it. A title written here would be a
+   * second one for the same node.
+   */
+  public function testTheRecorderDoesNotSetTheTitle() {
+    $saved = myapi_service_transaction_record(self::REQUEST_NID, 'assigned', 77, 'x');
+
+    $this->assertFalse(property_exists($saved, 'title'), 'the recorder leaves the title to hook_node_presave()');
+  }
+
+  /**
+   * The status is stored AS-IS. Recording what there was is the point, so
+   * nothing here validates it against the catalogue or against the graph — a
+   * request saved programmatically without one copies the empty value, exactly
+   * as myapi_service_transaction_create_initial() does.
+   */
+  public function testTheStatusIsStoredWithoutValidation() {
+    foreach (['assigned', 'cancelled', '', 'not_a_status'] as $status) {
+      myapi_test_write_reset();
+      $saved = myapi_service_transaction_record(self::REQUEST_NID, $status, 77, 'x');
+
+      $this->assertSame($status, $saved->field_request_status[LANGUAGE_NONE][0]['value'], $status);
+    }
+  }
+
+  /* -------------------------------------------------------------------------
+   * The award's timeline text, myapi_service_transaction_accept_comment().
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * WITH AN AMOUNT: the provider and the price, which is the part of the
+   * decision worth recording. Comma for the decimal separator and dot for the
+   * thousands, two decimals always, and NO CURRENCY SYMBOL — field_offer_amount
+   * stores a number and the module has no currency anywhere, so writing one
+   * here would invent a datum.
+   */
+  public function testAPricedOfferNamesTheProviderAndTheAmount() {
+    $cases = [
+      '95.5'      => 'Oferta adjudicada a Fontanería Ruiz por 95,50.',
+      '95.50'     => 'Oferta adjudicada a Fontanería Ruiz por 95,50.',
+      '1250'      => 'Oferta adjudicada a Fontanería Ruiz por 1.250,00.',
+      '1234567.8' => 'Oferta adjudicada a Fontanería Ruiz por 1.234.567,80.',
+      '0.5'       => 'Oferta adjudicada a Fontanería Ruiz por 0,50.',
+      '95.567'    => 'Oferta adjudicada a Fontanería Ruiz por 95,57.',
+    ];
+
+    foreach ($cases as $amount => $expected) {
+      $this->assertSame(
+        $expected,
+        myapi_service_transaction_accept_comment('Fontanería Ruiz', $amount, 'fixed'),
+        $amount
+      );
+    }
+  }
+
+  /**
+   * The amount arrives off a query column, so it is a string; a float behaves
+   * identically. Neither prints differently from the other.
+   */
+  public function testTheAmountReadsTheSameAsStringOrFloat() {
+    $this->assertSame(
+      myapi_service_transaction_accept_comment('Fontanería Ruiz', '95.50', 'fixed'),
+      myapi_service_transaction_accept_comment('Fontanería Ruiz', 95.50, 'fixed')
+    );
+  }
+
+  /**
+   * 'on_site_quote' IS THE AMOUNTLESS TYPE (SPEC 100) AND IT WINS over whatever
+   * sits in the column: an offer to be quoted on site has no price to record,
+   * and printing one left over from an earlier edit would put a figure nobody
+   * agreed to on a timeline that is forever.
+   */
+  public function testAnOnSiteQuoteNeverPrintsAnAmount() {
+    $expected = 'Oferta adjudicada a Fontanería Ruiz.';
+
+    $this->assertSame($expected, myapi_service_transaction_accept_comment('Fontanería Ruiz', NULL, 'on_site_quote'));
+    $this->assertSame($expected, myapi_service_transaction_accept_comment('Fontanería Ruiz', '95.50', 'on_site_quote'));
+  }
+
+  /**
+   * NO AMOUNT AT ALL is the same sentence: an offer created before the ten
+   * quote columns existed has no row in field_data_field_offer_amount, and a
+   * non-numeric value is treated as an absence rather than printed raw.
+   */
+  public function testAnOfferWithoutAnAmountNamesOnlyTheProvider() {
+    $expected = 'Oferta adjudicada a Fontanería Ruiz.';
+
+    foreach ([NULL, '', 'abc', []] as $amount) {
+      $this->assertSame(
+        $expected,
+        myapi_service_transaction_accept_comment('Fontanería Ruiz', $amount, 'fixed'),
+        var_export($amount, TRUE)
+      );
+    }
+  }
+
+  /**
+   * WITHOUT A PROVIDER NAME the entry is still a whole sentence. This case
+   * cannot happen today — condition 9 requires an active provider, which is
+   * published and therefore titled — and exists because a pure function handed
+   * NULL must answer a sentence and not half of one.
+   */
+  public function testWithoutAProviderNameTheEntryStillReads() {
+    foreach ([NULL, '', '   '] as $name) {
+      $this->assertSame(
+        'Oferta adjudicada.',
+        myapi_service_transaction_accept_comment($name, '95.50', 'fixed'),
+        var_export($name, TRUE)
+      );
+    }
+  }
+
+  /**
+   * The provider's name is trimmed, so the timeline never prints a leading
+   * blank — the same rule the cancellation reason follows.
+   */
+  public function testTheProviderNameIsTrimmed() {
+    $this->assertSame(
+      'Oferta adjudicada a Fontanería Ruiz.',
+      myapi_service_transaction_accept_comment('  Fontanería Ruiz  ', NULL, 'on_site_quote')
+    );
   }
 
   /**
