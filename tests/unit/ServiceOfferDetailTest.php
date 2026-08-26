@@ -13,6 +13,11 @@ require_once __DIR__ . '/../../includes/myapi.service_offer.inc';
 require_once __DIR__ . '/../../includes/myapi.service_offer_query.inc';
 require_once __DIR__ . '/../../includes/myapi.service_request_query.inc';
 require_once __DIR__ . '/../../resources/service_offer.resource.inc';
+// SPEC 103, decision 4: `condominium` and `requester` are built in THREE places
+// on purpose. This suite is what keeps the three in agreement, so it has to be
+// able to call all three — hence the request resource, for the two copies that
+// live there.
+require_once __DIR__ . '/../../resources/service_request.resource.inc';
 
 /**
  * Unit tests for the detail of one offer: GET /api/v1/service-offers/provider/%
@@ -351,6 +356,241 @@ class ServiceOfferDetailTest extends TestCase {
       $this->requestRow(['assigned_provider_id' => (string) self::PROVIDER_NID]),
       []
     ));
+  }
+
+  /* -------------------------------------------------------------------------
+   * The `request` block: seven keys, and who sees which (step 4).
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * A request row as myapi_service_request_detail_row() delivers it, carrying
+   * every alias the shared serialiser reads plus the four the context block
+   * adds.
+   */
+  private function contextRow(array $overrides = []) {
+    return (object) ($overrides + [
+      'nid'                   => (string) self::REQUEST_NID,
+      'title'                 => 'Fuga en el calentador',
+      'description'           => 'El calentador gotea por la base.',
+      'status'                => 'assigned',
+      'category_id'           => '12',
+      'category_code'         => 'plumbing',
+      'category_name'         => 'Plomería',
+      'unit_id'               => '55',
+      'unit_name'             => 'Apto 302',
+      'condominium_id'        => '7',
+      'condominium_name'      => 'Residencial Los Álamos',
+      'requester_uid'         => '314',
+      'requester_name'        => 'María Crespo',
+      'assigned_offer_id'     => NULL,
+      'assigned_offer_status' => NULL,
+      'assigned_provider_id'  => (string) self::PROVIDER_NID,
+      'assigned_provider_name' => 'Plomería Torres',
+      'created'               => (string) self::CREATED,
+      'desired_start'         => NULL,
+    ]);
+  }
+
+  /**
+   * SEVEN KEYS, IN THIS ORDER, WHATEVER THE TWO BOOLEANS SAY. Written out as a
+   * literal on purpose: reading them off the function under test would make the
+   * assertion agree with itself.
+   */
+  const CONTEXT_KEYS = [
+    'id',
+    'title',
+    'status',
+    'category',
+    'condominium',
+    'unit',
+    'requester',
+  ];
+
+  public function testTheContextIsAlwaysTheSameSevenKeysInOrder() {
+    foreach ([[TRUE, TRUE], [TRUE, FALSE], [FALSE, TRUE], [FALSE, FALSE]] as $case) {
+      list($show_requester, $show_unit) = $case;
+
+      $context = myapi_service_offer_build_context(
+        $this->contextRow(),
+        $show_requester,
+        $show_unit
+      );
+
+      $this->assertSame(
+        self::CONTEXT_KEYS,
+        array_keys($context),
+        'requester=' . var_export($show_requester, TRUE) . ' unit=' . var_export($show_unit, TRUE)
+      );
+    }
+  }
+
+  /**
+   * THE FIVE SHARED KEYS ARE NOT WRITTEN TWICE. They are compared, over the
+   * SAME row, against myapi_service_request_build_item() — the serialiser the
+   * request's own endpoints answer with. This is the test that fails the day
+   * somebody deletes the call and reimplements the five, which is the only way
+   * that duplication ever gets in.
+   */
+  public function testFiveKeysAreIdenticalToTheSharedRequestSerialiser() {
+    $row = $this->contextRow();
+
+    $shared = myapi_service_request_build_item($row, []);
+    $context = myapi_service_offer_build_context($row, TRUE, TRUE);
+
+    foreach (['id', 'title', 'status', 'category', 'unit'] as $key) {
+      $this->assertSame($shared[$key], $context[$key], $key . ' is taken, not rewritten');
+    }
+  }
+
+  /**
+   * `category.code` is "" and NEVER null when the term carries none — the field
+   * is required on the vocabulary, so an empty one is corrupt data the client
+   * can still compare as a string. Inherited from the shared serialiser, and
+   * asserted here because it is a criterion of this spec too.
+   */
+  public function testTheCategoryCodeIsAnEmptyStringAndNeverNull() {
+    $context = myapi_service_offer_build_context(
+      $this->contextRow(['category_code' => NULL]),
+      TRUE,
+      TRUE
+    );
+
+    $this->assertSame('', $context['category']['code']);
+    $this->assertSame(['id', 'code', 'name'], array_keys($context['category']));
+  }
+
+  /**
+   * `unit.name` IS field_nombre_vivienda AND NOT THE NODE TITLE — the title is
+   * an internal label, the field is the name the resident knows their flat by.
+   * The row seeds a different title precisely so a serialiser reading the wrong
+   * column would fail here.
+   */
+  public function testTheUnitNameIsTheFieldAndNotTheNodeTitle() {
+    $context = myapi_service_offer_build_context(
+      $this->contextRow(['title' => 'Vivienda interna 55', 'unit_name' => 'Apto 302']),
+      TRUE,
+      TRUE
+    );
+
+    $this->assertSame('Apto 302', $context['unit']['name']);
+  }
+
+  /**
+   * THE FOUR COMBINATIONS OF THE TWO BOOLEANS, and `condominium` unmoved by
+   * either of them (decision 11): it names the residential complex, not a
+   * person and not a door.
+   */
+  public function testTheTwoBooleansGovernExactlyTwoKeys() {
+    $row = $this->contextRow();
+
+    $both = myapi_service_offer_build_context($row, TRUE, TRUE);
+    $this->assertSame(['id' => 55, 'name' => 'Apto 302'], $both['unit']);
+    $this->assertSame(['id' => 314, 'name' => 'María Crespo'], $both['requester']);
+
+    $unit_only = myapi_service_offer_build_context($row, FALSE, TRUE);
+    $this->assertSame(['id' => 55, 'name' => 'Apto 302'], $unit_only['unit']);
+    $this->assertNull($unit_only['requester']);
+
+    $requester_only = myapi_service_offer_build_context($row, TRUE, FALSE);
+    $this->assertNull($requester_only['unit']);
+    $this->assertSame(['id' => 314, 'name' => 'María Crespo'], $requester_only['requester']);
+
+    $neither = myapi_service_offer_build_context($row, FALSE, FALSE);
+    $this->assertNull($neither['unit']);
+    $this->assertNull($neither['requester']);
+
+    // The condominium is the same object in all four.
+    foreach ([$both, $unit_only, $requester_only, $neither] as $context) {
+      $this->assertSame(
+        ['id' => 7, 'name' => 'Residencial Los Álamos'],
+        $context['condominium'],
+        'the condominium travels always and for everyone'
+      );
+    }
+  }
+
+  /**
+   * A HIDDEN KEY IS A WHOLE null AND NEVER {id: null, name: null}. A provider
+   * cannot tell "not awarded to me" from "the unit was deleted", and has no
+   * reason to: in both cases there is no address to paint.
+   */
+  public function testAHiddenKeyIsAWholeNullAndNeverAHalfObject() {
+    $hidden = myapi_service_offer_build_context($this->contextRow(), FALSE, FALSE);
+
+    $this->assertNull($hidden['unit']);
+    $this->assertNull($hidden['requester']);
+    $this->assertNotSame(['id' => NULL, 'name' => NULL], $hidden['unit']);
+    $this->assertNotSame(['id' => NULL, 'name' => NULL], $hidden['requester']);
+  }
+
+  /**
+   * A request with NO CONDOMINIUM and NO UNIT answers a whole null for each,
+   * with the seven keys still in place — and the same for a shown block whose
+   * columns are empty.
+   */
+  public function testMissingColumnsAnswerWholeNullsAndKeepTheSevenKeys() {
+    $context = myapi_service_offer_build_context(
+      $this->contextRow([
+        'condominium_id'   => NULL,
+        'condominium_name' => NULL,
+        'unit_id'          => NULL,
+        'unit_name'        => NULL,
+        'requester_uid'    => NULL,
+        'requester_name'   => NULL,
+      ]),
+      TRUE,
+      TRUE
+    );
+
+    $this->assertSame(self::CONTEXT_KEYS, array_keys($context));
+    $this->assertNull($context['condominium']);
+    $this->assertNull($context['unit']);
+    $this->assertNull($context['requester']);
+  }
+
+  /**
+   * THE THREE COPIES OF `condominium` AND `requester` ANSWER THE SAME THING.
+   * Decision 4 leaves those five lines in three places on purpose; this is what
+   * makes the debt DETECTABLE — a divergence between the context block, the
+   * provider listing item and the request's own detail fails in red the day it
+   * is written, instead of showing up as one request naming two condominiums.
+   */
+  public function testTheThreeCopiesOfCondominiumAndRequesterAgree() {
+    $row = $this->contextRow();
+
+    $context = myapi_service_offer_build_context($row, TRUE, TRUE);
+    $listing = myapi_service_request_provider_build_item($row, [], [self::PROVIDER_NID]);
+    $detail = myapi_service_request_build_detail($row, 'requester', [], [], 0, []);
+
+    foreach (['condominium', 'requester'] as $key) {
+      $this->assertSame($listing[$key], $context[$key], $key . ': the provider listing and the context agree');
+      $this->assertSame($detail[$key], $context[$key], $key . ": the request's own detail and the context agree");
+    }
+  }
+
+  /**
+   * NOT ONE CONTACT DATUM, and not one key of the request's own detail that
+   * `request` is not: it is REFERENTIAL by decision (decision 3), never half a
+   * detail.
+   */
+  public function testTheContextCarriesNothingItWasNotAskedFor() {
+    $context = myapi_service_offer_build_context($this->contextRow(), TRUE, TRUE);
+
+    $forbidden = [
+      'description', 'desired_start', 'closed_at', 'offers_count',
+      'assigned_offer', 'assigned_provider', 'images', 'attachment',
+      'transactions', 'viewer', 'offers', 'phone', 'email', 'address',
+    ];
+
+    foreach ($forbidden as $key) {
+      $this->assertArrayNotHasKey($key, $context, $key . ' is out of scope');
+    }
+
+    foreach (['unit', 'requester', 'condominium'] as $key) {
+      if ($context[$key] !== NULL) {
+        $this->assertSame(['id', 'name'], array_keys($context[$key]), $key . ' is {id, name} and nothing else');
+      }
+    }
   }
 
   /* -------------------------------------------------------------------------

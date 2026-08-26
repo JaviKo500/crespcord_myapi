@@ -56,6 +56,13 @@ module_load_include('inc', 'myapi', 'includes/myapi.services_common');
 // amount or a date looks like. See myapi_service_offer_provider_build_item().
 module_load_include('inc', 'myapi', 'includes/myapi.service_offer');
 
+// SPEC 103: myapi_service_request_build_item(), of which the `request` block of
+// the detail takes five of its seven keys instead of rewriting them — so the
+// same request cannot describe itself one way inside its own endpoint and
+// another way inside an offer that hangs off it. See
+// myapi_service_offer_build_context().
+module_load_include('inc', 'myapi', 'includes/myapi.service_request_query');
+
 /**
  * The query the count and the page are both built on: one provider's offers,
  * with the request each one hangs off, and the five optional filters
@@ -759,4 +766,112 @@ function myapi_service_offer_detail_is_mine($request_row, array $owned_provider_
     array_map('intval', $owned_provider_ids),
     TRUE
   );
+}
+
+/**
+ * The `request` block: SEVEN KEYS, ALWAYS THE SEVEN, in this order (SPEC 103).
+ *
+ *   id, title, status, category, condominium, unit, requester
+ *
+ * THE SEVEN TRAVEL IN BOTH ROUTES AND IN EVERY CASE; TWO CHANGE CONTENT. It is
+ * the doctrine of SPEC 89 — "the keys are always the same; some change what
+ * they carry" — and it is what leaves a client with nothing to branch on: it
+ * reads seven keys whoever it is, and a value that is null means "not for you"
+ * or "not there", which are the same thing to a screen that has nothing to
+ * paint either way.
+ *
+ * IT DECIDES NOTHING. Both booleans arrive already resolved: the provider's
+ * route works them out of myapi_service_offer_detail_is_mine(), the resident's
+ * route hard-codes them. Putting the decision in here would mean this function
+ * needed a uid, a role and a scope, and the two routes would share a branch
+ * instead of sharing a serialiser — which is exactly the shape SPEC 99 walked
+ * back.
+ *
+ * FIVE OF THE SEVEN ARE NOT WRITTEN HERE. `id`, `title`, `status`, `category`
+ * and `unit` are taken from myapi_service_request_build_item(), the serialiser
+ * the two request listings and the two request details already answer with, so
+ * the same request cannot describe itself one way inside its own endpoint and
+ * another way inside an offer that hangs off it. The (int) of the ids, the ""
+ * of a missing title, the "" — never null — of a category code with no term
+ * value, and the rule that `unit.name` is field_nombre_vivienda AND NOT the
+ * node title are all written once, over there. The empty map is what that
+ * function takes for "no offer counts": this block publishes no counter, which
+ * is precisely why it can never fall out of step with `offers_count`.
+ *
+ * `condominium` AND `requester` ARE BUILT HERE, for the THIRD time in the
+ * module — the other two are myapi_service_request_provider_build_item() and
+ * myapi_service_request_build_detail(). That is decision 4, and it is CONSCIOUS
+ * DEBT, not an oversight: extracting a shared pure would mean editing code of
+ * SPECS 89 and 98 that nobody is otherwise touching. The day a fourth site
+ * needs it, the extraction stops being optional. What makes the debt detectable
+ * is that ServiceOfferDetailTest fixes the three shapes against each other, so
+ * a divergence fails in red the same day it is written.
+ *
+ * `condominium` TRAVELS ALWAYS AND FOR EVERYONE, with no `mine` condition
+ * (decision 11). It names the residential complex, not a person and not a door,
+ * and without it a provider does not know which city it is quoting for. Same
+ * decision SPEC 89 took over the same datum. Its `name` is the NODE TITLE: the
+ * 'condominio' bundle has no name field.
+ *
+ * `unit` AND `requester` ARE A WHOLE null WHEN THEY ARE NOT SHOWN, never
+ * {id: null, name: null}. A provider cannot tell "not awarded to me" from "the
+ * unit was deleted", and has no reason to: in both cases there is no address to
+ * paint. Two half-answers would only invite a client to branch on which half is
+ * missing.
+ *
+ * PURE: no database, no node_load(), no account, no $_GET.
+ *
+ * @param object $request_row
+ *   A row of myapi_service_request_detail_row(), carrying every alias
+ *   myapi_service_request_build_item() reads plus `condominium_id`,
+ *   `condominium_name`, `requester_uid` and `requester_name`. The caller has
+ *   already answered 404 if there was none.
+ * @param bool $show_requester
+ *   TRUE to publish `requester`. FALSE answers a whole null. Resolved by the
+ *   caller: "the job is already mine" for the provider, always FALSE for the
+ *   resident, who is the requester.
+ * @param bool $show_unit
+ *   TRUE to publish `unit`. FALSE answers a whole null. "The job is already
+ *   mine" for the provider; always TRUE for the resident, whose home it is.
+ *
+ * @return array  The seven keys above, in that order.
+ */
+function myapi_service_offer_build_context($request_row, $show_requester, $show_unit) {
+  // The five shared keys, from the serialiser that owns them. The empty map is
+  // "no offer counts": this block publishes no counter — see the docblock.
+  $item = myapi_service_request_build_item($request_row, []);
+
+  // Always, for everyone — see the docblock. Same shape the request's own
+  // detail builds, so the two cannot answer two different condominiums.
+  $condominium = NULL;
+  if (isset($request_row->condominium_id) && $request_row->condominium_id !== '') {
+    $condominium = [
+      'id'   => (int) $request_row->condominium_id,
+      'name' => isset($request_row->condominium_name) ? $request_row->condominium_name : NULL,
+    ];
+  }
+
+  // Only when the caller says so, and a WHOLE null otherwise. The requester's
+  // join is INNER, so on a shown block the null below only fires on corrupt
+  // data. NO PHONE, NO EMAIL, NO ADDRESS: no response of this module publishes
+  // a contact datum and this one does not open that door.
+  $requester = NULL;
+  if ($show_requester && isset($request_row->requester_uid) && $request_row->requester_uid !== '') {
+    $requester = [
+      'id'   => (int) $request_row->requester_uid,
+      'name' => isset($request_row->requester_name) ? $request_row->requester_name : NULL,
+    ];
+  }
+
+  return [
+    'id'          => $item['id'],
+    'title'       => $item['title'],
+    'status'      => $item['status'],
+    'category'    => $item['category'],
+    'condominium' => $condominium,
+    // The unit is the operative datum: it appears when the work is already mine
+    // (SPEC 98), and travels always for the resident, whose home it is.
+    'unit'        => $show_unit ? $item['unit'] : NULL,
+    'requester'   => $requester,
+  ];
 }
