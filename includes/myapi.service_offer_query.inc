@@ -41,6 +41,11 @@
 // literal here.
 module_load_include('inc', 'myapi', 'includes/myapi.services_common');
 
+// For myapi_service_offer_build(): the item below TAKES six of its fifteen keys
+// instead of rewriting them, so the two listings cannot disagree about what an
+// amount or a date looks like. See myapi_service_offer_provider_build_item().
+module_load_include('inc', 'myapi', 'includes/myapi.service_offer');
+
 /**
  * The query the count and the page are both built on: one provider's offers,
  * with the request each one hangs off, and the five optional filters
@@ -408,5 +413,99 @@ function myapi_service_offer_provider_scope($provider_id, $uid) {
   return [
     'id'   => (int) $row->nid,
     'name' => isset($row->title) ? $row->title : NULL,
+  ];
+}
+
+/**
+ * Serialises one row of GET /api/v1/service-offers/provider: EIGHT keys, always
+ * the eight, in this order (SPEC 102).
+ *
+ * PURE: no database, no node_load(). Same split includes/myapi.service_offer.inc
+ * follows, and what lets tests/unit fix the whole shape of this response with
+ * no site booted.
+ *
+ * THE SIX SHARED KEYS ARE TAKEN FROM myapi_service_offer_build() AND NOT
+ * REWRITTEN, and that is the single most important line of this function. The
+ * (float) that keeps `amount` from travelling as "95.50", the format_date()
+ * that makes the two dates 'Y-m-d\TH:i:s', and the rule that an empty string is
+ * a null are written ONCE, in the serialiser of fifteen keys that `offers` and
+ * `my_offers` already answer with. This item is that serialiser TRIMMED, never
+ * a second one: the day somebody rounds `amount` there, this listing rounds it
+ * too, or the change does not happen at all. It cannot drift without somebody
+ * deleting the call — which is exactly what the test that compares the six keys
+ * over the same row guards.
+ *
+ * THE SEVEN LONG KEYS ARE DROPPED ON PURPOSE — message, includes, excludes,
+ * duration, tax_included, warranty_days, requires_visit, available_from. They
+ * are read where they are already read: inside GET /api/v1/service-requests/provider/%,
+ * in `my_offers`, with all fifteen. Multiplied by fifty rows they would turn a
+ * listing into a download. This endpoint is REFERENTIAL by decision: enough to
+ * paint the row and open the detail, and not half a detail.
+ *
+ * `provider` IS COPIED FROM THE ARGUMENT AND NEVER READ OFF THE ROW. It is the
+ * same object in every item of the page — myapi_service_offer_provider_scope()
+ * resolved it ONCE, outside the loop — so the listing never joins node or
+ * file_managed per row to repeat the same string twenty times. It is {id, name}
+ * and NOT {id, name, logo} like `offers` and `my_offers`: the logo is the
+ * reader's OWN, which the app already has, and fetching it would cost a
+ * leftJoin to file_managed on every row to paint the same image. It is never
+ * null — a page with no provider was answered as an empty list before this
+ * function ran.
+ *
+ * `request` IS NEVER NULL EITHER, and that is the INNER JOIN of the base query
+ * showing up in the contract: every item of this listing can be opened. It
+ * carries the label and nothing more — no description, no unit, no
+ * offers_count, no assigned_provider — because it is what lets the client paint
+ * the row and navigate, not a second copy of the detail.
+ *
+ * `request.category` IS {id, code, name}, in the order and with the types of
+ * the SPEC 98 item: `code` is "" and never null when the term carries none,
+ * because the field is required on the vocabulary and an empty one is corrupt
+ * data the client can still compare as a string.
+ *
+ * NOT ONE DATUM OF THE COMPETITION OR OF THE CUSTOMER TRAVELS. No requester, no
+ * condominium, no unit, no count of rival offers and no amount of theirs. What
+ * a provider reads here is its own archive.
+ *
+ * @param object $row
+ *   One row of myapi_service_offer_provider_fetch(), carrying `nid`, `created`,
+ *   `status`, `amount`, `amount_type`, `valid_until`, `request_id`,
+ *   `request_title`, `request_status`, `category_id`, `category_name` and
+ *   `category_code`.
+ * @param array $provider
+ *   ['id' => int, 'name' => string], as myapi_service_offer_provider_scope()
+ *   returns it — resolved once for the whole page.
+ *
+ * @return array  The eight keys above, in that order.
+ */
+function myapi_service_offer_provider_build_item($row, array $provider) {
+  // The fifteen-key serialiser, run once over this row. Six of its keys are
+  // this item's first six; the other nine are dropped here and never rewritten.
+  $offer = myapi_service_offer_build($row);
+
+  return [
+    'id'          => $offer['id'],
+    'status'      => $offer['status'],
+    'amount'      => $offer['amount'],
+    'amount_type' => $offer['amount_type'],
+    'created'     => $offer['created'],
+    'valid_until' => $offer['valid_until'],
+    // Copied, not read off the row — see the docblock.
+    'provider'    => [
+      'id'   => isset($provider['id']) ? (int) $provider['id'] : NULL,
+      'name' => isset($provider['name']) ? $provider['name'] : NULL,
+    ],
+    'request'     => [
+      'id'       => isset($row->request_id) ? (int) $row->request_id : NULL,
+      'title'    => isset($row->request_title) ? $row->request_title : '',
+      'status'   => isset($row->request_status) ? $row->request_status : NULL,
+      // Three keys, in the same order /api/v1/service-categories and the two
+      // request listings print them — id, code, name.
+      'category' => [
+        'id'   => isset($row->category_id) ? (int) $row->category_id : NULL,
+        'code' => isset($row->category_code) ? $row->category_code : '',
+        'name' => isset($row->category_name) ? $row->category_name : '',
+      ],
+    ],
   ];
 }
