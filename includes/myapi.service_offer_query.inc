@@ -875,3 +875,66 @@ function myapi_service_offer_build_context($request_row, $show_requester, $show_
     'requester'   => $requester,
   ];
 }
+
+/**
+ * The whole response of both detail routes: the fifteen keys plus `request`
+ * (SPEC 103).
+ *
+ * SIXTEEN KEYS, AND `request` IS THE SIXTEENTH — appended, never interleaved.
+ * That order is not decoration: it is the order drupal_json_encode() prints,
+ * the order docs/service-offer.md shows, and what makes "the first fifteen are
+ * byte for byte myapi_service_offer_build()'s" a thing a test can check.
+ *
+ * THE FIFTEEN ARE TAKEN WHOLE AND NOT ONE OF THEM IS REWRITTEN. Same
+ * construction-by-delegation SPEC 102's item uses, and the single most
+ * important line of this function: the (float) that keeps `amount` from
+ * travelling as "95.50", the format_date() that makes the three dates
+ * 'Y-m-d\TH:i:s', the rule that an empty string is a null, the one that
+ * `message` stays "" because it is REQUIRED, and the one that `requires_visit`
+ * is never null are written ONCE, in the serialiser that `offers` and
+ * `my_offers` already answer with. The day somebody changes the format of
+ * `amount` it changes in all four places at once, or it does not change at all.
+ * It cannot drift without somebody deleting the call — which is exactly what
+ * the test that compares the fifteen over the same row guards.
+ *
+ * `request` IS THE OFFER'S SIXTEENTH KEY AND NOT A SIBLING OF IT IN `data`
+ * (decision 2). In SPEC 100 the same block travels OUTSIDE the object because
+ * there it reports the EFFECT of a write on the request; here it is the CONTEXT
+ * of the offer being read, and an offer without its request cannot be painted.
+ * Pulling it out would leave the client recomposing by hand what the API
+ * already knows belongs together.
+ *
+ * IT DECIDES NOTHING EITHER. Both booleans travel straight through to
+ * myapi_service_offer_build_context(); the two routes resolve them, each with
+ * its own gate, which is what keeps them two sibling endpoints instead of one
+ * endpoint with a branch inside.
+ *
+ * PURE: no database, no node_load(), no account, no $_GET.
+ *
+ * @param object $offer_row
+ *   A row of myapi_service_offer_detail_row(), carrying the fifteen aliases
+ *   myapi_service_offer_build() reads.
+ * @param object $request_row
+ *   A row of myapi_service_request_detail_row() for THAT offer's request — the
+ *   one `request_id` names. The caller has already answered 404 if there was
+ *   none.
+ * @param bool $show_requester
+ *   Passed through to myapi_service_offer_build_context().
+ * @param bool $show_unit
+ *   Passed through to myapi_service_offer_build_context().
+ *
+ * @return array  The sixteen keys, in that order.
+ */
+function myapi_service_offer_build_detail($offer_row, $request_row, $show_requester, $show_unit) {
+  // The fifteen, whole and untouched — see the docblock.
+  $offer = myapi_service_offer_build($offer_row);
+
+  // Appended, never interleaved: the fifteen keep their order and their place.
+  $offer['request'] = myapi_service_offer_build_context(
+    $request_row,
+    $show_requester,
+    $show_unit
+  );
+
+  return $offer;
+}

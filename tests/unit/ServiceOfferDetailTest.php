@@ -594,6 +594,248 @@ class ServiceOfferDetailTest extends TestCase {
   }
 
   /* -------------------------------------------------------------------------
+   * The response: fifteen keys plus `request` (step 5).
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * THE SIXTEEN KEYS, IN THE ORDER THE SPEC FIXES THEM. Written out as a
+   * literal: reading them off the function under test would make the assertion
+   * agree with itself.
+   */
+  const DETAIL_KEYS = [
+    'id',
+    'provider',
+    'amount',
+    'message',
+    'status',
+    'created',
+    'amount_type',
+    'valid_until',
+    'available_from',
+    'duration',
+    'includes',
+    'excludes',
+    'tax_included',
+    'warranty_days',
+    'requires_visit',
+    'request',
+  ];
+
+  /**
+   * An offer row as an OBJECT, the shape myapi_service_offer_build() reads —
+   * the fixture rows above are arrays keyed by qualified column, which is what
+   * the query answers with, so this one names the aliases directly.
+   */
+  private function offerObject(array $overrides = []) {
+    return (object) ($overrides + [
+      'nid'               => (string) self::OFFER_NID,
+      'provider_id'       => (string) self::PROVIDER_NID,
+      'provider_name'     => 'Plomería Torres',
+      'provider_logo_uri' => 'public://logo.png',
+      'amount'            => '95.50',
+      'message'           => 'Cambio de resistencia y purgado del circuito.',
+      'status'            => 'selected',
+      'created'           => (string) self::CREATED,
+      'amount_type'       => 'fixed',
+      'valid_until'       => '1756771199',
+      'available_from'    => '1756285200',
+      'duration'          => '2',
+      'duration_unit'     => 'hours',
+      'includes'          => 'Material y desplazamiento.',
+      'excludes'          => '',
+      'tax_included'      => '1',
+      'warranty_days'     => '30',
+      'requires_visit'    => '0',
+    ]);
+  }
+
+  public function testTheResponseIsSixteenKeysAndRequestIsTheLast() {
+    $detail = myapi_service_offer_build_detail(
+      $this->offerObject(),
+      $this->contextRow(),
+      TRUE,
+      TRUE
+    );
+
+    $this->assertSame(self::DETAIL_KEYS, array_keys($detail));
+    $this->assertSame('request', array_keys($detail)[15], 'request is the sixteenth');
+  }
+
+  /**
+   * THE FIFTEEN ARE NOT WRITTEN TWICE. Compared, over the SAME row, against
+   * myapi_service_offer_build() — the serialiser `offers` and `my_offers`
+   * already answer with. This is the test that fails the day somebody deletes
+   * the call and reimplements the fifteen.
+   */
+  public function testTheFifteenKeysAreIdenticalToTheSharedOfferSerialiser() {
+    $row = $this->offerObject();
+
+    $shared = myapi_service_offer_build($row);
+    $detail = myapi_service_offer_build_detail($row, $this->contextRow(), TRUE, TRUE);
+
+    foreach ($shared as $key => $value) {
+      $this->assertSame($value, $detail[$key], $key . ' is taken, not rewritten');
+    }
+
+    // And nothing of the fifteen was dropped on the way in.
+    $this->assertSame(array_keys($shared), array_slice(array_keys($detail), 0, 15));
+  }
+
+  /**
+   * The typing rules of the fifteen, asserted through THIS response because
+   * they are criteria of this spec too: `amount` is a float or null and never
+   * "95.50"; `message` is "" and never null; `requires_visit` is a bool and
+   * never null; `tax_included` tells true, false and null apart; `duration` is
+   * a whole object or a whole null.
+   */
+  public function testTheTypingRulesOfTheFifteenSurviveTheDelegation() {
+    $detail = myapi_service_offer_build_detail(
+      $this->offerObject(),
+      $this->contextRow(),
+      TRUE,
+      TRUE
+    );
+
+    $this->assertSame(95.5, $detail['amount']);
+    $this->assertIsFloat($detail['amount']);
+    $this->assertSame('Cambio de resistencia y purgado del circuito.', $detail['message']);
+    $this->assertFalse($detail['requires_visit']);
+    $this->assertTrue($detail['tax_included']);
+    $this->assertSame(['value' => 2, 'unit' => 'hours'], $detail['duration']);
+    // "" is a null for every optional text; `message` is the exception above.
+    $this->assertNull($detail['excludes']);
+    $this->assertSame(['id', 'name', 'logo'], array_keys($detail['provider']));
+  }
+
+  /**
+   * An 'on_site_quote' offer with no amount answers a WHOLE null, and
+   * `tax_included` undeclared is null and not false — the only three-valued key
+   * of the fifteen.
+   */
+  public function testAnUnpricedOfferAnswersNullAndNotZero() {
+    $detail = myapi_service_offer_build_detail(
+      $this->offerObject([
+        'amount'       => NULL,
+        'amount_type'  => 'on_site_quote',
+        'tax_included' => NULL,
+      ]),
+      $this->contextRow(),
+      TRUE,
+      TRUE
+    );
+
+    $this->assertNull($detail['amount']);
+    $this->assertSame('on_site_quote', $detail['amount_type']);
+    $this->assertNull($detail['tax_included']);
+  }
+
+  /**
+   * AN OFFER OLDER THAN SPEC 100 IS SERVED WHOLE: the ten quote keys read null
+   * — except `requires_visit`, which is false and never null — and the sixteen
+   * keys are all still there.
+   */
+  public function testAnOfferOlderThanSpec100AnswersTheSixteenKeys() {
+    $detail = myapi_service_offer_build_detail(
+      $this->offerObject([
+        'amount_type'    => NULL,
+        'valid_until'    => NULL,
+        'available_from' => NULL,
+        'duration'       => NULL,
+        'duration_unit'  => NULL,
+        'includes'       => NULL,
+        'excludes'       => NULL,
+        'tax_included'   => NULL,
+        'warranty_days'  => NULL,
+        'requires_visit' => NULL,
+      ]),
+      $this->contextRow(),
+      TRUE,
+      TRUE
+    );
+
+    $this->assertSame(self::DETAIL_KEYS, array_keys($detail));
+
+    foreach (['amount_type', 'valid_until', 'available_from', 'duration',
+      'includes', 'excludes', 'tax_included', 'warranty_days'] as $key) {
+      $this->assertNull($detail[$key], $key . ' predates the field');
+    }
+
+    $this->assertFalse($detail['requires_visit'], 'never null: an undeclared visit is no visit');
+  }
+
+  /**
+   * A SUSPENDED PROVIDER answers `provider: null` — a whole null, never a half
+   * object — and the offer is served all the same. It is what `offers` already
+   * answers for that same row: one datum, one answer, in every route.
+   */
+  public function testASuspendedProviderAnswersAWholeNullProvider() {
+    $detail = myapi_service_offer_build_detail(
+      $this->offerObject([
+        'provider_id'       => NULL,
+        'provider_name'     => NULL,
+        'provider_logo_uri' => NULL,
+      ]),
+      $this->contextRow(),
+      TRUE,
+      TRUE
+    );
+
+    $this->assertSame(self::DETAIL_KEYS, array_keys($detail));
+    $this->assertNull($detail['provider']);
+  }
+
+  /**
+   * `logo` IS null AND NEVER "" when the provider has none — a client that
+   * paints an empty string gets a broken image, and a null it can test.
+   */
+  public function testAProviderWithNoLogoAnswersANullLogo() {
+    $detail = myapi_service_offer_build_detail(
+      $this->offerObject(['provider_logo_uri' => NULL]),
+      $this->contextRow(),
+      TRUE,
+      TRUE
+    );
+
+    $this->assertNull($detail['provider']['logo']);
+    $this->assertSame(self::PROVIDER_NID, $detail['provider']['id']);
+  }
+
+  /**
+   * THE TWO ROUTES DIFFER IN TWO KEYS AND IN NOTHING ELSE. The fifteen are
+   * identical and so are five of the seven of `request`; what changes is `unit`
+   * and `requester`, which is the whole of the visibility contract.
+   */
+  public function testTheTwoRoutesDifferInExactlyTwoKeys() {
+    $offer = $this->offerObject();
+    $request = $this->contextRow();
+
+    // The provider, on a request awarded to one of its providers.
+    $provider_view = myapi_service_offer_build_detail($offer, $request, TRUE, TRUE);
+    // The resident: the unit always, the requester never.
+    $resident_view = myapi_service_offer_build_detail($offer, $request, FALSE, TRUE);
+
+    $this->assertSame(array_keys($provider_view), array_keys($resident_view));
+
+    $differ = [];
+    foreach ($provider_view as $key => $value) {
+      if ($key !== 'request' && $value !== $resident_view[$key]) {
+        $differ[] = $key;
+      }
+    }
+    $this->assertSame([], $differ, 'not one of the fifteen changes with the reader');
+
+    foreach ($provider_view['request'] as $key => $value) {
+      if ($key === 'requester') {
+        continue;
+      }
+      $this->assertSame($value, $resident_view['request'][$key], $key . ' is the same for both');
+    }
+
+    $this->assertNotNull($provider_view['request']['requester']);
+    $this->assertNull($resident_view['request']['requester'], 'the resident is the requester');
+  }
+
+  /* -------------------------------------------------------------------------
    * The two provider columns: the joined one is painted, the raw one gates.
    * ---------------------------------------------------------------------- */
 
