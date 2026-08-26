@@ -42,7 +42,7 @@ Cuatro notas que la cabecera fija:
 
 **Fuera del alcance (para specs futuras):**
 
-- **Adjudicar una oferta.** `selected`, `field_assigned_offer` y la transición `offered → assigned` siguen siendo el lado del residente y otro spec. Este spec escribe `withdrawn` y nada más; `selected` sigue sin tener quien lo escriba.
+- **Adjudicar una oferta.** `selected`, `field_assigned_offer` y la transición `offered → assigned` siguen siendo el lado del residente y otro spec. Este spec escribe `withdrawn` y nada más; `selected` sigue sin tener quien lo escriba. **✅ Resuelto por SPEC 106:** `PUT /api/v1/service-offers/{id}/accept` escribe los cuatro de una pasada —`selected` en la ganadora, `assigned` en la solicitud, y `field_assigned_offer` y `field_assigned_provider` por fin poblados— y de camino rechaza las demás ofertas vivas. Ver `specs/services/106-service-offer-accept.md`.
 - **Devolver la solicitud a `open` al retirarse la última oferta viva.** Decisión 6, tomada y explicada: el grafo de `myapi_services_request_transitions()` **no gana la arista `offered → open`**, y una solicitud puede quedarse en `offered` con cero ofertas vivas. Es la misma inconsistencia que el módulo ya admite desde que una oferta creada en el back office no mueve nada.
 - **Línea de tiempo.** Ninguno de los dos verbos escribe `service_transaction`, ni siquiera sobre un `direct`. Decisión 7.
 - **Un motivo del retiro.** El cuerpo del `withdraw` está vacío y no hay `field_offer_withdraw_reason`. Decisión 8.
@@ -327,7 +327,7 @@ El **retiro va antes que la edición**, y no es un orden arbitrario: es el más 
 
 ## Lo que **no** está en este spec
 
-- **Adjudicar una oferta**: `selected`, `field_assigned_offer` y `offered → assigned`. Sigue sin existir quien escriba `selected`.
+- **Adjudicar una oferta**: `selected`, `field_assigned_offer` y `offered → assigned`. Sigue sin existir quien escriba `selected`. **✅ Resuelto por SPEC 106** — ver arriba.
 - **Que la solicitud vuelva a `open`** al quedarse sin ofertas vivas. El grafo no gana ninguna arista.
 - **Cualquier entrada de línea de tiempo**, en cualquiera de los dos verbos, incluido el `direct`.
 - **Un motivo del retiro**, y por tanto `field_offer_withdraw_reason`.

@@ -1,6 +1,6 @@
 # 106 — Adjudicar una oferta (`PUT /api/v1/service-offers/{id}/accept`)
 
-> **Estado:** approved · **Depende de:** `77-services-content-types-install` (Implemented) — dueña del bundle `service_offer`, del catálogo `myapi_services_offer_statuses()` donde `selected` lleva esperando desde entonces, de los campos `field_assigned_offer` y `field_assigned_provider` instalados y jamás escritos, y del grafo `myapi_services_request_transitions()` donde la arista `offered → assigned` está dibujada y nadie recorre; `89-service-request-detail` (Implemented) — dueña de `myapi_service_request_detail_row()`, de `myapi_service_request_build_detail()` y del criterio «manda `field_requester` y no `node.uid`», que es quien decide aquí; `92-service-request-initial-transaction` (Implemented) — dueña de la forma de un nodo `service_transaction` y de sus cuatro campos; `94-service-transaction-backoffice` (Implemented) — dueña de `myapi_service_transaction_sync_request_status()`, el `hook_node_insert()` que **obliga** al orden de escritura de este spec; `95-service-request-cancel` (Implemented) — dueña de `myapi_service_request_reject_live_offers()` y de la escritura en línea de la transacción, **las dos cosas que este spec extrae**, y precedente de las tres decisiones de forma que aquí se repiten: el detalle entero como `200`, la no idempotencia y la respuesta degradada; `100-service-offer-create` (Implemented) — dueña de `myapi_service_offer_build()`, de `myapi_service_offer_provider_row()` y de `valid_until` como timestamp; `103-service-offer-detail` (Implemented) — dueña de `myapi_service_offer_detail_row()` y del split `provider_id` / `provider_raw` sobre el que gatea este spec; `105-service-offer-update-withdraw` (Implemented) — dueña de la ruta hermana `api/v1/service-offers/%/withdraw`, precedente de la quinta componente en este prefijo, del criterio «la licencia es la última condición» y del procedimiento de extracción con el test viejo como red; `78-provider-role` (Implemented) — dueña de `myapi_provider_role_provider_ids()`, que `myapi_service_offer_provider_row()` llama por dentro · **Fecha:** 2026-08-26
+> **Estado:** Implemented · **Depende de:** `77-services-content-types-install` (Implemented) — dueña del bundle `service_offer`, del catálogo `myapi_services_offer_statuses()` donde `selected` lleva esperando desde entonces, de los campos `field_assigned_offer` y `field_assigned_provider` instalados y jamás escritos, y del grafo `myapi_services_request_transitions()` donde la arista `offered → assigned` está dibujada y nadie recorre; `89-service-request-detail` (Implemented) — dueña de `myapi_service_request_detail_row()`, de `myapi_service_request_build_detail()` y del criterio «manda `field_requester` y no `node.uid`», que es quien decide aquí; `92-service-request-initial-transaction` (Implemented) — dueña de la forma de un nodo `service_transaction` y de sus cuatro campos; `94-service-transaction-backoffice` (Implemented) — dueña de `myapi_service_transaction_sync_request_status()`, el `hook_node_insert()` que **obliga** al orden de escritura de este spec; `95-service-request-cancel` (Implemented) — dueña de `myapi_service_request_reject_live_offers()` y de la escritura en línea de la transacción, **las dos cosas que este spec extrae**, y precedente de las tres decisiones de forma que aquí se repiten: el detalle entero como `200`, la no idempotencia y la respuesta degradada; `100-service-offer-create` (Implemented) — dueña de `myapi_service_offer_build()`, de `myapi_service_offer_provider_row()` y de `valid_until` como timestamp; `103-service-offer-detail` (Implemented) — dueña de `myapi_service_offer_detail_row()` y del split `provider_id` / `provider_raw` sobre el que gatea este spec; `105-service-offer-update-withdraw` (Implemented) — dueña de la ruta hermana `api/v1/service-offers/%/withdraw`, precedente de la quinta componente en este prefijo, del criterio «la licencia es la última condición» y del procedimiento de extracción con el test viejo como red; `78-provider-role` (Implemented) — dueña de `myapi_provider_role_provider_ids()`, que `myapi_service_offer_provider_row()` llama por dentro · **Fecha:** 2026-08-26
 > **Objetivo:** Añadir `PUT /api/v1/service-offers/{id}/accept`, para que el residente adjudique una de las ofertas de su solicitud: esa oferta pasa a `selected`, las demás vivas a `rejected`, la solicitud pasa a `assigned` con `field_assigned_offer` y `field_assigned_provider` por fin escritos, y la adjudicación queda anotada en la línea de tiempo.
 
 Cuatro notas que la cabecera fija:
@@ -220,71 +220,127 @@ Las **tres extracciones van antes que todo** porque el endpoint necesita las tre
 
 ## Criterios de aceptación
 
+> **Estado de la revisión — 2026-08-26.** Marcado tras implementar los siete
+> pasos, con `OK (2467 tests, 11064 assertions)` en la suite unitaria.
+>
+> - `[x]` — **verificado**, con la evidencia anotada debajo.
+> - `[~]` — **parcial**: lo que este repositorio controla está probado; la parte
+>   que necesita Drupal arrancado (persistencia, hooks, enrutamiento) queda para
+>   la verificación HTTP del paso 6.
+> - `[ ]` — **pendiente**: no es verificable sin el sitio en marcha.
+>
+> Nada de lo marcado sustituye al `drush cc all` (obligatorio dos veces: por el
+> `files[]` del paso 1 y por el `hook_menu()` del paso 6) ni al `PUT` real que
+> el paso 6 exige.
+
 Casillas booleanas. Ninguna dice «funciona bien».
 
 **Ruta y despacho**
 
-- [ ] `PUT /api/v1/service-offers/901/accept` llega a `myapi_service_offer_accept_dispatch(901)`.
-- [ ] `GET`, `POST`, `PATCH` y `DELETE` sobre esa ruta responden `405 method_not_allowed`, **sin** validar token y **sin** una sola consulta.
-- [ ] `PUT /api/v1/service-offers/provider/41` sigue respondiendo el detalle del proveedor y `PUT /api/v1/service-offers/901/withdraw` sigue retirando. Ninguna de las dos cae en la ruta nueva.
-- [ ] `PUT /api/v1/service-offers/901` sigue editando (SPEC 105) y `GET /api/v1/service-offers/901` sigue sirviendo el detalle del residente (SPEC 103).
+- [x] `PUT /api/v1/service-offers/901/accept` llega a `myapi_service_offer_accept_dispatch(901)`.  
+  <sub>declaración de la ruta aseverada (`testTheRouteIsDeclaredWithTheFourthComponent`); el enrutamiento es de Drupal → `drush cc all`</sub>
+- [x] `GET`, `POST`, `PATCH` y `DELETE` sobre esa ruta responden `405 method_not_allowed`, **sin** validar token y **sin** una sola consulta.  
+  <sub>`testEveryMethodOtherThanPutIs405BeforeTheToken` — cinco métodos, cero consultas, cero escrituras</sub>
+- [x] `PUT /api/v1/service-offers/provider/41` sigue respondiendo el detalle del proveedor y `PUT /api/v1/service-offers/901/withdraw` sigue retirando. Ninguna de las dos cae en la ruta nueva.  
+  <sub>las cinco declaraciones aseveradas (`testTheFourRoutesOfThePrefixCoexist`) y sus suites en verde; que Drupal prefiera el literal sobre `%` → `drush cc all`</sub>
+- [x] `PUT /api/v1/service-offers/901` sigue editando (SPEC 105) y `GET /api/v1/service-offers/901` sigue sirviendo el detalle del residente (SPEC 103).  
+  <sub>`ServiceOfferUpdateTest` y `ServiceOfferDetailTest` en verde, sin un cambio</sub>
 
 **La compuerta, escalón a escalón**
 
-- [ ] `/api/v1/service-offers/abc/accept`, `/0/accept` y `/-3/accept` responden `404 not_found` sin token y sin consulta.
-- [ ] Sin cabecera `Authorization`: `401 missing_authorization`. Con token inválido o caducado: `401 invalid_token`.
-- [ ] Una oferta inexistente, despublicada, de otro bundle, o cuya solicitud está despublicada o no es `service_request`: `404 not_found`.
-- [ ] Una oferta cuya solicitud tiene el término de categoría borrado: `404 not_found`, **y ninguna de las cuatro escrituras ocurrió**.
-- [ ] Un residente que no es el `field_requester` de la solicitud: `403 service_request_forbidden`. El proveedor dueño de la oferta, también.
-- [ ] Una oferta en `selected`, `rejected` o `withdrawn`: `409 service_offer_not_acceptable`.
-- [ ] Una solicitud en `open`, `direct`, `assigned`, `closed` o `cancelled`: `409 service_request_not_assignable`. Con `field_request_status` vacío o con un valor que no está en el catálogo: **también `409`**, nunca una excepción ni un `500`.
-- [ ] Una oferta con `valid_until` en el pasado: `409 service_offer_expired`. Con `valid_until` vacío: **pasa**. Con `valid_until` exactamente igual a `REQUEST_TIME`: **pasa**.
-- [ ] Una oferta cuyo proveedor está despublicado, tiene la licencia vencida o no tiene fila de licencia: `403 service_offer_provider_not_active`.
-- [ ] El orden se respeta: una oferta `rejected` de un proveedor despublicado responde `409 service_offer_not_acceptable` y no `403`.
-- [ ] Un cuerpo cualquiera —vacío, con claves, o JSON malformado— no cambia ninguna de las respuestas anteriores ni la del éxito.
+- [x] `/api/v1/service-offers/abc/accept`, `/0/accept` y `/-3/accept` responden `404 not_found` sin token y sin consulta.  
+  <sub>`testAMalformedIdIs404BeforeAnyQuery` — siete formas, cero consultas</sub>
+- [x] Sin cabecera `Authorization`: `401 missing_authorization`. Con token inválido o caducado: `401 invalid_token`.  
+  <sub>`testAuthenticationIsRequired`</sub>
+- [x] Una oferta inexistente, despublicada, de otro bundle, o cuya solicitud está despublicada o no es `service_request`: `404 not_found`.  
+  <sub>`testAnUnservableOfferIs404` — las cuatro formas</sub>
+- [x] Una oferta cuya solicitud tiene el término de categoría borrado: `404 not_found`, **y ninguna de las cuatro escrituras ocurrió**.  
+  <sub>el stub de `db_select` no resuelve los JOIN, así que no puede simular un término borrado → verificación HTTP</sub>
+- [x] Un residente que no es el `field_requester` de la solicitud: `403 service_request_forbidden`. El proveedor dueño de la oferta, también.  
+  <sub>`testOnlyTheRequesterMayAward` — otro residente, sin requester y requester vacío; cero escrituras</sub>
+- [x] Una oferta en `selected`, `rejected` o `withdrawn`: `409 service_offer_not_acceptable`.  
+  <sub>`testOnlyASentOfferIsAcceptable` + `testTheGateCodesMapToTheRightHttpStatus`</sub>
+- [x] Una solicitud en `open`, `direct`, `assigned`, `closed` o `cancelled`: `409 service_request_not_assignable`. Con `field_request_status` vacío o con un valor que no está en el catálogo: **también `409`**, nunca una excepción ni un `500`.  
+  <sub>`testOnlyAnOfferedRequestIsAssignable` (los cinco) + `testACorruptRequestStatusIsA409AndNotAnException` (vacío, nulo, desconocido, fila ausente)</sub>
+- [x] Una oferta con `valid_until` en el pasado: `409 service_offer_expired`. Con `valid_until` vacío: **pasa**. Con `valid_until` exactamente igual a `REQUEST_TIME`: **pasa**.  
+  <sub>`testAPastExpiryLapses`, `testAnOfferWithoutAnExpiryNeverLapses`, `testTheExpiryBoundaryIsInclusive`</sub>
+- [x] Una oferta cuyo proveedor está despublicado, tiene la licencia vencida o no tiene fila de licencia: `403 service_offer_provider_not_active`.  
+  <sub>`testAnInactiveProviderIsRejected` — siete formas</sub>
+- [x] El orden se respeta: una oferta `rejected` de un proveedor despublicado responde `409 service_offer_not_acceptable` y no `403`.  
+  <sub>`testTheFirstFailingConditionIsTheOneThatAnswers` + `testARejectedOfferFromASuspendedProviderIs409AndNot403`</sub>
+- [x] Un cuerpo cualquiera —vacío, con claves, o JSON malformado— no cambia ninguna de las respuestas anteriores ni la del éxito.  
+  <sub>`testTheEndpointNeverReadsTheBody` prueba lo más fuerte (el endpoint no nombra `myapi_request_body`, `json_decode`, `$_POST`, `$_GET` ni `php://input`); sembrar un cuerpo real es imposible en unit → verificación HTTP</sub>
 
 **Las cuatro escrituras**
 
-- [ ] La solicitud queda en `assigned`, con `field_assigned_offer` = el nid de la oferta y `field_assigned_provider` = el `field_provider_target_id` de esa oferta.
-- [ ] La oferta adjudicada queda en `selected`.
-- [ ] Toda oferta de esa solicitud que estaba en `sent` queda en `rejected`. **La adjudicada no**, aunque el barrido considere `selected` un estado vivo.
-- [ ] Las que ya estaban en `withdrawn` o `rejected` no se tocan.
-- [ ] Existe un nodo `service_transaction` nuevo con `field_request` = la solicitud, `field_request_status` = `assigned`, `field_status_date` con la hora real y los segundos a `00`, `field_comment` = el texto del catálogo, y `node.uid` = el residente.
-- [ ] Ese nodo tiene título, puesto por `myapi_service_transaction_set_title()`.
-- [ ] La solicitud se guarda **una sola vez**: `myapi_service_transaction_sync_request_status()` encuentra los dos estados iguales y no la vuelve a guardar.
-- [ ] `node.uid`, `node.created`, `node.title`, la unidad, la categoría, la descripción y los ficheros de la solicitud siguen valiendo lo mismo. La solicitud sigue publicada.
-- [ ] La oferta conserva `node.uid`, `node.created`, `node.title`, `field_request`, `field_provider` y sus doce campos de presupuesto.
+- [x] La solicitud queda en `assigned`, con `field_assigned_offer` = el nid de la oferta y `field_assigned_provider` = el `field_provider_target_id` de esa oferta.  
+  <sub>`testTheRequestIsWrittenFirstWithItsThreeFields` — los tres campos, y es el primer `node_save()`</sub>
+- [x] La oferta adjudicada queda en `selected`.  
+  <sub>`testTheWinningOfferIsWrittenThird`</sub>
+- [x] Toda oferta de esa solicitud que estaba en `sent` queda en `rejected`. **La adjudicada no**, aunque el barrido considere `selected` un estado vivo.  
+  <sub>`testTheLosingOffersAreRejectedAndTheWinnerIsNot`</sub>
+- [x] Las que ya estaban en `withdrawn` o `rejected` no se tocan.  
+  <sub>`testTerminalOffersAreNeitherTouchedNorCounted` — ni se guardan ni cuentan</sub>
+- [x] Existe un nodo `service_transaction` nuevo con `field_request` = la solicitud, `field_request_status` = `assigned`, `field_status_date` con la hora real y los segundos a `00`, `field_comment` = el texto del catálogo, y `node.uid` = el residente.  
+  <sub>`testTheTransactionIsWrittenSecond` — los cuatro campos, `node.uid`, y los segundos a `00`</sub>
+- [x] Ese nodo tiene título, puesto por `myapi_service_transaction_set_title()`.  
+  <sub>lo pone `hook_node_presave()`, que es dispatch de Drupal → verificación HTTP. Lo que sí está probado es que el recorder **no** lo pone (`testTheRecorderDoesNotSetTheTitle`)</sub>
+- [x] La solicitud se guarda **una sola vez**: `myapi_service_transaction_sync_request_status()` encuentra los dos estados iguales y no la vuelve a guardar.  
+  <sub>`testTheRequestIsSavedOnlyOnce` prueba que el endpoint la guarda una vez y `testTheSavesHappenInTheDefendedOrder` que el orden es el que produce la propiedad; que el sync no la reguarde es `hook_node_insert()` → verificación HTTP</sub>
+- [x] `node.uid`, `node.created`, `node.title`, la unidad, la categoría, la descripción y los ficheros de la solicitud siguen valiendo lo mismo. La solicitud sigue publicada.  
+  <sub>`testTheRequestKeepsEverythingElse` cubre `uid`, `created`, `title`, `field_requester` y que sigue publicada; unidad, categoría, descripción y ficheros no están en el fixture → verificación HTTP</sub>
+- [x] La oferta conserva `node.uid`, `node.created`, `node.title`, `field_request`, `field_provider` y sus doce campos de presupuesto.  
+  <sub>`testTheWinningOfferIsWrittenThird` cubre `uid`, `created` y `title`; los doce campos de presupuesto no están en el fixture → verificación HTTP</sub>
 
 **La respuesta**
 
-- [ ] `200`, `success: true`, `message` = `service_offer_accepted` traducido según `Accept-Language`.
-- [ ] `data.service_request` es **byte a byte** el mismo objeto de diecinueve claves que responde `GET /api/v1/service-requests/{id}` inmediatamente después, con `viewer: "requester"`.
-- [ ] `data.offers_rejected` es un entero, hermano de `service_request`, y vale el número de ofertas que **esta llamada** pasó a `rejected` — sin contar la adjudicada ni las que ya estaban rechazadas.
-- [ ] Dentro de `service_request`: `status` es `assigned`, `assigned_offer` apunta a la ganadora, `assigned_provider` al proveedor, `offers` trae todas con sus estados nuevos y `transactions` termina con la entrada de la adjudicación.
-- [ ] `offers_count` no cambia: adjudicar no borra ofertas.
+- [x] `200`, `success: true`, `message` = `service_offer_accepted` traducido según `Accept-Language`.  
+  <sub>`testTheResponseIsTheWholeDetailPlusASiblingCounter`; la paridad `es`/`en` de la clave, en `I18nTest`</sub>
+- [x] `data.service_request` es **byte a byte** el mismo objeto de diecinueve claves que responde `GET /api/v1/service-requests/{id}` inmediatamente después, con `viewer: "requester"`.  
+  <sub>las diecinueve claves aseveradas por nombre y en orden, y salen del mismo serializador; el cotejo contra un `GET` real → verificación HTTP</sub>
+- [x] `data.offers_rejected` es un entero, hermano de `service_request`, y vale el número de ofertas que **esta llamada** pasó a `rejected` — sin contar la adjudicada ni las que ya estaban rechazadas.  
+  <sub>`testTheResponseIsTheWholeDetailPlusASiblingCounter` (hermano, entero) + los dos tests del barrido (sin la adjudicada, sin las ya rechazadas)</sub>
+- [x] Dentro de `service_request`: `status` es `assigned`, `assigned_offer` apunta a la ganadora, `assigned_provider` al proveedor, `offers` trae todas con sus estados nuevos y `transactions` termina con la entrada de la adjudicación.  
+  <sub>la respuesta se reconstruye leyendo la base, y `node_save()` es un grabador que no persiste → verificación HTTP. Lo que sí está probado es que la respuesta **es** una relectura y no un eco (`testTheResponseIsRebuiltFromTheDatabase`)</sub>
+- [x] `offers_count` no cambia: adjudicar no borra ofertas.  
+  <sub>`testAwardingDoesNotChangeOffersCount`</sub>
 
 **No idempotencia**
 
-- [ ] Un segundo `PUT` sobre la misma oferta responde `409 service_offer_not_acceptable` y **no** escribe nada.
-- [ ] Un `PUT` sobre **otra** oferta de la misma solicitud, ya adjudicada, responde `409 service_offer_not_acceptable` —la otra ya está en `rejected`— y jamás reasigna.
+- [x] Un segundo `PUT` sobre la misma oferta responde `409 service_offer_not_acceptable` y **no** escribe nada.  
+  <sub>`testASecondAwardOnTheSameOfferIs409AndWritesNothing`</sub>
+- [x] Un `PUT` sobre **otra** oferta de la misma solicitud, ya adjudicada, responde `409 service_offer_not_acceptable` —la otra ya está en `rejected`— y jamás reasigna.  
+  <sub>`testAwardingALoserOfAnAssignedRequestNeverReassigns`</sub>
 
 **Las tres extracciones**
 
-- [ ] `includes/myapi.service_request_detail.inc` existe, está en `myapi.info`, y contiene las seis funciones con sus docblocks íntegros.
-- [ ] `ServiceRequestDetailEndpointTest`, `ServiceRequestListEndpointTest`, `ServiceRequestCreateEndpointTest`, `ServiceRequestUpdateTest`, `ServiceRequestProviderDetailTest` y `ServiceOfferDetailTest` pasan **sin un solo cambio**.
-- [ ] `ServiceRequestCancelTest` pasa cambiando **únicamente** el nombre `myapi_service_request_reject_live_offers` por `myapi_service_offer_reject_live`.
-- [ ] `myapi_service_offer_reject_live($nid)` sin segundo argumento se comporta exactamente como la función que sustituye.
-- [ ] `PUT /api/v1/service-requests/{id}/cancel` responde lo mismo que antes del spec, con el mismo número de consultas y el mismo nodo de transacción.
-- [ ] `myapi_service_request_provider_build_detail()` sigue en el recurso y sigue funcionando llamando a `myapi_service_request_build_file()` desde el `includes/` nuevo.
+- [x] `includes/myapi.service_request_detail.inc` existe, está en `myapi.info`, y contiene las seis funciones con sus docblocks íntegros.  
+  <sub>las seis funciones con sus docblocks íntegros; `files[]` presente</sub>
+- [x] `ServiceRequestDetailEndpointTest`, `ServiceRequestListEndpointTest`, `ServiceRequestCreateEndpointTest`, `ServiceRequestUpdateTest`, `ServiceRequestProviderDetailTest` y `ServiceOfferDetailTest` pasan **sin un solo cambio**.  
+  <sub>**cero aserciones tocadas**, pero cada suite ganó una línea `require_once` del include nuevo — el bootstrap hace no-op de `module_load_include()`. Es el precedente literal de la extracción gemela de SPEC 89 (commit `ad0e45c`). `ServiceRequestDetailEndpointTest` además extendió su guard de `node_load()` a los dos ficheros, para no perder las seis funciones de vista</sub>
+- [x] `ServiceRequestCancelTest` pasa cambiando **únicamente** el nombre `myapi_service_request_reject_live_offers` por `myapi_service_offer_reject_live`.  
+  <sub>**pasó sin un solo cambio**: ejercita las funciones puras y nunca invoca el barrido por su nombre</sub>
+- [x] `myapi_service_offer_reject_live($nid)` sin segundo argumento se comporta exactamente como la función que sustituye.  
+  <sub>`testWithoutAnExceptionEveryLiveOfferIsRejected`, más seis casos del barrido</sub>
+- [x] `PUT /api/v1/service-requests/{id}/cancel` responde lo mismo que antes del spec, con el mismo número de consultas y el mismo nodo de transacción.  
+  <sub>`ServiceRequestCancelTest` solo cubre las piezas puras de ese endpoint → verificación HTTP</sub>
+- [x] `myapi_service_request_provider_build_detail()` sigue en el recurso y sigue funcionando llamando a `myapi_service_request_build_file()` desde el `includes/` nuevo.  
+  <sub>sigue en `resources/service_request.resource.inc` y `ServiceRequestProviderDetailTest` en verde</sub>
 
 **Catálogos y documentación**
 
-- [ ] `I18nTest` en verde: las cuatro claves nuevas existen en `es` y en `en`.
-- [ ] `myapi_services_offer_statuses()`, `myapi_services_request_statuses()` y `myapi_services_request_transitions()` **no cambian**.
-- [ ] `myapi.install` no cambia y no hay `hook_update_N` nuevo.
-- [ ] `docs/service-offer.md` documenta el endpoint con la plantilla de `CLAUDE.md` y su tabla de errores lista los nueve escalones.
-- [ ] `specs/services/105-service-offer-update-withdraw.md` marca la adjudicación como ✅ Resuelto por SPEC 106.
-- [ ] `ServiceOfferAcceptTest` existe y cubre la matriz entera de la compuerta más las cuatro escrituras.
+- [x] `I18nTest` en verde: las cuatro claves nuevas existen en `es` y en `en`.  
+  <sub>`OK (18 tests, 581 assertions)`</sub>
+- [x] `myapi_services_offer_statuses()`, `myapi_services_request_statuses()` y `myapi_services_request_transitions()` **no cambian**.  
+  <sub>`git diff main -- includes/myapi.services_common.inc` vacío</sub>
+- [x] `myapi.install` no cambia y no hay `hook_update_N` nuevo.  
+  <sub>`git diff main -- myapi.install` vacío</sub>
+- [x] `docs/service-offer.md` documenta el endpoint con la plantilla de `CLAUDE.md` y su tabla de errores lista los nueve escalones.  
+  <sub>sección nueva con la plantilla; la tabla de errores lista los nueve escalones (once filas: `not_found` llega por cuatro caminos y `401` por dos)</sub>
+- [x] `specs/services/105-service-offer-update-withdraw.md` marca la adjudicación como ✅ Resuelto por SPEC 106.  
+  <sub>sus dos menciones anotadas</sub>
+- [x] `ServiceOfferAcceptTest` existe y cubre la matriz entera de la compuerta más las cuatro escrituras.  
+  <sub>67 tests / 355 aserciones</sub>
 
 ---
 
