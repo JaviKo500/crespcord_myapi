@@ -55,6 +55,10 @@ class ServiceOfferDetailTest extends TestCase {
   const REQUEST_NID = 128;
   const PROVIDER_NID = 41;
   const CREATED = 1756116840;
+  const TOKEN = 'a-valid-access-token';
+  const UID = 7;
+  const REQUESTER_UID = 314;
+  const FOREIGN_PROVIDER = 77;
 
   protected function setUp(): void {
     myapi_test_db_seed();
@@ -833,6 +837,643 @@ class ServiceOfferDetailTest extends TestCase {
 
     $this->assertNotNull($provider_view['request']['requester']);
     $this->assertNull($resident_view['request']['requester'], 'the resident is the requester');
+  }
+
+
+  /* =========================================================================
+   * THE PROVIDER'S ROUTE: GET /api/v1/service-offers/provider/% (step 6).
+   *
+   * WHAT THIS HALF CANNOT PROVE, and is a manual criterion instead: that
+   * hook_menu() resolves the literal 'provider' before the wildcard (that is
+   * step 8, and it needs `drush cc all`), and that MySQL evaluates the INNER
+   * JOIN to the request the way the fixture evaluator does. What it DOES prove
+   * is everything the module decides: the ORDER of the gate, which refusal
+   * comes before which query, and the whole visibility contract.
+   * ====================================================================== */
+
+  /**
+   * A request node row, flat, as myapi_service_request_detail_row()'s joins
+   * deliver it.
+   */
+  private function requestNode(array $overrides = []) {
+    return $overrides + [
+      'nid'                                    => (string) self::REQUEST_NID,
+      'type'                                   => MYAPI_SERVICES_REQUEST_TYPE,
+      'status'                                 => '1',
+      'title'                                  => 'Fuga en el calentador',
+      'created'                                => (string) self::CREATED,
+      'fcat.field_category_tid'                => '12',
+      'td.name'                                => 'Plomería',
+      'cc.field_category_code_value'           => 'plumbing',
+      'frs.field_request_status_value'         => 'assigned',
+      'fr.field_requester_target_id'           => (string) self::REQUESTER_UID,
+      'fd.field_description_value'             => 'El calentador gotea por la base.',
+      'fds.field_desired_start_value'          => NULL,
+      'fca.field_closed_at_value'              => NULL,
+      'nu.nid'                                 => '55',
+      'fnv.field_nombre_vivienda_value'        => 'Apto 302',
+      'nc.nid'                                 => '7',
+      'nc.title'                               => 'Residencial Los Álamos',
+      'fma.fid'                                => NULL,
+      'fma.filename'                           => NULL,
+      'no.nid'                                 => NULL,
+      'fos.field_offer_status_value'           => NULL,
+      'np.nid'                                 => (string) self::PROVIDER_NID,
+      'np.title'                               => 'Plomería Torres',
+      'fao.field_assigned_offer_target_id'     => NULL,
+      'fap.field_assigned_provider_target_id'  => (string) self::PROVIDER_NID,
+    ];
+  }
+
+  /**
+   * A provider node: published, of the provider bundle.
+   */
+  private function providerNode($nid = self::PROVIDER_NID, $status = '1', $title = 'Plomería Torres') {
+    return [
+      'nid'    => (string) $nid,
+      'type'   => MYAPI_SERVICES_PROVIDER_TYPE,
+      'status' => $status,
+      'title'  => $title,
+    ];
+  }
+
+  /**
+   * One row of field_data_field_provider_users: the account -> provider link.
+   */
+  private function link($provider_nid, $uid = self::UID) {
+    return [
+      'entity_id'   => (string) $provider_nid,
+      'entity_type' => 'node',
+      'deleted'     => '0',
+      MYAPI_PROVIDER_USERS_FIELD . '_target_id' => (string) $uid,
+    ];
+  }
+
+  private function tokenRow($uid = self::UID) {
+    return [
+      'id'                => '1',
+      'uid'               => (string) $uid,
+      'access_token_hash' => myapi_token_hash(self::TOKEN),
+      'revoked'           => '0',
+      'access_expires_at' => REQUEST_TIME + 1800,
+    ];
+  }
+
+  /**
+   * Seeds a whole scenario in one call: every myapi_test_db_seed() replaces the
+   * entire fixture, so nothing can be added afterwards.
+   */
+  private function seed(array $nodes, array $tables = [], $roles = NULL, $uid = self::UID) {
+    $roles = $roles === NULL ? ['authenticated user', MYAPI_PROVIDER_ROLE] : $roles;
+
+    $GLOBALS['myapi_test_users'][$uid] = [
+      'uid'    => $uid,
+      'name'   => 'usuario' . $uid,
+      'status' => 1,
+      'roles'  => $roles,
+    ];
+
+    $tables += [
+      'my_api_tokens' => [$this->tokenRow($uid)],
+      'field_data_' . MYAPI_PROVIDER_USERS_FIELD => [$this->link(self::PROVIDER_NID)],
+      // The requester's row, flat, with the two profile joins already resolved
+      // under their qualified sources — the shared "nombre apellidos" rule of
+      // includes/myapi.user.inc.
+      'users' => [[
+        'uid'                     => (string) self::REQUESTER_UID,
+        'name'                    => 'mcrespo',
+        'fn.field_nombre_value'   => 'María',
+        'fa.field_apellidos_value' => 'Crespo',
+      ]],
+    ];
+
+    $tables['node'] = $nodes;
+
+    myapi_test_db_seed($tables);
+    myapi_test_static_reset();
+  }
+
+  private function authenticate() {
+    $_SERVER['HTTP_AUTHORIZATION'] = 'Bearer ' . self::TOKEN;
+  }
+
+  /**
+   * The three nodes a happy scenario needs: the offer, its request, the
+   * provider.
+   */
+  private function scenario(array $offer = [], array $request = []) {
+    return [
+      $this->offerRow($offer),
+      $this->requestNode($request),
+      $this->providerNode(),
+    ];
+  }
+
+  private function providerDetail($nid = self::OFFER_NID) {
+    return myapi_test_capture(function () use ($nid) {
+      myapi_service_offer_provider_item_dispatch((string) $nid);
+    });
+  }
+
+  private function offer(array $result) {
+    return $result['json']['data']['service_offer'];
+  }
+
+  /* -------------------------------------------------------------------------
+   * Method, nid and authentication.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * EVERY METHOD BUT GET IS 405, WITHOUT A TOKEN IN THE REQUEST. The method is
+   * wrong whoever is asking, and answering 401 first would tell a client with a
+   * broken verb to go fix its credentials.
+   */
+  public function testEveryMethodButGetIs405BeforeTheToken() {
+    $this->seed($this->scenario());
+
+    foreach (['POST', 'PUT', 'PATCH', 'DELETE'] as $method) {
+      $_SERVER['REQUEST_METHOD'] = $method;
+      $result = $this->providerDetail();
+
+      $this->assertSame(405, $result['status'], $method);
+      $this->assertSame('method_not_allowed', $result['json']['error_code'], $method);
+    }
+
+    $_SERVER['REQUEST_METHOD'] = 'GET';
+  }
+
+  /**
+   * A nid THAT IS NOT A POSITIVE INTEGER IS 404 AND RUNS NO QUERY AT ALL — not
+   * even the token's. The answer is about the shape of the URL, not about what
+   * exists.
+   */
+  public function testAMalformedNidIs404WithoutAnyQuery() {
+    $this->authenticate();
+
+    foreach (['abc', '0', '-1', '1,2', ' 41', '1.5', ''] as $nid) {
+      // Re-seeded per case: myapi_test_db_seed() also clears the query log, and
+      // "no query ran" is the assertion this test exists for.
+      $this->seed($this->scenario());
+      $result = $this->providerDetail($nid);
+
+      $this->assertSame(404, $result['status'], var_export($nid, TRUE));
+      $this->assertSame('not_found', $result['json']['error_code'], var_export($nid, TRUE));
+      $this->assertSame([], myapi_test_db_queries(), 'no query ran for ' . var_export($nid, TRUE));
+    }
+  }
+
+  /**
+   * No Authorization header is 401 missing_authorization; a token that is not
+   * in the table is 401 invalid_token.
+   */
+  public function testTheTwo401s() {
+    $this->seed($this->scenario());
+
+    $result = $this->providerDetail();
+    $this->assertSame(401, $result['status']);
+    $this->assertSame('missing_authorization', $result['json']['error_code']);
+
+    $_SERVER['HTTP_AUTHORIZATION'] = 'Bearer not-the-token';
+    $result = $this->providerDetail();
+    $this->assertSame(401, $result['status']);
+    $this->assertSame('invalid_token', $result['json']['error_code']);
+  }
+
+  /* -------------------------------------------------------------------------
+   * Authorisation.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * AN ACCOUNT WITHOUT THE 'proveedor' ROLE IS 403 provider_role_required,
+   * BEFORE ANY QUERY ABOUT OFFERS — and an 'administrator' without the role is
+   * refused like anybody else: this is a marketplace actor, not a permission.
+   */
+  public function testNoProviderRoleIs403BeforeAnyOfferQuery() {
+    foreach ([['authenticated user'], ['authenticated user', 'administrator']] as $roles) {
+      $this->authenticate();
+      $this->seed($this->scenario(), [], $roles);
+      $result = $this->providerDetail();
+
+      $this->assertSame(403, $result['status'], implode(',', $roles));
+      $this->assertSame('provider_role_required', $result['json']['error_code']);
+      $this->assertSame([], myapi_test_db_queries('node'), 'no node was queried');
+    }
+  }
+
+  /**
+   * THE ROLE WITH NO LINKED PROVIDER IS 403 forbidden — not
+   * provider_role_required: the role is there, and there is nothing to operate
+   * with it, which the scope resolves as "not yours".
+   */
+  public function testTheRoleWithNoLinkedProviderIs403Forbidden() {
+    $this->authenticate();
+    $this->seed($this->scenario(), ['field_data_' . MYAPI_PROVIDER_USERS_FIELD => []]);
+
+    $result = $this->providerDetail();
+
+    $this->assertSame(403, $result['status']);
+    $this->assertSame('forbidden', $result['json']['error_code']);
+  }
+
+  /**
+   * ANOTHER PROVIDER'S OFFER IS 403 AND NEVER 404 (decision 6). The module
+   * answers 403 to a foreign request already, and a provider debugging its
+   * integration has to be able to tell "not yours" from "does not exist".
+   */
+  public function testAForeignOfferIs403AndNot404() {
+    $this->authenticate();
+    $this->seed($this->scenario([
+      'fp.field_provider_target_id' => (string) self::FOREIGN_PROVIDER,
+      'np.nid'                      => (string) self::FOREIGN_PROVIDER,
+    ]));
+
+    $result = $this->providerDetail();
+
+    $this->assertSame(403, $result['status']);
+    $this->assertSame('forbidden', $result['json']['error_code']);
+  }
+
+  /**
+   * A SUSPENDED PROVIDER READS ITS OWN OFFER: 200, whole. The licence governs
+   * the market — being able to quote — and not the record of what was already
+   * quoted, which is why the gate reads the RAW column. `provider` is null
+   * because the joined node is out, exactly as `offers` already answers it.
+   */
+  public function testASuspendedProvidersOwnOfferIs200() {
+    $this->authenticate();
+    $this->seed([
+      $this->offerRow(['np.nid' => NULL, 'np.title' => NULL, 'fml.uri' => NULL]),
+      $this->requestNode(),
+      $this->providerNode(self::PROVIDER_NID, '0'),
+    ]);
+
+    $result = $this->providerDetail();
+
+    $this->assertSame(200, $result['status']);
+    $this->assertNull($this->offer($result)['provider']);
+    $this->assertSame(self::DETAIL_KEYS, array_keys($this->offer($result)));
+  }
+
+  /**
+   * AN ACCOUNT WITH TWO PROVIDERS reads the offers of both.
+   */
+  public function testAnAccountWithTwoProvidersReadsBothArchives() {
+    $this->authenticate();
+    $this->seed(
+      [
+        $this->offerRow([
+          'fp.field_provider_target_id' => '42',
+          'np.nid'                      => '42',
+          'np.title'                    => 'Electricidad Rivas',
+        ]),
+        $this->requestNode(),
+        $this->providerNode(42, '1', 'Electricidad Rivas'),
+      ],
+      ['field_data_' . MYAPI_PROVIDER_USERS_FIELD => [
+        $this->link(self::PROVIDER_NID),
+        $this->link(42),
+      ]]
+    );
+
+    $result = $this->providerDetail();
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame(42, $this->offer($result)['provider']['id']);
+  }
+
+  /* -------------------------------------------------------------------------
+   * The servable set, through the endpoint.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * THE FOUR 404s ARE INDISTINGUISHABLE: same code, same message. What the
+   * fixture can reach here is three of them — the fourth, an unpublished
+   * request, rides in the INNER JOIN and is asserted as a query shape above.
+   */
+  public function testTheFour404sAreIndistinguishable() {
+    $cases = [
+      'does not exist' => [$this->requestNode(), $this->providerNode()],
+      'unpublished'    => $this->scenario(['status' => '0']),
+      'another bundle' => $this->scenario(['type' => MYAPI_SERVICES_PROVIDER_TYPE]),
+    ];
+
+    $bodies = [];
+    foreach ($cases as $label => $nodes) {
+      $this->authenticate();
+      $this->seed($nodes);
+      $result = $this->providerDetail();
+
+      $this->assertSame(404, $result['status'], $label);
+      $bodies[] = $result['json'];
+    }
+
+    $this->assertSame([$bodies[0]], array_unique($bodies, SORT_REGULAR), 'the three answer the same body');
+  }
+
+  /* -------------------------------------------------------------------------
+   * The response, and the visibility rule.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * THE JOB IS MINE: `unit` and `requester` travel with their objects, and
+   * `requester.name` is the shared "nombre apellidos" rule of SPEC 89.
+   */
+  public function testAnAwardedRequestShowsTheUnitAndTheRequester() {
+    $this->authenticate();
+    $this->seed($this->scenario());
+
+    $result = $this->providerDetail();
+    $offer = $this->offer($result);
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame(self::DETAIL_KEYS, array_keys($offer));
+    $this->assertSame(self::CONTEXT_KEYS, array_keys($offer['request']));
+    $this->assertSame(['id' => 55, 'name' => 'Apto 302'], $offer['request']['unit']);
+    $this->assertSame(['id' => self::REQUESTER_UID, 'name' => 'María Crespo'], $offer['request']['requester']);
+    $this->assertSame(['id' => 7, 'name' => 'Residencial Los Álamos'], $offer['request']['condominium']);
+  }
+
+  /**
+   * NOT AWARDED, OR AWARDED TO SOMEBODY ELSE: `unit` and `requester` are whole
+   * nulls — and they stay null even when MY offer sits at 'selected', because
+   * the award decides and not the offer (decision 5). `condominium` travels all
+   * the same (decision 11).
+   */
+  public function testAnUnawardedOrForeignAwardHidesTheUnitAndTheRequester() {
+    $cases = [
+      'unawarded' => ['np.nid' => NULL, 'fap.field_assigned_provider_target_id' => NULL],
+      'awarded to another' => [
+        'np.nid' => (string) self::FOREIGN_PROVIDER,
+        'fap.field_assigned_provider_target_id' => (string) self::FOREIGN_PROVIDER,
+      ],
+      'broken award' => [
+        'np.nid' => NULL,
+        'fap.field_assigned_provider_target_id' => (string) self::PROVIDER_NID,
+      ],
+    ];
+
+    foreach ($cases as $label => $request) {
+      $this->authenticate();
+      $this->seed($this->scenario(['fost.field_offer_status_value' => 'selected'], $request));
+
+      $offer = $this->offer($this->providerDetail());
+
+      $this->assertSame(self::CONTEXT_KEYS, array_keys($offer['request']), $label);
+      $this->assertNull($offer['request']['unit'], $label);
+      $this->assertNull($offer['request']['requester'], $label);
+      $this->assertSame(
+        ['id' => 7, 'name' => 'Residencial Los Álamos'],
+        $offer['request']['condominium'],
+        $label . ': the condominium travels always'
+      );
+    }
+  }
+
+  /**
+   * THE JOB IS MINE EVEN WHEN MY OFFER LOST. An offer at 'rejected' or
+   * 'withdrawn' on a request awarded to one of my providers still opens the
+   * address: the work is mine either way.
+   */
+  public function testARejectedOfferOnAJobOfMineStillShowsTheAddress() {
+    foreach (['rejected', 'withdrawn'] as $status) {
+      $this->authenticate();
+      $this->seed($this->scenario(['fost.field_offer_status_value' => $status]));
+
+      $offer = $this->offer($this->providerDetail());
+
+      $this->assertSame($status, $offer['status']);
+      $this->assertSame(['id' => 55, 'name' => 'Apto 302'], $offer['request']['unit'], $status);
+      $this->assertNotNull($offer['request']['requester'], $status);
+    }
+  }
+
+  /**
+   * NOT ONE DATUM OF THE REQUEST'S DETAIL, OF THE COMPETITION OR OF ANYBODY'S
+   * CONTACT travels — in the response or inside `request`.
+   */
+  public function testTheResponseCarriesNothingItWasNotAskedFor() {
+    $this->authenticate();
+    $this->seed($this->scenario());
+
+    $offer = $this->offer($this->providerDetail());
+    $flat = json_encode($offer);
+
+    foreach (['description', 'desired_start', 'closed_at', 'offers_count',
+      'assigned_offer', 'assigned_provider', 'images', 'attachment',
+      'transactions', 'viewer', 'phone', 'email', 'address'] as $key) {
+      $this->assertStringNotContainsString('"' . $key . '"', $flat, $key . ' is out of scope');
+    }
+  }
+
+
+  /* =========================================================================
+   * THE RESIDENT'S ROUTE: GET /api/v1/service-offers/% (step 7).
+   * ====================================================================== */
+
+  private function requesterDetail($nid = self::OFFER_NID) {
+    return myapi_test_capture(function () use ($nid) {
+      myapi_service_offer_item_dispatch((string) $nid);
+    });
+  }
+
+  /**
+   * Seeds the scenario as the REQUESTER: the token belongs to the resident, who
+   * holds no special role at all.
+   */
+  private function seedAsRequester(array $offer = [], array $request = [], $roles = NULL) {
+    $roles = $roles === NULL ? ['authenticated user'] : $roles;
+
+    $this->seed($this->scenario($offer, $request), [], $roles, self::REQUESTER_UID);
+  }
+
+  /**
+   * EVERY METHOD BUT GET IS 405, WITHOUT A TOKEN IN THE REQUEST.
+   */
+  public function testTheResidentsRouteRefusesEveryMethodButGetBeforeTheToken() {
+    $this->seedAsRequester();
+
+    foreach (['POST', 'PUT', 'PATCH', 'DELETE'] as $method) {
+      $_SERVER['REQUEST_METHOD'] = $method;
+      $result = $this->requesterDetail();
+
+      $this->assertSame(405, $result['status'], $method);
+      $this->assertSame('method_not_allowed', $result['json']['error_code'], $method);
+    }
+
+    $_SERVER['REQUEST_METHOD'] = 'GET';
+  }
+
+  /**
+   * A malformed nid is 404 and runs no query, the token's included.
+   */
+  public function testTheResidentsRouteRefusesAMalformedNidWithoutQuerying() {
+    $this->authenticate();
+
+    foreach (['abc', '0', '-1', '1,2', ' 41'] as $nid) {
+      $this->seedAsRequester();
+      $result = $this->requesterDetail($nid);
+
+      $this->assertSame(404, $result['status'], var_export($nid, TRUE));
+      $this->assertSame('not_found', $result['json']['error_code']);
+      $this->assertSame([], myapi_test_db_queries());
+    }
+  }
+
+  public function testTheResidentsRouteAnswersTheTwo401s() {
+    $this->seedAsRequester();
+
+    $result = $this->requesterDetail();
+    $this->assertSame(401, $result['status']);
+    $this->assertSame('missing_authorization', $result['json']['error_code']);
+
+    $_SERVER['HTTP_AUTHORIZATION'] = 'Bearer not-the-token';
+    $result = $this->requesterDetail();
+    $this->assertSame(401, $result['status']);
+    $this->assertSame('invalid_token', $result['json']['error_code']);
+  }
+
+  /**
+   * THE REQUESTER READS IT, WITH NO SPECIAL ROLE AT ALL (decision 13): what
+   * grants access is not a label on the account but a fact about the data.
+   * `unit` travels — it is their home — and `requester` is null, which is
+   * deliberate and not an oversight.
+   */
+  public function testTheRequesterReadsTheOfferWithNoRoleAtAll() {
+    $this->authenticate();
+    $this->seedAsRequester();
+
+    $result = $this->requesterDetail();
+    $offer = $this->offer($result);
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame(self::DETAIL_KEYS, array_keys($offer));
+    $this->assertSame(self::CONTEXT_KEYS, array_keys($offer['request']));
+    $this->assertSame(['id' => 55, 'name' => 'Apto 302'], $offer['request']['unit']);
+    $this->assertNull($offer['request']['requester'], 'the reader IS the requester');
+    $this->assertSame(['id' => 7, 'name' => 'Residencial Los Álamos'], $offer['request']['condominium']);
+  }
+
+  /**
+   * `unit` TRAVELS WHATEVER THE AWARD SAYS: the `mine` rule exists to keep a
+   * resident's address away from a provider who is not going to that house, and
+   * the resident lives there.
+   */
+  public function testTheResidentSeesTheUnitOnAnUnawardedRequest() {
+    $this->authenticate();
+    $this->seedAsRequester([], [
+      'np.nid' => NULL,
+      'fap.field_assigned_provider_target_id' => NULL,
+      'frs.field_request_status_value' => 'offered',
+    ]);
+
+    $offer = $this->offer($this->requesterDetail());
+
+    $this->assertSame(['id' => 55, 'name' => 'Apto 302'], $offer['request']['unit']);
+    $this->assertNull($offer['request']['requester']);
+  }
+
+  /**
+   * A request with NO UNIT answers a whole null, and the seven keys stay.
+   */
+  public function testAResidentsRequestWithNoUnitAnswersAWholeNull() {
+    $this->authenticate();
+    $this->seedAsRequester([], ['nu.nid' => NULL, 'fnv.field_nombre_vivienda_value' => NULL]);
+
+    $offer = $this->offer($this->requesterDetail());
+
+    $this->assertSame(self::CONTEXT_KEYS, array_keys($offer['request']));
+    $this->assertNull($offer['request']['unit']);
+  }
+
+  /**
+   * A PROVIDER WHO BID IS 403 HERE, AND SO IS THE AWARDED ONE.
+   * myapi_service_request_viewer() answers 'provider' for both, and 'provider'
+   * is not 'requester': for them there is the other route.
+   */
+  public function testAProviderIs403OnTheResidentsRoute() {
+    $this->authenticate();
+    // The account of the provider: it holds the role AND the award, which is
+    // rule 2b of the viewer — the strongest 'provider' verdict there is.
+    $this->seed($this->scenario(), [], NULL, self::UID);
+
+    $result = $this->requesterDetail();
+
+    $this->assertSame(403, $result['status']);
+    $this->assertSame('forbidden', $result['json']['error_code']);
+  }
+
+  /**
+   * AN ACCOUNT WITH NO RELATION TO THE REQUEST IS 403: the viewer answers NULL
+   * and NULL is not 'requester'.
+   */
+  public function testAStrangerIs403OnTheResidentsRoute() {
+    $this->authenticate();
+    $this->seed($this->scenario(), [
+      'field_data_' . MYAPI_PROVIDER_USERS_FIELD => [],
+    ], ['authenticated user'], 999);
+
+    $result = $this->requesterDetail();
+
+    $this->assertSame(403, $result['status']);
+    $this->assertSame('forbidden', $result['json']['error_code']);
+  }
+
+  /**
+   * THE SERVABLE SET IS THE SAME ON BOTH ROUTES — "which offers exist" cannot
+   * depend on who is asking — and the 404 comes BEFORE the 403: a stranger
+   * asking for an offer that does not exist is told it does not exist, exactly
+   * as the requester is.
+   */
+  public function testTheResidentsRouteAnswers404OnTheSameCases() {
+    $cases = [
+      'does not exist' => [$this->requestNode(), $this->providerNode()],
+      'unpublished'    => $this->scenario(['status' => '0']),
+      'another bundle' => $this->scenario(['type' => MYAPI_SERVICES_PROVIDER_TYPE]),
+    ];
+
+    foreach ($cases as $label => $nodes) {
+      $this->authenticate();
+      $this->seed($nodes, [], ['authenticated user'], self::REQUESTER_UID);
+      $result = $this->requesterDetail();
+
+      $this->assertSame(404, $result['status'], $label);
+      $this->assertSame('not_found', $result['json']['error_code'], $label);
+    }
+  }
+
+  /**
+   * THE TWO ROUTES ANSWER THE SAME FIFTEEN KEYS FOR THE SAME OFFER, and differ
+   * only in `request.unit` and `request.requester`. It is the whole contract of
+   * this spec, asserted end to end and not over a pure function.
+   */
+  public function testBothRoutesAnswerTheSameOfferAndDifferInTwoKeysOnly() {
+    $this->authenticate();
+    $this->seed($this->scenario());
+    $provider_view = $this->offer($this->providerDetail());
+
+    $this->authenticate();
+    $this->seedAsRequester();
+    $resident_view = $this->offer($this->requesterDetail());
+
+    $this->assertSame(array_keys($provider_view), array_keys($resident_view));
+
+    foreach ($provider_view as $key => $value) {
+      if ($key === 'request') {
+        continue;
+      }
+      $this->assertSame($value, $resident_view[$key], $key . ' is the same in both routes');
+    }
+
+    foreach (['id', 'title', 'status', 'category', 'condominium', 'unit'] as $key) {
+      $this->assertSame(
+        $provider_view['request'][$key],
+        $resident_view['request'][$key],
+        'request.' . $key . ' is the same in both routes'
+      );
+    }
+
+    $this->assertNotNull($provider_view['request']['requester']);
+    $this->assertNull($resident_view['request']['requester']);
   }
 
   /* -------------------------------------------------------------------------

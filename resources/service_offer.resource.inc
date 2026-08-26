@@ -88,6 +88,12 @@ module_load_include('inc', 'myapi', 'includes/myapi.service_request_query');
 // archive. Same split as above — this file orchestrates and decides nothing.
 module_load_include('inc', 'myapi', 'includes/myapi.service_offer_query');
 
+// SPEC 103: myapi_user_display_names(), the "nombre apellidos" / users.name rule
+// this module writes ONCE. The provider's detail resolves the requester's name
+// with it — the one alias myapi_service_request_detail_row() does not project —
+// and only when the name is going to travel.
+module_load_include('inc', 'myapi', 'includes/myapi.user');
+
 /**
  * Dispatcher for /api/v1/service-requests/%/offers (SPEC 100).
  *
@@ -726,4 +732,316 @@ function myapi_service_offer_provider_parse_created_range() {
     'from' => $range['from'] !== NULL ? strtotime($range['from'] . ' 00:00:00') : NULL,
     'to'   => $range['to'] !== NULL ? strtotime($range['to'] . ' 23:59:59') : NULL,
   ];
+}
+
+/* ---------------------------------------------------------------------------
+ * The detail of ONE offer — two routes, two audiences (SPEC 103).
+ *
+ * GET /api/v1/service-offers/provider/%  the provider who sent it.
+ * GET /api/v1/service-offers/%           the resident who received it.
+ *
+ * TWO SIBLING DISPATCHERS AND TWO SIBLING HANDLERS, NEVER ONE WITH A BRANCH
+ * INSIDE (decision 1). SPEC 89 served two readers through one route and paid
+ * for it with eighteen keys that change content depending on who looks; SPEC 99
+ * walked that back and opened a route of its own for the provider. This spec
+ * starts at the end of that story. The role gate is the plainest reason it
+ * could not be one route: a shared dispatcher would either demand the
+ * 'proveedor' role of a resident or stop demanding it of the provider.
+ *
+ * NEITHER OF THEM OWNS AN ACCESS RULE. The provider goes through
+ * myapi_service_offer_provider_scope() (SPEC 102), the resident through
+ * myapi_service_request_viewer() (SPEC 89), and both are used UNMODIFIED. If
+ * this endpoint and the request's own detail ever disagreed about who may read
+ * what, that would be a bug and not a nuance — the symptom being a reader who
+ * can open the offer but not the request it hangs on, with nothing failing
+ * loudly.
+ *
+ * NEITHER OF THEM WRITES ANYTHING, and neither publishes a counter. That is
+ * what keeps them outside the sentence of SPEC 100 — "there is no GET of the
+ * collection on purpose" — which is about the offers OF A REQUEST: the
+ * competition, the set offers_count counts. These serve ONE offer to somebody
+ * who already had the right to read it.
+ *
+ * What these four functions own is the ORDER, and the order is the contract.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Routes /api/v1/service-offers/provider/% by HTTP method (SPEC 103).
+ *
+ * A SIBLING of myapi_service_offer_provider_dispatch(), not a branch inside it:
+ * Drupal 7 resolves routes by number of segments first, so the listing and the
+ * item are two menu entries that never compete, and one dispatcher per route
+ * keeps each one's 405 as simple as it looks.
+ *
+ * GET AND NOTHING ELSE. Editing, withdrawing and awarding an offer are three
+ * writes and three specs of their own; until they arrive, a dispatcher that
+ * refuses everything but GET is what keeps that visible.
+ *
+ * THE 405 COMES BEFORE THE TOKEN AND BEFORE ANY QUERY, the criterion every
+ * dispatcher of this module follows: a POST to a GET-only route is wrong
+ * whoever is asking.
+ */
+function myapi_service_offer_provider_item_dispatch($nid = NULL) {
+  if (myapi_request_method() === 'GET') {
+    myapi_service_offer_provider_detail($nid);
+    return;
+  }
+
+  myapi_error('method_not_allowed', 405);
+}
+
+/**
+ * GET /api/v1/service-offers/provider/% — one of my offers, whole (SPEC 103).
+ *
+ * WHAT IT CLOSES. GET /api/v1/service-offers/provider is REFERENTIAL by
+ * decision — eight keys per item — and refers the whole quote to
+ * GET /api/v1/service-requests/provider/%, inside `my_offers`. So reading the
+ * fifteen keys of ONE offer meant downloading the entire detail of its request:
+ * its images, its timeline, the count of the competition and the rest of one's
+ * own offers. A row of that listing could not be opened. Now it can.
+ *
+ * EIGHT NUMBERED STEPS, AND THE ORDER IS THE CONTRACT:
+ *
+ *   1. The nid.        404 not_found when it is not a positive integer, before
+ *                      the token and before any query.
+ *   2. Authentication. 401 missing_authorization / invalid_token.
+ *   3. The role.       403 provider_role_required, BEFORE ANY QUERY ABOUT
+ *                      OFFERS. An administrator without the role is refused
+ *                      like anybody else: this is a marketplace actor, not a
+ *                      permission.
+ *   4. The offer.      FALSE — no such offer, unpublished, another bundle, or
+ *                      its request not published — is 404, and the four are
+ *                      told apart by nobody.
+ *   5. Ownership.      myapi_service_offer_provider_scope() over the RAW
+ *                      provider column, FALSE is 403 forbidden.
+ *   6. The request.    Its context, from the function that owns it.
+ *   7. Is it mine?     The award decides what `unit` and `requester` carry.
+ *   8. 200.
+ *
+ * A FOREIGN OFFER IS 403 AND NOT 404 (decision 6). The module already answers
+ * 403 to a foreign REQUEST, and a provider debugging its integration has to be
+ * able to tell "not yours" from "does not exist". What the 403 leaks — that an
+ * offer with that nid exists — says nothing about whose it is, for how much, or
+ * on what.
+ *
+ * THE GATE READS `provider_raw` AND NOT `provider_id`, and that is deliberate:
+ * the raw column is the offer's owner even when the provider node is
+ * unpublished, and SPEC 102 decided that a suspended provider still reads its
+ * own archive — the licence governs the market, not the record of what was
+ * already quoted. Gating on the joined column would answer 403 to an account
+ * for ITS OWN offer the day its provider node was suspended.
+ *
+ * IT IS THE SAME myapi_service_offer_provider_scope() THE LISTING CALLS, with
+ * no copy and no variant (riesgo 5). While that stays true, an item that
+ * appears in the listing can always be opened; the day one of them grows a
+ * condition the other lacks, the symptom is a row answering 403 when tapped and
+ * nothing failing loudly.
+ *
+ * FIVE QUERIES, FIXED — token, account, link, offer, request — plus the one
+ * that resolves the requester's name, and that sixth one only runs when the
+ * name is going to travel. Nothing here grows with anything.
+ *
+ * NO LICENCE, NO PUBLISHED FLAG, NO STATUS OF EITHER KIND. An offer 'withdrawn'
+ * on a request 'cancelled' from a suspended provider whose licence expired is
+ * served whole. The servable set is three conditions and they are all in
+ * myapi_service_offer_detail_row().
+ *
+ * @param mixed $nid  The OFFER's nid, from the route.
+ */
+function myapi_service_offer_provider_detail($nid) {
+  // 1. The nid, before anything else — including the token. ctype_digit() over
+  // the string form rejects 'abc', '-1', '1.5' and '' alike; the > 0 then
+  // rejects '0'. Nothing is leaked by answering first: the answer is about the
+  // SHAPE of the URL and not about what exists. Byte for byte the guard
+  // myapi_service_request_provider_detail() opens with.
+  if (!is_scalar($nid) || !ctype_digit((string) $nid) || (int) $nid <= 0) {
+    myapi_error('not_found', 404);
+  }
+  $nid = (int) $nid;
+
+  // 2. Authentication. Answers 401 missing_authorization / invalid_token on
+  // its own and never returns on failure.
+  $token = myapi_auth_require_access_token();
+  $uid = (int) $token->uid;
+
+  // 3. The role gate, before a single query about offers. The account is
+  // loaded because the gate reads ->roles; Drupal 7 serves it from the static
+  // cache myapi_auth_require_access_token() already filled, so it costs no
+  // query.
+  $account = user_load($uid);
+  if (!myapi_provider_role_is($account)) {
+    myapi_error('provider_role_required', 403);
+  }
+
+  // 4. The offer. FALSE covers all four "no such offer" cases at once and the
+  // reader is told none of them apart.
+  $row = myapi_service_offer_detail_row($nid);
+  if (!$row) {
+    myapi_error('not_found', 404);
+  }
+
+  // 5. Whose offer this is — the RAW column, see the docblock. FALSE means
+  // foreign, non-existent or of another bundle, and all three are 403 here:
+  // this is an item and not a listing, so there is no empty list to answer
+  // with, and the module answers 403 to a foreign request already.
+  if (myapi_service_offer_provider_scope($row->provider_raw, $uid) === FALSE) {
+    myapi_error('forbidden', 403);
+  }
+
+  // 6. The context, from the ONE function that knows what a request is. The
+  // INNER JOIN of step 4 already guaranteed the request is published, so a
+  // FALSE here is corrupt data — an orphaned category tid — and it answers the
+  // same 404 as the rest: a response the client could not paint is not half a
+  // response.
+  $request_row = myapi_service_request_detail_row($row->request_id);
+  if (!$request_row) {
+    myapi_error('not_found', 404);
+  }
+
+  // 7. "Is this job already mine?" — over the AWARD of the request and never
+  // over the status of my offer (decision 5). It governs `unit` and
+  // `requester`, and nothing else.
+  $provider_ids = myapi_provider_role_provider_ids($account);
+  $is_mine = myapi_service_offer_detail_is_mine($request_row, $provider_ids);
+
+  // The requester's name, by the shared rule of includes/myapi.user.inc, and
+  // ONLY when it is going to travel: the query is skipped outright when the job
+  // is not mine, because the key is a whole null then. It is the one alias
+  // myapi_service_request_detail_row() does not project. NO CONTACT DETAIL is
+  // fetched — not a phone, not an email, not an address.
+  $request_row->requester_name = NULL;
+  if ($is_mine && isset($request_row->requester_uid) && $request_row->requester_uid !== '') {
+    $names = myapi_user_display_names([(int) $request_row->requester_uid]);
+    $request_row->requester_name = isset($names[(int) $request_row->requester_uid])
+      ? $names[(int) $request_row->requester_uid]
+      : NULL;
+  }
+
+  // 8. Respond 200 (read-only endpoint, no message_key). One object under
+  // 'service_offer', never a list.
+  myapi_respond([
+    'service_offer' => myapi_service_offer_build_detail($row, $request_row, $is_mine, $is_mine),
+  ], 200);
+}
+
+/**
+ * Routes /api/v1/service-offers/% by HTTP method (SPEC 103).
+ *
+ * A SIBLING of myapi_service_offer_provider_item_dispatch(), and the reason
+ * they are two and not one is the role: this route demands none, and that one
+ * demands 'proveedor' before it queries anything. A shared dispatcher would
+ * either demand it of a resident or stop demanding it of the provider.
+ *
+ * GET AND NOTHING ELSE, and the 405 before the token — the criterion of every
+ * dispatcher in this module.
+ */
+function myapi_service_offer_item_dispatch($nid = NULL) {
+  if (myapi_request_method() === 'GET') {
+    myapi_service_offer_requester_detail($nid);
+    return;
+  }
+
+  myapi_error('method_not_allowed', 405);
+}
+
+/**
+ * GET /api/v1/service-offers/% — one of the offers I received (SPEC 103).
+ *
+ * WHAT IT CLOSES. The offers of a request already reach the resident inside
+ * GET /api/v1/service-requests/%, in `offers`, with all fifteen keys, and that
+ * does not change. What had no answer was OPENING ONE OFFER FROM A NOTIFICATION
+ * OR A DEEP LINK: the client knows the nid of the offer and not the nid of the
+ * request, and to paint a screen about ONE offer it had to download the whole
+ * request — the rival offers, their amounts and their messages — in order to
+ * keep one of them.
+ *
+ * SIX NUMBERED STEPS, AND THE ORDER IS THE CONTRACT:
+ *
+ *   1. The nid.        404 not_found when it is not a positive integer, before
+ *                      the token and before any query.
+ *   2. Authentication. 401 missing_authorization / invalid_token.
+ *   3. The offer.      FALSE — no such offer, unpublished, another bundle, or
+ *                      its request not published — is 404.
+ *   4. The request.    Its context, and the row the access rule reads.
+ *   5. Who is asking.  myapi_service_request_viewer(), UNMODIFIED. Only
+ *                      'requester' passes; NULL and 'provider' are both 403.
+ *   6. 200.
+ *
+ * NO ROLE IS DEMANDED, AND THAT IS DECISION 13. There is no 'residente' role in
+ * this module, and what grants access is not a label on the account but a FACT
+ * ABOUT THE DATA: being the requester of the request this offer hangs on.
+ * Inventing a role would put a second, weaker condition beside the real one.
+ *
+ * THE ACCESS RULE IS myapi_service_request_viewer(), UNMODIFIED (decision 10),
+ * AND ONLY 'requester' PASSES. Rule 1 of that function — field_requester and
+ * NOT node.uid — is the module's ONE definition of "who is the resident", and
+ * rewriting the comparison here would be a second one: the symptom of them
+ * drifting would be an account that can read the offer and not the request it
+ * hangs on, with nothing failing loudly.
+ *
+ * A PROVIDER WHO BID GETS 403 HERE, and so does the AWARDED one: that function
+ * answers 'provider' for both, and 'provider' is not 'requester'. For them
+ * there is the other route, which is where the role gate and the ownership
+ * gate live. A building administrator gets 403 too — decision 14: the request's
+ * own detail does not let them in either, and making the offer the first
+ * exception would be an exception that starts at the leaf.
+ *
+ * `requester` IS ALWAYS NULL HERE, AND THAT IS DELIBERATE (decision 8). The
+ * reader IS the requester, so the key would tell them their own name; it still
+ * travels, as one of the seven, because a client that reads the same seven keys
+ * in both routes has nothing to branch on. docs/service-offer.md says so in
+ * as many words, because a client that does not know it will open a bug.
+ *
+ * `unit` TRAVELS ALWAYS: it is their home. No `mine` rule applies on this side
+ * — that rule exists to keep a resident's address away from a provider who is
+ * not going to that house, and the resident lives there.
+ *
+ * FOUR QUERIES, FIXED — token, offer, request, and the account load the token
+ * layer already did. NO query about providers, no role lookup, and no name
+ * resolution: `requester` is null by construction, so there is nobody to name.
+ *
+ * @param mixed $nid  The OFFER's nid, from the route.
+ */
+function myapi_service_offer_requester_detail($nid) {
+  // 1. The nid, before anything else — including the token. Byte for byte the
+  // guard the provider's route opens with: the answer is about the SHAPE of the
+  // URL and not about what exists.
+  if (!is_scalar($nid) || !ctype_digit((string) $nid) || (int) $nid <= 0) {
+    myapi_error('not_found', 404);
+  }
+  $nid = (int) $nid;
+
+  // 2. Authentication. Answers 401 on its own and never returns on failure.
+  $token = myapi_auth_require_access_token();
+  $uid = (int) $token->uid;
+
+  // 3. The offer. The SAME servable set as the provider's route — three
+  // conditions, four indistinguishable ways to miss them — because "which
+  // offers exist" cannot depend on who is asking.
+  $row = myapi_service_offer_detail_row($nid);
+  if (!$row) {
+    myapi_error('not_found', 404);
+  }
+
+  // 4. The request: both the context of the response and the row the access
+  // rule below reads. The INNER JOIN of step 3 already guaranteed it is
+  // published, so a FALSE here is corrupt data and answers the same 404.
+  $request_row = myapi_service_request_detail_row($row->request_id);
+  if (!$request_row) {
+    myapi_error('not_found', 404);
+  }
+
+  // 5. WHO IS ASKING, by the one function that decides it for this whole
+  // domain, used unmodified. EXACTLY 'requester' passes: NULL is a 403 and so
+  // is 'provider' — for them there is the other route.
+  if (myapi_service_request_viewer($request_row, $uid) !== 'requester') {
+    myapi_error('forbidden', 403);
+  }
+
+  // 6. Respond 200 (read-only endpoint, no message_key). The unit always — it
+  // is their home — and the requester never: it is them. One object under
+  // 'service_offer', never a list.
+  myapi_respond([
+    'service_offer' => myapi_service_offer_build_detail($row, $request_row, FALSE, TRUE),
+  ], 200);
 }
