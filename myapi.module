@@ -618,7 +618,11 @@ function myapi_menu() {
   // FIVE COMPONENTS, so it competes with nothing: the wildcard route above has
   // four, and 'api/v1/service-offers/provider/%' has five but a LITERAL third
   // component, which Drupal 7 always prefers over the '%' this one carries
-  // there.
+  // there. SPEC 106 added a SECOND five-component route to this prefix,
+  // 'api/v1/service-offers/%/accept', and it does not compete with this one
+  // either: the two differ in their FIFTH component, which is a literal on
+  // both sides, so '/service-offers/901/withdraw' and '/service-offers/901/accept'
+  // resolve to different callbacks with nothing to disambiguate.
   //
   // 'page arguments' => [3]: the wildcard is the FOURTH component —
   // api / v1 / service-offers / % / withdraw — and the literal is the fifth.
@@ -626,6 +630,35 @@ function myapi_menu() {
   // the components and hand over the one that is the id.
   $items['api/v1/service-offers/%/withdraw'] = [
     'page callback'    => 'myapi_service_offer_withdraw_dispatch',
+    'page arguments'   => [3],
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/service_offer.resource.inc',
+  ];
+
+  // Awarding an offer (SPEC 106): the resident picks one of the offers on their
+  // own request. A PUT on the OFFER and not a POST on the request, because
+  // nothing is born — so no 201 — and the object whose state changes by the
+  // resident's decision IS the offer; the request turning 'assigned' is the
+  // consequence, not the action (decision 1). The URL identifies the offer on
+  // its own, so the body goes empty and the case "the offer you sent is not of
+  // this request" cannot exist.
+  //
+  // It executes an arc the module has had declared since SPEC 77 and nobody
+  // walked: 'selected' in the offer status catalogue, 'assigned' in the
+  // request's, the 'offered' -> 'assigned' edge in
+  // myapi_services_request_transitions(), and field_assigned_offer and
+  // field_assigned_provider installed and never written.
+  //
+  // FIVE COMPONENTS, and it competes with neither of the other two: '901' sits
+  // in [3], so it can never be the 'provider' route — that one carries a
+  // literal there — and 'accept' sits in [4], so it can never be the withdrawal.
+  // Drupal 7 resolves the three literals with nothing left ambiguous.
+  //
+  // 'page arguments' => [3]: same count as the withdrawal above — the wildcard
+  // is the FOURTH component and the literal is the fifth.
+  $items['api/v1/service-offers/%/accept'] = [
+    'page callback'    => 'myapi_service_offer_accept_dispatch',
     'page arguments'   => [3],
     'access callback'  => TRUE,
     'type'             => MENU_CALLBACK,

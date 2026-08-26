@@ -11,6 +11,12 @@ require_once __DIR__ . '/../../includes/myapi.services_common.inc';
 require_once __DIR__ . '/../../includes/myapi.provider_role.inc';
 require_once __DIR__ . '/../../includes/myapi.service_offer.inc';
 require_once __DIR__ . '/../../includes/myapi.service_transaction.inc';
+require_once __DIR__ . '/../../includes/myapi.service_offer_query.inc';
+require_once __DIR__ . '/../../includes/myapi.service_request_query.inc';
+require_once __DIR__ . '/../../includes/myapi.service_request_detail.inc';
+require_once __DIR__ . '/../../includes/myapi.user.inc';
+require_once __DIR__ . '/../../resources/service_offer.resource.inc';
+require_once __DIR__ . '/../../myapi.module';
 
 /**
  * Unit tests for PUT /api/v1/service-offers/{id}/accept (SPEC 106).
@@ -32,10 +38,29 @@ class ServiceOfferAcceptTest extends TestCase {
 
   const REQUEST_NID = 500;
 
+  const OFFER_NID    = 901;
+  const PROVIDER_NID = 41;
+  const UID          = 314;
+  const CREATED      = 1787000000;
+  const TOKEN        = 'accept-test-token';
+
   protected function setUp(): void {
     myapi_test_db_seed();
     myapi_test_node_seed();
     myapi_test_write_reset();
+    myapi_test_static_reset();
+    $GLOBALS['myapi_test_users'] = [];
+    $_SERVER['REQUEST_METHOD'] = 'PUT';
+    unset($_SERVER['HTTP_AUTHORIZATION']);
+  }
+
+  protected function tearDown(): void {
+    unset($_SERVER['HTTP_AUTHORIZATION']);
+    $GLOBALS['myapi_test_users'] = [];
+    myapi_test_static_reset();
+    myapi_test_write_reset();
+    myapi_test_node_seed();
+    myapi_test_db_seed();
   }
 
   /* -------------------------------------------------------------------------
@@ -53,7 +78,7 @@ class ServiceOfferAcceptTest extends TestCase {
    * @param string $status       Its field_offer_status value.
    * @param mixed  $request_nid  The request it hangs on.
    */
-  private function offerRow($offer_nid, $status, $request_nid = self::REQUEST_NID) {
+  private function sweepRow($offer_nid, $status, $request_nid = self::REQUEST_NID) {
     return [
       'entity_type'              => 'node',
       'deleted'                  => 0,
@@ -106,9 +131,9 @@ class ServiceOfferAcceptTest extends TestCase {
    */
   public function testWithoutAnExceptionEveryLiveOfferIsRejected() {
     $this->seedOffers([
-      $this->offerRow(901, 'sent'),
-      $this->offerRow(902, 'sent'),
-      $this->offerRow(903, 'selected'),
+      $this->sweepRow(901, 'sent'),
+      $this->sweepRow(902, 'sent'),
+      $this->sweepRow(903, 'selected'),
     ]);
 
     $rejected = myapi_service_offer_reject_live(self::REQUEST_NID);
@@ -129,9 +154,9 @@ class ServiceOfferAcceptTest extends TestCase {
    */
   public function testTheExceptedOfferSurvivesAndTheOthersDoNot() {
     $this->seedOffers([
-      $this->offerRow(901, 'selected'),
-      $this->offerRow(902, 'sent'),
-      $this->offerRow(903, 'sent'),
+      $this->sweepRow(901, 'selected'),
+      $this->sweepRow(902, 'sent'),
+      $this->sweepRow(903, 'sent'),
     ]);
 
     $rejected = myapi_service_offer_reject_live(self::REQUEST_NID, 901);
@@ -148,8 +173,8 @@ class ServiceOfferAcceptTest extends TestCase {
    */
   public function testAnExceptionFromAnotherRequestChangesNothing() {
     $this->seedOffers([
-      $this->offerRow(901, 'sent'),
-      $this->offerRow(902, 'sent'),
+      $this->sweepRow(901, 'sent'),
+      $this->sweepRow(902, 'sent'),
     ]);
 
     $rejected = myapi_service_offer_reject_live(self::REQUEST_NID, 777);
@@ -164,8 +189,8 @@ class ServiceOfferAcceptTest extends TestCase {
    */
   public function testTheExceptionMatchesAcrossTypes() {
     $this->seedOffers([
-      $this->offerRow('901', 'selected'),
-      $this->offerRow('902', 'sent'),
+      $this->sweepRow('901', 'selected'),
+      $this->sweepRow('902', 'sent'),
     ]);
 
     $rejected = myapi_service_offer_reject_live((string) self::REQUEST_NID, '901');
@@ -182,9 +207,9 @@ class ServiceOfferAcceptTest extends TestCase {
    */
   public function testTerminalStatusesAreLeftAlone() {
     $this->seedOffers([
-      $this->offerRow(901, 'sent'),
-      $this->offerRow(902, 'withdrawn'),
-      $this->offerRow(903, 'rejected'),
+      $this->sweepRow(901, 'sent'),
+      $this->sweepRow(902, 'withdrawn'),
+      $this->sweepRow(903, 'rejected'),
     ]);
 
     $rejected = myapi_service_offer_reject_live(self::REQUEST_NID, 901);
@@ -211,8 +236,8 @@ class ServiceOfferAcceptTest extends TestCase {
    */
   public function testAnUnloadableOfferIsSkippedAndNotCounted() {
     myapi_test_db_seed(['field_data_field_request' => [
-      $this->offerRow(901, 'sent'),
-      $this->offerRow(902, 'sent'),
+      $this->sweepRow(901, 'sent'),
+      $this->sweepRow(902, 'sent'),
     ]]);
     // Only one of the two loads.
     myapi_test_node_seed([901 => (object) [
@@ -225,6 +250,862 @@ class ServiceOfferAcceptTest extends TestCase {
 
     $this->assertSame(1, $rejected);
     $this->assertSame([901 => 'rejected'], $this->savedStatuses());
+  }
+
+
+
+  /* -------------------------------------------------------------------------
+   * Fixtures and the harness for the endpoint.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * One offer row, flat, as every join of myapi_service_offer_detail_row()
+   * delivers it. The published flag of the node travels as `status` and the
+   * offer's own status under its QUALIFIED source, because a flat row cannot
+   * hold both and the fixture resolves the qualified name first — the same
+   * shape ServiceOfferWithdrawTest uses.
+   */
+  private function offerRow(array $overrides = []) {
+    return $overrides + [
+      'nid'                                  => (string) self::OFFER_NID,
+      'type'                                 => MYAPI_SERVICES_OFFER_TYPE,
+      'status'                               => '1',
+      'created'                              => (string) self::CREATED,
+      'fq.field_request_target_id'           => (string) self::REQUEST_NID,
+      'nr.nid'                               => (string) self::REQUEST_NID,
+      'fp.field_provider_target_id'          => (string) self::PROVIDER_NID,
+      'np.nid'                               => (string) self::PROVIDER_NID,
+      'np.title'                             => 'Plomería Torres',
+      'foa.field_offer_amount_value'         => '150.50',
+      'fost.field_offer_status_value'        => 'sent',
+      'fat.field_offer_amount_type_value'    => 'fixed',
+      'fvu.field_offer_valid_until_value'    => NULL,
+    ];
+  }
+
+  /** The request row, flat, as myapi_service_request_detail_row() reads it. */
+  private function requestRow(array $overrides = []) {
+    return $overrides + [
+      'nid'                            => (string) self::REQUEST_NID,
+      'type'                           => MYAPI_SERVICES_REQUEST_TYPE,
+      'status'                         => '1',
+      'title'                          => 'Fuga en el calentador',
+      'created'                        => (string) self::CREATED,
+      'fr.field_requester_target_id'   => (string) self::UID,
+      'requester_uid'                  => (string) self::UID,
+      'frs.field_request_status_value' => MYAPI_SERVICES_REQUEST_STATUS_OFFERED,
+      'fcat.field_category_tid'        => '9',
+      'category_id'                    => '9',
+      'category_code'                  => 'plumbing',
+      'category_name'                  => 'Plomería',
+    ];
+  }
+
+  /** The provider node, with the licence myapi_service_offer_provider_row() reads. */
+  private function providerRow(array $overrides = []) {
+    return $overrides + [
+      'nid'                              => (string) self::PROVIDER_NID,
+      'type'                             => MYAPI_SERVICES_PROVIDER_TYPE,
+      'status'                           => '1',
+      'title'                            => 'Plomería Torres',
+      'fle.field_license_expiry_value'   => (string) (REQUEST_TIME + 86400),
+    ];
+  }
+
+  private function tokenRow() {
+    return [
+      'id'                => '1',
+      'uid'               => (string) self::UID,
+      'access_token_hash' => myapi_token_hash(self::TOKEN),
+      'revoked'           => '0',
+      'access_expires_at' => REQUEST_TIME + 1800,
+    ];
+  }
+
+  /**
+   * The loaded nodes the four writes touch: the request and the offer. Only
+   * what the endpoint reads or writes is shaped — everything else is left out
+   * precisely because the endpoint must not invent it.
+   */
+  private function seedNodes(array $extra_offers = []) {
+    $nodes = [
+      self::REQUEST_NID => (object) [
+        'nid'    => self::REQUEST_NID,
+        'type'   => MYAPI_SERVICES_REQUEST_TYPE,
+        'uid'    => 7,
+        'status' => 1,
+        'title'  => 'Fuga en el calentador',
+        'created' => self::CREATED,
+        'field_request_status' => [LANGUAGE_NONE => [['value' => MYAPI_SERVICES_REQUEST_STATUS_OFFERED]]],
+        'field_requester'      => [LANGUAGE_NONE => [['target_id' => self::UID]]],
+      ],
+      self::OFFER_NID => (object) [
+        'nid'    => self::OFFER_NID,
+        'type'   => MYAPI_SERVICES_OFFER_TYPE,
+        'uid'    => 33,
+        'status' => 1,
+        'title'  => 'Oferta de Plomería Torres — solicitud #128',
+        'created' => self::CREATED,
+        'field_offer_status' => [LANGUAGE_NONE => [['value' => 'sent']]],
+      ],
+    ];
+
+    foreach ($extra_offers as $nid => $status) {
+      $nodes[$nid] = (object) [
+        'nid'    => $nid,
+        'type'   => MYAPI_SERVICES_OFFER_TYPE,
+        'uid'    => 33,
+        'status' => 1,
+        'field_offer_status' => [LANGUAGE_NONE => [['value' => $status]]],
+      ];
+    }
+
+    myapi_test_node_seed($nodes);
+  }
+
+  /**
+   * Seeds a whole scenario in one call: every myapi_test_db_seed() replaces the
+   * entire fixture, so nothing can be added afterwards.
+   *
+   * $options: 'drop_offer' removes the offer row entirely (a 404 case),
+   * 'provider' overrides the provider node, and 'offers' is a map of
+   * nid => status for the OTHER offers of the same request, which is what the
+   * sweep and offers_count read.
+   */
+  private function seed(array $offer = [], array $request = [], array $options = []) {
+    $options += ['drop_offer' => FALSE, 'provider' => [], 'offers' => []];
+
+    $GLOBALS['myapi_test_users'][self::UID] = [
+      'uid'    => self::UID,
+      'name'   => 'residente' . self::UID,
+      'status' => 1,
+      'roles'  => ['authenticated user'],
+    ];
+
+    $nodes = [$this->requestRow($request), $this->providerRow($options['provider'])];
+    if (!$options['drop_offer']) {
+      $nodes[] = $this->offerRow($offer);
+    }
+
+    // The offers of this request, as the three queries over
+    // field_data_field_request read them: the sweep, offers_count and the
+    // detail's listing all hang off this one fixture.
+    $offer_status = isset($offer['fost.field_offer_status_value'])
+      ? $offer['fost.field_offer_status_value']
+      : 'sent';
+    $links = [];
+    if (!$options['drop_offer']) {
+      $links[] = $this->offerLink(self::OFFER_NID, $offer_status);
+    }
+    foreach ($options['offers'] as $nid => $status) {
+      $links[] = $this->offerLink($nid, $status);
+    }
+
+    myapi_test_db_seed([
+      'my_api_tokens'           => [$this->tokenRow()],
+      'node'                    => $nodes,
+      'field_data_field_request' => $links,
+      'users'                   => [['uid' => (string) self::UID, 'name' => 'residente314']],
+    ]);
+    myapi_test_static_reset();
+    $this->seedNodes($options['offers']);
+  }
+
+  /**
+   * One row of field_data_field_request, flat, carrying every column the three
+   * queries that read that table project or filter on.
+   */
+  private function offerLink($offer_nid, $status) {
+    return [
+      'entity_type'                       => 'node',
+      'deleted'                           => '0',
+      'field_request_target_id'           => (string) self::REQUEST_NID,
+      'type'                              => MYAPI_SERVICES_OFFER_TYPE,
+      'status'                            => '1',
+      'field_offer_status_value'          => $status,
+      'nid'                               => (string) $offer_nid,
+      'created'                           => (string) self::CREATED,
+      'provider_id'                       => (string) self::PROVIDER_NID,
+      'provider_name'                     => 'Plomería Torres',
+    ];
+  }
+
+  private function authenticate() {
+    $_SERVER['HTTP_AUTHORIZATION'] = 'Bearer ' . self::TOKEN;
+  }
+
+  private function dispatch($nid = self::OFFER_NID) {
+    return myapi_test_capture(function () use ($nid) {
+      myapi_service_offer_accept_dispatch((string) $nid);
+    });
+  }
+
+  private function assertError(array $result, $status, $error_code, $label = '') {
+    $this->assertSame($status, $result['status'], $label);
+    $this->assertFalse($result['json']['success'], $label);
+    $this->assertSame($error_code, $result['json']['error_code'], $label);
+  }
+
+  /** The nodes the call saved, keyed by nid. */
+  private function saves() {
+    $saves = [];
+    foreach (myapi_test_node_saves() as $node) {
+      $saves[(int) $node->nid] = $node;
+    }
+
+    return $saves;
+  }
+
+  /* -------------------------------------------------------------------------
+   * The route and the dispatcher.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * Drupal's router is not run in tests/unit, so what is asserted is the
+   * DECLARATION — the same criterion, and the same helper, as SPEC 103's route
+   * tests. That Drupal 7 prefers a literal over a wildcard is core behaviour
+   * and a MANUAL step of the spec, verified with `drush cc all` in between.
+   */
+  private function moduleSource() {
+    return file_get_contents(__DIR__ . '/../../myapi.module');
+  }
+
+  /**
+   * THE AWARD'S ROUTE TAKES THE FOURTH COMPONENT. 'page arguments' => [3]: the
+   * wildcard is api / v1 / service-offers / % / accept and the literal is the
+   * fifth — a [4] would hand the dispatcher the string 'accept'.
+   */
+  public function testTheRouteIsDeclaredWithTheFourthComponent() {
+    $this->assertMatchesRegularExpression(
+      '/\$items\[\'api\/v1\/service-offers\/%\/accept\'\]\s*=\s*\[\s*'
+      . '\'page callback\'\s*=>\s*\'myapi_service_offer_accept_dispatch\',\s*'
+      . '\'page arguments\'\s*=>\s*\[3\],\s*'
+      . '\'access callback\'\s*=>\s*TRUE,\s*'
+      . '\'type\'\s*=>\s*MENU_CALLBACK,\s*'
+      . '\'file\'\s*=>\s*\'resources\/service_offer\.resource\.inc\',/',
+      $this->moduleSource()
+    );
+  }
+
+  /**
+   * THE FOUR ROUTES OF THE PREFIX COEXIST, and each still points where it did.
+   * '/service-offers/901/accept' carries the id in [3], so it can never be
+   * '/service-offers/provider/%' — that one has a LITERAL there — and 'accept'
+   * in [4], so it can never be the withdrawal. The symptom of an error here is
+   * not a 404: it is one of the four starting to answer another one's job.
+   */
+  public function testTheFourRoutesOfThePrefixCoexist() {
+    $module = $this->moduleSource();
+
+    $routes = [
+      "\$items['api/v1/service-offers/provider']"    => 'myapi_service_offer_provider_dispatch',
+      "\$items['api/v1/service-offers/provider/%']"  => 'myapi_service_offer_provider_item_dispatch',
+      "\$items['api/v1/service-offers/%']"           => 'myapi_service_offer_item_dispatch',
+      "\$items['api/v1/service-offers/%/withdraw']"  => 'myapi_service_offer_withdraw_dispatch',
+      "\$items['api/v1/service-offers/%/accept']"    => 'myapi_service_offer_accept_dispatch',
+    ];
+
+    foreach ($routes as $route => $callback) {
+      $this->assertStringContainsString($route, $module, $route . ' is declared');
+      $this->assertStringContainsString("'page callback'    => '" . $callback . "'", $module);
+    }
+  }
+
+  /**
+   * Every method but PUT answers 405 — BEFORE the token and before a single
+   * query, the criterion every dispatcher of this module follows: the method is
+   * wrong whoever is asking.
+   */
+  public function testEveryMethodOtherThanPutIs405BeforeTheToken() {
+    foreach (['GET', 'POST', 'PATCH', 'DELETE', 'HEAD'] as $method) {
+      $this->seed();
+      $this->authenticate();
+      $_SERVER['REQUEST_METHOD'] = $method;
+
+      $result = $this->dispatch();
+
+      $this->assertError($result, 405, 'method_not_allowed', $method);
+      $this->assertSame([], myapi_test_db_queries(), $method . ' costs no query');
+      $this->assertSame([], myapi_test_node_saves(), $method . ' writes nothing');
+    }
+  }
+
+  /**
+   * And with no token at all it is STILL 405 and never 401: the method is
+   * checked first.
+   */
+  public function testAWrongMethodWithoutATokenIsStill405() {
+    $this->seed();
+    $_SERVER['REQUEST_METHOD'] = 'GET';
+
+    $this->assertError($this->dispatch(), 405, 'method_not_allowed');
+  }
+
+  /* -------------------------------------------------------------------------
+   * The five conditions the resource owns.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * CONDITION 1 — a wildcard that is not a positive integer is 404 and COSTS NO
+   * QUERY, not even the token's. The answer is about the SHAPE of the URL and
+   * not about what exists.
+   *
+   * @dataProvider malformedIds
+   */
+  public function testAMalformedIdIs404BeforeAnyQuery($nid) {
+    $this->seed();
+    $this->authenticate();
+
+    $result = myapi_test_capture(function () use ($nid) {
+      myapi_service_offer_accept_dispatch($nid);
+    });
+
+    $this->assertError($result, 404, 'not_found');
+    $this->assertSame([], myapi_test_db_queries(), 'no query was run');
+    $this->assertSame([], myapi_test_node_saves());
+  }
+
+  public function malformedIds() {
+    return [
+      'letters'  => ['abc'],
+      'zero'     => ['0'],
+      'negative' => ['-3'],
+      'list'     => ['1,2'],
+      'decimal'  => ['1.5'],
+      'empty'    => [''],
+      'null'     => [NULL],
+    ];
+  }
+
+  /**
+   * CONDITION 2 — no Authorization header is 401 missing_authorization, and a
+   * token that does not resolve is 401 invalid_token. Neither writes anything.
+   */
+  public function testAuthenticationIsRequired() {
+    $this->seed();
+    $this->assertError($this->dispatch(), 401, 'missing_authorization');
+    $this->assertSame([], myapi_test_node_saves());
+
+    $this->seed();
+    $_SERVER['HTTP_AUTHORIZATION'] = 'Bearer not-a-real-token';
+    $this->assertError($this->dispatch(), 401, 'invalid_token');
+    $this->assertSame([], myapi_test_node_saves());
+  }
+
+  /**
+   * CONDITION 3 — an offer that is not servable is 404, and the four ways in
+   * are indistinguishable on purpose: missing, unpublished, another bundle, or
+   * its request unpublished.
+   */
+  public function testAnUnservableOfferIs404() {
+    $cases = [
+      'missing'            => ['offer' => NULL],
+      'unpublished'        => ['offer' => ['status' => '0']],
+      'another bundle'     => ['offer' => ['type' => MYAPI_SERVICES_REQUEST_TYPE]],
+      'request unpublished' => ['request' => ['status' => '0']],
+    ];
+
+    foreach ($cases as $label => $case) {
+      $this->seed(
+        isset($case['offer']) ? $case['offer'] : [],
+        isset($case['request']) ? $case['request'] : [],
+        ['drop_offer' => array_key_exists('offer', $case) && $case['offer'] === NULL]
+      );
+      $this->authenticate();
+
+      $this->assertError($this->dispatch(), 404, 'not_found', $label);
+      $this->assertSame([], myapi_test_node_saves(), $label . ' writes nothing');
+    }
+  }
+
+  /**
+   * CONDITION 5 — ONLY THE field_requester AWARDS. Not node.uid, not the rest
+   * of the unit, and not the provider who owns the offer. A request with no
+   * requester at all is a 403 too: nobody owns it, so nobody may award it.
+   *
+   * AND NOTHING WAS WRITTEN: the four writes all sit after this line.
+   */
+  public function testOnlyTheRequesterMayAward() {
+    $cases = [
+      'another resident' => ['fr.field_requester_target_id' => '999', 'requester_uid' => '999'],
+      'no requester'     => ['fr.field_requester_target_id' => NULL, 'requester_uid' => NULL],
+      'empty requester'  => ['fr.field_requester_target_id' => '', 'requester_uid' => ''],
+    ];
+
+    foreach ($cases as $label => $overrides) {
+      $this->seed([], $overrides);
+      $this->authenticate();
+
+      $this->assertError($this->dispatch(), 403, 'service_request_forbidden', $label);
+      $this->assertSame([], myapi_test_node_saves(), $label . ' writes nothing');
+    }
+  }
+
+  /**
+   * THE GATE'S CODES REACH HTTP WITH THE RIGHT STATUS, which is the ONE thing
+   * the resource adds to the pure gate: whether the offer may still be awarded
+   * is a 409, whether its provider may still work is a 403.
+   *
+   * AND NONE OF THE FOUR WRITES HAPPENED — the gate sits before all of them.
+   */
+  public function testTheGateCodesMapToTheRightHttpStatus() {
+    $cases = [
+      'offer rejected'      => [409, 'service_offer_not_acceptable', ['fost.field_offer_status_value' => 'rejected'], [], []],
+      'offer selected'      => [409, 'service_offer_not_acceptable', ['fost.field_offer_status_value' => 'selected'], [], []],
+      'offer withdrawn'     => [409, 'service_offer_not_acceptable', ['fost.field_offer_status_value' => 'withdrawn'], [], []],
+      'request open'        => [409, 'service_request_not_assignable', [], ['frs.field_request_status_value' => 'open'], []],
+      'request assigned'    => [409, 'service_request_not_assignable', [], ['frs.field_request_status_value' => 'assigned'], []],
+      'request cancelled'   => [409, 'service_request_not_assignable', [], ['frs.field_request_status_value' => 'cancelled'], []],
+      'request corrupt'     => [409, 'service_request_not_assignable', [], ['frs.field_request_status_value' => 'nonsense'], []],
+      'quote expired'       => [409, 'service_offer_expired', ['fvu.field_offer_valid_until_value' => (string) (REQUEST_TIME - 1)], [], []],
+      'provider suspended'  => [403, 'service_offer_provider_not_active', [], [], ['status' => '0']],
+      'licence lapsed'      => [403, 'service_offer_provider_not_active', [], [], ['fle.field_license_expiry_value' => (string) (REQUEST_TIME - 1)]],
+      'no licence row'      => [403, 'service_offer_provider_not_active', [], [], ['fle.field_license_expiry_value' => NULL]],
+    ];
+
+    foreach ($cases as $label => $case) {
+      list($status, $code, $offer, $request, $provider) = $case;
+
+      $this->seed($offer, $request, ['provider' => $provider]);
+      $this->authenticate();
+
+      $this->assertError($this->dispatch(), $status, $code, $label);
+      $this->assertSame([], myapi_test_node_saves(), $label . ' writes nothing');
+    }
+  }
+
+  /**
+   * THE ORDER SURVIVES THE TRIP THROUGH HTTP: a rejected offer whose provider
+   * is also suspended answers 409 service_offer_not_acceptable and NOT the 403.
+   * The gate asserts this over rows; this asserts the resource did not reorder
+   * it on the way out.
+   */
+  public function testARejectedOfferFromASuspendedProviderIs409AndNot403() {
+    $this->seed(
+      ['fost.field_offer_status_value' => 'rejected'],
+      [],
+      ['provider' => ['status' => '0']]
+    );
+    $this->authenticate();
+
+    $this->assertError($this->dispatch(), 409, 'service_offer_not_acceptable');
+  }
+
+  /**
+   * THE BODY IS NOT READ AT ALL — asserted STRUCTURALLY and not through a
+   * fixture, which is the only honest way: myapi_request_body() reads
+   * php://input, so no unit test can hand it one. What CAN be proved is the
+   * stronger claim — the endpoint never calls it. Nothing is parsed, so a body
+   * with keys and a body that is malformed JSON are the same thing: ignored,
+   * and neither can fail.
+   *
+   * Same shape, and same reason, as the withdrawal's guard of SPEC 105.
+   */
+  public function testTheEndpointNeverReadsTheBody() {
+    $source = $this->acceptSource();
+
+    foreach (['myapi_request_body', 'json_decode', '$_POST', '$_GET', 'php://input'] as $forbidden) {
+      $this->assertStringNotContainsString($forbidden, $source, $forbidden);
+    }
+  }
+
+  /**
+   * THE FOUR WRITES ARE IN THE ORDER THE SPEC DEFENDS, and the order is the
+   * contract: the REQUEST first, so that
+   * myapi_service_transaction_sync_request_status() — which fires on the
+   * hook_node_insert() of the transaction — compares two equal statuses and
+   * does NOT save the request a second time. That property cannot be observed
+   * from a unit test, because the hook is Drupal's dispatch; what can be
+   * observed is the order that produces it.
+   */
+  public function testTheFourWritesAreInOrder() {
+    $source = $this->acceptSource();
+
+    $positions = [
+      'the request'     => strpos($source, 'node_save($request_node)'),
+      'the transaction' => strpos($source, 'myapi_service_transaction_record('),
+      'the winner'      => strpos($source, 'node_save($offer)'),
+      'the losers'      => strpos($source, 'myapi_service_offer_reject_live('),
+    ];
+
+    foreach ($positions as $label => $position) {
+      $this->assertNotFalse($position, $label . ' is written');
+    }
+
+    $this->assertSame(array_keys($positions), array_keys($positions));
+    $this->assertTrue($positions['the request'] < $positions['the transaction'], 'the request before the transaction');
+    $this->assertTrue($positions['the transaction'] < $positions['the winner'], 'the transaction before the winner');
+    $this->assertTrue($positions['the winner'] < $positions['the losers'], 'the winner before the losers');
+  }
+
+  /**
+   * THE WINNER IS SPARED BY NID AND NOT BY STATUS. By the time the sweep runs
+   * the winner already says 'selected', which myapi_service_offer_reject_live()
+   * considers live — so without the second argument it would reject itself and
+   * the request would end up assigned to a rejected offer.
+   */
+  public function testTheSweepIsCalledWithTheWinnersNid() {
+    $this->assertStringContainsString(
+      'myapi_service_offer_reject_live($request_nid, $nid)',
+      $this->acceptSource()
+    );
+  }
+
+  /**
+   * field_assigned_provider IS WRITTEN FROM provider_raw AND NEVER FROM
+   * provider_id — decision 15. The joined column carries status = 1 inside it,
+   * so the day condition 9 is relaxed, the record of who a job was awarded to
+   * must not depend on whether their listing is still published.
+   */
+  public function testTheAssignedProviderComesFromTheRawColumn() {
+    $source = $this->acceptSource();
+
+    $this->assertStringContainsString(
+      "\$request_node->field_assigned_provider[LANGUAGE_NONE][0]['target_id'] = (int) \$row->provider_raw;",
+      $source
+    );
+    $this->assertStringNotContainsString('$row->provider_id', $source, 'never the joined column');
+  }
+
+  /**
+   * The body of myapi_service_offer_accept(), comments stripped and bounded at
+   * the next function: this file grows, and a scan that ran to the end of it
+   * would read the neighbours' code as if it were this one's.
+   */
+  private function acceptSource() {
+    $code = file_get_contents(__DIR__ . '/../../resources/service_offer.resource.inc');
+    $code = preg_replace(['#/\*.*?\*/#s', '#//[^\n]*#'], '', $code);
+
+    $start = strpos($code, 'function myapi_service_offer_accept($nid)');
+    $this->assertNotFalse($start, 'the endpoint exists');
+
+    $end = strpos($code, "\nfunction ", $start + 1);
+
+    return $end === FALSE ? substr($code, $start) : substr($code, $start, $end - $start);
+  }
+
+
+  /* -------------------------------------------------------------------------
+   * The four writes, and the shape of the 200.
+   *
+   * WHAT THIS LAYER CAN PROVE AND WHAT IT CANNOT. node_save() is a RECORDER
+   * (see tests/unit/bootstrap.php): it does not persist, so the response —
+   * which is rebuilt from the database AFTER the writes — comes back reading
+   * the fixture and not what was just written. That is exactly why the
+   * assertions below split in two: WHAT WAS HANDED TO node_save(), which is the
+   * whole contract of this endpoint and is asserted here in full; and THAT THE
+   * RESPONSE IS A REREAD, which is asserted by its shape. That the reread
+   * answers 'assigned', that hook_node_presave() titles the transaction and
+   * that hook_node_insert() runs the status sync are the HTTP checks of step 6
+   * of the spec, against a running site.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * WRITE A — THE REQUEST, and it is the FIRST node saved. Its status, its
+   * assigned offer and its assigned provider, in one node_save().
+   */
+  public function testTheRequestIsWrittenFirstWithItsThreeFields() {
+    $this->seed();
+    $this->authenticate();
+
+    $this->dispatch();
+
+    $saves = myapi_test_node_saves();
+    $this->assertNotEmpty($saves);
+    $request = $saves[0];
+
+    $this->assertSame(MYAPI_SERVICES_REQUEST_TYPE, $request->type, 'the request is saved first');
+    $this->assertSame(self::REQUEST_NID, (int) $request->nid);
+    $this->assertSame(
+      MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED,
+      $request->field_request_status[LANGUAGE_NONE][0]['value']
+    );
+    $this->assertSame(self::OFFER_NID, $request->field_assigned_offer[LANGUAGE_NONE][0]['target_id']);
+    $this->assertSame(self::PROVIDER_NID, $request->field_assigned_provider[LANGUAGE_NONE][0]['target_id']);
+  }
+
+  /**
+   * THE REQUEST IS SAVED EXACTLY ONCE. Saving it twice is the symptom of the
+   * order being broken: myapi_service_transaction_sync_request_status() rewrites
+   * the request's status from the transaction's, and it only returns without
+   * saving because the endpoint already wrote the same value first.
+   */
+  public function testTheRequestIsSavedOnlyOnce() {
+    $this->seed();
+    $this->authenticate();
+
+    $this->dispatch();
+
+    $requests = array_filter(myapi_test_node_saves(), function ($node) {
+      return $node->type === MYAPI_SERVICES_REQUEST_TYPE;
+    });
+
+    $this->assertCount(1, $requests);
+  }
+
+  /**
+   * THE REQUEST KEEPS EVERYTHING ELSE. node.uid, node.created, node.title and
+   * the published flag are untouched: awarding neither unpublishes nor
+   * rewrites history.
+   */
+  public function testTheRequestKeepsEverythingElse() {
+    $this->seed();
+    $this->authenticate();
+
+    $this->dispatch();
+    $request = $this->saves()[self::REQUEST_NID];
+
+    $this->assertSame(7, $request->uid, 'the technical author is not rewritten');
+    $this->assertSame(self::CREATED, $request->created);
+    $this->assertSame('Fuga en el calentador', $request->title);
+    $this->assertSame(1, $request->status, 'the request stays published');
+    $this->assertSame(self::UID, $request->field_requester[LANGUAGE_NONE][0]['target_id']);
+  }
+
+  /**
+   * WRITE B — THE TRANSACTION, second, with the four fields of SPEC 77 and
+   * node.uid = the resident who awarded. Its comment is the award text, built
+   * from the provider's name and the offer's amount, both of which came off
+   * rows the gate had already paid for.
+   */
+  public function testTheTransactionIsWrittenSecond() {
+    $this->seed();
+    $this->authenticate();
+
+    $this->dispatch();
+
+    $saves = myapi_test_node_saves();
+    $transaction = $saves[1];
+
+    $this->assertSame(MYAPI_SERVICES_TRANSACTION_TYPE, $transaction->type);
+    $this->assertSame(self::REQUEST_NID, $transaction->field_request[LANGUAGE_NONE][0]['target_id']);
+    $this->assertSame(
+      MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED,
+      $transaction->field_request_status[LANGUAGE_NONE][0]['value']
+    );
+    $this->assertSame(self::UID, $transaction->uid, 'the resident who awarded');
+    $this->assertSame(
+      'Oferta adjudicada a Plomería Torres por 150,50.',
+      $transaction->field_comment[LANGUAGE_NONE][0]['value']
+    );
+    $this->assertMatchesRegularExpression(
+      '/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:00$/',
+      $transaction->field_status_date[LANGUAGE_NONE][0]['value']
+    );
+    $this->assertFalse(
+      property_exists($transaction, 'title'),
+      'the title belongs to hook_node_presave()'
+    );
+  }
+
+  /**
+   * An 'on_site_quote' offer records the provider and no figure — the endpoint
+   * hands the amount type through and the builder decides, which is what keeps
+   * the rule in one place.
+   */
+  public function testAnOnSiteQuoteRecordsNoAmount() {
+    $this->seed([
+      'fat.field_offer_amount_type_value' => 'on_site_quote',
+      'foa.field_offer_amount_value'      => NULL,
+    ]);
+    $this->authenticate();
+
+    $this->dispatch();
+
+    $this->assertSame(
+      'Oferta adjudicada a Plomería Torres.',
+      myapi_test_node_saves()[1]->field_comment[LANGUAGE_NONE][0]['value']
+    );
+  }
+
+  /**
+   * WRITE C — THE WINNER, third, and it is ONE field: 'selected'. Nothing else
+   * of the offer moves.
+   */
+  public function testTheWinningOfferIsWrittenThird() {
+    $this->seed();
+    $this->authenticate();
+
+    $this->dispatch();
+
+    $offer = myapi_test_node_saves()[2];
+
+    $this->assertSame(MYAPI_SERVICES_OFFER_TYPE, $offer->type);
+    $this->assertSame(self::OFFER_NID, (int) $offer->nid);
+    $this->assertSame('selected', $offer->field_offer_status[LANGUAGE_NONE][0]['value']);
+    $this->assertSame(33, $offer->uid, 'the provider who created it, not the resident');
+    $this->assertSame(self::CREATED, $offer->created);
+    $this->assertSame('Oferta de Plomería Torres — solicitud #128', $offer->title);
+  }
+
+  /**
+   * WRITE D — THE LOSERS. Every other offer that was 'sent' becomes 'rejected',
+   * AND THE WINNER DOES NOT, even though the sweep considers 'selected' live.
+   * offers_rejected counts exactly the ones THIS call moved.
+   */
+  public function testTheLosingOffersAreRejectedAndTheWinnerIsNot() {
+    $this->seed([], [], ['offers' => [902 => 'sent', 903 => 'sent']]);
+    $this->authenticate();
+
+    $result = $this->dispatch();
+    $saves = $this->saves();
+
+    $this->assertSame('selected', $saves[self::OFFER_NID]->field_offer_status[LANGUAGE_NONE][0]['value']);
+    $this->assertSame('rejected', $saves[902]->field_offer_status[LANGUAGE_NONE][0]['value']);
+    $this->assertSame('rejected', $saves[903]->field_offer_status[LANGUAGE_NONE][0]['value']);
+    $this->assertSame(2, $result['json']['data']['offers_rejected']);
+  }
+
+  /**
+   * OFFERS THAT WERE ALREADY 'withdrawn' OR 'rejected' ARE NOT TOUCHED, and
+   * they do not count either: the first is the provider's own retreat and
+   * overwriting it would erase who walked away by themselves, the second is
+   * already terminal.
+   */
+  public function testTerminalOffersAreNeitherTouchedNorCounted() {
+    $this->seed([], [], ['offers' => [902 => 'withdrawn', 903 => 'rejected', 904 => 'sent']]);
+    $this->authenticate();
+
+    $result = $this->dispatch();
+    $saves = $this->saves();
+
+    $this->assertArrayNotHasKey(902, $saves, 'the withdrawn one is not saved');
+    $this->assertArrayNotHasKey(903, $saves, 'the rejected one is not saved');
+    $this->assertSame('rejected', $saves[904]->field_offer_status[LANGUAGE_NONE][0]['value']);
+    $this->assertSame(1, $result['json']['data']['offers_rejected']);
+  }
+
+  /**
+   * THE FOUR WRITES, IN ORDER, OBSERVED AS SAVES: request, transaction, winner,
+   * losers. The order is what makes the status sync of SPEC 94 find two equal
+   * statuses and return without saving the request again.
+   */
+  public function testTheSavesHappenInTheDefendedOrder() {
+    $this->seed([], [], ['offers' => [902 => 'sent']]);
+    $this->authenticate();
+
+    $this->dispatch();
+
+    $order = array_map(function ($node) {
+      return $node->type . ':' . (int) $node->nid;
+    }, myapi_test_node_saves());
+
+    $this->assertSame([
+      MYAPI_SERVICES_REQUEST_TYPE . ':' . self::REQUEST_NID,
+      MYAPI_SERVICES_TRANSACTION_TYPE . ':900',
+      MYAPI_SERVICES_OFFER_TYPE . ':' . self::OFFER_NID,
+      MYAPI_SERVICES_OFFER_TYPE . ':902',
+    ], $order);
+  }
+
+  /**
+   * THE 200 IS THE RESIDENT'S WHOLE DETAIL, with offers_rejected as a SIBLING
+   * and not a twentieth key of it — so the object under 'service_request' stays
+   * byte-identical to what GET /api/v1/service-requests/{id} answers and the
+   * app can swap it in with no special case.
+   *
+   * The nineteen keys are asserted BY NAME AND IN ORDER: this response is the
+   * detail's serialiser or it is nothing.
+   */
+  public function testTheResponseIsTheWholeDetailPlusASiblingCounter() {
+    $this->seed();
+    $this->authenticate();
+
+    $result = $this->dispatch();
+
+    $this->assertSame(200, $result['status']);
+    $this->assertTrue($result['json']['success']);
+    $this->assertSame('Oferta adjudicada correctamente.', $result['json']['message']);
+
+    $this->assertSame(
+      ['service_request', 'offers_rejected'],
+      array_keys($result['json']['data']),
+      'offers_rejected is a sibling'
+    );
+    $this->assertIsInt($result['json']['data']['offers_rejected']);
+
+    $this->assertSame([
+      'id', 'title', 'description', 'status', 'category', 'unit', 'offers_count',
+      'assigned_offer', 'assigned_provider', 'created', 'desired_start',
+      'viewer', 'requester', 'condominium', 'images', 'attachment', 'closed_at',
+      'offers', 'transactions',
+    ], array_keys($result['json']['data']['service_request']));
+
+    $this->assertSame('requester', $result['json']['data']['service_request']['viewer']);
+  }
+
+  /**
+   * THE RESPONSE IS A REREAD AND NOT AN ECHO OF WHAT WAS JUST WRITTEN, which is
+   * the whole of decision 10 — the answer cannot disagree with what a GET would
+   * say because it IS what a GET answers. The proof at this layer is the
+   * inverse of the obvious one: node_save() does not persist here, so the
+   * status that comes back is the FIXTURE'S, not the 'assigned' the endpoint
+   * wrote. An implementation that echoed its own writes would answer 'assigned'
+   * and this assertion would fail.
+   */
+  public function testTheResponseIsRebuiltFromTheDatabase() {
+    $this->seed();
+    $this->authenticate();
+
+    $result = $this->dispatch();
+
+    $this->assertSame(
+      MYAPI_SERVICES_REQUEST_STATUS_OFFERED,
+      $result['json']['data']['service_request']['status'],
+      'the fixture never moved, so a reread still says offered'
+    );
+    $this->assertSame(
+      MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED,
+      $this->saves()[self::REQUEST_NID]->field_request_status[LANGUAGE_NONE][0]['value'],
+      'while the write itself said assigned'
+    );
+  }
+
+  /**
+   * NOT IDEMPOTENT, ON PURPOSE (decision 11). A second PUT on the offer that
+   * was just awarded answers 409 service_offer_not_acceptable — it says
+   * 'selected' now — and writes NOTHING. A 200 would pretend the second call
+   * had done something, and it would land a duplicate entry on a timeline that
+   * is forever.
+   */
+  public function testASecondAwardOnTheSameOfferIs409AndWritesNothing() {
+    $this->seed(['fost.field_offer_status_value' => 'selected'], [
+      'frs.field_request_status_value' => MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED,
+    ]);
+    $this->authenticate();
+
+    $this->assertError($this->dispatch(), 409, 'service_offer_not_acceptable');
+    $this->assertSame([], myapi_test_node_saves());
+  }
+
+  /**
+   * AND A PUT ON ANOTHER OFFER OF THE SAME, ALREADY AWARDED REQUEST NEVER
+   * REASSIGNS. That one is 'rejected' by now, so condition 6 answers first —
+   * which is why the 409 says service_offer_not_acceptable and not
+   * service_request_not_assignable, even though the request would fail
+   * condition 7 too.
+   */
+  public function testAwardingALoserOfAnAssignedRequestNeverReassigns() {
+    $this->seed(['fost.field_offer_status_value' => 'rejected'], [
+      'frs.field_request_status_value' => MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED,
+    ]);
+    $this->authenticate();
+
+    $this->assertError($this->dispatch(), 409, 'service_offer_not_acceptable');
+    $this->assertSame([], myapi_test_node_saves());
+  }
+
+  /**
+   * offers_count IS THE REAL TOTAL AND NOT count($offers): awarding deletes no
+   * offer, so the number is the same it was before the call.
+   */
+  public function testAwardingDoesNotChangeOffersCount() {
+    $this->seed([], [], ['offers' => [902 => 'sent', 903 => 'withdrawn']]);
+    $this->authenticate();
+
+    $result = $this->dispatch();
+
+    $this->assertSame(3, $result['json']['data']['service_request']['offers_count']);
   }
 
   /* -------------------------------------------------------------------------
@@ -689,7 +1570,7 @@ class ServiceOfferAcceptTest extends TestCase {
    */
   public function testANonPositiveIntegerRequestNidCostsNoQuery() {
     foreach (['abc', '0', '-3', '', 0, -3, 1.5, NULL, []] as $raw) {
-      myapi_test_db_seed(['field_data_field_request' => [$this->offerRow(901, 'sent')]]);
+      myapi_test_db_seed(['field_data_field_request' => [$this->sweepRow(901, 'sent')]]);
       myapi_test_write_reset();
 
       $this->assertSame(0, myapi_service_offer_reject_live($raw), var_export($raw, TRUE));

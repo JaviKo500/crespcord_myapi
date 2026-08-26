@@ -93,6 +93,16 @@ module_load_include('inc', 'myapi', 'includes/myapi.service_offer_query');
 // with it — the one alias myapi_service_request_detail_row() does not project —
 // and only when the name is going to travel.
 module_load_include('inc', 'myapi', 'includes/myapi.user');
+// SPEC 106: myapi_service_transaction_record(), the four fields of a timeline
+// entry, extracted from myapi_service_request_cancel() where it was written
+// inline since SPEC 95. Awarding changes the request's status, so it writes one
+// — the criterion that separates SPEC 95 from SPEC 105.
+module_load_include('inc', 'myapi', 'includes/myapi.service_transaction');
+// SPEC 106: the loaders and the serialiser of the RESIDENT'S request detail,
+// extracted from resources/service_request.resource.inc by this same spec. The
+// 200 of the award IS that detail, byte for byte, because it is built by these
+// very functions — see the @file docblock of the include.
+module_load_include('inc', 'myapi', 'includes/myapi.service_request_detail');
 
 /**
  * Dispatcher for /api/v1/service-requests/%/offers (SPEC 100).
@@ -1452,4 +1462,388 @@ function myapi_service_offer_update($nid) {
       'status' => isset($request_row->status) ? $request_row->status : NULL,
     ],
   ], 200, 'service_offer_updated');
+}
+
+/* ---------------------------------------------------------------------------
+ * PUT /api/v1/service-offers/%/accept — the resident awards one offer
+ * (SPEC 106).
+ *
+ * THE ARC THE MODULE HAS HAD DECLARED SINCE SPEC 77 AND NOBODY WALKED.
+ * 'selected' is in myapi_services_offer_statuses(), 'assigned' is in
+ * myapi_services_request_statuses(), the 'offered' -> 'assigned' edge is in
+ * myapi_services_request_transitions(), and field_assigned_offer and
+ * field_assigned_provider have been installed on the 'service_request' bundle
+ * with their selection_settings all along. Five things waiting for this
+ * endpoint. Today an offer is created (SPEC 100), read (SPECS 102 and 103),
+ * edited and withdrawn (SPEC 105); the one thing that could not be done with it
+ * is ACCEPT it, which is what it was born for.
+ *
+ * A PUT ON THE OFFER AND NOT A POST ON THE REQUEST (decision 1). Nothing is
+ * born, so there is no 201. And the object whose state changes by the
+ * resident's decision is the OFFER; the request turning 'assigned' is the
+ * consequence, not the action. The URL identifies the offer on its own, the
+ * body goes empty, and therefore the case "the offer you sent is not of this
+ * request" does not exist.
+ *
+ * THE FIRST WRITE OF THIS MODULE THAT TOUCHES FOUR NODES AND TWO BUNDLES IN ONE
+ * PASS: the winning offer, the losing ones, the request and the transaction.
+ * The order of those writes is not style — it is the condition that makes
+ * myapi_service_transaction_sync_request_status() compare two equal statuses
+ * and NOT save the request again.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Routes /api/v1/service-offers/%/accept by HTTP method (SPEC 106).
+ *
+ * PUT AND NOTHING ELSE, and the 405 BEFORE the token and before any query —
+ * the criterion every dispatcher of this module follows: the method is wrong
+ * whoever is asking. GET is not a read of an award: there is nothing there to
+ * read, and the offer is read by its own two detail routes.
+ */
+function myapi_service_offer_accept_dispatch($nid = NULL) {
+  if (myapi_request_method() === 'PUT') {
+    myapi_service_offer_accept($nid);
+    return;
+  }
+
+  myapi_error('method_not_allowed', 405);
+}
+
+/**
+ * PUT /api/v1/service-offers/%/accept — award this offer (SPEC 106).
+ *
+ * NINE CONDITIONS AND FOUR WRITES, AND BOTH ORDERS ARE THE CONTRACT:
+ *
+ *   1. The nid.        404 not_found when it is not a positive integer, before
+ *                      the token and before any query.
+ *   2. Authentication. 401 missing_authorization / invalid_token.
+ *   3. The offer.      404 not_found — the four indistinguishable ways in.
+ *   4. Its request.    404 not_found, the deleted category term included.
+ *   5. Whose it is.    403 service_request_forbidden unless the reader IS the
+ *                      field_requester.
+ *   6 to 9.            myapi_service_offer_accept_gate(), pure — the offer's
+ *                      status, the graph, the quote's expiry and the licence.
+ *
+ *   Then, and only then:
+ *
+ *   A. The request.    'assigned' + field_assigned_offer + field_assigned_provider.
+ *   B. The transaction. One timeline entry.
+ *   C. The winner.     field_offer_status = 'selected'.
+ *   D. The losers.     Every other live offer to 'rejected'.
+ *
+ * THE ORDER OF THE WRITES IS SPEC 95'S, INHERITED WITH ITS THREE REASONS:
+ *
+ *   - THE REQUEST FIRST, so myapi_service_transaction_sync_request_status()
+ *     (SPEC 94), which fires on the hook_node_insert() of the transaction,
+ *     compares the two statuses, finds them equal and returns WITHOUT saving
+ *     the request a second time. Whoever touches either side has to keep that
+ *     property.
+ *   - THE MAIN EFFECT IS WRITTEN IN PLAIN SIGHT, in this endpoint, and not
+ *     delegated to the hook. Creating only the transaction and letting the sync
+ *     write the status would save one line and would make awarding stop
+ *     awarding, in silence, the day somebody edits that sync.
+ *   - THE OFFERS LAST, AND NOT ATOMICALLY. No database transaction is opened:
+ *     node_save() with the Field API and its hooks inside one is a known source
+ *     of lock-ups in Drupal 7. The price is in the spec's risks — the longest
+ *     window is the losing sweep, and a 'sent' offer hanging off an 'assigned'
+ *     request is ugly to read but awards nothing and charges nothing.
+ *
+ * And two that are this spec's own:
+ *
+ *   - field_assigned_provider IS WRITTEN FROM provider_raw, the field's own
+ *     target_id, and never from the joined provider_id (decision 15). Condition
+ *     9 already guarantees the provider is active, so today the two columns
+ *     hold the same value; the raw one is used because it IS the value of the
+ *     field, and because the record of who a job was awarded to must not depend
+ *     on whether their listing is still published the day somebody relaxes that
+ *     condition.
+ *   - THE WINNER IS EXCLUDED FROM THE SWEEP BY NID, through the second argument
+ *     of myapi_service_offer_reject_live(), and NOT by its status: by the time
+ *     the sweep runs the winner already says 'selected', which is one of the
+ *     two statuses that function considers live, so without the exception it
+ *     would reject itself.
+ *
+ * THE REQUEST IS READ WITH myapi_service_request_detail_row() AND NOT WITH
+ * node_load(), unlike myapi_service_request_cancel() (decision 9). One query
+ * brings requester_uid and status together, which is everything the gate asks
+ * of the request, and the node_load() is paid AFTERWARDS, only once the write
+ * is known to be safe. The side effect is the real improvement: that function
+ * INNER JOINs the category's taxonomy term, so a request whose category was
+ * deleted fails IN THE GATE, with a 404, before anything is written — instead
+ * of failing while building the response with all four writes already done.
+ * SPEC 95's degraded branch is inherited all the same, but becomes nearly
+ * unreachable.
+ *
+ * THE LICENCE IS READ OFF provider_raw AND NEVER OFF provider_id. The joined
+ * column carries status = 1 inside it, so an UNPUBLISHED provider arrives as
+ * NULL and would slip under condition 9; on the raw column it fires the 403 it
+ * has coming.
+ *
+ * THE BODY IS NOT READ AT ALL. There is no key this endpoint would know what to
+ * do with, so a body with keys and a body that is malformed JSON are the same
+ * thing: ignored. Nothing is parsed, so nothing can fail — identical to the
+ * withdrawal of SPEC 105 and for the same reason.
+ *
+ * NOT IDEMPOTENT, ON PURPOSE (decision 11) — the literal precedent of SPEC 95.
+ * A second PUT answers 409 service_offer_not_acceptable and reassigns nothing,
+ * which is the truth: the second call did nothing. It is also what keeps a
+ * duplicate transaction off a timeline that is forever. A PUT on ANOTHER offer
+ * of the same, already awarded request answers the same 409 — that one is
+ * 'rejected' by now — and never reassigns.
+ *
+ * THE 200 IS THE RESIDENT'S WHOLE DETAIL (decision 10), not the offer.
+ * Discarded: answering the fifteen-key object plus a sibling `request`, which is
+ * what the withdrawal does and would be cheaper. Awarding changes FOUR things at
+ * once and three of them are not in the offer — the request's status, its two
+ * assignment fields, the other offers' statuses and the timeline. A client
+ * receiving only the offer would have to ask for the detail immediately
+ * afterwards, so the six queries are paid here or there — and here the response
+ * CANNOT disagree with what a GET would say, because it is what a GET answers.
+ *
+ * @param mixed $nid  The OFFER's nid, from the route.
+ */
+function myapi_service_offer_accept($nid) {
+  // 1. The nid, before anything else — including the token. Byte for byte the
+  // guard the withdrawal and both detail routes open with: the answer is about
+  // the SHAPE of the URL and not about what exists.
+  if (!is_scalar($nid) || !ctype_digit((string) $nid) || (int) $nid <= 0) {
+    myapi_error('not_found', 404);
+  }
+  $nid = (int) $nid;
+
+  // 2. Authentication. Answers 401 on its own and never returns on failure.
+  $token = myapi_auth_require_access_token();
+  $uid = (int) $token->uid;
+
+  // 3. The offer. THE SAME servable set as both detail routes — the four
+  // indistinguishable ways to miss it are missing, unpublished, another bundle,
+  // or its request unpublished.
+  //
+  // NO ROLE GATE HERE, unlike the withdrawal and the edit: this endpoint is the
+  // RESIDENT'S, and a resident has no 'proveedor' role to check. Who may award
+  // is condition 5, and it is a fact about the data.
+  $row = myapi_service_offer_detail_row($nid);
+  if (!$row) {
+    myapi_error('not_found', 404);
+  }
+
+  // 4. Its request — the row conditions 5 and 7 read, and the one that makes a
+  // deleted category term a 404 BEFORE any write. The INNER JOIN of step 3
+  // already guaranteed the request is published, so a FALSE here is corrupt
+  // data and answers the same 404.
+  $request_row = myapi_service_request_detail_row($row->request_id);
+  if (!$request_row) {
+    myapi_error('not_found', 404);
+  }
+  $request_nid = (int) $row->request_id;
+
+  // 5. WHO IS AWARDING. field_requester EXACTLY, and never node.uid: a request
+  // an operator registered on a resident's behalf belongs to the resident,
+  // which is SPEC 89's and SPEC 95's criterion. Not the rest of the unit either,
+  // unlike a payment (SPEC 23): a service request is signed by one person and
+  // the household does not inherit the right to award it. A provider never
+  // awards, not even their own offer — they land here.
+  //
+  // A request with no requester at all resolves to NULL and is a 403: nobody
+  // owns it, so nobody may award it.
+  $requester_uid = isset($request_row->requester_uid) && $request_row->requester_uid !== ''
+    ? (int) $request_row->requester_uid
+    : NULL;
+
+  if ($requester_uid === NULL || $requester_uid !== $uid) {
+    myapi_error('service_request_forbidden', 403);
+  }
+
+  // 6 to 9. The pure gate — the offer's status, the graph, the quote's expiry
+  // and the licence, in that order, first failure answers. The provider is read
+  // off the RAW column; see the docblock.
+  //
+  // myapi_service_offer_provider_row() computes `owned` and `category_ids` that
+  // nothing here looks at — the resident owns no provider — and is reused all
+  // the same (decision 12): a leaner query would be a SECOND definition of
+  // "what a provider is to a gate" inside the very file that already holds the
+  // first.
+  $provider_row = myapi_service_offer_provider_row($row->provider_raw, $uid);
+
+  $error = myapi_service_offer_accept_gate($row, $request_row, $provider_row, REQUEST_TIME);
+  if ($error !== NULL) {
+    // The mapping from code to HTTP status is the ONE thing this file adds to
+    // the gate: WHETHER the offer may still be awarded is a 409, and WHETHER
+    // its provider may still work is a 403.
+    $statuses = [
+      'service_offer_not_acceptable'      => 409,
+      'service_request_not_assignable'    => 409,
+      'service_offer_expired'             => 409,
+      'service_offer_provider_not_active' => 403,
+    ];
+    myapi_error($error, isset($statuses[$error]) ? $statuses[$error] : 409);
+  }
+
+  // ---------------------------------------------------------------------
+  // The four writes. From here on nothing answers an error but a 500 over a
+  // node that will not load: every condition has passed.
+  // ---------------------------------------------------------------------
+
+  // A. THE REQUEST, FIRST — see the docblock for why the order is a contract.
+  // node_load() and not a db_update() on the three field tables: a write goes
+  // through the entity so hook_node_presave() and hook_node_update() see it,
+  // and an UPDATE would leave the revision table and the entity cache lying.
+  $request_node = node_load($request_nid);
+
+  // The row above proves the request exists, is of this bundle and is
+  // published, so this can only fail on a race. NOTHING has been written yet,
+  // so the honest answer is a 500 and not a 200 over writes that did not
+  // happen.
+  if (!$request_node || $request_node->type !== MYAPI_SERVICES_REQUEST_TYPE) {
+    watchdog(
+      'myapi',
+      'SPEC 106: la solicitud @request pasó la compuerta de la adjudicación pero no se pudo cargar como nodo @type.',
+      ['@request' => $request_nid, '@type' => MYAPI_SERVICES_REQUEST_TYPE],
+      WATCHDOG_ERROR
+    );
+    myapi_error('server_error', 500);
+  }
+
+  $request_node->field_request_status[LANGUAGE_NONE][0]['value'] = MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED;
+  $request_node->field_assigned_offer[LANGUAGE_NONE][0]['target_id'] = $nid;
+  // The RAW column and not the joined one — decision 15, see the docblock.
+  $request_node->field_assigned_provider[LANGUAGE_NONE][0]['target_id'] = (int) $row->provider_raw;
+  node_save($request_node);
+
+  // B. THE TRANSACTION. One entry, written by the one function that writes a
+  // timeline entry (extracted by this spec). The title is not set here —
+  // myapi_service_transaction_set_title() puts it in from hook_node_presave(),
+  // inside that node_save().
+  //
+  // The provider's name comes off the licence row the gate already paid for,
+  // and the amount off the offer row: no query of its own.
+  myapi_service_transaction_record(
+    $request_nid,
+    MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED,
+    // The resident who awarded, which is who is behind the token.
+    $uid,
+    myapi_service_transaction_accept_comment(
+      isset($provider_row->title) ? $provider_row->title : NULL,
+      isset($row->amount) ? $row->amount : NULL,
+      isset($row->amount_type) ? $row->amount_type : NULL
+    )
+  );
+
+  // C. THE WINNER. One field, through the entity for the same reason as A.
+  $offer = node_load($nid);
+  if (!$offer || $offer->type !== MYAPI_SERVICES_OFFER_TYPE) {
+    // Unlike the 500 above, the request and the transaction ARE already
+    // written, so this is logged and the flow CONTINUES: answering 500 now
+    // would tell the client nothing happened when the request is already
+    // 'assigned'. The award is recoverable by hand from the back office, which
+    // is where SPEC 95 left the same class of window.
+    watchdog(
+      'myapi',
+      'SPEC 106: la oferta @offer pasó la compuerta de la adjudicación pero no se pudo cargar como nodo @type; la solicitud @request ya quedó adjudicada.',
+      ['@offer' => $nid, '@type' => MYAPI_SERVICES_OFFER_TYPE, '@request' => $request_nid],
+      WATCHDOG_ERROR
+    );
+  }
+  else {
+    // The literal, exactly as the withdrawal writes 'withdrawn' and the sweep
+    // writes 'rejected': the value is an allowed_value of field_offer_status
+    // and a key of myapi_services_offer_statuses() since SPEC 77, and it has
+    // never had a constant of its own.
+    $offer->field_offer_status[LANGUAGE_NONE][0]['value'] = 'selected';
+    node_save($offer);
+  }
+
+  // D. THE LOSERS. Last, and the only step that can leave the data half
+  // written — see the sweep's own docblock for why that is accepted. The winner
+  // is spared BY NID and not by status: it already says 'selected', which that
+  // function considers live.
+  $offers_rejected = myapi_service_offer_reject_live($request_nid, $nid);
+
+  // ---------------------------------------------------------------------
+  // The answer: THE SAME NINETEEN-KEY OBJECT the detail serves, rebuilt from
+  // the database AFTER the four writes, reusing SPEC 89's own loaders and
+  // serialiser — the same decision, and the same shape, as the 200 of SPEC 95.
+  //
+  // `viewer` is always 'requester': condition 5 proved whoever got here is the
+  // field_requester, and nobody else reaches this line.
+  // ---------------------------------------------------------------------
+  $detail_row = myapi_service_request_detail_row($request_nid);
+
+  // THE ONE THING THAT CAN FAIL AFTER THE WRITES, AND IT MUST NOT FATAL.
+  // Condition 4 already read this same row successfully, so reaching here means
+  // the category term was deleted DURING this request — nearly unreachable, and
+  // that near-unreachability is precisely decision 9's side effect. The branch
+  // is inherited from SPEC 95 all the same: the award is written and it is
+  // CORRECT, so the truthful answer is 200, the body degrades to the two keys
+  // known without a query, and the inconsistency is logged instead of
+  // swallowed. The app tells the two shapes apart by `viewer`, which only the
+  // full object carries.
+  if (!$detail_row) {
+    watchdog(
+      'myapi',
+      'Service request @nid was awarded but its detail could not be built: its category term is missing. The response was degraded.',
+      ['@nid' => $request_nid],
+      WATCHDOG_ERROR
+    );
+
+    myapi_respond(
+      [
+        'service_request' => [
+          'id'     => $request_nid,
+          'status' => MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED,
+        ],
+        'offers_rejected' => $offers_rejected,
+      ],
+      200,
+      'service_offer_accepted'
+    );
+  }
+
+  $detail_row->requester_name = NULL;
+  $names = myapi_user_display_names([$uid]);
+  if (isset($names[$uid])) {
+    $detail_row->requester_name = $names[$uid];
+  }
+
+  $images = myapi_service_request_load_images($request_nid);
+
+  // The requester's answer is EVERY offer, so the trim is the empty list — the
+  // same argument the detail passes for this reader. They all come back with
+  // the statuses steps C and D just wrote.
+  $offers = array_map(
+    'myapi_service_offer_build',
+    myapi_service_request_load_offers($request_nid, [])
+  );
+
+  // The REAL total, and never count($offers): awarding deletes no offer, so
+  // this is the same number it was before the call.
+  $offer_counts = myapi_service_request_offer_counts_by_nid([$request_nid]);
+  $offers_count = isset($offer_counts[$request_nid]) ? $offer_counts[$request_nid] : 0;
+
+  // The timeline, with the award entry already the last of it. This is why the
+  // response carries no separate 'transaction' key: it would be the same object
+  // twice.
+  $transactions = myapi_service_request_load_transactions($request_nid);
+
+  // offers_rejected is a SIBLING of service_request and not a twentieth key of
+  // it, so the object under 'service_request' stays byte-identical to the
+  // detail's and the app can swap it in with no special case. It is also the
+  // one thing the app cannot deduce from what it just received: `offers` shows
+  // which offers are rejected NOW, not which ones THIS call rejected — an offer
+  // already rejected before the award looks exactly the same.
+  myapi_respond(
+    [
+      'service_request' => myapi_service_request_build_detail(
+        $detail_row,
+        'requester',
+        $images,
+        $offers,
+        $offers_count,
+        $transactions
+      ),
+      'offers_rejected' => $offers_rejected,
+    ],
+    200,
+    'service_offer_accepted'
+  );
 }
