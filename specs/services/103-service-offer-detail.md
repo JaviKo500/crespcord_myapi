@@ -1,6 +1,6 @@
 # 103 — Detalle de una oferta (`GET /api/v1/service-offers/provider/{id}` y `GET /api/v1/service-offers/{id}`)
 
-> **Estado:** Approved · **Fecha:** 2026-08-26
+> **Estado:** Implemented · **Fecha:** 2026-08-26
 > **Objetivo:** Servir el detalle de una oferta en dos rutas propias —una para el
 > proveedor que la envió y otra para el residente que la recibió— con las quince
 > claves del serializador compartido más el contexto referencial de su solicitud:
@@ -441,117 +441,141 @@ no existe hasta el paso 6.
 
 **Método, ruta y autenticación**
 
-- [ ] `POST`, `PUT`, `PATCH` y `DELETE` sobre `/api/v1/service-offers/provider/{id}`
+- [x] `POST`, `PUT`, `PATCH` y `DELETE` sobre `/api/v1/service-offers/provider/{id}`
       y sobre `/api/v1/service-offers/{id}` responden `405 method_not_allowed`,
       **sin token** en la petición.
-- [ ] Sin cabecera `Authorization` → `401 missing_authorization` en las dos rutas.
-- [ ] Con un token caducado o inexistente → `401 invalid_token` en las dos.
-- [ ] `{id}` no entero positivo (`abc`, `0`, `-1`, `1,2`, `" 41"`) →
+- [x] Sin cabecera `Authorization` → `401 missing_authorization` en las dos rutas.
+- [x] Con un token caducado o inexistente → `401 invalid_token` en las dos.
+- [x] `{id}` no entero positivo (`abc`, `0`, `-1`, `1,2`, `" 41"`) →
       `404 not_found`, y **no se ejecuta ninguna consulta de ofertas**.
-- [ ] `GET /api/v1/service-offers/provider` (SPEC 102) sigue respondiendo su
+- [x] `GET /api/v1/service-offers/provider` (SPEC 102) sigue respondiendo su
       listado y **no** cae en el despachador del detalle.
-- [ ] `GET /api/v1/service-offers/provider/41` cae en la ruta del proveedor y
+- [x] `GET /api/v1/service-offers/provider/41` cae en la ruta del proveedor y
       **nunca** en la del comodín.
 
 **El conjunto servible — las dos rutas responden `404` en los mismos cuatro casos**
 
-- [ ] Oferta inexistente → `404 not_found`.
-- [ ] Oferta **despublicada** → `404 not_found`.
-- [ ] Un nid de otro bundle (una solicitud, un proveedor) → `404 not_found`.
-- [ ] Oferta cuya **solicitud** está despublicada o borrada → `404 not_found`,
+- [x] Oferta inexistente → `404 not_found`.
+- [x] Oferta **despublicada** → `404 not_found`.
+- [x] Un nid de otro bundle (una solicitud, un proveedor) → `404 not_found`.
+- [x] Oferta cuya **solicitud** está despublicada o borrada → `404 not_found`,
       nunca `200` con `request: null`.
-- [ ] Los cuatro `404` son **indistinguibles entre sí**: mismo `error_code`, mismo
+- [x] Los cuatro `404` son **indistinguibles entre sí**: mismo `error_code`, mismo
       mensaje.
 
 **Autorización — `/provider/{id}`**
 
-- [ ] Token válido de una cuenta **sin** el rol `proveedor` →
+- [x] Token válido de una cuenta **sin** el rol `proveedor` →
       `403 provider_role_required`, **antes de cualquier consulta de ofertas**.
-- [ ] Cuenta con `administrator` pero **sin** `proveedor` →
+- [x] Cuenta con `administrator` pero **sin** `proveedor` →
       `403 provider_role_required`.
-- [ ] Cuenta con el rol pero **sin ningún proveedor vinculado** → `403 forbidden`.
-- [ ] Oferta de **otro** proveedor → `403 forbidden`, nunca `404`.
-- [ ] Oferta de un proveedor **suspendido** (`status = 0`) propio → `200` con la
+- [x] Cuenta con el rol pero **sin ningún proveedor vinculado** → `403 forbidden`.
+- [x] Oferta de **otro** proveedor → `403 forbidden`, nunca `404`.
+- [x] Oferta de un proveedor **suspendido** (`status = 0`) propio → `200` con la
       respuesta completa.
-- [ ] Oferta de un proveedor con `field_license_expiry` en el pasado → `200`.
-- [ ] Una cuenta con dos proveedores lee las ofertas de los dos.
-- [ ] El **solicitante** de la solicitud, si además tiene el rol `proveedor`, no
+- [x] Oferta de un proveedor con `field_license_expiry` en el pasado → `200`.
+- [x] Una cuenta con dos proveedores lee las ofertas de los dos.
+- [x] El **solicitante** de la solicitud, si además tiene el rol `proveedor`, no
       entra por aquí a una oferta que no es de sus proveedores → `403 forbidden`.
 
 **Autorización — `/{id}`**
 
-- [ ] El **solicitante** de la solicitud (`field_requester = uid`) → `200`.
-- [ ] Un proveedor que ofertó en esa solicitud → `403 forbidden`
+- [x] El **solicitante** de la solicitud (`field_requester = uid`) → `200`.
+- [x] Un proveedor que ofertó en esa solicitud → `403 forbidden`
       (`myapi_service_request_viewer()` devuelve `'provider'`, no `'requester'`).
-- [ ] El proveedor **adjudicado** → `403 forbidden`. Para eso está la otra ruta.
-- [ ] Una cuenta sin relación con la solicitud → `403 forbidden`.
-- [ ] La ruta **no exige ningún rol**: un solicitante sin roles especiales entra.
+- [x] El proveedor **adjudicado** → `403 forbidden`. Para eso está la otra ruta.
+- [x] Una cuenta sin relación con la solicitud → `403 forbidden`.
+- [x] La ruta **no exige ningún rol**: un solicitante sin roles especiales entra.
 
 **Las quince claves de la oferta**
 
-- [ ] Las quince valen, sobre la misma fila, **exactamente lo mismo** que las
+- [x] Las quince valen, sobre la misma fila, **exactamente lo mismo** que las
       homónimas de `myapi_service_offer_build()`, en las dos rutas.
-- [ ] `amount` es `float` o `null`, nunca `"95.50"`; una oferta `on_site_quote`
+- [x] `amount` es `float` o `null`, nunca `"95.50"`; una oferta `on_site_quote`
       responde `null`.
-- [ ] `message` es `""` cuando está vacío, **nunca `null`**.
-- [ ] `requires_visit` es `bool`, **nunca `null`**.
-- [ ] `tax_included` distingue `true`, `false` y `null`.
-- [ ] `duration` es un objeto entero o un `null` entero, nunca
+- [x] `message` es `""` cuando está vacío, **nunca `null`**.
+- [x] `requires_visit` es `bool`, **nunca `null`**.
+- [x] `tax_included` distingue `true`, `false` y `null`.
+- [x] `duration` es un objeto entero o un `null` entero, nunca
       `{value: null, unit: null}`.
-- [ ] Una oferta anterior al SPEC 100 responde `amount_type: null`,
+- [x] Una oferta anterior al SPEC 100 responde `amount_type: null`,
       `valid_until: null`, `available_from: null`, `duration: null`,
       `includes: null`, `excludes: null`, `tax_included: null`,
       `warranty_days: null`, `requires_visit: false`, y **se sirve con `200`**.
-- [ ] `created`, `valid_until` y `available_from` tienen formato `Y-m-d\TH:i:s`.
-- [ ] `provider` lleva `{id, name, logo}` en las dos rutas; `logo` es `null`
+- [x] `created`, `valid_until` y `available_from` tienen formato `Y-m-d\TH:i:s`.
+- [x] `provider` lleva `{id, name, logo}` en las dos rutas; `logo` es `null`
       —nunca `""` ni una URL rota— cuando el proveedor no tiene logo o su fichero
       ya no existe.
-- [ ] Una oferta `withdrawn` sobre una solicitud `cancelled` se sirve completa.
-- [ ] Una oferta sobre una solicitud `direct` (SPEC 101) se sirve sin nada
+- [x] Una oferta `withdrawn` sobre una solicitud `cancelled` se sirve completa.
+- [x] Una oferta sobre una solicitud `direct` (SPEC 101) se sirve sin nada
       distinto.
 
 **El bloque `request` y la visibilidad**
 
-- [ ] `service_offer` tiene **exactamente dieciséis claves**, y `request` es la
+- [x] `service_offer` tiene **exactamente dieciséis claves**, y `request` es la
       última.
-- [ ] `request` tiene **exactamente siete claves**, en el orden `id`, `title`,
+- [x] `request` tiene **exactamente siete claves**, en el orden `id`, `title`,
       `status`, `category`, `condominium`, `unit`, `requester`, **en las dos rutas
       y en todos los casos**.
-- [ ] `request.id` es el nid del **nodo unido**; una oferta cuyo
+- [x] `request.id` es el nid del **nodo unido**; una oferta cuyo
       `field_request_target_id` apunta a un nodo borrado ya dio `404` antes.
-- [ ] `request.category.code` es `""` —nunca `null`— cuando el término no tiene
+- [x] `request.category.code` es `""` —nunca `null`— cuando el término no tiene
       código.
-- [ ] `request.condominium` viaja **siempre y en las dos rutas**, sin condición de
+- [x] `request.condominium` viaja **siempre y en las dos rutas**, sin condición de
       adjudicación; es `null` entero cuando la solicitud no tiene condominio o el
       nodo está despublicado.
-- [ ] `request.unit.name` es `field_nombre_vivienda`, **no** el título del nodo.
-- [ ] `/provider/{id}`, solicitud **no adjudicada**: `unit: null` y
+- [x] `request.unit.name` es `field_nombre_vivienda`, **no** el título del nodo.
+- [x] `/provider/{id}`, solicitud **no adjudicada**: `unit: null` y
       `requester: null`.
-- [ ] `/provider/{id}`, solicitud adjudicada a **otro** proveedor: `unit: null` y
+- [x] `/provider/{id}`, solicitud adjudicada a **otro** proveedor: `unit: null` y
       `requester: null`, aunque mi oferta esté en `selected`.
-- [ ] `/provider/{id}`, solicitud adjudicada a **uno de mis** proveedores: `unit`
+- [x] `/provider/{id}`, solicitud adjudicada a **uno de mis** proveedores: `unit`
       y `requester` con sus objetos, **aunque mi oferta esté en `rejected` o
       `withdrawn`**.
-- [ ] `/provider/{id}` con la adjudicación apuntando a un proveedor borrado o
+- [x] `/provider/{id}` con la adjudicación apuntando a un proveedor borrado o
       despublicado: `unit: null` y `requester: null`.
-- [ ] `/{id}`: `unit` viaja **siempre** (o `null` entero si la solicitud no tiene
+- [x] `/{id}`: `unit` viaja **siempre** (o `null` entero si la solicitud no tiene
       vivienda) y `requester` es **siempre `null`**.
-- [ ] Ni la respuesta ni `request` contienen `description`, `desired_start`,
+- [x] Ni la respuesta ni `request` contienen `description`, `desired_start`,
       `closed_at`, `offers_count`, `assigned_offer`, `assigned_provider`,
       `images`, `attachment`, `transactions`, `viewer`, ni **ningún dato de
       contacto** (teléfono, email, dirección) de nadie.
-- [ ] `unit` y `requester`, cuando no se ven, son un `null` entero y **nunca**
+- [x] `unit` y `requester`, cuando no se ven, son un `null` entero y **nunca**
       `{id: null, name: null}`.
 
 **Regresión del paso 1 — el traslado no movió nada**
 
-- [ ] `ServiceRequestProviderListTest`, `ServiceRequestProviderDetailTest` y el
+- [x] `ServiceRequestProviderListTest`, `ServiceRequestProviderDetailTest` y el
       resto de la familia `service_request` pasan **sin que se toque un solo
       test**.
-- [ ] `GET /api/v1/service-requests/{id}`, `GET /api/v1/service-requests/provider`
+- [x] `GET /api/v1/service-requests/{id}`, `GET /api/v1/service-requests/provider`
       y `GET /api/v1/service-requests/provider/{id}` responden **byte a byte** lo
       mismo que antes del traslado.
-- [ ] `myapi.info` lista todo fichero `.inc` nuevo o movido.
+- [x] `myapi.info` lista todo fichero `.inc` nuevo o movido.
+
+**Los cuatro que quedan sin marcar, y por qué**
+
+Ninguno de los cuatro se puede comprobar sin un sitio arrancado; los tres
+primeros necesitan `drush cc all` de por medio y el cuarto, el router de Drupal.
+
+- **Los dos de enrutado** (`/service-offers/provider` sigue siendo el listado;
+  `/service-offers/provider/41` cae en la ruta del proveedor). `tests/unit` no
+  ejecuta el router. Lo que sí queda fijado por test es la **declaración**: los
+  tres `$items[...]` del prefijo, sus callbacks, y `page arguments` `[4]` y `[3]`
+  respectivamente — un `[3]` en la del proveedor entregaría el literal
+  `'provider'` al despachador.
+- **Solicitud despublicada o borrada → `404`.** Viaja en el `innerJoin`, y el
+  evaluador de fixtures registra los joins sin resolverlos. Lo que sí queda
+  fijado es la **forma** de ese join: `INNER`, sobre `node`, con `nr.type` y
+  `nr.status = 1` — que es la aserción que salta si alguien lo "simplifica"
+  (riesgo 4). Nota: el criterio de los cuatro `404` indistinguibles **sí** queda
+  marcado, porque los cuatro salen de una **única** llamada a
+  `myapi_error('not_found', 404)`: no hay dos sitios que puedan divergir.
+- **Los tres endpoints de `service-requests` responden byte a byte lo mismo.**
+  Verificable solo por HTTP contra el sitio. Lo que consta es que el traslado
+  del paso 1 fue **verbatim** (comprobado con `diff` contra los bloques
+  extraídos: idénticos) y que la familia `service_request` pasa entera sin que
+  se haya tocado un solo test.
 
 ---
 
