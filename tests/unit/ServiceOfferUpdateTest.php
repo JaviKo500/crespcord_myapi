@@ -818,6 +818,20 @@ class ServiceOfferUpdateTest extends TestCase {
     }
   }
 
+  /**
+   * ONE SAVE, AND IT IS THE OFFER. Neither the request's status (decision 6)
+   * nor a service_transaction (decision 7) is written by an edit — exactly like
+   * SPEC 96's edit of a request.
+   */
+  public function testTheEditSavesTheOfferAndNothingElse() {
+    $source = $this->updateSource();
+
+    $this->assertSame(1, substr_count($source, 'node_save('), 'exactly one save');
+    $this->assertStringContainsString('node_save($offer)', $source);
+    $this->assertStringNotContainsString('MYAPI_SERVICES_TRANSACTION_TYPE', $source);
+    $this->assertStringNotContainsString('field_request_status', $source);
+  }
+
   /** The body of myapi_service_offer_update(), comments stripped. */
   private function updateSource() {
     $code = file_get_contents(__DIR__ . '/../../resources/service_offer.resource.inc');
