@@ -81,8 +81,8 @@ for a small job must be able to finish the form.
 | `amount_type` | `fixed` \| `estimate` \| `hourly` \| `on_site_quote` | **Yes** | How the amount is to be read. Mandatory because the number is unreadable without it: the same `150` means a closed price, a guess, an hourly rate or nothing at all. |
 | `amount` | decimal ≥ 0, ≤ 99999999.99 | **conditional** | **Required** for `fixed`, `estimate` and `hourly`; **forbidden** for `on_site_quote`. `0` is a price somebody offered. May be sent as a number or as a string, so the decimals survive the wire. |
 | `tax_included` | bool | No | Only alongside an `amount`. Omitting it is *I did not say*, which is a different answer from `false`. |
-| `valid_until` | string `Y-m-d H:i` | No | Until when the offer stands. Must be **strictly in the future**. |
-| `available_from` | string `Y-m-d H:i` | No | When you could start. Strictly in the future, and not later than `valid_until`. |
+| `valid_until` | string `Y-m-d H:i` | No | Until when the offer stands — the deadline the resident has to accept it. Must be **strictly in the future**. |
+| `available_from` | string `Y-m-d H:i` | No | When you could start the work. Strictly in the future. **Not compared against `valid_until`** — see below. |
 | `duration` | int 1–9999 | No | Estimated duration. **Coupled with `duration_unit`: send both or neither.** |
 | `duration_unit` | `hours` \| `days` | No | Same. |
 | `includes` | string, ≤ 2000 chars | No | What the quote covers. Empty after trimming is stored as absent. |
@@ -97,6 +97,14 @@ true.
 
 **Lengths count characters, not bytes.** 2000 accented characters fit; the cut
 is the one the provider can count.
+
+**The two dates are not a range, and neither is compared against the other.**
+`valid_until` is a deadline on the *resident's decision*; `available_from` is a
+date on the *provider's execution*. There is no required order between them, and
+the frequent case is the one a range would forbid: *"I need an answer before 8,
+and I can start at 11."* Both dates are validated on their own — parseable and
+strictly in the future — and nothing else. Until SPEC 104 this endpoint refused
+`available_from` later than `valid_until` with a `422`; it no longer does.
 
 **Unknown keys are ignored, not refused.** A `status` in the body changes
 nothing: the offer is born `sent` whatever it says, because the status is not a
@@ -347,15 +355,14 @@ guess whether anything moved.
 | 422 | `service_offer_amount_required` | `amount_type` is `fixed`, `estimate` or `hourly` and no `amount` came. |
 | 422 | `service_offer_amount_not_allowed` | `amount_type` is `on_site_quote` and an `amount` came. |
 | 422 | `service_offer_tax_without_amount` | `tax_included` without an `amount`. |
-| 422 | `service_offer_dates_inconsistent` | `available_from` is later than `valid_until`. |
 | 422 | `service_offer_duration_incomplete` | One of `duration` / `duration_unit` without the other. |
 
 **A `403` or a `409` from the gate always beats a `422` from the body.**
 
 **The order of the body rules is the contract too**, and the first broken one
 answers: `message`, `amount_type`, `amount`, `tax_included`, `valid_until`,
-`available_from`, their coherence, `duration`/`duration_unit`,
-`includes`/`excludes`, `warranty_days`, `requires_visit`.
+`available_from`, `duration`/`duration_unit`, `includes`/`excludes`,
+`warranty_days`, `requires_visit`.
 
 ---
 

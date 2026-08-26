@@ -600,7 +600,7 @@ class ServiceOfferCreateTest extends TestCase {
   }
 
   /**
-   * The eleven rules, one broken field at a time, in the order of the spec's
+   * The ten rules, one broken field at a time, in the order of the spec's
    * table.
    *
    * @dataProvider bodyCases
@@ -661,7 +661,7 @@ class ServiceOfferCreateTest extends TestCase {
       'available garbage'    => [['available_from' => 'mañana temprano???'], 'invalid_field', 'available_from'],
       'available past'       => [['available_from' => '2001-01-01 10:00'], 'invalid_field', 'available_from'],
 
-      /* 8 — duration and its unit. */
+      /* 7 — duration and its unit. */
       'duration, no unit'    => [['duration' => 3], 'service_offer_duration_incomplete', NULL],
       'unit, no duration'    => [['duration_unit' => 'hours'], 'service_offer_duration_incomplete', NULL],
       'duration zero'        => [['duration' => 0, 'duration_unit' => 'hours'], 'invalid_field', 'duration'],
@@ -670,17 +670,17 @@ class ServiceOfferCreateTest extends TestCase {
       'duration fractional'  => [['duration' => 2.5, 'duration_unit' => 'hours'], 'invalid_field', 'duration'],
       'unit off catalogue'   => [['duration' => 3, 'duration_unit' => 'weeks'], 'invalid_field', 'duration_unit'],
 
-      /* 9 — includes and excludes. */
+      /* 8 — includes and excludes. */
       'includes 2001 chars'  => [['includes' => str_repeat('a', 2001)], 'invalid_field', 'includes'],
       'excludes 2001 chars'  => [['excludes' => str_repeat('a', 2001)], 'invalid_field', 'excludes'],
       'includes not a text'  => [['includes' => 5], 'invalid_field', 'includes'],
 
-      /* 10 — warranty_days. */
+      /* 9 — warranty_days. */
       'warranty negative'    => [['warranty_days' => -1], 'invalid_field', 'warranty_days'],
       'warranty over 3650'   => [['warranty_days' => 3651], 'invalid_field', 'warranty_days'],
       'warranty fractional'  => [['warranty_days' => 1.5], 'invalid_field', 'warranty_days'],
 
-      /* 11 — requires_visit. */
+      /* 10 — requires_visit. */
       'visit as "true"'      => [['requires_visit' => 'true'], 'invalid_field', 'requires_visit'],
       'visit as 1'           => [['requires_visit' => 1], 'invalid_field', 'requires_visit'],
       'visit as 0'           => [['requires_visit' => 0], 'invalid_field', 'requires_visit'],
@@ -732,25 +732,28 @@ class ServiceOfferCreateTest extends TestCase {
   }
 
   /**
-   * Rule 7 compares available_from <= valid_until AND NOT THE OTHER WAY ROUND.
-   * Promising availability for after the offer expires is the incoherence;
-   * being able to come before it expires is not.
+   * THE TWO DATES ARE NOT A RANGE, and since SPEC 104 neither is compared
+   * against the other. `valid_until` is a deadline on the resident's DECISION
+   * and `available_from` a date on the provider's EXECUTION: every order
+   * between them is accepted, including the one SPEC 100 refused, which is the
+   * frequent one — answer me before 8, and I can start at 11.
    */
-  public function testTheTwoDatesMustBeCoherentInOneDirectionOnly() {
+  public function testTheTwoDatesAreNotComparedAgainstEachOther() {
     $soon = date('Y-m-d H:i', REQUEST_TIME + 3600);
     $later = date('Y-m-d H:i', REQUEST_TIME + 7200);
 
-    // available_from AFTER valid_until: refused.
-    $this->assertRejected(
-      $this->minimalBody(['valid_until' => $soon, 'available_from' => $later]),
-      'service_offer_dates_inconsistent'
+    // available_from AFTER valid_until: accepted. This is the case SPEC 104
+    // came to open, and the reason this test exists.
+    $accepted = $this->assertAccepted(
+      $this->minimalBody(['valid_until' => $soon, 'available_from' => $later])
     );
+    $this->assertSame(strtotime($soon), $accepted['valid_until']);
+    $this->assertSame(strtotime($later), $accepted['available_from']);
 
-    // available_from BEFORE valid_until: accepted, and this is the normal case.
+    // available_from BEFORE valid_until: accepted too.
     $this->assertAccepted($this->minimalBody(['valid_until' => $later, 'available_from' => $soon]));
 
-    // The same instant: accepted. Nothing is incoherent about an offer that
-    // expires the moment you become available.
+    // The same instant: accepted.
     $this->assertAccepted($this->minimalBody(['valid_until' => $soon, 'available_from' => $soon]));
 
     // Either one alone is fine.
@@ -817,7 +820,8 @@ class ServiceOfferCreateTest extends TestCase {
       'amount'
     );
 
-    // The dates (5, 6) beat their coherence (7).
+    // valid_until (5) beats available_from (6): the first date broken answers,
+    // and it is the one the table names first.
     $this->assertRejected(
       $this->minimalBody(['valid_until' => 'nunca', 'available_from' => '2001-01-01 10:00']),
       'invalid_field',
@@ -1053,18 +1057,19 @@ class ServiceOfferCreateTest extends TestCase {
    * this is what catches it.
    *
    * I18nTest already holds the whole catalogue to parity, no duplicates and
-   * matching placeholders; this test pins these twelve BY NAME, so renaming one
-   * in the code without renaming it in the catalogue fails here.
+   * matching placeholders; this test pins these eleven BY NAME, so renaming one
+   * in the code without renaming it in the catalogue fails here. They were
+   * twelve until SPEC 104 retired `service_offer_dates_inconsistent`.
    *
    * @dataProvider spec100Keys
    */
-  public function testTheTwelveKeysResolveInBothLanguages($key) {
+  public function testTheElevenKeysResolveInBothLanguages($key) {
     foreach (['es', 'en'] as $lang) {
       $message = myapi_t($key, [], $lang);
 
       $this->assertNotSame($key, $message, $key . ' has no ' . $lang . ' message');
       $this->assertNotSame('', trim($message));
-      // No placeholder left unreplaced: none of the twelve takes one.
+      // No placeholder left unreplaced: none of the eleven takes one.
       $this->assertStringNotContainsString('@', $message, $key . ' (' . $lang . ') must take no placeholder');
     }
 
@@ -1084,7 +1089,6 @@ class ServiceOfferCreateTest extends TestCase {
       ['service_offer_amount_required'],
       ['service_offer_amount_not_allowed'],
       ['service_offer_tax_without_amount'],
-      ['service_offer_dates_inconsistent'],
       ['service_offer_duration_incomplete'],
     ];
   }
@@ -1121,9 +1125,10 @@ class ServiceOfferCreateTest extends TestCase {
   }
 
   /**
-   * The four generic keys this endpoint REUSES are still there, untouched. The
-   * spec adds twelve and reuses seven; these are the ones a careless cleanup of
-   * the catalogue could take away without any SPEC 100 test noticing.
+   * The generic keys this endpoint REUSES are still there, untouched. SPEC 100
+   * added twelve keys of its own (eleven after SPEC 104) and reuses these
+   * seven; they are the ones a careless cleanup of the catalogue could take
+   * away without any SPEC 100 test noticing.
    */
   public function testTheReusedGenericKeysStillExist() {
     foreach (['missing_authorization', 'invalid_token', 'method_not_allowed',

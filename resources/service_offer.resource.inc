@@ -140,7 +140,7 @@ function myapi_service_offer_dispatch($nid = NULL) {
  *   7. Uniqueness.             409 service_offer_already_sent, last of the
  *                              seven because it is the only one whose query can
  *                              be skipped when an earlier condition fails.
- *   8. The body.               Eleven rules, all 422.
+ *   8. The body.               Ten rules, all 422.
  *   9. The three writes.
  *  10. 201.
  *

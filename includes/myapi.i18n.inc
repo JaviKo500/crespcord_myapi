@@ -198,7 +198,6 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'service_offer_amount_required'      => 'An amount is required for this price type.',
       'service_offer_amount_not_allowed'   => 'An on-site quote carries no amount.',
       'service_offer_tax_without_amount'   => 'Tax inclusion cannot be stated without an amount.',
-      'service_offer_dates_inconsistent'   => "Availability cannot be later than the offer's validity.",
       'service_offer_duration_incomplete'  => 'Provide both the duration and its unit, or neither.',
     ],
     'es' => [
@@ -310,7 +309,6 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'service_offer_amount_required'      => 'Indique el monto para este tipo de precio.',
       'service_offer_amount_not_allowed'   => 'Una oferta a presupuestar en sitio no lleva monto.',
       'service_offer_tax_without_amount'   => 'No puede indicar si el impuesto está incluido sin un monto.',
-      'service_offer_dates_inconsistent'   => 'La disponibilidad no puede ser posterior a la validez de la oferta.',
       'service_offer_duration_incomplete'  => 'Indique la duración y su unidad, o ninguna de las dos.',
     ],
   ];

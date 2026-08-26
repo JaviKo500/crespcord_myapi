@@ -486,7 +486,8 @@ function myapi_service_offer_eligibility($request_row, $provider_row, $uid, $now
  * ------------------------------------------------------------------------ */
 
 /**
- * Validates the eleven fields of the body, in order (SPEC 100).
+ * Validates the body of the offer, rule by rule and in order (SPEC 100,
+ * amended by SPEC 104).
  *
  * SAME CONTRACT AS myapi_service_request_validate_cancel_reason() (SPEC 95):
  * it answers ['ok' => TRUE, 'values' => [...]] or ['ok' => FALSE,
@@ -499,7 +500,7 @@ function myapi_service_offer_eligibility($request_row, $provider_row, $uid, $now
  * the order lives in myapi_service_offer_create(), and this function is never
  * reached in that case.
  *
- * THE ORDER OF THE ELEVEN IS THE CONTRACT, and the first failure answers. The
+ * THE ORDER OF THE TEN IS THE CONTRACT, and the first failure answers. The
  * three conditional rules are what make it matter:
  *
  *   3. `amount` is REQUIRED for 'fixed', 'estimate' and 'hourly' and FORBIDDEN
@@ -507,7 +508,7 @@ function myapi_service_offer_eligibility($request_row, $provider_row, $uid, $now
  *      site that carries a number is as wrong as a closed price with none.
  *   4. `tax_included` without an `amount` is refused rather than ignored. "Tax
  *      is included" in a quote with no figure is a statement about nothing.
- *   8. `duration` and `duration_unit` travel together or not at all. One
+ *   7. `duration` and `duration_unit` travel together or not at all. One
  *      without the other means nothing, and accepting it would store half a
  *      fact the serialiser would then have to hide.
  *
@@ -528,9 +529,11 @@ function myapi_service_offer_eligibility($request_row, $provider_row, $uid, $now
  * THE TWO DATES MUST BE STRICTLY IN THE FUTURE, the same decision SPEC 90 took
  * for `desired_start` and for the same reason: everything is compared against
  * the server's clock and the exact second is not a case a client builds on
- * purpose. Rule 7 then compares available_from <= valid_until and NOT the other
- * way round — promising availability for after the offer expires is the
- * incoherence; being able to come before it expires is not.
+ * purpose. NEITHER IS COMPARED AGAINST THE OTHER, and SPEC 104 removed the rule
+ * that did: they are not the two ends of a range. `valid_until` is a deadline on
+ * the RESIDENT'S DECISION and `available_from` a date on the PROVIDER'S
+ * EXECUTION, so the order between them is free — and the natural one, accept
+ * first and work afterwards, is precisely the one the old rule refused.
  *
  * An optional text that is empty after trim() is stored as ABSENT, not as "".
  * The serialiser answers null for it either way, and an empty row is a value
@@ -640,13 +643,7 @@ function myapi_service_offer_validate_body($body) {
     $values[$field] = $timestamp;
   }
 
-  /* 7. Coherence between the two — see the docblock on the direction. */
-  if ($values['valid_until'] !== NULL && $values['available_from'] !== NULL
-    && $values['available_from'] > $values['valid_until']) {
-    return ['ok' => FALSE, 'error_code' => 'service_offer_dates_inconsistent', 'replacements' => []];
-  }
-
-  /* 8. duration and duration_unit — both or neither. */
+  /* 7. duration and duration_unit — both or neither. */
   $has_duration = array_key_exists('duration', $body) && $body['duration'] !== NULL && $body['duration'] !== '';
   $has_unit = array_key_exists('duration_unit', $body) && $body['duration_unit'] !== NULL && $body['duration_unit'] !== '';
 
@@ -666,7 +663,7 @@ function myapi_service_offer_validate_body($body) {
     $values['duration_unit'] = $body['duration_unit'];
   }
 
-  /* 9. includes and excludes — optional text, up to 2000 characters. */
+  /* 8. includes and excludes — optional text, up to 2000 characters. */
   foreach (['includes', 'excludes'] as $field) {
     if (!array_key_exists($field, $body) || $body[$field] === NULL) {
       continue;
@@ -684,7 +681,7 @@ function myapi_service_offer_validate_body($body) {
     }
   }
 
-  /* 10. warranty_days — an integer from 0 to 3650. */
+  /* 9. warranty_days — an integer from 0 to 3650. */
   if (array_key_exists('warranty_days', $body) && $body['warranty_days'] !== NULL && $body['warranty_days'] !== '') {
     $days = _myapi_service_offer_integer($body['warranty_days']);
     // 0 IS A DECLARATION — "no warranty" — and not an absence.
@@ -694,7 +691,7 @@ function myapi_service_offer_validate_body($body) {
     $values['warranty_days'] = $days;
   }
 
-  /* 11. requires_visit — a real boolean; absent is FALSE. */
+  /* 10. requires_visit — a real boolean; absent is FALSE. */
   if (array_key_exists('requires_visit', $body) && $body['requires_visit'] !== NULL) {
     if (!is_bool($body['requires_visit'])) {
       return _myapi_service_offer_invalid('invalid_field', 'requires_visit');
@@ -709,7 +706,7 @@ function myapi_service_offer_validate_body($body) {
  * The failure shape of myapi_service_offer_validate_body(), for the codes that
  * name a field.
  *
- * Written once because eleven rules return it: a helper is what keeps the
+ * Written once because ten rules return it: a helper is what keeps the
  * '@field' replacement from being retyped fourteen times, where one typo would
  * answer a message naming the wrong field.
  *

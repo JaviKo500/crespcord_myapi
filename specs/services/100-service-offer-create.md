@@ -164,7 +164,7 @@ Un `direct` cae por la condición 5 sin necesidad de una regla propia: no está 
 | 4 | `tax_included` | booleano real; solo tiene sentido con `amount` | `422 invalid_field` / `422 service_offer_tax_without_amount` |
 | 5 | `valid_until` | `strtotime()` parsea y el resultado es **estrictamente mayor** que `REQUEST_TIME` | `422 invalid_field` |
 | 6 | `available_from` | ídem | `422 invalid_field` |
-| 7 | coherencia | si vienen los dos, `available_from <= valid_until` | `422 service_offer_dates_inconsistent` |
+| 7 | coherencia | si vienen los dos, `available_from <= valid_until` | `422 service_offer_dates_inconsistent` · **⚠️ Superseded por SPEC 104:** la regla se retira; las dos fechas ya no se comparan entre sí. Ver `specs/services/104-service-offer-dates-not-a-range.md` |
 | 8 | `duration` / `duration_unit` | los dos o ninguno; `duration` entero 1..9999; `duration_unit` ∈ `myapi_services_offer_duration_units()` | `422 service_offer_duration_incomplete` / `422 invalid_field` |
 | 9 | `includes`, `excludes` | string, ≤ 2000 caracteres; vacío tras `trim()` se guarda como ausente | `422 invalid_field` |
 | 10 | `warranty_days` | entero, 0..3650 | `422 invalid_field` |
@@ -172,7 +172,7 @@ Un `direct` cae por la condición 5 sin necesidad de una regla propia: no está 
 
 El corte de `valid_until` y `available_from` es **estrictamente futuro**, la misma decisión que SPEC 90 tomó para `desired_start`, y por el mismo motivo: todo se compara contra el reloj del servidor y el segundo exacto no es un caso que un cliente arme a propósito.
 
-La regla 7 compara `available_from <= valid_until` y no al revés: prometer disponibilidad para después de que la oferta caduque es la incoherencia; poder ir antes de que caduque no lo es.
+La regla 7 compara `available_from <= valid_until` y no al revés: prometer disponibilidad para después de que la oferta caduque es la incoherencia; poder ir antes de que caduque no lo es. **⚠️ Superseded por SPEC 104:** el razonamiento leía las dos fechas como un rango y no lo son —`valid_until` es un plazo sobre la **decisión** del residente y `available_from` una fecha sobre la **ejecución** del proveedor—, así que la regla se retira entera y las reglas 8..11 pasan a 7..10. Ver `specs/services/104-service-offer-dates-not-a-range.md`.
 
 ### Las tres escrituras, en este orden
 
@@ -198,7 +198,7 @@ El orden es el de SPEC 95: primero lo que el usuario pidió, después lo derivad
 | `service_offer_amount_required` | Indique el monto para este tipo de precio. | An amount is required for this price type. |
 | `service_offer_amount_not_allowed` | Una oferta a presupuestar en sitio no lleva monto. | An on-site quote carries no amount. |
 | `service_offer_tax_without_amount` | No puede indicar si el impuesto está incluido sin un monto. | Tax inclusion cannot be stated without an amount. |
-| `service_offer_dates_inconsistent` | La disponibilidad no puede ser posterior a la validez de la oferta. | Availability cannot be later than the offer's validity. |
+| `service_offer_dates_inconsistent` | La disponibilidad no puede ser posterior a la validez de la oferta. | Availability cannot be later than the offer's validity. **⚠️ Superseded por SPEC 104:** clave retirada del catálogo; ningún endpoint la responde ya. |
 | `service_offer_duration_incomplete` | Indique la duración y su unidad, o ninguna de las dos. | Provide both the duration and its unit, or neither. |
 
 Reutilizadas sin cambio: `missing_authorization`, `invalid_token`, `method_not_allowed`, `missing_field`, `invalid_field`, `provider_role_required`, `service_request_not_found`.
@@ -384,7 +384,7 @@ Once pasos. Los cuatro primeros no encienden nada: cierran la deuda de arquitect
 - [x] `tax_included`, `requires_visit` con `"true"`, `"1"` o `1` → `422 invalid_field`; con `true` o `false` → se acepta.
 - [x] `valid_until` o `available_from` con formato no parseable → `422 invalid_field`.
 - [x] Cualquiera de las dos en el pasado, o en el instante exacto de `REQUEST_TIME` → `422 invalid_field`.
-- [x] `available_from` posterior a `valid_until` → `422 service_offer_dates_inconsistent`.
+- [x] `available_from` posterior a `valid_until` → `422 service_offer_dates_inconsistent`. **⚠️ Superseded por SPEC 104:** ese cuerpo se **acepta**; el criterio vive ahora invertido en SPEC 104.
 - [x] `duration` sin `duration_unit`, o al revés → `422 service_offer_duration_incomplete`.
 - [x] `duration = 0` o negativa → `422 invalid_field`; `duration_unit` fuera del catálogo → `422 invalid_field`.
 - [x] `warranty_days` negativo → `422 invalid_field`; `warranty_days = 0` → se acepta.
