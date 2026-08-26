@@ -919,18 +919,10 @@ function myapi_service_offer_direct_quote_comment($provider_name) {
  * provider may be operated by several accounts, and the offer has to know which
  * of them sent it — the node's author — as well as which company it commits.
  *
- * AN OPTIONAL VALUE THAT IS NULL IS NOT WRITTEN AT ALL, rather than written as
- * an empty row. The two are different in the database and the serialiser reads
- * them the same way only by accident; leaving the field alone is what makes a
- * new offer that declared nothing indistinguishable from one stored before
- * myapi_update_7035(), which is exactly right.
- *
- * requires_visit IS THE EXCEPTION and is ALWAYS written, as 0 or 1. It has no
- * third state — the absence of "I need to visit" is "I do not" — so storing the
- * false is storing what the provider said.
- *
- * Only 'value' is written and never 'format', the rule every write path of this
- * module follows: the column is stored raw and escaped by whoever renders it.
+ * THE TWELVE VALUES OF THE BODY are not written here. They are written by
+ * myapi_service_offer_apply_values(), which SPEC 105 extracted so that the POST
+ * that creates an offer and the PUT that corrects it store them identically —
+ * including the rule that an optional value left out is not written at all.
  *
  * @param mixed $uid            The authenticated account's uid.
  * @param mixed $request_nid    The request this offer is made on.
@@ -951,35 +943,77 @@ function myapi_service_offer_build_node($uid, $request_nid, $provider_id, $provi
 
   $node->field_request[LANGUAGE_NONE][0]['target_id'] = (int) $request_nid;
   $node->field_provider[LANGUAGE_NONE][0]['target_id'] = (int) $provider_id;
-  $node->field_offer_message[LANGUAGE_NONE][0]['value'] = $values['message'];
   $node->field_offer_status[LANGUAGE_NONE][0]['value'] = MYAPI_SERVICES_OFFER_STATUS_SENT;
+
+  // The twelve values of the body, shared with the PUT of SPEC 105.
+  myapi_service_offer_apply_values($node, $values);
+
+  return $node;
+}
+
+/**
+ * Writes the twelve validated body values onto an offer node (SPEC 105).
+ *
+ * Extracted from myapi_service_offer_build_node() of SPEC 100, unchanged, so
+ * that the POST that creates an offer and the PUT that corrects it can never
+ * drift into storing the same twelve fields differently. Pure: it mutates the
+ * node it is handed and never saves it.
+ *
+ * AN OPTIONAL VALUE THAT IS NULL IS NOT WRITTEN AT ALL on a node that never
+ * had it, rather than written as an empty row. The two are different in the
+ * database and the serialiser reads them the same way only by accident;
+ * leaving the field alone is what makes a new offer that declared nothing
+ * indistinguishable from one stored before myapi_update_7035().
+ *
+ * ON A NODE THAT DOES HAVE IT, A NULL EMPTIES THE FIELD. That is the half the
+ * PUT of SPEC 105 needs and the half the POST never reaches: the PUT is a TOTAL
+ * REPLACEMENT, so an optional field the provider left out of the body is a
+ * field the provider deleted, and an offer that had 90 warranty days ends the
+ * request with none. A brand new node has no such property, so the branch never
+ * fires from build_node() and the extraction changed nothing.
+ *
+ * duration AND duration_unit TRAVEL TOGETHER, as rule 7 of the validator
+ * guarantees: the unit follows the duration, so both are written or both are
+ * emptied and the pair can never end up half stored.
+ *
+ * requires_visit IS THE EXCEPTION and is ALWAYS written, as 0 or 1. It has no
+ * third state — the absence of "I need to visit" is "I do not" — so storing the
+ * false is storing what the provider said.
+ *
+ * Only 'value' is written and never 'format', the rule every write path of this
+ * module follows: the column is stored raw and escaped by whoever renders it.
+ *
+ * @param object $node   The node to write on, new or loaded. Mutated in place.
+ * @param array $values  The 'values' of myapi_service_offer_validate_body().
+ *
+ * @return object  The same node, for the caller that prefers to chain.
+ */
+function myapi_service_offer_apply_values($node, array $values) {
+  // The two the body can never omit.
+  $node->field_offer_message[LANGUAGE_NONE][0]['value'] = $values['message'];
   $node->field_offer_amount_type[LANGUAGE_NONE][0]['value'] = $values['amount_type'];
 
-  // The eight optional ones: written only when the provider declared them.
-  if ($values['amount'] !== NULL) {
-    $node->field_offer_amount[LANGUAGE_NONE][0]['value'] = $values['amount'];
-  }
-  if ($values['tax_included'] !== NULL) {
-    $node->field_offer_tax_included[LANGUAGE_NONE][0]['value'] = $values['tax_included'] ? 1 : 0;
-  }
-  if ($values['valid_until'] !== NULL) {
-    $node->field_offer_valid_until[LANGUAGE_NONE][0]['value'] = $values['valid_until'];
-  }
-  if ($values['available_from'] !== NULL) {
-    $node->field_offer_available_from[LANGUAGE_NONE][0]['value'] = $values['available_from'];
-  }
-  if ($values['duration'] !== NULL) {
-    $node->field_offer_duration[LANGUAGE_NONE][0]['value'] = $values['duration'];
-    $node->field_offer_duration_unit[LANGUAGE_NONE][0]['value'] = $values['duration_unit'];
-  }
-  if ($values['includes'] !== NULL) {
-    $node->field_offer_includes[LANGUAGE_NONE][0]['value'] = $values['includes'];
-  }
-  if ($values['excludes'] !== NULL) {
-    $node->field_offer_excludes[LANGUAGE_NONE][0]['value'] = $values['excludes'];
-  }
-  if ($values['warranty_days'] !== NULL) {
-    $node->field_offer_warranty_days[LANGUAGE_NONE][0]['value'] = $values['warranty_days'];
+  // The eight optional ones: written when declared, emptied when absent.
+  $optional = [
+    'field_offer_amount'         => $values['amount'],
+    'field_offer_tax_included'   => $values['tax_included'] === NULL ? NULL : ($values['tax_included'] ? 1 : 0),
+    'field_offer_valid_until'    => $values['valid_until'],
+    'field_offer_available_from' => $values['available_from'],
+    'field_offer_duration'       => $values['duration'],
+    'field_offer_duration_unit'  => $values['duration'] === NULL ? NULL : $values['duration_unit'],
+    'field_offer_includes'       => $values['includes'],
+    'field_offer_excludes'       => $values['excludes'],
+    'field_offer_warranty_days'  => $values['warranty_days'],
+  ];
+
+  foreach ($optional as $field => $value) {
+    if ($value !== NULL) {
+      $node->{$field}[LANGUAGE_NONE][0]['value'] = $value;
+    }
+    elseif (property_exists($node, $field)) {
+      // The field existed and the body left it out: the provider deleted it.
+      $node->{$field} = [];
+    }
   }
 
   // Always written — see the docblock.
@@ -987,3 +1021,4 @@ function myapi_service_offer_build_node($uid, $request_nid, $provider_id, $provi
 
   return $node;
 }
+
