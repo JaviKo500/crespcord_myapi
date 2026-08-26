@@ -1061,6 +1061,128 @@ class ServiceOfferAcceptTest extends TestCase {
     );
   }
 
+  /* -------------------------------------------------------------------------
+   * Accepting the quote of a `direct` request (SPEC 107).
+   *
+   * A 'direct' is born with a provider and WITHOUT A PRICE — 'service_request'
+   * has no monetary field, so the price of that job can only live in
+   * field_offer_amount, on an offer. Until SPEC 107 the resident had no verb
+   * that closed that gap: the quote sat at 'sent' for ever and the agreement
+   * happened outside the module.
+   *
+   * IT IS THE SAME ENDPOINT AND THE SAME GATE. Not one line of
+   * myapi_service_offer_accept() or of myapi_service_offer_accept_gate()
+   * changed: the gate asks the graph, so adding the 'direct' -> 'assigned' edge
+   * to myapi_services_request_transitions() is the entire change. That is what
+   * "the graph is asked, not transcribed" buys.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * A resident accepts the quote on their own 'direct' request: 200, and the
+   * request moves to 'assigned' like any other award.
+   */
+  public function testTheQuoteOfADirectRequestCanBeAccepted() {
+    $this->seed([], ['frs.field_request_status_value' => MYAPI_SERVICES_REQUEST_STATUS_DIRECT]);
+    $this->authenticate();
+
+    $result = $this->dispatch();
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame('Oferta adjudicada correctamente.', $result['json']['message']);
+  }
+
+  /**
+   * AND IT WRITES THE SAME FOUR THINGS, in the same order. A 'direct' award is
+   * an award: the request moves, the timeline records it, the quote becomes
+   * 'selected' and any other live offer is rejected.
+   */
+  public function testAcceptingADirectQuoteWritesTheSameFourThings() {
+    $this->seed(
+      [],
+      ['frs.field_request_status_value' => MYAPI_SERVICES_REQUEST_STATUS_DIRECT],
+      ['offers' => [902 => 'sent']]
+    );
+    $this->authenticate();
+
+    $result = $this->dispatch();
+    $saves = $this->saves();
+
+    $this->assertSame(
+      MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED,
+      $saves[self::REQUEST_NID]->field_request_status[LANGUAGE_NONE][0]['value']
+    );
+    $this->assertSame(self::OFFER_NID, $saves[self::REQUEST_NID]->field_assigned_offer[LANGUAGE_NONE][0]['target_id']);
+    $this->assertSame('selected', $saves[self::OFFER_NID]->field_offer_status[LANGUAGE_NONE][0]['value']);
+    $this->assertSame('rejected', $saves[902]->field_offer_status[LANGUAGE_NONE][0]['value']);
+    $this->assertSame(1, $result['json']['data']['offers_rejected']);
+
+    // The timeline entry says 'assigned' — on a 'direct' the status DOES move
+    // now, unlike the entry SPEC 101 writes when the quote arrives, which
+    // repeats 'direct'.
+    $transaction = myapi_test_node_saves()[1];
+    $this->assertSame(MYAPI_SERVICES_TRANSACTION_TYPE, $transaction->type);
+    $this->assertSame(
+      MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED,
+      $transaction->field_request_status[LANGUAGE_NONE][0]['value']
+    );
+  }
+
+  /**
+   * field_assigned_offer WAS EMPTY UNTIL THIS CALL, and that is the hole SPEC
+   * 107 fills. A 'direct' is born with field_assigned_provider written by
+   * myapi_service_request_build_node() and field_assigned_offer empty; quoting
+   * does not fill it (SPEC 101), and before this endpoint nothing ever did.
+   */
+  public function testAcceptingIsWhatFinallyFillsTheAssignedOfferOfADirect() {
+    $this->seed([], ['frs.field_request_status_value' => MYAPI_SERVICES_REQUEST_STATUS_DIRECT]);
+    $this->authenticate();
+
+    $this->dispatch();
+    $request = $this->saves()[self::REQUEST_NID];
+
+    $this->assertSame(self::OFFER_NID, $request->field_assigned_offer[LANGUAGE_NONE][0]['target_id']);
+    $this->assertSame(self::PROVIDER_NID, $request->field_assigned_provider[LANGUAGE_NONE][0]['target_id']);
+  }
+
+  /**
+   * RECEIVING A QUOTE ASSIGNS NOTHING BY ITSELF, and that is the decision this
+   * spec turned down. A 'direct' with an offer sitting on it is still 'direct',
+   * so the resident who has not accepted anything is committed to no amount —
+   * and the provider keeps their way back, because editing and withdrawing both
+   * require the offer to be 'sent'.
+   *
+   * The proof is structural and it is the strongest available: the ONE function
+   * that writes field_assigned_offer is the award, and the create endpoint does
+   * not touch the field at all.
+   */
+  public function testQuotingADirectAssignsNothing() {
+    $create = $this->functionSource('myapi_service_offer_create');
+
+    $this->assertStringNotContainsString('field_assigned_offer', $create);
+    $this->assertStringNotContainsString('field_assigned_provider', $create);
+    $this->assertStringNotContainsString(
+      MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED,
+      $create,
+      'creating an offer never moves a request to assigned'
+    );
+  }
+
+  /**
+   * One function of the offers' resource, comments stripped and bounded at the
+   * next one.
+   */
+  private function functionSource($name) {
+    $code = file_get_contents(__DIR__ . '/../../resources/service_offer.resource.inc');
+    $code = preg_replace(['#/\*.*?\*/#s', '#//[^\n]*#'], '', $code);
+
+    $start = strpos($code, 'function ' . $name . '(');
+    $this->assertNotFalse($start, $name . '() exists');
+
+    $end = strpos($code, "\nfunction ", $start + 1);
+
+    return $end === FALSE ? substr($code, $start) : substr($code, $start, $end - $start);
+  }
+
   /**
    * NOT IDEMPOTENT, ON PURPOSE (decision 11). A second PUT on the offer that
    * was just awarded answers 409 service_offer_not_acceptable — it says
@@ -1198,19 +1320,23 @@ class ServiceOfferAcceptTest extends TestCase {
   }
 
   /**
-   * CONDITION 7 — THE GRAPH ANSWERS, AND ONLY 'offered' LEADS TO 'assigned'.
-   * The list below is not this gate's: it is myapi_services_request_transitions()
-   * read from the outside, which is the point of asking instead of transcribing.
+   * CONDITION 7 — THE GRAPH ANSWERS, AND 'offered' AND 'direct' ARE THE TWO
+   * STATUSES THAT LEAD TO 'assigned'. The lists below are not this gate's: they
+   * are myapi_services_request_transitions() read from the outside, which is the
+   * point of asking instead of transcribing — and it is why SPEC 107 could add
+   * the 'direct' case without touching one line of this function.
    *
    * 'open' IS IN THE FAILING LIST ON PURPOSE. A request with offers still
-   * sitting in 'open' — the hole SPEC 100 left, since nothing syncs
-   * 'open' -> 'offered' from the back office — cannot be awarded from the app,
-   * and SPEC 106 does not invent that edge (decision 3).
+   * sitting in 'open' — an offer created from the BACK OFFICE, which does not
+   * go through the endpoint that syncs 'open' -> 'offered' — cannot be awarded
+   * from the app, and neither spec invents that edge.
    */
-  public function testOnlyAnOfferedRequestIsAssignable() {
-    $this->assertNull($this->gate(NULL, $this->request(['status' => 'offered'])));
+  public function testOnlyAnOfferedOrDirectRequestIsAssignable() {
+    foreach (['offered', 'direct'] as $status) {
+      $this->assertNull($this->gate(NULL, $this->request(['status' => $status])), $status);
+    }
 
-    foreach (['open', 'direct', 'assigned', 'closed', 'cancelled'] as $status) {
+    foreach (['open', 'assigned', 'closed', 'cancelled'] as $status) {
       $this->assertSame(
         self::NOT_ASSIGNABLE,
         $this->gate(NULL, $this->request(['status' => $status])),

@@ -391,7 +391,6 @@ class ServicesInstallTest extends TestCase {
       'cancelled into direct'     => ['cancelled', 'direct'],
       'direct back to open'       => ['direct', 'open'],
       'direct into the round'     => ['direct', 'offered'],
-      'direct into assigned'      => ['direct', 'assigned'],
       'direct to direct'          => ['direct', 'direct'],
       // An unknown status answers FALSE instead of throwing: a hand-written
       // value in the field must be refused, not crash the caller.
@@ -1267,15 +1266,21 @@ class ServicesInstallTest extends TestCase {
   }
 
   /**
-   * 'direct' is a root of the graph: it has an entry of its own, its two exits
-   * are the terminals, and NO status lists it as a destination. The closure test
-   * above would not catch this — a status nothing reaches is well-formed — and
-   * the product decision is exactly that unreachability.
+   * 'direct' is a root of the graph: it has an entry of its own and NO status
+   * lists it as a destination. The closure test above would not catch this — a
+   * status nothing reaches is well-formed — and the product decision is exactly
+   * that unreachability.
+   *
+   * THE WAY IN IS WHAT MAKES IT A ROOT, AND SPEC 107 DID NOT TOUCH IT. What
+   * that spec added is a third way OUT: 'direct' → 'assigned', the resident
+   * accepting the quote of the provider they already chose. A 'direct' is born
+   * with a provider but without a price, and until then it had no verb that
+   * closed that gap.
    */
   public function testTheDirectStatusIsARootOfTheGraph() {
     $transitions = myapi_services_request_transitions();
 
-    $this->assertSame(['closed', 'cancelled'], $transitions['direct']);
+    $this->assertSame(['assigned', 'closed', 'cancelled'], $transitions['direct']);
 
     foreach ($transitions as $from => $targets) {
       $this->assertNotContains(
@@ -1284,6 +1289,16 @@ class ServicesInstallTest extends TestCase {
         $from . ' must not lead into direct: a request is born direct or it is not direct'
       );
     }
+  }
+
+  /**
+   * 'direct' → 'assigned' IS AN EDGE OF THE GRAPH AND NOT A BRANCH IN AN
+   * ENDPOINT (SPEC 107). The award's gate asks the graph and transcribes
+   * nothing, so this one line is the whole of what made a 'direct' awardable —
+   * which is also why the change could not be made anywhere else.
+   */
+  public function testADirectRequestCanBeAwarded() {
+    $this->assertTrue(myapi_services_transition_allowed('direct', 'assigned'));
   }
 
   /**

@@ -277,13 +277,16 @@ function myapi_services_star_values() {
  *   open ──(first offer)──> offered ──(award)──> assigned
  *                              │                    │
  *                              └────> closed <──────┘
- *                                       ▲
- *   direct ─────────────────────────────┘
+ *                                       ▲    ▲
+ *   direct ───(accept the quote)────────┼────┘
+ *      └──────────────────────────────> assigned
  *
  *   open | direct | offered | assigned ──> cancelled
  *
  * - open → offered      automatic, on the first offer.
  * - offered → assigned  the resident picks an offer.
+ * - direct → assigned   the resident accepts the quote of the provider they
+ *                       already chose (SPEC 107). See below.
  * - offered → closed    closing with no award, allowed by the contract (7.2.4).
  * - assigned → closed   closing after the job; needs a rating (see below).
  * - direct → closed     closing a direct job; needs a rating too (see below).
@@ -293,12 +296,34 @@ function myapi_services_star_values() {
  * nothing reopens a request. That is a decision, not an omission — reopening
  * would need its own rules about the offers and the chat of the closed round.
  *
- * 'direct' is a ROOT: no status leads to it. A request either is born with a
- * provider already chosen or it goes through the bidding round, and the two
- * paths never cross — 'open' → 'direct' would leave the offers already
+ * 'direct' is still a ROOT: no status leads to it. A request either is born
+ * with a provider already chosen or it goes through the bidding round, and the
+ * two paths never cross — 'open' → 'direct' would leave the offers already
  * received with nothing to resolve them, and 'assigned' → 'direct' would
- * contradict the offer the resident already awarded. The two ways in and out
- * of it live in the same graph so nothing has to restate them.
+ * contradict the offer the resident already awarded. What SPEC 107 changed is
+ * the way OUT, not the way in.
+ *
+ * WHY 'direct' → 'assigned' EXISTS SINCE SPEC 107, when SPEC 87 gave 'direct'
+ * only the two terminal exits. A 'direct' is born with a provider but WITHOUT
+ * A PRICE: 'service_request' has no monetary field, so the only place the price
+ * of that job can live is field_offer_amount, on an offer (SPEC 101). That left
+ * a request permanently half-agreed — provider settled, amount not — and the
+ * resident with no verb to close the gap: the quote sat at 'sent' for ever and
+ * the agreement happened outside the module.
+ *
+ * This edge is that verb, and it is the RESIDENT'S ACT and never automatic.
+ * Receiving a quote does not assign anything: the provider bidding on a
+ * 'direct' still leaves the request in 'direct' with field_assigned_offer
+ * empty, exactly as SPEC 101 left it. What moves the request is the resident
+ * calling PUT /api/v1/service-offers/{id}/accept — the same endpoint, the same
+ * gate and the same four writes as an award off the bidding round, because
+ * accepting a price IS awarding: it is the moment the job is committed to.
+ *
+ * DISCARDED: assigning automatically when a 'direct' receives an offer. It
+ * would commit the resident to an amount they never accepted, and it would take
+ * the provider's way back — editing and withdrawing both require the offer to
+ * be 'sent' (SPEC 105), so a wrong zero would be frozen in place, which is the
+ * exact damage SPEC 105 was written to repair.
  *
  * SPEC 77 does not enforce any of this: no endpoint and no form validation
  * reads this catalogue yet. It is written here now so the flow spec has one
@@ -314,6 +339,9 @@ function myapi_services_request_transitions() {
       MYAPI_SERVICES_REQUEST_STATUS_CANCELLED,
     ],
     MYAPI_SERVICES_REQUEST_STATUS_DIRECT => [
+      // SPEC 107: the resident accepts the quote of the provider they already
+      // chose. See the docblock — it is their act, never automatic.
+      MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED,
       MYAPI_SERVICES_REQUEST_STATUS_CLOSED,
       MYAPI_SERVICES_REQUEST_STATUS_CANCELLED,
     ],

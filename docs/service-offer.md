@@ -410,16 +410,24 @@ the rule that makes a rating compulsory answers *yes* for `assigned` and
 real company left unrated. And `offered` means *not awarded*, which would
 contradict the `field_assigned_provider` the request carries.
 
-A `direct` moved to `assigned` would record as **agreed** a price the resident
-never accepted, with no way back — `assigned` only leads to `closed` or
-`cancelled`.
+A `direct` moved to `assigned` **by the mere arrival of your quote** would
+record as *agreed* a price the resident never accepted — and it would take away
+your own way back, because editing and withdrawing both require the offer to be
+`sent`. A wrong zero would be frozen in place.
 
 Standing still is the only option that breaks nothing. So after your quote:
 
 - the request is still `direct`, with its `changed` untouched;
 - closing it **still requires rating you**;
 - `field_assigned_offer` is still empty — quoting is not awarding;
-- your offer is `sent`, and **nothing in this module moves it from there yet**.
+- your offer is `sent`, and **you can still correct it or take it back**.
+
+> **What moves it is the resident, and only the resident.** Since SPEC 107 they
+> can accept your quote with
+> [`PUT /api/v1/service-offers/{id}/accept`](#put-apiv1service-offersidaccept),
+> which takes the request to `assigned` and your offer to `selected`. That is
+> the moment the price is agreed — an act, not a side effect. Until they do it,
+> everything above holds.
 
 ### What the resident sees
 
@@ -443,8 +451,12 @@ Standing still is the only option that breaks nothing. So after your quote:
 
 ### What is still missing on a `direct`
 
-- **The resident cannot accept or reject the quote.** The offer stays `sent` for
-  ever. What is left to agree is the *amount*, and that is discussed in the chat.
+- ~~**The resident cannot accept or reject the quote.**~~ **✅ Resuelto por
+  SPEC 107** for accepting: the resident awards the quote with
+  [`PUT /api/v1/service-offers/{id}/accept`](#put-apiv1service-offersidaccept),
+  which is what finally moves a `direct` to `assigned` and fills
+  `field_assigned_offer`. **Rejecting one specific quote is still not here** —
+  the resident's exits are accepting it or cancelling the request.
 - **The chat is still closed.** Its three fields have been empty since SPEC 77.
   What changed is that the row they would hang off **now exists** — before this,
   a `direct` had no offer and therefore no possible thread.
@@ -1301,7 +1313,7 @@ The first one that fails answers.
 | 4 | Its request exists and is servable | `404 not_found` |
 | 5 | The reader **is** the request's `field_requester` | `403 service_request_forbidden` |
 | 6 | The offer is still `sent` | `409 service_offer_not_acceptable` |
-| 7 | Its request can go to `assigned` (only from `offered`) | `409 service_request_not_assignable` |
+| 7 | Its request can go to `assigned` (from `offered`, or from `direct` since SPEC 107) | `409 service_request_not_assignable` |
 | 8 | `valid_until` is absent, or has not passed | `409 service_offer_expired` |
 | 9 | The offer's provider may still operate | `403 service_offer_provider_not_active` |
 
@@ -1311,11 +1323,20 @@ The first one that fails answers.
 > one person, and the household does not inherit the right to award it. **A
 > provider never awards, not even their own offer.**
 
+> **A `direct` request IS awardable, since SPEC 107.** It is born with a
+> provider but **without a price** — `service_request` has no monetary field, so
+> the amount can only live on an offer — and this endpoint is the verb that
+> closes that gap: the resident accepts the quote of the company they already
+> chose. It writes exactly the same four things as an award off the bidding
+> round. **Receiving the quote assigns nothing by itself**; only the resident's
+> call does.
+
 > **A request sitting in `open` cannot be awarded.** The graph has no
-> `open → assigned` edge, and nothing yet syncs `open → offered` when an offer
-> is created from the back office. So a request in `open` **with offers hanging
-> off it** answers `409 service_request_not_assignable`, and the resident cannot
-> award it from the app. Known, and the spec that closes it is another one.
+> `open → assigned` edge, and an offer created **from the back office** does not
+> go through the endpoint that syncs `open → offered`. So a request left in
+> `open` **with offers hanging off it** answers
+> `409 service_request_not_assignable`. Known, and the spec that closes it is
+> another one.
 
 > **`valid_until` absent means the quote does not expire.** It is optional and
 > most offers do not carry one. The comparison is `>=`: an offer is good
@@ -1451,7 +1472,7 @@ key of it, so the app can swap the object in with no special case.
 | 404 | `not_found` | The request cannot be resolved — its category term was deleted. **Nothing is written.** |
 | 403 | `service_request_forbidden` | The reader is not the request's `field_requester`. The provider who owns the offer lands here too. |
 | 409 | `service_offer_not_acceptable` | The offer is `selected`, `rejected` or `withdrawn`. |
-| 409 | `service_request_not_assignable` | The request is `open`, `direct`, `assigned`, `closed`, `cancelled`, or its status is empty or unknown. |
+| 409 | `service_request_not_assignable` | The request is `open`, `assigned`, `closed`, `cancelled`, or its status is empty or unknown. |
 | 409 | `service_offer_expired` | The offer's `valid_until` has passed. |
 | 403 | `service_offer_provider_not_active` | The offer's provider is unpublished or its licence has expired. |
 
@@ -1482,9 +1503,9 @@ Written down so it is not looked for in this document:
   it rejected and to the timeline entry it already wrote, and that is a spec of
   its own. There is also no record of *which* offers a given award rejected —
   `offers_rejected` is a counter and it leaves with the response.
-- **The resident accepting the quote on a `direct`.** Awarding needs the
-  `offered → assigned` edge, and a `direct` request does not have it: it awards
-  at birth and has no offers to accept.
+- **A resident rejecting ONE quote on a `direct`** without cancelling the whole
+  request. Accepting is here since SPEC 107; refusing a single quote and asking
+  for another is not, and their only exit is still cancelling.
 - **Anything expiring an offer.** `valid_until` is *read* by the award, but no
   sweep changes the status of a lapsed offer — it keeps saying `sent` in all
   three places it travels.

@@ -1085,7 +1085,7 @@ rejected for its provider never leaves an orphaned upload behind.
 |-------|---|---|
 | `status` | `open` | `direct` |
 | `assigned_provider` | `null` | `{ id, name }` |
-| `assigned_offer` | `null` | `null` — a direct award never adjudicates an offer |
+| `assigned_offer` | `null` | `null` **at birth** — a `direct` is awarded to a company, not to an offer, and it has none yet. It stays `null` while the provider quotes, and is filled only if the resident later accepts that quote ([`PUT /api/v1/service-offers/{id}/accept`](service-offer.md), SPEC 107), which also moves the request to `assigned`. |
 | `closed_at` | `null` | `null` |
 
 **Images (`images[]`) and attachment (`attachment`)**
