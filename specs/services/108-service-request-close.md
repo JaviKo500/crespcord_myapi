@@ -1,6 +1,6 @@
 # 108 — Cerrar una solicitud de servicio y calificar al proveedor (`PUT /api/v1/service-requests/{id}/close`)
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-08-28
 - **Dependencias:**
   - `77-services-content-types-install` (Implemented) — dueña de **todo lo que
@@ -630,49 +630,59 @@ Ningún test existente se toca.
 
 **Puros (PHPUnit, sin sitio arrancado):**
 
-- [ ] Los dos ficheros de test nuevos pasan, y las suites de SPEC 95, 100, 103,
+- [x] Los dos ficheros de test nuevos pasan, y las suites de SPEC 95, 100, 103,
       105 y 106 siguen pasando sin una expectativa tocada.
+      *`ServiceRequestCloseTest` (24) y `ServiceRatingAggregatesTest` (25) en
+      verde; suite completa `OK (2520 tests, 11749 assertions)`. Las cinco
+      suites citadas pasan intactas.*
+      **Salvedad al «ningún test existente se toca»:**
+      `ServiceRequestDetailEndpointTest::testNoReadPathCallsNodeLoad()` —de
+      SPEC 89, no de las cinco de arriba— prohíbe `node_load()` en todo
+      `service_request.resource.inc` salvo una lista blanca, y el paso 3 de la
+      compuerta de este spec exige justamente un `node_load()`. Se añadió
+      `myapi_service_request_close` a esa lista, que es la misma decisión que
+      el propio test ya registra para `cancel` y para `update`.
 
 **Sitio arrancado (HTTP + back office):**
 
-- [ ] `PUT /service-requests/{id}/close` con `{stars: 5}` sobre una `assigned`
+- [x] `PUT /service-requests/{id}/close` con `{stars: 5}` sobre una `assigned`
       propia → `200`, `status: closed`, `closed_at` con el instante,
       `rating_id` con un nid.
-- [ ] Ese nodo `service_rating` existe, publicado, con `field_rating_provider`
+- [x] Ese nodo `service_rating` existe, publicado, con `field_rating_provider`
       = el proveedor adjudicado, `field_rating_offer` = la oferta adjudicada,
       `field_stars` = 5, `field_unit` = la vivienda de la solicitud, y **título
       puesto**.
-- [ ] El nodo `provider` de ese proveedor pasa a `field_rating_count = 1` y
+- [x] El nodo `provider` de ese proveedor pasa a `field_rating_count = 1` y
       `field_rating_avg = 5.00`, y `GET /api/v1/providers` lo refleja.
-- [ ] Una segunda calificación de 4 estrellas al mismo proveedor deja
+- [x] Una segunda calificación de 4 estrellas al mismo proveedor deja
       `count = 2` y `avg = 4.50`.
-- [ ] Editar esa segunda calificación a 2 estrellas desde `node/%nid/edit` deja
+- [x] Editar esa segunda calificación a 2 estrellas desde `node/%nid/edit` deja
       `avg = 3.50` **sin tocar nada más**.
-- [ ] **Borrarla** desde `node/%nid/delete` deja `count = 1` y `avg = 5.00`
+- [x] **Borrarla** desde `node/%nid/delete` deja `count = 1` y `avg = 5.00`
       —la moderación de SPEC 77— y no un `count = 2` con el promedio viejo.
-- [ ] `GET /api/v1/providers/{id}` de ese proveedor **cobra vida sin haber
+- [x] `GET /api/v1/providers/{id}` de ese proveedor **cobra vida sin haber
       tocado una línea de su código**: `ratings` trae los items reales con
       autor, comentario y **`unit` no nulo**, y `rating_summary` deja de ser
       cinco ceros. La suma de sus cinco valores es igual a `rating_count`.
-- [ ] Cerrar una `direct` propia con `{stars: 3}` → `200`; el
+- [x] Cerrar una `direct` propia con `{stars: 3}` → `200`; el
       `service_rating` tiene `field_rating_provider` y **`field_rating_offer`
       vacío**.
-- [ ] Cerrar una `offered` propia con `close_reason` → `200`, `rating_id: null`,
+- [x] Cerrar una `offered` propia con `close_reason` → `200`, `rating_id: null`,
       y **no** se crea ningún `service_rating`.
-- [ ] Cerrar una `offered` **sin** `close_reason` → `422 missing_field` y nada
+- [x] Cerrar una `offered` **sin** `close_reason` → `422 missing_field` y nada
       escrito.
-- [ ] Cerrar una `assigned` **sin** `stars` → `422 missing_field`, la solicitud
+- [x] Cerrar una `assigned` **sin** `stars` → `422 missing_field`, la solicitud
       sigue en `assigned` y no hay calificación.
-- [ ] Cerrar una `open` → `409 service_request_not_closable`.
-- [ ] Cerrar dos veces → la segunda `409 service_request_not_closable`, sin
+- [x] Cerrar una `open` → `409 service_request_not_closable`.
+- [x] Cerrar dos veces → la segunda `409 service_request_not_closable`, sin
       segunda calificación y sin segunda entrada de timeline.
-- [ ] Cerrar la solicitud de otro → `403 service_request_forbidden`, también
+- [x] Cerrar la solicitud de otro → `403 service_request_forbidden`, también
       siendo el proveedor adjudicado.
-- [ ] `POST`, `GET` y `DELETE` sobre la ruta → `405 method_not_allowed`.
-- [ ] En los tres cierres, el timeline del detalle trae **una** entrada nueva
+- [x] `POST`, `GET` y `DELETE` sobre la ruta → `405 method_not_allowed`.
+- [x] En los tres cierres, el timeline del detalle trae **una** entrada nueva
       con `status: closed`, su texto y su fecha, y la solicitud **no** se
       guardó dos veces (el sync de SPEC 94 no reescribe).
-- [ ] `/service-requests/7/cancel`, `/service-requests/provider` y
+- [x] `/service-requests/7/cancel`, `/service-requests/provider` y
       `/service-requests/provider/41` siguen resolviendo lo suyo tras el
       `drush cc all`.
 
