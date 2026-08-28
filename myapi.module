@@ -1122,6 +1122,15 @@ function myapi_mail($key, &$message, $params) {
  *   transaction can ever be born titleless — not even in an intermediate
  *   commit. It reads the request, its status, the status date and the comment;
  *   it writes nothing but $node->title.
+ * - 'service_rating' (SPEC 108): delegates to
+ *   myapi_service_rating_set_title() (includes/myapi.service_rating.inc), the
+ *   same job the two branches above do for the transaction bundles, and for
+ *   the same two reasons. 'service_rating' was the last bundle of the services
+ *   series with no title generator. It covers the close endpoint,
+ *   node/add/service_rating and node/%nid/edit at once, so no rating can be
+ *   born titleless. It reads the rated provider, the stars and node.created,
+ *   loads the provider to resolve its name, and writes nothing but
+ *   $node->title.
  */
 function myapi_node_presave($node) {
   if ($node->type === 'pagos') {
@@ -1138,6 +1147,10 @@ function myapi_node_presave($node) {
   if ($node->type === 'service_transaction') {
     module_load_include('inc', 'myapi', 'includes/myapi.service_transaction');
     myapi_service_transaction_set_title($node);
+  }
+  if ($node->type === 'service_rating') {
+    module_load_include('inc', 'myapi', 'includes/myapi.service_rating');
+    myapi_service_rating_set_title($node);
   }
 }
 
@@ -1183,6 +1196,18 @@ function myapi_node_presave($node) {
  *   re-save it does perform on a real status change is an UPDATE of a
  *   'service_request', which myapi_node_update() has no branch for. Whoever
  *   adds one must keep that property, or the cascade becomes infinite.
+ * - 'service_rating' (SPEC 108): delegates to
+ *   myapi_service_rating_sync_provider() (includes/myapi.service_rating.inc),
+ *   which recalculates field_rating_avg and field_rating_count on the rated
+ *   'provider' node. Hung off the hook and not off the close endpoint for the
+ *   reason SPEC 92 and SPEC 94 already recorded: one implementation covers the
+ *   app and node/add/service_rating at once, and hanging it off the endpoint
+ *   would leave every rating an operator writes by hand uncounted — the very
+ *   hole SPEC 108 exists to close. The provider nid is resolved here and passed
+ *   in, the same shape the 'pagos' branch above reads a field to decide with.
+ *   It cannot cascade: what the sync saves is a 'provider' node, and no branch
+ *   of any node hook reacts to that bundle. Whoever adds one has to keep that
+ *   property.
  * - 'claim_transaction': delegates to
  *   myapi_claim_transaction_sync_claim_status() (SPEC 57, same include),
  *   which syncs the parent claim's field_status when it differs. Covers
@@ -1224,6 +1249,12 @@ function myapi_node_insert($node) {
   if ($node->type === 'service_transaction') {
     module_load_include('inc', 'myapi', 'includes/myapi.service_transaction_admin');
     myapi_service_transaction_sync_request_status($node);
+    return;
+  }
+  if ($node->type === 'service_rating') {
+    module_load_include('inc', 'myapi', 'includes/myapi.service_rating');
+    module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+    myapi_service_rating_sync_provider(myapi_building_admin_field_target_id($node, 'field_rating_provider'));
     return;
   }
   if ($node->type === 'claim_transaction') {
@@ -1277,6 +1308,13 @@ function myapi_node_insert($node) {
  *   existing transaction's field_request_status from the native
  *   node/%nid/edit syncs the request exactly like creating one does. There is
  *   no notifier to skip here: the marketplace has none yet.
+ * - 'service_rating' (SPEC 108): delegates to
+ *   myapi_service_rating_sync_provider() (includes/myapi.service_rating.inc) —
+ *   the same function myapi_node_insert()'s 'service_rating' branch calls, so
+ *   an operator who edits the stars of an existing rating from the native
+ *   node/%nid/edit resynchronises the provider's two counters exactly like
+ *   creating one does. No $exclude_nid here: the rating being edited is a row
+ *   that stays, and it must go on counting.
  * - 'reclamo' (SPEC 68): delegates to myapi_claim_is_publication_transition() /
  *   myapi_claim_notify_published() in includes/myapi.claim_notification.inc,
  *   notifying the neighbours of the condominium — requester excluded — the one
@@ -1323,11 +1361,57 @@ function myapi_node_update($node) {
     myapi_service_transaction_sync_request_status($node);
     return;
   }
+  if ($node->type === 'service_rating') {
+    module_load_include('inc', 'myapi', 'includes/myapi.service_rating');
+    module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+    myapi_service_rating_sync_provider(myapi_building_admin_field_target_id($node, 'field_rating_provider'));
+    return;
+  }
   if ($node->type === 'reclamo') {
     module_load_include('inc', 'myapi', 'includes/myapi.claim_notification');
     if (myapi_claim_is_publication_transition($node)) {
       myapi_claim_notify_published($node);
     }
+    return;
+  }
+}
+
+/**
+ * Implements hook_node_delete().
+ *
+ * Glue only, and NEW IN SPEC 108 — this module had never implemented the hook.
+ * One branch:
+ * - 'service_rating': delegates to myapi_service_rating_sync_provider()
+ *   (includes/myapi.service_rating.inc), the same function the 'service_rating'
+ *   branches of myapi_node_insert() and myapi_node_update() call, so moderating
+ *   a rating leaves the provider's two counters right.
+ *
+ * WHY DELETING IS NOT OPTIONAL HERE. SPEC 77 decided that moderating a rating
+ * means DELETING the node and not unpublishing it, which is why neither
+ * SPEC 84's two queries nor SPEC 108's aggregate carries an n.status filter.
+ * With no branch here, every act of moderation would leave the reputation
+ * stale — a count that still includes a rating nobody can read.
+ *
+ * THE SECOND ARGUMENT IS THE POINT. hook_node_delete() runs in Drupal 7 BEFORE
+ * field_attach_delete() and before the {node} row goes away, so at this instant
+ * the dying rating is still in every table the aggregate reads: recalculating
+ * without excluding it would return exactly the numbers that stood before the
+ * deletion. Drupal 7 offers no later hook to lean on, hence $node->nid travels
+ * as $exclude_nid. The insert and update branches pass nothing, because there
+ * the row stays and must go on counting.
+ *
+ * The type is compared against the literal, like every branch of the three
+ * hooks above: this hook fires for EVERY bundle of the site, and the cost for
+ * a node that is not a 'service_rating' is one string comparison.
+ */
+function myapi_node_delete($node) {
+  if ($node->type === 'service_rating') {
+    module_load_include('inc', 'myapi', 'includes/myapi.service_rating');
+    module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+    myapi_service_rating_sync_provider(
+      myapi_building_admin_field_target_id($node, 'field_rating_provider'),
+      $node->nid
+    );
     return;
   }
 }
