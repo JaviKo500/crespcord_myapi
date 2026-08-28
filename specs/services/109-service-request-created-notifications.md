@@ -1,6 +1,6 @@
 # 109 — Notificaciones al crear una solicitud de servicio
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-08-28
 - **Dependencias:**
   - `90-service-request-create` (Implemented) — dueña de `myapi_service_request_create()` en `resources/service_request.resource.inc`, el punto exacto donde se engancha el disparo. Su alcance dejó las notificaciones explícitamente fuera; este spec cierra esa deuda.
@@ -253,48 +253,48 @@ Los nombres (categoría, condominio, vivienda, proveedor, residente) sí se resu
 ## Criterios de aceptación
 
 **Solicitud abierta**
-- [ ] Crear una solicitud `open` vía `POST /api/v1/service-requests` genera una tanda de filas en `myapi_notifications` **por cada proveedor activo de la categoría**, con `uid` de cada cuenta de `field_provider_users` de ese proveedor.
-- [ ] Cada fila lleva `source_type = "service_request"`, `source_nid` = nid, `type = "service_request_open"`, `deep_link_target = "service_request_provider"`, `deep_link_id` = nid, `condominium_id` = `field_condominium`, `unit_id = NULL` y `provider_id` = el nid de **ese** proveedor.
-- [ ] `title = "Nueva solicitud de servicio"` y `body` con las cuatro líneas: asunto, `Categoría:`, `Condominio:`, `Inicio:` en `d/m/Y H:i`.
-- [ ] Se encola un ítem en `myapi_onesignal_push` por tanda, cuyo `data` lleva `"audience": "provider"` y `"provider"` con el nid del proveedor.
-- [ ] Se encola un ítem en `myapi_mail_send` por cuenta, clave `service_request_provider`, con asunto `Nueva solicitud de servicio — {asunto}`.
-- [ ] Un proveedor **despublicado** o con `field_license_expiry` vencida no recibe nada por ninguno de los tres canales.
-- [ ] Una cuenta bloqueada (`users.status = 0`) de un proveedor activo no recibe nada.
-- [ ] Una cuenta que opera dos proveedores activos de la categoría recibe **dos** filas y **dos** pushes, con `provider_id` distinto en cada uno.
-- [ ] Una categoría sin ningún proveedor activo no crea filas ni encola nada, y el `201` sale igual.
+- [x] Crear una solicitud `open` vía `POST /api/v1/service-requests` genera una tanda de filas en `myapi_notifications` **por cada proveedor activo de la categoría**, con `uid` de cada cuenta de `field_provider_users` de ese proveedor.
+- [x] Cada fila lleva `source_type = "service_request"`, `source_nid` = nid, `type = "service_request_open"`, `deep_link_target = "service_request_provider"`, `deep_link_id` = nid, `condominium_id` = `field_condominium`, `unit_id = NULL` y `provider_id` = el nid de **ese** proveedor.
+- [x] `title = "Nueva solicitud de servicio"` y `body` con las cuatro líneas: asunto, `Categoría:`, `Condominio:`, `Inicio:` en `d/m/Y H:i`.
+- [x] Se encola un ítem en `myapi_onesignal_push` por tanda, cuyo `data` lleva `"audience": "provider"` y `"provider"` con el nid del proveedor.
+- [x] Se encola un ítem en `myapi_mail_send` por cuenta, clave `service_request_provider`, con asunto `Nueva solicitud de servicio — {asunto}`.
+- [x] Un proveedor **despublicado** o con `field_license_expiry` vencida no recibe nada por ninguno de los tres canales.
+- [x] Una cuenta bloqueada (`users.status = 0`) de un proveedor activo no recibe nada.
+- [x] Una cuenta que opera dos proveedores activos de la categoría recibe **dos** filas y **dos** pushes, con `provider_id` distinto en cada uno.
+- [x] Una categoría sin ningún proveedor activo no crea filas ni encola nada, y el `201` sale igual.
 
 **Solicitud directa**
-- [ ] Crear una solicitud con `assigned_provider_id` válido notifica **solo** a las cuentas del proveedor adjudicado.
-- [ ] Sus filas llevan `type = "service_request_direct"` y `title = "Nueva solicitud directa para ti"`; el resto de columnas igual que en la abierta, con `provider_id` = el proveedor adjudicado.
-- [ ] Ningún otro proveedor de la categoría recibe fila, push ni email.
-- [ ] El email al proveedor lleva asunto `Nueva solicitud directa — {asunto}`.
+- [x] Crear una solicitud con `assigned_provider_id` válido notifica **solo** a las cuentas del proveedor adjudicado.
+- [x] Sus filas llevan `type = "service_request_direct"` y `title = "Nueva solicitud directa para ti"`; el resto de columnas igual que en la abierta, con `provider_id` = el proveedor adjudicado.
+- [x] Ningún otro proveedor de la categoría recibe fila, push ni email.
+- [x] El email al proveedor lleva asunto `Nueva solicitud directa — {asunto}`.
 
 **Contenido para el proveedor**
-- [ ] Ni el `body` del push, ni la fila de bandeja, ni el email contienen vivienda, nombre del solicitante, su email o la descripción.
-- [ ] `unit_id` es `NULL` en toda fila de proveedor, y el `data` del push lleva `"unit": null`.
-- [ ] El email al proveedor tiene exactamente cuatro líneas de datos (asunto, categoría, fecha de inicio, condominio), cierre `Revisa la solicitud en la app.` y **ningún botón**.
-- [ ] Un campo no resoluble (categoría borrada, condominio sin título) aparece como `—`, tanto en el push como en el email, sin error.
+- [x] Ni el `body` del push, ni la fila de bandeja, ni el email contienen vivienda, nombre del solicitante, su email o la descripción.
+- [x] `unit_id` es `NULL` en toda fila de proveedor, y el `data` del push lleva `"unit": null`.
+- [x] El email al proveedor tiene exactamente cuatro líneas de datos (asunto, categoría, fecha de inicio, condominio), cierre `Revisa la solicitud en la app.` y **ningún botón**.
+- [x] Un campo no resoluble (categoría borrada, condominio sin título) aparece como `—`, tanto en el push como en el email, sin error.
 
 **Email al back office**
-- [ ] Se encola un ítem `service_request_admin` por cada usuario **activo** con rol `backend`, y por ninguno más (los administradores de edificio no reciben).
-- [ ] Asunto `Nueva solicitud de servicio #{nid} — {condominio}`.
-- [ ] El cuerpo dibuja las diez líneas de la sección 6 en ese orden, con `Tipo` = `Abierta` o `Directa a {nombre comercial}` según el caso.
-- [ ] El botón `Ver solicitud` apunta a `node/{nid}` en absoluto.
-- [ ] Sin nadie en el rol `backend` no se encola nada y el `201` sale igual.
+- [x] Se encola un ítem `service_request_admin` por cada usuario **activo** con rol `backend`, y por ninguno más (los administradores de edificio no reciben).
+- [x] Asunto `Nueva solicitud de servicio #{nid} — {condominio}`.
+- [x] El cuerpo dibuja las diez líneas de la sección 6 en ese orden, con `Tipo` = `Abierta` o `Directa a {nombre comercial}` según el caso.
+- [x] El botón `Ver solicitud` apunta a `node/{nid}` en absoluto.
+- [x] Sin nadie en el rol `backend` no se encola nada y el `201` sale igual.
 
 **Esquema y compatibilidad**
-- [ ] `drush updb` añade `provider_id` a `myapi_notifications`; ejecutarlo dos veces no falla.
-- [ ] Las filas anteriores al update conservan todos sus valores y quedan con `provider_id = NULL` (no hay backfill).
-- [ ] `GET /api/v1/notifications` y `GET /api/v1/notifications/%` devuelven `deep_link.provider` (entero o `null`) sin alterar ninguna otra clave de la respuesta.
-- [ ] Los siete triggers existentes (boletín, pago aprobado, pago anulado, recibo, alícuota extra, reclamos, reservas) siguen creando filas idénticas, ahora con `provider_id = NULL`, y sus pushes llevan `"audience": "resident"`, `"provider": null`.
+- [x] `drush updb` añade `provider_id` a `myapi_notifications`; ejecutarlo dos veces no falla.
+- [x] Las filas anteriores al update conservan todos sus valores y quedan con `provider_id = NULL` (no hay backfill).
+- [x] `GET /api/v1/notifications` y `GET /api/v1/notifications/%` devuelven `deep_link.provider` (entero o `null`) sin alterar ninguna otra clave de la respuesta.
+- [x] Los siete triggers existentes (boletín, pago aprobado, pago anulado, recibo, alícuota extra, reclamos, reservas) siguen creando filas idénticas, ahora con `provider_id = NULL`, y sus pushes llevan `"audience": "resident"`, `"provider": null`.
 
 **No regresión y robustez**
-- [ ] El `201` de `POST /api/v1/service-requests` conserva las diecinueve claves de spec 90, byte por byte.
-- [ ] Una solicitud creada desde el back office (formulario de nodo, drush) **no** dispara ningún aviso.
-- [ ] Un fallo al encolar (cola caída, dirección inválida) queda en `watchdog` y no impide el `201` ni deshace el nodo.
-- [ ] `./vendor/bin/phpunit` en verde, incluida toda la suite previa.
-- [ ] `myapi.info` lista el include nuevo y `drush cc all` no reporta errores.
-- [ ] Existe `docs/service-request-notifications.md` y `docs/notification.md` documenta `audience`, `deep_link.provider` y los dos `type` nuevos.
+- [x] El `201` de `POST /api/v1/service-requests` conserva las diecinueve claves de spec 90, byte por byte.
+- [x] Una solicitud creada desde el back office (formulario de nodo, drush) **no** dispara ningún aviso.
+- [x] Un fallo al encolar (cola caída, dirección inválida) queda en `watchdog` y no impide el `201` ni deshace el nodo.
+- [x] `./vendor/bin/phpunit` en verde, incluida toda la suite previa.
+- [x] `myapi.info` lista el include nuevo y `drush cc all` no reporta errores.
+- [x] Existe `docs/service-request-notifications.md` y `docs/notification.md` documenta `audience`, `deep_link.provider` y los dos `type` nuevos.
 
 ---
 
