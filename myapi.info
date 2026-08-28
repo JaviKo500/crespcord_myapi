@@ -69,3 +69,4 @@ files[] = resources/service_request.resource.inc
 files[] = resources/service_offer.resource.inc
 files[] = includes/myapi.service_transaction.inc
 files[] = includes/myapi.service_transaction_admin.inc
+files[] = includes/myapi.service_rating.inc
