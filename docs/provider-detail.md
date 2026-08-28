@@ -119,7 +119,7 @@ in provider.md for the why and for the one endpoint that still differs.
 | `stars` | int | `1`–`5`. |
 | `comment` | string | `myapi_text_to_plain()`. `""` when the rating carries none — the field is optional. |
 | `author_name` | string | **Abbreviated** — `"Andrés M."`, first name plus the initial of the last name — resolved from the same profile pair `myapi_claim_notification.inc` uses for `requester_name`, with three fallback levels: the profile → the account's username → `"Usuario eliminado"` for a deleted account. |
-| `unit` | string \| **null** | The **name** (`field_nombre_vivienda`) of the `vivienda` node of `field_unit` — the same value `GET /api/v1/units` answers as `name`, **not** the node title. `null` when the rating carries no `field_unit` (every rating today, until the flow that creates a rating fills the field in), and also `null` when that unit has no name recorded or no longer exists: the title is never used as a fallback. |
+| `unit` | string \| **null** | The **name** (`field_nombre_vivienda`) of the `vivienda` node of `field_unit` — the same value `GET /api/v1/units` answers as `name`, **not** the node title. `null` when the rating carries no `field_unit`, and also `null` when that unit has no name recorded or no longer exists: the title is never used as a fallback. Since SPEC 108 **every rating written from the app carries it**: closing a request records the unit the service went to. Ratings created by hand from the back office may still leave it empty. |
 | `created` | string | `Y-m-d\TH:i:s`, same format as `claim.resource.inc` and `reservation.resource.inc`. |
 
 `author_name` is deliberately **abbreviated** and not the full name reclamos
@@ -143,6 +143,19 @@ A provider with no ratings answers:
 "rating_summary": { "1": 0, "2": 0, "3": 0, "4": 0, "5": 0 }
 ```
 
+**That used to be every provider of the marketplace.** These two keys have been
+served since SPEC 84 and answered `[]` and five zeros ever since, for one
+reason: no rating existed anywhere on the site. Since SPEC 108 they carry real
+data, and **not one line of this endpoint changed** — what arrived was something
+for it to read. The flow that creates a rating is
+[`PUT /api/v1/service-requests/{id}/close`](service-request.md): the resident
+closes their own request and rates the provider that did the job.
+
+The equality above — *the sum of the five values always equals `rating_count`* —
+holds because the counter is computed by the **same conditions** as this
+summary, deliberately. Both count ratings whatever the state of their node,
+because moderating a rating means **deleting** it, not unpublishing it.
+
 ### The "published" rule, not the "active" one
 
 The detail only requires the node to be **published** (`status = 1`) — it
@@ -156,10 +169,11 @@ already open, and its gallery, keep serving. A provider with **no**
 `field_license_expiry` at all answers `200` the same way.
 
 **Notes**
-- Nothing in this endpoint writes: the provider is edited from the back
-  office, and a rating is written from the back office too — no rating flow
-  exists in the app yet, so `ratings` and `rating_summary` answer empty on a
-  freshly installed site.
+- Nothing in this endpoint writes: the provider is edited from the back office,
+  and a rating is written either by a resident closing a request
+  ([`PUT /api/v1/service-requests/{id}/close`](service-request.md), SPEC 108) or
+  by an operator from the back office. On a freshly installed site, with no
+  request ever closed, `ratings` and `rating_summary` still answer empty.
 - `tags` follows the same delta order as `categories`; a tag whose term was
   deleted in the back office is omitted in silence, same criterion as an
   orphan category.

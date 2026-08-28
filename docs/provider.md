@@ -170,8 +170,30 @@ And it is `rating_count` and not `rating_avg` for a second reason: a provider
 may answer **`rating_avg: 0`** rather than `null`, because `field_rating_avg` is
 not empty but holds a stored `0.00`. The endpoint reports what is stored — the
 `null` is for a field with no value at all. Either way the reading is the same:
-**`rating_count: 0` means not rated yet**, whatever `rating_avg` says. Nothing
-writes these two counters yet; the flow that recalculates them is its own spec.
+**`rating_count: 0` means not rated yet**, whatever `rating_avg` says.
+
+### The counters are written since SPEC 108
+
+**Until then, every provider of the marketplace answered `rating_avg: null` and
+`rating_count: 0`**, whatever work it had done: the two fields had existed since
+the schema was built and nothing had ever written them. They are real now.
+
+What writes them is **not** an endpoint: it is a node hook that fires whenever a
+`service_rating` node is created, edited or deleted, so the numbers are right
+whichever door the rating came through — a resident closing their request with
+[`PUT /api/v1/service-requests/{id}/close`](service-request.md), or an operator
+creating, correcting or **moderating** one from the back office. Moderating a
+rating means *deleting* it, and the counters follow that too.
+
+- **`rating_count`** is the number of ratings of that provider, and a provider
+  with none has a stored `0` — the API answered `0` for an empty field already,
+  and now storage and API say the same thing.
+- **`rating_avg`** is the average of the stars, rounded to **two decimals**, and
+  it is left **empty** — not `0.00` — while there is nothing to average. An
+  unrated provider does not have a zero for a mark.
+- The average is **recomputed whole** on every save, never adjusted
+  incrementally, so it repairs itself: whatever state the counters were left in,
+  the next rating saved puts both numbers right.
 
 ### The two decimals are JSON numbers
 

@@ -16,7 +16,9 @@ its own since SPEC 100 — see
 SPEC 106: `PUT /api/v1/service-offers/{id}/accept` is the write outside this
 document that moves a request to `assigned` and writes `field_assigned_offer`
 and `field_assigned_provider` — the resident acts on the offer, and the request
-changes as a consequence. **Closing** is still not here.
+changes as a consequence. **Closing** has a route of its own since SPEC 108 —
+[`PUT /api/v1/service-requests/{id}/close`](#put-apiv1service-requestsidclose),
+the write that ends a request and rates the provider that did the job.
 
 This is the **first route** of the `service_request` bundle, whose schema was
 built by SPEC 77, 86 and 87 without one. Three more routes live in this same
@@ -1557,10 +1559,13 @@ answers `409`, not `200`: it tells the resident their action did nothing, which
 is the truth, and it is what stops a duplicate entry from landing on the
 timeline.
 
-Out of scope of this endpoint: **closing** a request (`closed`, with or without
-a rating), **awarding** an offer, **creating** offers, **reopening** a cancelled
-request, notifying the providers whose offers were rejected, and cancellation by
-the provider. Each of these, if it arrives, is its own spec.
+Out of scope of this endpoint: **awarding** an offer, **creating** offers,
+**reopening** a cancelled request, notifying the providers whose offers were
+rejected, and cancellation by the provider. Each of these, if it arrives, is its
+own spec. **Closing** is out of scope here too, but it is no longer missing: it
+is the sibling verb, with its own route
+([`PUT /api/v1/service-requests/{id}/close`](#put-apiv1service-requestsidclose))
+and a different meaning — cancelling walks away from a job, closing finishes it.
 
 **Authentication:** required (Bearer access token)
 
@@ -1764,21 +1769,324 @@ curl -i -X PUT https://host/api/v1/service-requests/412/cancel \
 
 ---
 
+## PUT /api/v1/service-requests/{id}/close
+
+Closes a service request and, when a provider did the job, **rates it**. The
+request is left in `closed` with its closing instant recorded, one timeline
+entry is written, and the rated provider's two reputation counters are
+recalculated.
+
+`closed` was **the only status of the catalogue without a door**. `cancelled`
+has had one since SPEC 95, `assigned` since SPEC 106, `offered` since SPEC 100,
+and `open` and `direct` are birth statuses. An awarded request simply could not
+**end**: it stayed `assigned` forever, and the provider who did the work earned
+no reputation for it. This is the exit that was missing.
+
+**Closing is rating, which is why they are one call.** Splitting the verb in
+two would open a window in which the request is closed and unrated — the exact
+state the module was built to forbid, and one whose second call might never
+arrive. `closed` is **terminal**: there is no way back from it, here or
+anywhere else.
+
+**Only the requester closes.** Not the assigned provider — the rating is the
+resident's opinion *of* the provider, and a close executed by the provider
+would arrive without the one thing it is required to carry, or would ask the
+provider to score itself. Not a building administrator through this API either:
+they close from the back office. It is the same rule the sibling verb
+([cancel](#put-apiv1service-requestsidcancel)) fixed for this resource and the
+one [`PUT /api/v1/claims/{id}/close`](claim.md) fixed for the same verb on
+another: **whoever opens is whoever closes**.
+
+> **The cost of that rule.** A resident who never opens the app again leaves the
+> request in `assigned` forever, and that job earns its provider nothing. It is
+> accepted and written down: the fix — a "work finished" signal from the
+> provider, or an automatic close by cron — needs a new edge in the status graph
+> or a new field, and has no spec yet. An operator can close from the back
+> office meanwhile.
+
+**Not idempotent, on purpose.** A second call on an already-closed request
+answers `409`, not `200`: it tells the resident their action did nothing, which
+is the truth, and it is what stops a second rating and a duplicate timeline
+entry.
+
+**Authentication:** required (Bearer access token)
+
+**Headers**
+| Header | Value |
+|--------|-------|
+| Authorization | Bearer `<access_token>` |
+| Content-Type | `application/json` |
+
+### The body has two shapes, and the status picks one
+
+This is the only endpoint of the module whose body depends on the state of the
+thing it writes. The rule is not arbitrary: **a rating is demanded when, and
+only when, there was a provider who did the job.**
+
+**A. Closing a job — from `assigned` or `direct`**
+
+```json
+{ "stars": 5, "comment": "Llegó puntual y dejó todo limpio." }
+```
+
+| Field | Required | Type | Rule |
+|-------|----------|------|------|
+| `stars` | **yes** | integer | 1, 2, 3, 4 or 5. A string of digits is accepted, so `5` and `"5"` are the same value. |
+| `comment` | no | string | Up to **1000 characters**, measured with `drupal_strlen()` and not `strlen()`, so 1000 accented ones fit. Trimmed before storing. |
+| `close_reason` | — | — | **Ignored in silence** if sent. Here the rating's comment *is* the text of the close. |
+
+**B. Closing with nothing awarded — from `offered`**
+
+```json
+{ "close_reason": "Lo resolví con un conocido, ya no necesito el servicio." }
+```
+
+| Field | Required | Type | Rule |
+|-------|----------|------|------|
+| `close_reason` | **yes** | string | 1 to **1000 characters**, `drupal_strlen()`, trimmed. Whitespace-only counts as absent. |
+| `stars`, `comment` | — | — | **Ignored in silence** if sent. There is nobody to rate. |
+
+`close_reason` is **required** while the cancellation's `reason` is optional,
+and the difference is deliberate. Cancelling is walking away and the reason
+explains itself; **closing with nothing awarded, having received offers**,
+leaves the providers who sent them hanging, and that timeline entry is the only
+thing left to explain it to them. It is also the treatment
+[`PUT /api/v1/claims/{id}/close`](claim.md) already gives the same word.
+
+**1000 characters and not 255.** The cancellation's 255 is for a one-line
+reason; both texts here are a resident's written opinion about a service.
+
+**Keys that are left over are not a `422`.** What is named is validated and
+nothing else, the same criterion as the rest of the module: an app that sends
+the whole form in both cases works.
+
+**`stars` refuses booleans and floats explicitly.** `true` would cast to `1`,
+which *is* a valid star value, and `2.5` sits inside the range without being a
+star. Only an integer or a string of digits is a rating.
+
+### Which statuses admit a close
+
+| From | Rating | Result |
+|------|--------|--------|
+| `assigned` | **required** | `200` |
+| `direct` | **required** | `200` |
+| `offered` | not asked for | `200` |
+| `open` | — | `409 service_request_not_closable` |
+| `closed` | — | `409 service_request_not_closable` |
+| `cancelled` | — | `409 service_request_not_closable` |
+| empty, or a value outside the catalogue | — | `409 service_request_not_closable` |
+
+That table is **not written in the endpoint**: it is the module's transition
+graph, asked one question — *"does this status lead to `closed`?"*. Out of that
+comes free that **`open` answers `409`**: a request nobody has bid on is
+**cancelled**, which is what it means, and
+[cancel](#put-apiv1service-requestsidcancel) is the route for it. And because
+the graph answers *no* to a status it does not recognise, a corrupt
+`field_request_status` is a `409` and never a `500`.
+
+### What it writes, in this order
+
+1. **The rating** — *only when the status demanded one*. One `service_rating`
+   node, published, owned by the resident, pointing at the awarded provider
+   (`field_rating_provider`) and at the awarded offer
+   (`field_rating_offer`) — **the offer is left empty on a `direct` request**,
+   which never had one — with the stars, the comment, and the unit of the
+   request. Its title is generated:
+   `Calificación · Plomería Ruiz · 5★ · 28/08/2026`.
+2. **The request.** `field_request_status` becomes `closed` and
+   `field_closed_at` records the instant. **Nothing else changes**: the
+   category, the unit, the description, the files and **both award fields** keep
+   the values they had — a closed request is audited by who the job was given
+   to — and the node **stays published**. `field_closed_at` had never been
+   written by anything before this endpoint.
+3. **The transaction.** One `service_transaction` pointing at the request, with
+   `field_request_status = closed`, the instant with the seconds pinned to `00`,
+   the `uid` of the resident who closed, and `field_comment` holding one of
+   three texts:
+
+   | Situation | Comment |
+   |---|---|
+   | Closed with nothing awarded | the `close_reason` **verbatim**, no prefix and no label |
+   | Closed with a rating, provider known | `Servicio cerrado. Plomería Ruiz calificado con 5 estrellas.` |
+   | Closed with a rating, no provider name | `Servicio cerrado y calificado con 5 estrellas.` |
+
+4. **The provider's two counters** — *not this endpoint's write*, and that is
+   the point. `field_rating_count` and `field_rating_avg` on the `provider` node
+   are recalculated by a node hook that fires inside step 1, so a rating an
+   operator creates **by hand** from the back office counts exactly the same.
+   See [provider.md](provider.md).
+
+**The rating is written first, and that is the most important ordering decision
+of this endpoint.** It is the only irrecoverable step: if it fails, the request
+is still `assigned`, the resident retries and nothing is lost. The other way
+round, with the request already `closed` — terminal, second call answers `409` —
+a rating that failed could **never** be retried, and that provider would lose
+the reputation of a job it did.
+
+The request is saved **before** the transaction, so the back office's status
+sync sees the two statuses already equal and does not save it a second time. A
+close writes the request exactly once.
+
+> **The three writes are not one atomic transaction.** A failure between 1 and 2
+> leaves a rating on a request that is still `assigned`; between 2 and 3, a
+> closed request with no timeline entry. That is accepted, at the same price the
+> cancellation and the award accepted. The order is chosen so the likeliest
+> fragment is the **recoverable** one: retrying the close after a failure in
+> step 1 works again. The other case leaves a valid rating, which counts towards
+> the reputation and breaks nothing.
+
+**Success response (200)**
+
+`data.service_request` is **the same nineteen-key object**
+[`GET /api/v1/service-requests/{id}`](#get-apiv1service-requestsid) returns —
+same loaders, same serialiser, nothing shaped by hand here — plus `rating_id` as
+a **sibling** key. There is deliberately **no `data.transaction`** and **no
+`data.rating`**: the close entry is already the last of `transactions`, and the
+rating is readable through the provider.
+
+Everything is read **after** the writes, so `status` comes back `closed` and
+`closed_at` already carries the instant. `viewer` is always `"requester"` —
+nobody else can reach a `200` here — and `offers` therefore travels
+**untrimmed**, with whatever statuses the award left them at: closing moves no
+offer.
+
+```json
+{
+  "success": true,
+  "data": {
+    "service_request": {
+      "id": 412,
+      "title": "Fuga en el calentador",
+      "description": "El calentador del baño principal gotea desde el lunes.",
+      "status": "closed",
+      "category": { "id": 12, "code": "plumbing", "name": "Plomería" },
+      "unit": { "id": 55, "name": "A-301" },
+      "offers_count": 4,
+      "assigned_offer": { "id": 52, "status": "accepted" },
+      "assigned_provider": { "id": 9, "name": "Plomería Ruiz" },
+      "created": "2026-08-17T10:05:00",
+      "desired_start": "2026-08-20T08:00:00",
+      "viewer": "requester",
+      "requester": { "id": 42, "name": "Ana Pérez" },
+      "condominium": { "id": 7, "name": "Torres del Este" },
+      "images": [],
+      "attachment": null,
+      "closed_at": "2026-08-28T09:14:00",
+      "offers": [
+        { "id": 52, "status": "accepted", "...": "..." },
+        { "id": 53, "status": "rejected", "...": "..." }
+      ],
+      "transactions": [
+        { "id": 512, "status": "open", "...": "..." },
+        { "id": 988, "status": "assigned", "...": "..." },
+        {
+          "id": 1041,
+          "status": "closed",
+          "status_date": "2026-08-28T09:14:00",
+          "comment": "Servicio cerrado. Plomería Ruiz calificado con 5 estrellas.",
+          "created": "2026-08-28T09:14:00"
+        }
+      ]
+    },
+    "rating_id": 4021
+  },
+  "message": "Solicitud cerrada correctamente."
+}
+```
+
+See [the detail](#get-apiv1service-requestsid) for what every one of the
+nineteen keys means and how it is typed — this endpoint adds no key and changes
+no format.
+
+`rating_id` is the nid of the rating that was created, or **`null`** when the
+close needed none. It is **always present**: no key of this module appears and
+disappears with the case. It sits outside `service_request` so that object stays
+byte-identical to the detail's and the app can swap it into its state with no
+special case.
+
+**The rating's comment is not copied into the timeline.** It lives in the
+rating, which is where [`GET /api/v1/providers/{id}`](provider-detail.md) reads
+it from. Two copies of one text drift apart the day the back office edits one;
+the timeline says *that* the provider was rated and with how many stars.
+
+**Cost:** six queries after the writes. They are what buys the app a full
+repaint — status, offers and timeline at once — with no second round trip, and
+they are why this response can never disagree with what a `GET` would say.
+
+> **Degraded body (rare).** Exactly as in
+> [cancel](#put-apiv1service-requestsidcancel): a request whose category term
+> was deleted cannot be serialised, so **the close is still applied and still
+> answers `200`**, but `service_request` carries only `id` and `status`,
+> `rating_id` still travels, and the inconsistency is logged with `watchdog()`.
+> Answering `500` there would lie about an operation that succeeded and would
+> push the client into a retry that gets `409`.
+
+**Possible errors**
+| Code | `error_code` | When |
+|------|--------------|------|
+| 405 | `method_not_allowed` | Any method other than `PUT`. Answered **before** the token is read and without the request having to exist. |
+| 401 | `missing_authorization` / `invalid_token` | `Authorization` header absent or not a `Bearer <token>`; or the token is invalid, revoked, expired, or its user is missing/blocked. |
+| 404 | `service_request_not_found` | `{id}` is not a positive integer, or names a request that does not exist, is unpublished, or is not of bundle `service_request`. The four cases are told apart by nothing. |
+| 403 | `service_request_forbidden` | The request exists, but whoever is asking is not its `field_requester` — **including the assigned provider**, and a user who is only the node's `uid`. Nothing is written. |
+| 409 | `service_request_not_closable` | The current status does not lead to `closed` — see the table above. An already-closed request lands here. Nothing is written. |
+| 409 | `service_request_provider_missing` | The status demanded a rating and `field_assigned_provider` is empty — a request edited by hand, or a broken reference. Nothing is written: the close stops **before** the first write rather than closing the request and then failing to rate. |
+| 422 | `missing_field` | `stars` absent (shape A), or `close_reason` absent or whitespace-only (shape B). `@field` names the one that is missing. Nothing is written. |
+| 422 | `invalid_field` | `stars` outside 1–5, or not an integer; or `comment` / `close_reason` present with a type other than string. Nothing is written. |
+| 422 | `field_too_long` | `comment` or `close_reason` longer than 1000 characters. Nothing is written. |
+
+**The checks run in this order:** `{id}` → token → the request exists → **it is
+yours** → **its status admits it** → the body, **in the shape that status asks
+for** → the assigned provider exists. A malformed body on someone else's
+request answers `403`, never `422`.
+
+See [i18n.md](i18n.md) for the translated `error`/`message` text.
+
+**Example (closing an awarded job):**
+```bash
+curl -i -X PUT https://host/api/v1/service-requests/412/close \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"stars":5,"comment":"Llegó puntual y dejó todo limpio."}'
+```
+
+**Example (closing without awarding):**
+```bash
+curl -i -X PUT https://host/api/v1/service-requests/412/close \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"close_reason":"Lo resolví con un conocido."}'
+```
+
+---
+
 ## What is still not here
 
 Written down so it is not looked for in this document:
 
-- **Every write except creation, editing and cancellation.** Closing **on a
-  request that already exists**, and awarding **through a route of this prefix**
-  — awarding does exist since SPEC 106, but as a `PUT` on the *offer*
-  ([service-offer.md](service-offer.md)), because the object the resident acts
-  on is the offer. All `405` — see
+- **Awarding through a route of this prefix.** It does exist since SPEC 106, but
+  as a `PUT` on the *offer* ([service-offer.md](service-offer.md)), because the
+  object the resident acts on is the offer. Every other verb on this prefix is
+  `405` — see
   [`POST /api/v1/service-requests`](#post-apiv1service-requests),
-  [`POST /api/v1/service-requests/{id}`](#post-apiv1service-requestsid) and
+  [`POST /api/v1/service-requests/{id}`](#post-apiv1service-requestsid),
   [`PUT /api/v1/service-requests/{id}/cancel`](#put-apiv1service-requestsidcancel)
-  for the three writes this module does. In particular there is still no
-  **closing**: `cancelled` is one of the two terminal statuses and now has a
-  door; `closed` is the other and has none.
+  and
+  [`PUT /api/v1/service-requests/{id}/close`](#put-apiv1service-requestsidclose)
+  for the four writes this document covers. **The two terminal statuses now both
+  have a door**: `cancelled` since SPEC 95, `closed` since SPEC 108.
+- **A provider's way of saying "the job is done".** The provider still has no
+  verb at all over a request. Closing is the resident's, and only the
+  resident's, so a request whose resident never comes back stays `assigned`
+  forever and that job earns its provider no reputation. The fix — a "work
+  finished" signal, or an automatic close by cron — needs a new edge in the
+  status graph or a new field, and has no spec yet. Meanwhile an operator can
+  close from the back office.
+- **Editing or withdrawing a rating from the app.** A rating is written once,
+  with the close, and the resident does not touch it again: there is no `PUT`
+  and no `DELETE` on one. The back office can edit it and delete it, and the
+  provider's two counters are recalculated in both cases.
+- **Reopening.** `closed` is terminal, exactly like `cancelled`. The graph gains
+  no edge.
 - **Editing anything but the five fields the edit names**, and editing at all
   once the request has left `open`/`direct` or has received its first offer. The
   category, the unit, **the assigned provider** and the order of the images are
