@@ -693,6 +693,13 @@ al objeto del detalle, y que el método es `POST` y no `PUT` porque PHP no puebl
 - **Sí:** dieciséis claves. `offers`, `offers_count` y `transactions` no cambian
   con una edición —la compuerta acaba de probar que no hay ofertas— así que
   consultarlas sería pagar por confirmar lo ya sabido.
+  > **Ampliado el 2026-08-28.** Una de esas dieciséis, `assigned_provider`,
+  > viaja desde entonces como la **tarjeta de proveedor entera** (ocho claves,
+  > `title` y no `name`), igual que en el detalle: una `direct` **es** editable y
+  > conserva a su proveedor, y una edición no puede estrechar lo que la respuesta
+  > dice de la adjudicación. `assigned_offer` es siempre `null` aquí — la
+  > compuerta acaba de probar que no hay ofertas. Ver
+  > [la ampliación del SPEC 89](89-service-request-detail.md#ampliación-2026-08-28--la-adjudicación-viaja-entera).
 - **No:** las diecinueve del detalle, que es lo que devuelven la creación y la
   cancelación. Se acepta a cambio que **este objeto no sustituye al del `GET`**
   y que la app tiene que fusionarlo sobre el que ya tiene. Queda escrito en la

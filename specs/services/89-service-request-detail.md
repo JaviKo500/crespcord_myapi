@@ -72,6 +72,167 @@ Cinco notas que la cabecera fija:
 
 ---
 
+## Ampliación (2026-08-28) — la adjudicación viaja entera
+
+- **Estado:** Implemented
+- **Alcance del cambio:** los dos detalles (`GET /api/v1/service-requests/{id}`
+  y `GET /api/v1/service-requests/provider/{id}`, SPEC 99) y **toda respuesta
+  que devuelve el objeto del detalle**: el `201` de SPEC 90, el `200` de SPEC 96,
+  el de SPEC 95, el de SPEC 108 y el de `PUT /api/v1/service-offers/{id}/accept`
+  (SPEC 106).
+- **Los listados NO cambian.** `GET /api/v1/service-requests` (SPEC 88) y
+  `GET /api/v1/service-requests/provider` (SPEC 98) siguen respondiendo
+  `assigned_offer: {id, status}` y `assigned_provider: {id, name}`, exactamente
+  como hasta hoy.
+
+**El problema.** El detalle es la pantalla en la que el residente mira lo que
+contrató, y respondía de la adjudicación un nombre y un estado. Para pintar la
+tarjeta del proveedor adjudicado —logo, categorías, valoración, tarifa— la app
+tenía que pedir `GET /api/v1/providers/{id}`, y para pintar la oferta ganadora
+tenía que buscarla dentro de `offers` por `id`. Dos cosas que el servidor ya
+tiene delante cuando construye esa respuesta.
+
+**El cambio, en dos líneas:**
+
+| Clave | Antes | Ahora |
+|---|---|---|
+| `assigned_provider` | `{ id, name }` | **La tarjeta de proveedor**: las mismas ocho claves, en el mismo orden, que responde `GET /api/v1/providers` (SPEC 83) — `id`, `logo`, `title`, `categories`, `rating_avg`, `rating_count`, `short_description`, `hourly_rate` |
+| `assigned_offer` | `{ id, status }` | **La oferta entera**: las mismas quince claves de `myapi_service_offer_build()` (SPEC 100) que lleva cada elemento de `offers` / `my_offers` |
+
+Nada más se mueve: siguen siendo la octava y la novena clave, siguen siendo
+`null` cuando no hay adjudicación, y siguen yendo a `null` **de forma
+independiente** — una `direct` tiene proveedor y no tiene oferta, que es la razón
+de que sean dos claves y no una (SPEC 87). **Lo que crece es el contenido de un
+objeto, nunca la forma de la respuesta.**
+
+> ⚠️ **Cambio de contrato: `assigned_provider.name` desaparece; la tarjeta se
+> llama `title`.** Es deliberado y es la mitad del valor del cambio: la tarjeta
+> es *la del listado*, byte por byte, y añadirle un `name` al lado de `title` la
+> convertiría en una tarjeta distinta —justo la divergencia que servir un solo
+> objeto desde un solo constructor existe para impedir—. La app reutiliza el
+> modelo de proveedor que ya tiene.
+
+### Por qué la oferta sale de la lista y no de una consulta
+
+La oferta adjudicada de una solicitud **es** una de las ofertas de esa
+solicitud, así que el objeto se toma de `offers` (o de `my_offers` en la ruta del
+proveedor) buscándolo por `id`. Cero consultas nuevas, y —lo que importa más— es
+imposible que la clave y la lista digan dos cosas distintas de la misma oferta.
+
+### La única redacción: el proveedor que ofertó y perdió
+
+`offers` viene **recortado por la consulta** a lo que el lector puede ver. Hay un
+solo lector para el que la oferta adjudicada no está en su lista: el proveedor
+que ofertó y perdió, que conserva el acceso por la regla 2 («quien ya ofertó
+sigue viendo la solicitud»). Ampliar la clave fuera de su lista sería entregarle
+el precio que le ganó — exactamente la fuga que el recorte de `offers` existe
+para evitar.
+
+Para ese lector, y solo para ese, viajan las **mismas quince claves** con las
+trece que describen el presupuesto vacías: solo `id` y `status` dicen algo, que
+es justo lo que ya decía la forma de dos claves. Los `null` que responde son los
+mismos que responde una oferta guardada antes de SPEC 100, así que ningún cliente
+se encuentra con una forma que no conociera. **Una redacción es un contenido,
+nunca una forma.**
+
+`assigned_provider` **no** se redacta para ese lector: esas ocho claves son las
+que `GET /api/v1/providers` ya enseña a cualquiera con token. El perdedor se
+entera de **quién** ganó, nunca de **por cuánto**.
+
+### La tarjeta se responde aunque la licencia esté caducada
+
+`myapi_provider_card_by_nid()` filtra por bundle y por `status = 1`, y **no**
+llama a `myapi_provider_apply_active_conditions()`. Un proveedor adjudicado hace
+un mes cuya licencia venció la semana pasada sigue siendo el que está haciendo el
+trabajo; responder `assigned_provider: null` le diría al residente que no hay
+nadie adjudicado, que es una mentira sobre el estado de su solicitud. La regla
+del mercado —solo se **listan** los activos— es sobre quién puede ser
+contratado, no sobre quién ya lo fue, y las dos tienen que poder divergir.
+
+La tarjeta sigue siendo `null` en el mismo caso de siempre: el nodo referenciado
+fue **borrado o despublicado** (el `JOIN` del detalle ya lo deja en `NULL`).
+
+### Alcance en ficheros
+
+**`includes/myapi.provider_card.inc`** (nuevo) — la tarjeta, compartida. La Regla
+5 de CLAUDE.md prohíbe que el recurso de solicitudes llame a
+`resources/provider.resource.inc`, y la Regla 3 dice qué hacer en su lugar:
+
+- `myapi_provider_build_item()` — **movida literal** desde el recurso de
+  proveedores, sin renombrar.
+- `myapi_provider_categories_by_nid()` — **movida literal** por la misma razón.
+- `myapi_provider_card_by_nid($nid)` — **nueva**: dos consultas (la fila y sus
+  categorías) y la tarjeta ya construida, o `NULL`. Ningún listado puede
+  llamarla: una página de veinte solicitudes serían cuarenta consultas.
+
+**`resources/provider.resource.inc`** — pierde las dos funciones movidas y carga
+el include. Sus tres endpoints no cambian ni una clave; las suites de SPECS 83,
+84 y 97 pasan sin tocar una sola aserción, que es la prueba de que la mudanza no
+se llevó comportamiento.
+
+**`includes/myapi.service_request_detail.inc`** — dos funciones nuevas y una
+firma ampliada:
+
+- `myapi_service_request_assigned_provider_card($row)` — `NULL` sin consulta
+  alguna cuando no hay adjudicación; la tarjeta cuando la hay. Existe porque los
+  dos serializadores son **puros**, así que la carga la hace el orquestador.
+- `myapi_service_request_assigned_offer_item($assigned_offer, $offers)` — pura,
+  sin consultas: busca en la lista y, si no está, construye la redacción **con
+  `myapi_service_offer_build()`** a partir de una fila que solo lleva `nid` y
+  `status`. Así «siempre las mismas quince claves, en el mismo orden» es cierto
+  por construcción en las dos ramas.
+- `myapi_service_request_build_detail(..., $assigned_provider)` — séptimo
+  parámetro **obligatorio y no opcional**: un valor por defecto dejaría que un
+  punto de llamada se lo olvidara y respondiera `assigned_provider: null` en una
+  solicitud que sí tiene adjudicación, que es justo el silencio que una firma
+  debe impedir.
+
+**`resources/service_request.resource.inc`** —
+`myapi_service_request_provider_build_detail()` recibe el mismo séptimo
+parámetro y amplía las dos claves llamando a **las mismas dos funciones**, nunca
+a una copia: es lo que impide que las dos rutas de detalle contesten cosas
+distintas de una misma adjudicación. Los seis puntos de llamada (detalle,
+detalle del proveedor, creación, edición, cancelación y cierre) añaden una línea
+cada uno.
+
+**`resources/service_offer.resource.inc`** — el `200` de la adjudicación pasa la
+tarjeta. Es la ruta que **siempre** la paga, y con razón: adjudicar es
+exactamente lo que rellena `field_assigned_provider`.
+
+### El coste
+
+| Caso | Consultas nuevas |
+|---|---|
+| Solicitud sin adjudicar (toda `open`, la mayoría) | **0** — la guarda responde `NULL` sin tocar la base |
+| Solicitud adjudicada | **2** — la fila del proveedor y sus categorías |
+| La oferta adjudicada, en cualquier caso | **0** — sale de `offers` |
+
+### Criterios de aceptación de la ampliación
+
+1. Una solicitud adjudicada responde `assigned_provider` con las **ocho** claves
+   del listado de proveedores, en su orden, con su tipado: `logo` URL absoluta
+   pública o `null`, `rating_avg` float o `null` (nunca `0.0`), `rating_count`
+   entero (`0` y nunca `null`), `hourly_rate` float o `null`, `categories` lista
+   de `{id, code, name}` en orden de `delta`.
+2. `assigned_offer` es **idénticamente el mismo objeto** que su elemento en
+   `offers` — se compara contra la lista, no contra un literal.
+3. Una solicitud sin adjudicar **no ejecuta ni una consulta** sobre `node` con
+   `type = 'provider'`.
+4. Un proveedor adjudicado con la licencia caducada, o sin fila de licencia,
+   responde su tarjeta igual.
+5. Una adjudicación que apunta a un nodo borrado o despublicado responde
+   `assigned_provider: null`, nunca media tarjeta.
+6. El proveedor que ofertó y perdió recibe `assigned_offer` con `id` y `status`
+   y las otras trece claves vacías, con **las mismas quince claves** que un
+   elemento de su lista; el precio ganador **no aparece en el cuerpo**.
+7. El proveedor que ganó recibe su oferta entera: es el mismo objeto de
+   `my_offers`.
+8. Una `direct` responde `assigned_offer: null` y la tarjeta entera.
+9. Los dos listados (SPECS 88 y 98) responden exactamente lo que respondían.
+10. Las suites de SPECS 83, 84 y 97 pasan sin tocar una aserción.
+
+---
+
 ## Alcance
 
 ### Dentro del alcance
@@ -275,6 +436,12 @@ Tres detalles que la tabla fija:
 Las **diez primeras claves son, literalmente, las de
 `myapi_service_request_build_item()`** (SPEC 88), en su mismo orden y producidas
 por esa misma función. Detrás van las siete nuevas.
+
+> **Ampliado el 2026-08-28.** En este ejemplo la solicitud no está adjudicada, y
+> por eso se lee igual hoy. Cuando sí lo está, `assigned_provider` es la tarjeta
+> de proveedor entera (ocho claves, `title` y no `name`) y `assigned_offer` es la
+> oferta entera (quince claves) — ver
+> [Ampliación (2026-08-28)](#ampliación-2026-08-28--la-adjudicación-viaja-entera).
 
 ### La respuesta del **proveedor**
 

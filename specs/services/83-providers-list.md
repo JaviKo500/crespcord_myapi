@@ -423,3 +423,36 @@ Tres tests renombrados y reescritos con las expectativas nuevas
 `testCategoryNameAndCodeArePlainText` en `ProviderListEndpointTest`,
 `testTagNamesArePlainText` en `ProviderDetailEndpointTest`); ninguno añadido y
 ninguno borrado. Falta `drush cc all` en el servidor.
+
+---
+
+## Mudanza posterior (2026-08-28): la tarjeta se va a `includes/`
+
+**Qué se movió.** `myapi_provider_build_item()` y
+`myapi_provider_categories_by_nid()` dejan `resources/provider.resource.inc` y
+pasan a **`includes/myapi.provider_card.inc`**, literalmente y sin renombrar.
+
+**Por qué.** Apareció un tercer lector, y está en otro recurso: el detalle de una
+solicitud de servicio responde `assigned_provider` como una **tarjeta entera** —
+las mismas ocho claves de este listado, construidas por esta misma función (ver
+[la ampliación del SPEC 89](89-service-request-detail.md#ampliación-2026-08-28--la-adjudicación-viaja-entera)).
+La Regla 5 de CLAUDE.md prohíbe que aquel recurso llame a este, y la Regla 3 dice
+qué hacer en su lugar. Copiar el constructor habría sido una **segunda
+definición** de qué es un proveedor, divergente desde el día en que una de las
+dos cambiara, y el primer síntoma de esa divergencia es una tarjeta del mercado
+que enseña una valoración que la tarjeta del adjudicado no.
+
+**Qué NO cambia.** Ni una clave, ni un tipo, ni un orden en ninguno de los tres
+endpoints de este recurso. `myapi_provider_count()`, `myapi_provider_fetch()` y
+`myapi_provider_detail_fetch()` se quedan donde están: son las consultas de
+**este** listado y de **este** detalle, con su paginación y su orden. Las suites
+de SPECS 83, 84 y 97 pasan **sin tocar una sola aserción**, y esa es la prueba
+de que la mudanza no se llevó comportamiento.
+
+**Lo que sí es nuevo en el fichero.** `myapi_provider_card_by_nid($nid)`: dos
+consultas (la fila y sus categorías) y la tarjeta ya construida, para un
+llamador que solo tiene un `nid`. **Sin la condición de «activo»** — un
+proveedor adjudicado con la licencia caducada sigue siendo el que hace el
+trabajo — y por eso no reutiliza `myapi_provider_fetch()`. Ningún listado puede
+llamarla: una página de veinte serían cuarenta consultas, y para eso está la
+forma que este spec ya escribió. Cubierta por `tests/unit/ProviderCardTest.php`.

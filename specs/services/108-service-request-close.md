@@ -537,6 +537,14 @@ que ese `GET` contestaría, porque **es** lo que contestaría.
 }
 ```
 
+> **Ampliado el 2026-08-28.** Dos de esas diecinueve claves crecieron:
+> `assigned_provider` es la **tarjeta de proveedor entera** (ocho claves, `title`
+> y no `name`) y `assigned_offer` es la **oferta entera** (quince claves, sacada
+> de `offers` sin consulta nueva). Una solicitud que se cierra es, casi siempre,
+> una adjudicada, así que este `200` es de los que sí pagan las dos consultas de
+> la tarjeta. Ver
+> [la ampliación del SPEC 89](89-service-request-detail.md#ampliación-2026-08-28--la-adjudicación-viaja-entera).
+
 - **`rating_id`** es el nid de la calificación creada, o **`null`** cuando se
   cerró sin adjudicar. Siempre presente, como toda clave de este módulo: no
   aparece ni desaparece según el caso.

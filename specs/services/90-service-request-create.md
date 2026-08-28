@@ -160,7 +160,9 @@ Reutilizadas sin cambio: `missing_authorization`, `invalid_token`, `missing_fiel
 }
 ```
 
-Una solicitud con `assigned_provider_id` válido responde igual, con `status: "direct"` y `assigned_provider: { "id": ..., "name": ... }` ya relleno.
+Una solicitud con `assigned_provider_id` válido responde igual, con `status: "direct"` y `assigned_provider` ya relleno.
+
+> **Ampliado el 2026-08-28.** Ese `assigned_provider` no es `{id, name}`: es la **tarjeta de proveedor entera**, las ocho claves de `GET /api/v1/providers` (`title` y no `name`). Este `201` es la primera respuesta en la que el residente ve la empresa que eligió, y la pinta con el widget que ya tiene. Una solicitud `open` no paga ni una consulta por ello. Ver [la ampliación del SPEC 89](89-service-request-detail.md#ampliación-2026-08-28--la-adjudicación-viaja-entera).
 
 ### El plan de escritura y de respuesta
 

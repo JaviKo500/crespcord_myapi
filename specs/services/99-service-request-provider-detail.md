@@ -199,8 +199,8 @@ diferencia, seguidas de **6 propias del detalle**.
 | 5 | `category` | object | `{id, code, name}`. |
 | 6 | `unit` | object \| null | `{id, name}`. **Solo si el trabajo ya es mío** — ver abajo. |
 | 7 | `offers_count` | int | El total **real**, competencia incluida. |
-| 8 | `assigned_offer` | object \| null | `{id, status}`. |
-| 9 | `assigned_provider` | object \| null | `{id, name}`. Sin enmascarar, aunque gane un rival. |
+| 8 | `assigned_offer` | object \| null | **La oferta entera** (15 claves), sacada de `my_offers`. **Redactada para quien ofertó y perdió** — ver la ampliación del SPEC 89. |
+| 9 | `assigned_provider` | object \| null | **La tarjeta de proveedor entera** (8 claves, `title` y no `name`). Sin enmascarar, aunque gane un rival. |
 | 10 | `created` | string \| null | `Y-m-d\TH:i:s`. |
 | 11 | `desired_start` | string \| null | `Y-m-d\TH:i:s`. |
 | 12 | `requester` | object \| null | `{id, name}`. |
@@ -214,6 +214,18 @@ diferencia, seguidas de **6 propias del detalle**.
 
 Ninguna clave aparece ni desaparece. Un objeto anidado ausente es **un `null`
 entero**, nunca `{id: null, name: null}`.
+
+> **Ampliado el 2026-08-28 (ampliación del SPEC 89).** Las claves 8 y 9 son las
+> **dos únicas excepciones** a «las 13 primeras son byte a byte las del listado»:
+> el listado *nombra* la adjudicación y el detalle la responde entera —
+> `assigned_offer` como la oferta de 15 claves (la misma que lleva `my_offers`,
+> tomada de esa lista y sin consulta nueva) y `assigned_provider` como la
+> tarjeta de 8 claves de `GET /api/v1/providers`. Los `id` coinciden, el orden
+> no se mueve y ninguna clave aparece ni desaparece; lo que crece es el
+> contenido. Las dos se amplían llamando a **las mismas dos funciones** que usa
+> el detalle del residente, nunca a una copia. `assigned_provider.name` ya no
+> existe: la tarjeta lo llama `title`. Ver
+> [la ampliación del SPEC 89](89-service-request-detail.md#ampliación-2026-08-28--la-adjudicación-viaja-entera).
 
 ### La regla de la `unit`
 
@@ -488,7 +500,9 @@ detalle como diferencia deliberada — deja de ser cierta en esta ruta.
       `attachment`, `closed_at`, `my_offers`, `transactions`.
 - [x] `viewer` vale `"provider"` en toda respuesta `200`.
 - [x] Las 13 primeras claves son **byte a byte** las del ítem del mismo nid en
-      `GET /api/v1/service-requests/provider`.
+      `GET /api/v1/service-requests/provider`, **salvo `assigned_offer` y
+      `assigned_provider`**, que el detalle responde enteras (ampliación del
+      SPEC 89): los `id` coinciden y el orden no se mueve.
 - [x] `category` trae `{id, code, name}`; `code` es `""` y no `null` cuando el
       término no tiene código.
 - [x] `requester` trae `{id, name}` con el nombre resuelto por la regla del
@@ -526,8 +540,13 @@ detalle como diferencia deliberada — deja de ser cierta en esta ruta.
 - [x] Sin ofertas mías: `my_offers` es `[]` y la respuesta sigue siendo `200`.
 - [x] Cada oferta trae
       `{id, provider: {id, name, logo}, amount, message, status, created}`.
-- [x] `assigned_provider` nombra al ganador **aunque sea un rival**, y su nombre
-      no se enmascara.
+- [x] `assigned_provider` nombra al ganador **aunque sea un rival**, y no se
+      enmascara: viaja su tarjeta entera, que es lo que
+      `GET /api/v1/providers` ya enseña a cualquiera con token.
+- [x] `assigned_offer` de un rival viaja **redactada**: `id` y `status`, las
+      otras trece claves vacías, y el importe ganador **no aparece en el
+      cuerpo**. Si el ganador soy yo, la oferta viaja entera y es el mismo
+      objeto de `my_offers`.
 
 ### Ficheros privados
 

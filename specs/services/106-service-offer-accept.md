@@ -163,6 +163,7 @@ El importe va con `number_format($amount, 2, ',', '.')` y **sin símbolo de mone
 
 - **`200` y no `201`:** no nace ningún recurso que el cliente vaya a direccionar. La transacción es un efecto, no la respuesta.
 - **Seis consultas, y se pagan a propósito.** La app repinta de una sola vez la pantalla en la que ya está —estado nuevo, `assigned_offer`, las ofertas con sus estados recién escritos y la línea de tiempo con la entrada ya dentro— sin un segundo viaje. Y la respuesta **no puede** discrepar de lo que diría un `GET`, porque es lo que responde un `GET`.
+  > **Ocho desde el 2026-08-28.** Las dos nuevas son la **tarjeta** del proveedor adjudicado, y esta ruta siempre las paga: adjudicar es exactamente lo que rellena `field_assigned_provider`. Desde esa fecha `assigned_provider` viaja como las ocho claves de `GET /api/v1/providers` (`title`, no `name`) y `assigned_offer` como la oferta entera de quince claves, que sale de `offers` sin consulta alguna. Ver [la ampliación del SPEC 89](89-service-request-detail.md#ampliación-2026-08-28--la-adjudicación-viaja-entera).
 - **`viewer` vale siempre `requester`:** la condición 5 demostró que quien llega aquí es el `field_requester`, y nadie más alcanza esa línea.
 - **`offers_rejected` es hermana** para que el objeto bajo `service_request` sea idéntico byte a byte al del detalle y la app pueda sustituirlo sin un caso especial. Y es lo único que el cliente no puede deducir de lo que acaba de recibir: `offers` muestra qué ofertas están rechazadas **ahora**, no cuáles rechazó **esta llamada**.
 

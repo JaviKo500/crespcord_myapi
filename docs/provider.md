@@ -15,6 +15,16 @@ A provider that operates on the platform sees **its own** providers, active or
 not, through [GET /api/v1/providers/mine](provider-mine.md) — the same eight
 fields as here plus two flags, and no pagination.
 
+**These same eight fields are the `assigned_provider` of a service request.**
+The detail of a request answers the provider awarded to it as a whole card,
+built by the very same function, so the app paints it with the widget it already
+has for this listing — see
+[The award, widened](service-request.md#the-award-widened-assigned_provider-and-assigned_offer).
+Two differences worth knowing there: the card of an awarded provider is answered
+**even if its licence has expired** (the *active* rule below is about who may be
+hired, not about who already was), and the request's **listings** still answer a
+short `{id, name}` instead of the card.
+
 The address, the long description (`field_services_desc`), the tags, the full
 gallery and the ratings of a provider do not travel through this listing — see
 [GET /api/v1/providers/%](provider-detail.md) for the detail. The logo does

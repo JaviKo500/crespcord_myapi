@@ -1412,8 +1412,17 @@ key of it, so the app can swap the object in with no special case.
       "category": { "id": 9, "code": "plumbing", "name": "Plomería" },
       "unit": { "id": 57, "name": "Casa 12" },
       "offers_count": 3,
-      "assigned_offer": 901,
-      "assigned_provider": { "id": 41, "name": "Plomería Torres" },
+      "assigned_offer": { "id": 901, "status": "selected", "amount": 150.5, "…": "the fifteen keys of an offer" },
+      "assigned_provider": {
+        "id": 41,
+        "logo": null,
+        "title": "Plomería Torres",
+        "categories": [ { "id": 9, "code": "plumbing", "name": "Plomería" } ],
+        "rating_avg": 4.8,
+        "rating_count": 31,
+        "short_description": "Fontanería y gas, 24 h.",
+        "hourly_rate": 25.5
+      },
       "created": "2026-08-24T09:14:00",
       "desired_start": "2026-08-28T00:00:00",
       "viewer": "requester",
@@ -1440,11 +1449,20 @@ key of it, so the app can swap the object in with no special case.
 
 - **`200` and not `201`:** no resource is born that the client would address.
   The transaction is an effect, not the answer.
-- **Six queries, paid on purpose.** The app repaints the screen it is already on
-  — the new status, `assigned_offer`, every offer with its freshly written
+- **Eight queries, paid on purpose.** The app repaints the screen it is already
+  on — the new status, the awarded offer, every offer with its freshly written
   status and the timeline with the entry already in it — with no second round
   trip. And the response **cannot** disagree with what a `GET` would say,
-  because it is what a `GET` answers.
+  because it is what a `GET` answers. Six of the eight were always there; the
+  other two are the awarded provider's **card**, and this route always pays for
+  them because awarding is precisely what fills `field_assigned_provider`.
+- **`assigned_provider` and `assigned_offer` travel WHOLE** — the eight keys of
+  a provider card and the fifteen of an offer, exactly as
+  `GET /api/v1/service-requests/{id}` answers them. `assigned_provider.name` does
+  not exist: the card calls it `title`. See
+  [The award, widened](service-request.md#the-award-widened-assigned_provider-and-assigned_offer).
+  The awarded offer costs no query of its own — it is the very item of `offers`
+  above, the one this call has just moved to `selected`.
 - **`viewer` is always `requester`:** condition 5 already proved who got here.
 - **`offers_rejected` is the count of offers *this call* moved to `rejected`** —
   not counting the winner, and not counting the ones that were already rejected.

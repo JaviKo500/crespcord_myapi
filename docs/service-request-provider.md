@@ -198,8 +198,8 @@ The values it accepts are the `id` of each provider in
 | `category` | object | `{id, code, name}` |
 | `unit` | object \| null | **Conditional on the reader — see below** |
 | `offers_count` | int | **The real total**, competition included |
-| `assigned_offer` | object \| null | `{id, status}` |
-| `assigned_provider` | object \| null | `{id, name}`. **Not masked**, even when the winner is a rival |
+| `assigned_offer` | object \| null | `{id, status}`. The **detail** widens this to the whole offer |
+| `assigned_provider` | object \| null | `{id, name}`. **Not masked**, even when the winner is a rival. The **detail** widens this to the whole provider card |
 | `created` | string | `Y-m-d\TH:i:s` |
 | `desired_start` | string \| null | `Y-m-d\TH:i:s` |
 | `requester` | object \| null | `{id, name}` — `name` is `"field_nombre field_apellidos"` |
@@ -450,8 +450,17 @@ excludes it by definition and rule 2b points at somebody else. That is a
       "category": { "id": 12, "code": "plumbing", "name": "Plomería" },
       "unit": { "id": 55, "name": "A-301" },
       "offers_count": 4,
-      "assigned_offer": { "id": 901, "status": "selected" },
-      "assigned_provider": { "id": 41, "name": "Plomería Torres" },
+      "assigned_offer": { "id": 901, "status": "selected", "amount": 150.5, "...": "the fifteen keys of an offer" },
+      "assigned_provider": {
+        "id": 41,
+        "logo": null,
+        "title": "Plomería Torres",
+        "categories": [ { "id": 12, "code": "plumbing", "name": "Plomería" } ],
+        "rating_avg": 4.8,
+        "rating_count": 31,
+        "short_description": "Fontanería y gas, 24 h.",
+        "hourly_rate": 25.5
+      },
       "created": "2026-08-12T09:14:00",
       "desired_start": "2026-08-20T08:00:00",
       "requester": { "id": 3, "name": "Ana Pérez" },
@@ -503,8 +512,8 @@ The **thirteen of the listing item**, without a single difference, followed by
 | 5 | `category` | object | `{id, code, name}`; `code` is `""` and never `null` |
 | 6 | `unit` | object \| null | **Only when the job is already mine** — the rule of this file |
 | 7 | `offers_count` | int | **The real total**, competition included |
-| 8 | `assigned_offer` | object \| null | `{id, status}` |
-| 9 | `assigned_provider` | object \| null | `{id, name}`. **Not masked**, even when the winner is a rival |
+| 8 | `assigned_offer` | object \| null | **The whole offer**: the same fifteen keys `my_offers` carries, taken out of that very list. **Redacted for a bidder who lost** — see below |
+| 9 | `assigned_provider` | object \| null | **The whole provider card**: the eight keys of [`GET /api/v1/providers`](provider.md), `title` and not `name`. **Not masked**, even when the winner is a rival |
 | 10 | `created` | string | `Y-m-d\TH:i:s` |
 | 11 | `desired_start` | string \| null | `Y-m-d\TH:i:s` |
 | 12 | `requester` | object \| null | `{id, name}` — `name` is `"field_nombre field_apellidos"`, or the username |
@@ -518,7 +527,11 @@ The **thirteen of the listing item**, without a single difference, followed by
 
 **The thirteen are byte for byte the listing's item for the same `{id}`** — same
 types, same nulls, same order — because they come out of the very same
-serialiser. Nothing appears and nothing disappears with the data or with who is
+serialiser, **with the two award keys as the documented exception**: the listing
+*names* the award, the detail answers it whole (`assigned_offer` as an offer,
+`assigned_provider` as a provider card). The ids match, the order does not move,
+and no key appears or disappears — see
+[The award, widened](service-request.md#the-award-widened-assigned_provider-and-assigned_offer). Nothing appears and nothing disappears with the data or with who is
 asking: a `null` is an answer, an absent key is a question, and a nested object
 that does not apply is a **whole `null`** and never `{id: null, name: null}`.
 
@@ -557,8 +570,20 @@ after bidding, the offer this endpoint returns in `my_offers` is byte for byte
 the one the `201` carried, because both come out of the same serialiser.
 
 **The competition's amounts never travel.** What does travel is the count, and
-the winner's name in `assigned_provider`, unmasked: masking them would create
-two truths about the same datum depending on which endpoint you asked.
+the winner in `assigned_provider`, unmasked and as its whole card: those eight
+keys are what `GET /api/v1/providers` already shows to everybody, and masking
+them would create two truths about the same datum depending on which endpoint
+you asked.
+
+**And this is why `assigned_offer` is redacted for a bidder who lost.** The key
+is widened out of `my_offers`, which holds only my own; when the winner is a
+rival, their offer is not in that list, and widening it out of thin air would
+hand me the price that beat me. So in that one case the fifteen keys travel with
+the thirteen that describe the quote empty — only `id` and `status` say
+anything, exactly what the old two-key shape already said. A redaction is a
+content, never a shape: the keys and their order do not change. The winner that
+is **my own** provider is not redacted at all — my offer is in my list. See
+[the redaction rule](service-request.md#the-one-reader-whose-assigned_offer-is-redacted).
 
 **There is no `can_offer` key.** The client derives *"can I still bid on this?"*
 from `status`, `assigned_provider` and `my_offers`, all three of which are

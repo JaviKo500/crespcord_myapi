@@ -257,8 +257,8 @@ Each element contains exactly these **11 keys, always all 11, in this order**:
 | `category` | object | `{ "id": int, "code": string, "name": string }`, exactly three keys. Never `null` — see [The category is required](#the-category-is-required). `code` is `field_category_code`, the stable identifier `/api/v1/service-categories` answers for the same term, and `""` when the term has none — see [The category code](#the-category-code). |
 | `unit` | object \| **null** | `{ "id": int, "name": string }` or **a whole `null`**, never `{id: null, name: null}`. The unit the service goes to. `name` is `field_nombre_vivienda`, **not** the `vivienda` node title — see [The unit](#the-unit). |
 | `offers_count` | int | Offers received. **`0`** when there are none, never `null` and never absent. See below. |
-| `assigned_offer` | object \| **null** | `{ "id": int, "status": string }` or `null`. `status` is a key of the **offer** catalogue: `sent`, `selected`, `rejected`, `withdrawn`. |
-| `assigned_provider` | object \| **null** | `{ "id": int, "name": string }` or `null`. |
+| `assigned_offer` | object \| **null** | `{ "id": int, "status": string }` or `null`. `status` is a key of the **offer** catalogue: `sent`, `selected`, `rejected`, `withdrawn`. **In the detail this key travels whole** — see [The award, widened](#the-award-widened-assigned_provider-and-assigned_offer). |
+| `assigned_provider` | object \| **null** | `{ "id": int, "name": string }` or `null`. **In the detail this key travels as the whole provider card** — see [The award, widened](#the-award-widened-assigned_provider-and-assigned_offer). |
 | `created` | string | `Y-m-d\TH:i:s`, site timezone — identical to `created` in `/api/v1/claims`. |
 | `desired_start` | string | `field_desired_start`, same format. A real timestamp, not a naive stored string like `reception_date` in claims. |
 
@@ -291,6 +291,15 @@ half of it empty.
 
 To ask *"is there an award?"*, read `assigned_provider`: it is the key that is
 present in both awarded states.
+
+**The two keys keep this table in the detail, and only grow inside.** A listing
+answers twenty requests and can afford to *name* the award; the detail answers
+one and is the screen where the resident looks at what they hired, so there both
+objects travel whole — the provider as the eight-key card of
+[`GET /api/v1/providers`](provider.md) and the offer as the same fifteen-key
+object an item of `offers` is. Which of them is `null` never changes, nor does
+the order or the position of the keys: what grows is the content of an object.
+See [The award, widened](#the-award-widened-assigned_provider-and-assigned_offer).
 
 > ⚠️ `assigned_provider` is **denormalised** and no flow maintains it yet.
 > Nothing validates that it matches the provider of `assigned_offer`, so in
@@ -718,8 +727,10 @@ query**, not even the token's: the shape of the URL is wrong whoever is asking.
 ### The keys the detail adds
 
 Eight, on top of the listing's eleven. `unit` is **not** among them any more: it
-is the listing's, and the only one of the eleven the detail changes — see the
-trim above.
+is the listing's, and one of the **three** of the eleven the detail changes — the
+other two are `assigned_offer` and `assigned_provider`, which travel whole here
+(see [The award, widened](#the-award-widened-assigned_provider-and-assigned_offer)).
+No key is added, dropped or moved by any of the three: what changes is content.
 
 | Key | Source | Nullable | Notes |
 |-----|--------|:--------:|-------|
@@ -734,6 +745,115 @@ trim above.
 
 ¹ Required on the bundle; the `LEFT JOIN`s leave them `NULL` if somebody deleted
 the row by hand, and the serialiser answers `null` instead of breaking.
+
+### The award, widened: `assigned_provider` and `assigned_offer`
+
+In the **detail** — and in every response that answers the detail's object: the
+`201` of the creation, the `200` of the edition, of the cancellation, of the
+closing and of `PUT /api/v1/service-offers/{id}/accept` — the two award keys are
+not a name and a status. They are the two objects the app already knows how to
+paint:
+
+| Key | What it is | Identical to |
+|-----|-----------|--------------|
+| `assigned_provider` | The **provider card**: the same **eight keys, in the same order**, that [`GET /api/v1/providers`](provider.md) answers per provider — `id`, `logo`, `title`, `categories`, `rating_avg`, `rating_count`, `short_description`, `hourly_rate`. | An item of the marketplace listing |
+| `assigned_offer` | The **whole offer**: the same **fifteen keys** described in [Each offer](#each-offer-fifteen-keys-always-in-this-order). | An item of `offers` in this very response |
+
+Both are still `null` when there is no award, and still go `null`
+**independently** — a `direct` request has a provider and no offer.
+
+> ⚠️ **`assigned_provider.name` no longer exists: the card calls it `title`.**
+> The card is the listing's card, byte for byte, and adding a `name` beside
+> `title` would make it a *different* card — exactly the divergence serving one
+> object from one builder prevents. The listings
+> (`GET /api/v1/service-requests` and `GET /api/v1/service-requests/provider`)
+> are **unchanged** and still answer `{id, name}` there.
+
+**`assigned_offer` costs no extra query, and it cannot disagree with the list.**
+The awarded offer of a request *is* one of that request's offers, so the object
+is taken from `offers` (or from `my_offers` on the provider's route) and not read
+again.
+
+**The provider's card is read even when their licence has expired.** The
+marketplace only *lists* active providers; an awarded provider whose licence
+lapsed last week is still the one doing the job, and answering
+`assigned_provider: null` there would tell the resident nobody was awarded. The
+card is `null` in exactly one case, the same as before: the referenced provider
+node was **deleted or unpublished**.
+
+```json
+{
+  "assigned_offer": {
+    "id": 45,
+    "provider": { "id": 7, "name": "Plomería Rivas", "logo": "https://.../sites/default/files/logo-rivas.png" },
+    "amount": 150.5,
+    "message": "Puedo pasar el jueves por la mañana.",
+    "status": "selected",
+    "created": "2026-08-15T11:03:17",
+    "amount_type": "fixed",
+    "valid_until": "2026-08-22T23:59:00",
+    "available_from": "2026-08-17T08:00:00",
+    "duration": { "value": 3, "unit": "hours" },
+    "includes": "Mano de obra, desplazamiento y sellado.",
+    "excludes": "El calentador de repuesto, si hiciera falta.",
+    "tax_included": true,
+    "warranty_days": 90,
+    "requires_visit": false
+  },
+  "assigned_provider": {
+    "id": 7,
+    "logo": "https://.../sites/default/files/logo-rivas.png",
+    "title": "Plomería Rivas",
+    "categories": [ { "id": 12, "code": "plumbing", "name": "Plomería" } ],
+    "rating_avg": 4.8,
+    "rating_count": 31,
+    "short_description": "Plomería y gas, 24 h.",
+    "hourly_rate": 25.5
+  }
+}
+```
+
+#### The one reader whose `assigned_offer` is redacted
+
+A provider who **bid and lost** keeps reading the request — rule 2 above, and an
+offer with a `403` behind it is an offer with no explanation — but their `offers`
+is trimmed to their own, and the winning quote is not in it. Widening the key out
+of a list they are not in would hand a competitor's price to the bidder who lost
+against it, which is precisely what that trim exists to prevent.
+
+So for that reader, and **only** for that reader, `assigned_offer` carries the
+same fifteen keys with the thirteen that describe the quote empty:
+
+```json
+{
+  "assigned_offer": {
+    "id": 45,
+    "provider": null,
+    "amount": null,
+    "message": "",
+    "status": "selected",
+    "created": null,
+    "amount_type": null,
+    "valid_until": null,
+    "available_from": null,
+    "duration": null,
+    "includes": null,
+    "excludes": null,
+    "tax_included": null,
+    "warranty_days": null,
+    "requires_visit": false
+  }
+}
+```
+
+`id` and `status` are the two that always carry — they were already public in the
+two-key shape this replaces — and the nulls are exactly the ones an offer stored
+before SPEC 100 already answers, so no client meets a shape it has not met
+before. **A redaction is a content, never a shape.**
+
+`assigned_provider` is **not** redacted for that reader: those eight keys are
+what `GET /api/v1/providers` already shows to everybody holding a token. The
+loser learns *who* won, never *for how much*.
 
 #### Each offer: fifteen keys, always, in this order
 
@@ -1459,8 +1579,12 @@ cannot drift from it: they are byte for byte what an immediate
 always `"requester"` — the access check proved whoever got here is the
 `field_requester` — and `status` is whatever the request already had, `"open"`
 or `"direct"`, because editing does not move the status. A `direct` request
-answers the same sixteen keys with `assigned_provider` filled in. `images` is always an array, empty when there are none and
-never `null`; `attachment` is `null` when there is none, never `{fid: null}`.
+answers the same sixteen keys with `assigned_provider` filled in — and filled in
+as the **whole provider card**, exactly as the detail answers it (see
+[The award, widened](#the-award-widened-assigned_provider-and-assigned_offer)):
+an edit does not narrow what the response says about the award. `images` is
+always an array, empty when there are none and never `null`; `attachment` is
+`null` when there is none, never `{fid: null}`.
 
 **Success response (200)**
 
@@ -1671,8 +1795,8 @@ else can reach a `200` here — and `offers` therefore travels **untrimmed**.
       "category": { "id": 12, "code": "plumbing", "name": "Plomería" },
       "unit": { "id": 55, "name": "A-301" },
       "offers_count": 4,
-      "assigned_offer": { "id": 52, "status": "rejected" },
-      "assigned_provider": { "id": 9, "name": "Plomería Ruiz" },
+      "assigned_offer": { "id": 52, "status": "rejected", "amount": 150.5, "...": "the fifteen keys of an offer" },
+      "assigned_provider": { "id": 9, "title": "Plomería Ruiz", "...": "the eight keys of a provider card" },
       "created": "2026-08-17T10:05:00",
       "desired_start": "2026-08-20T08:00:00",
       "viewer": "requester",
@@ -1962,8 +2086,8 @@ offer.
       "category": { "id": 12, "code": "plumbing", "name": "Plomería" },
       "unit": { "id": 55, "name": "A-301" },
       "offers_count": 4,
-      "assigned_offer": { "id": 52, "status": "accepted" },
-      "assigned_provider": { "id": 9, "name": "Plomería Ruiz" },
+      "assigned_offer": { "id": 52, "status": "selected", "amount": 150.5, "...": "the fifteen keys of an offer" },
+      "assigned_provider": { "id": 9, "title": "Plomería Ruiz", "...": "the eight keys of a provider card" },
       "created": "2026-08-17T10:05:00",
       "desired_start": "2026-08-20T08:00:00",
       "viewer": "requester",
