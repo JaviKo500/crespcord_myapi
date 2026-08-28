@@ -1831,6 +1831,14 @@ function myapi_service_offer_accept($nid) {
   // one thing the app cannot deduce from what it just received: `offers` shows
   // which offers are rejected NOW, not which ones THIS call rejected — an offer
   // already rejected before the award looks exactly the same.
+  // The card of the awarded provider (SPEC 89). THIS ROUTE ALWAYS PAYS FOR IT,
+  // and rightly so: the award it just made is the very thing that fills
+  // field_assigned_provider, so this 200 is the first response in which the
+  // resident sees the company whose quote they accepted, whole. The awarded
+  // OFFER costs no query — the serialiser takes it out of $offers above, where
+  // step C has just left it with status 'selected'.
+  $assigned_provider = myapi_service_request_assigned_provider_card($detail_row);
+
   myapi_respond(
     [
       'service_request' => myapi_service_request_build_detail(
@@ -1839,7 +1847,8 @@ function myapi_service_offer_accept($nid) {
         $images,
         $offers,
         $offers_count,
-        $transactions
+        $transactions,
+        $assigned_provider
       ),
       'offers_rejected' => $offers_rejected,
     ],

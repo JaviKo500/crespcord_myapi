@@ -1213,10 +1213,19 @@ function myapi_service_request_detail($nid) {
   // the 403 above, so a reader who fits no rule never pays for this query.
   $transactions = myapi_service_request_load_transactions($nid);
 
+  // The card of the awarded provider (SPEC 89): the same eight keys
+  // GET /api/v1/providers answers, so the app paints whoever won the job with
+  // the widget it already has. TWO QUERIES, AND ONLY WHEN THERE IS AN AWARD —
+  // the helper answers NULL with no query at all for every request nobody has
+  // been awarded, which is every 'open' one. The awarded OFFER costs nothing:
+  // the serialiser takes it out of $offers, which this response is already
+  // carrying.
+  $assigned_provider = myapi_service_request_assigned_provider_card($row);
+
   // 7. Respond 200 (read-only endpoint, no message_key). One object under
   // 'service_request', never a list.
   myapi_respond([
-    'service_request' => myapi_service_request_build_detail($row, $viewer, $images, $offers, $offers_count, $transactions),
+    'service_request' => myapi_service_request_build_detail($row, $viewer, $images, $offers, $offers_count, $transactions, $assigned_provider),
   ], 200);
 }
 
@@ -1245,6 +1254,12 @@ function myapi_service_request_detail($nid) {
  * inversion against myapi_service_request_build_detail(), which OVERWRITES
  * `unit` to NULL for every provider reader: that is still correct on the
  * resident's route, which this spec does not touch.
+ *
+ * THE AWARD IS WIDENED BY THE SHARED FUNCTIONS OF SPEC 89, not by a copy:
+ * `assigned_offer` becomes the fifteen-key offer (out of `my_offers`, which is
+ * the trim the redaction of a lost bid depends on) and `assigned_provider`
+ * becomes the eight-key provider card. Both routes call the same two helpers,
+ * so the two details cannot answer two different things about one award.
  *
  * `my_offers` AND NOT `offers` (decision 7). The general detail hands a
  * provider a key called `offers` carrying only their own, which forces the
@@ -1291,10 +1306,15 @@ function myapi_service_request_detail($nid) {
  *   myapi_provider_role_provider_ids(). Never empty on this route — the
  *   orchestrator answered 403 before getting here — and it is what the `unit`
  *   rule measures the award against.
+ * @param array|NULL $assigned_provider
+ *   The card of the awarded provider, from
+ *   myapi_service_request_assigned_provider_card(), or NULL when the request
+ *   has none. REQUIRED and not optional, for the same reason its twin in
+ *   myapi_service_request_build_detail() is.
  *
  * @return array  The nineteen keys, in the documented order.
  */
-function myapi_service_request_provider_build_detail($row, array $images, array $my_offers, $offers_count, array $transactions, array $owned_provider_ids) {
+function myapi_service_request_provider_build_detail($row, array $images, array $my_offers, $offers_count, array $transactions, array $owned_provider_ids, $assigned_provider) {
   $nid = (int) $row->nid;
 
   // The thirteen keys of the provider's listing, from the provider's listing's
@@ -1303,6 +1323,28 @@ function myapi_service_request_provider_build_detail($row, array $images, array 
   $item = myapi_service_request_provider_build_item(
     $row, [$nid => (int) $offers_count], $owned_provider_ids
   );
+
+  // THE AWARD, ANSWERED WHOLE (SPEC 89), and by the SAME two functions the
+  // resident's detail uses — never by a copy of them. That is what keeps the
+  // two routes from ever disagreeing about the same award, and it is why the
+  // `unit` rule above is the only thing about this response that is written
+  // twice: it is the only one that genuinely differs.
+  //
+  // ORDER MATTERS HERE. The `unit` rule of
+  // myapi_service_request_provider_build_item() measures "is this job mine?"
+  // against $item['assigned_provider']['id'], so it has already run by the time
+  // the two keys below are widened. `id` is the one key both shapes carry, so
+  // the rule would still hold if the order changed; not depending on that is
+  // cheaper than remembering it.
+  //
+  // `my_offers` AND NOT `offers`: the list handed to the serialiser is this
+  // reader's own, which is exactly the trim the redaction of a lost bid needs —
+  // see myapi_service_request_assigned_offer_item().
+  $item['assigned_offer'] = myapi_service_request_assigned_offer_item($item['assigned_offer'], $my_offers);
+
+  if ($item['assigned_provider'] !== NULL) {
+    $item['assigned_provider'] = is_array($assigned_provider) ? $assigned_provider : NULL;
+  }
 
   // Appended, never interleaved: the thirteen keep their order and their
   // place, which is what makes the byte-for-byte comparison against the
@@ -1512,11 +1554,19 @@ function myapi_service_request_provider_detail($nid) {
   // reader who fits no rule never pays for this query.
   $transactions = myapi_service_request_load_transactions($nid);
 
+  // The card of the awarded provider (SPEC 89), the same one the resident's
+  // detail answers and loaded by the same helper. IT IS PUBLIC DATA and it
+  // travels whatever the reader: the card is what GET /api/v1/providers already
+  // shows to everybody, so a provider who bid and lost learns from it only who
+  // won — never what they charged, which is the redaction
+  // myapi_service_request_assigned_offer_item() makes over `assigned_offer`.
+  $assigned_provider = myapi_service_request_assigned_provider_card($row);
+
   // 9. Respond 200 (read-only endpoint, no message_key). One object under
   // 'service_request', the same envelope the general detail uses.
   myapi_respond([
     'service_request' => myapi_service_request_provider_build_detail(
-      $row, $images, $my_offers, $offers_count, $transactions, $provider_ids
+      $row, $images, $my_offers, $offers_count, $transactions, $provider_ids, $assigned_provider
     ),
   ], 200);
 }
@@ -2182,8 +2232,14 @@ function myapi_service_request_create() {
   // the same object and cannot drift.
   $transactions = myapi_service_request_load_transactions($node->nid);
 
+  // The card of the awarded provider (SPEC 89). NOT DEAD CODE ON THIS ROUTE:
+  // a request created with a valid assigned_provider_id is born 'direct' with
+  // the award already made, and this 201 is the first place the app sees the
+  // company it chose. An 'open' one pays no query for it.
+  $assigned_provider = myapi_service_request_assigned_provider_card($row);
+
   myapi_respond(
-    ['service_request' => myapi_service_request_build_detail($row, 'requester', $images, [], 0, $transactions)],
+    ['service_request' => myapi_service_request_build_detail($row, 'requester', $images, [], 0, $transactions, $assigned_provider)],
     201,
     'service_request_created'
   );
@@ -2442,7 +2498,8 @@ function myapi_service_request_cancel($nid) {
         $images,
         $offers,
         $offers_count,
-        $transactions
+        $transactions,
+        myapi_service_request_assigned_provider_card($row)
       ),
       'offers_rejected' => $offers_rejected,
     ],
@@ -2882,7 +2939,19 @@ function myapi_service_request_update($nid) {
   // that serves the GET, so they cannot drift from it by accident. The three
   // that go are unset AFTER it builds, which is also what keeps the remaining
   // sixteen in the documented order.
-  $detail = myapi_service_request_build_detail($row, 'requester', $images, [], 0, []);
+  // The card of the awarded provider (SPEC 89): a 'direct' request IS editable
+  // in its title, its description, its date and its files, and it keeps the
+  // provider the resident chose — so this 200 answers the same card the detail
+  // does. An 'open' one pays no query for it.
+  $detail = myapi_service_request_build_detail(
+    $row,
+    'requester',
+    $images,
+    [],
+    0,
+    [],
+    myapi_service_request_assigned_provider_card($row)
+  );
   unset($detail['offers_count'], $detail['offers'], $detail['transactions']);
 
   myapi_respond(['service_request' => $detail], 200, 'service_request_updated');
@@ -3227,7 +3296,8 @@ function myapi_service_request_close($nid) {
         $images,
         $offers,
         $offers_count,
-        $transactions
+        $transactions,
+        myapi_service_request_assigned_provider_card($row)
       ),
       'rating_id' => $rating_id,
     ],

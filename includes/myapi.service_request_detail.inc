@@ -43,6 +43,25 @@
  * callers inside the resource — the two listings and the edit gate — reach it
  * through this include.
  *
+ * TWO FUNCTIONS WERE BORN HERE AFTERWARDS, and both are about ONE key each of
+ * the award (SPEC 89). `assigned_offer` and `assigned_provider` used to be two
+ * keys apiece — an id and a name, an id and a status — and are now the WHOLE
+ * offer and the WHOLE provider card, which is what the app needs on the one
+ * screen where the resident looks at what they hired:
+ *
+ *   myapi_service_request_assigned_offer_item()  — pure, and costs no query:
+ *      the awarded offer of a request IS one of that request's offers, so it
+ *      comes out of the list the detail already loaded. It also owns the one
+ *      confidentiality rule of the pair — the redaction for a bidder who lost.
+ *   myapi_service_request_assigned_provider_card() — one call to
+ *      myapi_provider_card_by_nid(), and only when there is an award. It lives
+ *      here rather than in either serialiser because both serialisers are pure,
+ *      and it is written once because seven call sites answer this same detail.
+ *
+ * Both are shared by the resident's serialiser and the provider's, which is
+ * what keeps the two routes from ever answering two different things about one
+ * award.
+ *
  * myapi_service_request_provider_build_detail() DID NOT COME. It is the
  * provider's sibling of myapi_service_request_build_detail() and nobody outside
  * the request resource calls it, so moving it would be moving code without a
@@ -69,6 +88,18 @@ module_load_include('inc', 'myapi', 'includes/myapi.services_common');
 // which is what makes the detail's first eleven keys byte for byte the
 // listing's — see its docblock.
 module_load_include('inc', 'myapi', 'includes/myapi.service_request_query');
+// SPEC 89: myapi_service_offer_build(), the serialiser of an item of `offers`.
+// The detail used to serve the awarded offer's id and status; since it serves
+// the WHOLE offer under `assigned_offer`, the object it answers has to be built
+// by the same function that builds the items of the list, and not by a second
+// one — see myapi_service_request_assigned_offer_item().
+module_load_include('inc', 'myapi', 'includes/myapi.service_offer');
+// SPEC 89: myapi_provider_card_by_nid(), the eight keys GET /api/v1/providers
+// answers per provider. `assigned_provider` is that card and not a name, so it
+// is loaded from the file that OWNS the card — includes/myapi.provider_card.inc,
+// where SPEC 89 moved it out of resources/provider.resource.inc — and never
+// rebuilt here.
+module_load_include('inc', 'myapi', 'includes/myapi.provider_card');
 
 /**
  * How many offers each request of a page received, in ONE query (SPEC 88).
@@ -454,14 +485,123 @@ function myapi_service_request_build_file($fid, $filename, $request_nid) {
 }
 
 /**
+ * The card of the provider awarded a request, or NULL (SPEC 89).
+ *
+ * THE ONLY FUNCTION OF THE DETAIL THAT QUERIES THE PROVIDER, and the reason it
+ * exists is that both serialisers of the detail are PURE: neither
+ * myapi_service_request_build_detail() nor its provider-side sibling may open a
+ * query, so the card has to be resolved by the orchestrator and handed to them.
+ * Seven call sites do exactly that — the resident's detail, the provider's
+ * detail, the creation, the edition, the cancellation, the closing and the
+ * award — and every one of them writes the same single line, because the rule
+ * of WHEN to pay for the card is written here and nowhere else.
+ *
+ * IT COSTS NOTHING WHEN THERE IS NO AWARD, and that is the whole point of the
+ * guard below: a request nobody has been awarded — every 'open' one, which is
+ * most of them — never reaches myapi_provider_card_by_nid() and never pays its
+ * two queries. The check is over `assigned_provider_id`, the alias of the
+ * JOINED provider node, and never over the raw field column: a field row left
+ * pointing at a provider that was deleted or unpublished has already left that
+ * alias NULL, and asking for its card would be a query with no possible answer.
+ *
+ * @param object $row
+ *   The row of myapi_service_request_detail_row(), which carries
+ *   `assigned_provider_id`.
+ *
+ * @return array|NULL
+ *   The eight keys of myapi_provider_build_item(), or NULL when the request has
+ *   no provider awarded.
+ */
+function myapi_service_request_assigned_provider_card($row) {
+  if (!is_object($row) || !isset($row->assigned_provider_id) || $row->assigned_provider_id === '') {
+    return NULL;
+  }
+
+  return myapi_provider_card_by_nid($row->assigned_provider_id);
+}
+
+/**
+ * The awarded offer, WHOLE, as the reader is allowed to see it (SPEC 89).
+ *
+ * `assigned_offer` used to be two keys — {id, status} — and is now the SAME
+ * OBJECT an item of `offers` is: the fifteen keys of
+ * myapi_service_offer_build(). The app that already parses the list parses this
+ * with the same model, and the screen that shows the awarded quote no longer
+ * has to look the offer up in the list to find its amount.
+ *
+ * IT COSTS NO QUERY, and that is the design and not a lucky accident. The
+ * awarded offer of a request IS one of that request's offers, so the object is
+ * taken from the list the detail has already loaded — matched by id — instead
+ * of being read again. A second query would also be a second chance to
+ * disagree with the list about the same offer.
+ *
+ * THE FALLBACK IS A REDACTION AND NOT AN ERROR, and it is the one rule of this
+ * function that is about confidentiality. The list handed in is ALREADY TRIMMED
+ * BY THE QUERY to what the reader may see (myapi_service_request_load_offers()
+ * with the reader's provider nids), so there is exactly one case in which the
+ * awarded offer is not in it: a provider who bid and LOST, and who keeps
+ * reading the request because rule 2 of myapi_service_request_viewer() says
+ * whoever offered keeps their access. Serving them the winning quote would hand
+ * a competitor's price to the bidder who lost against it — the very leak SPEC
+ * 89 trimmed `offers` to prevent — so what travels is the same fifteen keys
+ * with the thirteen that say anything about the quote left empty. `id` and
+ * `status` are the two that always carry, because they were already public in
+ * the two-key shape this replaces.
+ *
+ * THE EMPTY OBJECT IS BUILT BY myapi_service_offer_build() TOO, out of a row
+ * carrying nothing but the nid and the status, and not written out key by key
+ * here. That is what makes "always the same fifteen keys, in the same order"
+ * true by construction on both branches, and what keeps this function from
+ * becoming a second definition of an offer the day a sixteenth key is added.
+ * The nulls it answers are exactly the ones an offer stored before SPEC 100
+ * already answers, so no client meets a shape it has not met before.
+ *
+ * PURE: no database. Both inputs arrive resolved.
+ *
+ * @param mixed $assigned_offer
+ *   The `assigned_offer` key of myapi_service_request_build_item(): NULL, or
+ *   the two-key {id, status} it builds from the JOINED offer node.
+ * @param array $offers
+ *   The list of myapi_service_offer_build() items the detail is answering —
+ *   `offers` on the resident's route, `my_offers` on the provider's — ALREADY
+ *   TRIMMED BY THE QUERY to what this reader may see.
+ *
+ * @return array|NULL
+ *   The fifteen keys of an offer, or NULL when the request has no offer
+ *   awarded.
+ */
+function myapi_service_request_assigned_offer_item($assigned_offer, array $offers) {
+  if (!is_array($assigned_offer) || !isset($assigned_offer['id'])) {
+    return NULL;
+  }
+
+  $id = (int) $assigned_offer['id'];
+
+  foreach ($offers as $offer) {
+    if (isset($offer['id']) && (int) $offer['id'] === $id) {
+      return $offer;
+    }
+  }
+
+  // The redaction. Same builder, same fifteen keys, and a row that says only
+  // what the two-key shape already said out loud.
+  return myapi_service_offer_build((object) [
+    'nid'    => $id,
+    'status' => isset($assigned_offer['status']) ? $assigned_offer['status'] : NULL,
+  ]);
+}
+
+/**
  * Shapes the whole detail item, for either reader (SPEC 89).
  *
- * THE TEN FIRST KEYS ARE THE LISTING'S, PRODUCED BY THE LISTING'S OWN
+ * THE ELEVEN FIRST KEYS ARE THE LISTING'S, PRODUCED BY THE LISTING'S OWN
  * SERIALISER. This function calls myapi_service_request_build_item() and adds
- * eight keys after it; it does not restate one of them. That is what makes
- * "the ten first keys are byte for byte what GET /api/v1/service-requests
- * answers for that request" an acceptance criterion this file cannot break by
- * accident, and it is why SPEC 88's response does not change by a single key.
+ * eight keys after it; it does not restate one of them, and it OVERWRITES
+ * three — `unit` for the provider, and `assigned_offer` and `assigned_provider`
+ * for both readers. Every id, every key and every position stays exactly where
+ * the listing put it, so SPEC 88's response does not change by a single key and
+ * the detail is still the listing plus eight; what an overwrite changes is how
+ * much of an object travels, never which objects there are.
  *
  * NINETEEN KEYS, ALWAYS, FOR BOTH READERS. Nothing appears and nothing
  * disappears with the data or with who is asking: a null is an answer, an absent
@@ -490,9 +630,31 @@ function myapi_service_request_build_file($fid, $filename, $request_nid) {
  *            Since SPEC 91 this key arrives ALREADY BUILT from
  *            myapi_service_request_build_item() — the listing answers it too —
  *            so what happens here is an OVERWRITE and no longer a second
- *            resolution of the same two columns. It is the one key of the
- *            listing the detail touches, and the resolving rule stays in one
- *            place.
+ *            resolution of the same two columns. The resolving rule stays in
+ *            one place.
+ *
+ * THE AWARD TRAVELS WHOLE, AND THAT IS THE OTHER TWO OVERWRITES. A listing
+ * answers many requests and can only afford to name the award; a detail answers
+ * one and is where the app paints it, so:
+ *
+ *   assigned_offer    : the SAME fifteen-key object an item of `offers` is,
+ *                       taken out of that very list by
+ *                       myapi_service_request_assigned_offer_item() — no query,
+ *                       and no second opinion about the same offer. The one
+ *                       reader it is redacted for is the provider who bid and
+ *                       lost, whose reasons are written in that function.
+ *   assigned_provider : the SAME eight-key card GET /api/v1/providers answers,
+ *                       built by myapi_provider_build_item() and loaded by the
+ *                       orchestrator through
+ *                       myapi_service_request_assigned_provider_card(). The app
+ *                       paints the awarded company with the widget it already
+ *                       has for the marketplace, and `title` is the company's
+ *                       name in it — the card's own key, not a `name` this
+ *                       function would add to keep an older shape alive.
+ *
+ * Both are still NULL when there is no award, and they still go NULL
+ * INDEPENDENTLY: a 'direct' request has a provider and no offer, and that is
+ * the whole reason they are two keys and not one.
  *
  * Everything else the provider receives whole, `requester {id, name}` and
  * `condominium` included, and `offers_count` is the FULL count and not the size
@@ -532,21 +694,53 @@ function myapi_service_request_build_file($fid, $filename, $request_nid) {
  *   The timeline, from myapi_service_request_load_transactions(): already
  *   ordered and already shaped into its five keys. Always an array, empty for
  *   a request born before SPEC 92.
+ * @param array|NULL $assigned_provider
+ *   The card of the awarded provider, from
+ *   myapi_service_request_assigned_provider_card(), or NULL when the request
+ *   has none. REQUIRED and not optional on purpose: a default would let a call
+ *   site forget it and answer `assigned_provider: null` on a request that
+ *   plainly has one, which is the kind of silence a signature is supposed to
+ *   prevent.
  *
  * @return array  The nineteen keys, in order.
  */
-function myapi_service_request_build_detail($row, $viewer, array $images, array $offers, $offers_count, array $transactions) {
+function myapi_service_request_build_detail($row, $viewer, array $images, array $offers, $offers_count, array $transactions, $assigned_provider) {
   $nid = (int) $row->nid;
 
   // The eleven keys of the listing, from the listing's own serialiser. The
   // count is handed over as the one-entry map that function expects.
   $item = myapi_service_request_build_item($row, [$nid => (int) $offers_count]);
 
-  // Half of the provider's trim, and the only key of the listing this function
-  // overwrites instead of adding — see the docblock. NULL here is a DECISION
-  // and not a missing datum, which is what `viewer` below makes readable.
+  // Half of the provider's trim, and the FIRST of the three keys of the listing
+  // this function overwrites instead of adding — see the docblock. NULL here is
+  // a DECISION and not a missing datum, which is what `viewer` below makes
+  // readable.
   if ($viewer === 'provider') {
     $item['unit'] = NULL;
+  }
+
+  // THE AWARD, ANSWERED WHOLE. The two other keys of the listing this function
+  // overwrites, and the reason the detail is worth a round trip once a request
+  // has been awarded: the listing says WHICH offer and WHICH provider won, the
+  // detail says what the quote actually is and who the company actually is. The
+  // ids and the order of the keys do not move — `assigned_offer` and
+  // `assigned_provider` are still the eighth and ninth keys, still null when
+  // there is no award — so what changes is the CONTENT of an object, never the
+  // shape of the response.
+  //
+  // Neither line resolves anything: the offer comes out of the list this same
+  // response is already carrying, and the card was loaded by the orchestrator
+  // through myapi_service_request_assigned_provider_card(). This function stays
+  // pure, which is what its docblock promises and what the unit suite relies on.
+  $item['assigned_offer'] = myapi_service_request_assigned_offer_item($item['assigned_offer'], $offers);
+
+  // The guard is over the BUILT key and not over the argument: a card that
+  // could not be loaded — the provider node deleted between two queries of the
+  // same request — answers NULL, the same answer a broken reference already
+  // gets from myapi_service_request_build_item(). Passing a card for a request
+  // with no award never invents one.
+  if ($item['assigned_provider'] !== NULL) {
+    $item['assigned_provider'] = is_array($assigned_provider) ? $assigned_provider : NULL;
   }
 
   // Required on the bundle, but LEFT-joined: a field row deleted by hand
