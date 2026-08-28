@@ -242,6 +242,15 @@ function myapi_schema() {
         'unsigned'    => TRUE,
         'not null'    => FALSE,
       ],
+      // SPEC 109. Logical FK to the provider node this notice belongs to. No
+      // index: the inbox is always queried by uid, so a column nothing filters
+      // by would only cost writes.
+      'provider_id' => [
+        'description' => 'Logical FK to the provider node (nid) this notification is about. NULL on every notification that is not addressed to a provider.',
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'not null'    => FALSE,
+      ],
       'is_read' => [
         'description' => '0 = unread, 1 = read.',
         'type'        => 'int',
@@ -513,6 +522,11 @@ function myapi_html_mail_keys() {
     // SPEC 80. The detail of a payment registered from the app, sent to the
     // 'backend' role.
     'myapi_payment_created_admin',
+    // SPEC 109. The two mails a service request fires when it is created: the
+    // heads-up to every account of a notified provider, and the detail sent to
+    // the 'backend' role.
+    'myapi_service_request_provider',
+    'myapi_service_request_admin',
   ];
 }
 
@@ -4408,5 +4422,41 @@ function myapi_update_7035() {
 
   return t('SPEC 100: creados en @type los diez campos del presupuesto de una oferta (tipo de precio, validez, disponibilidad, duración y su unidad, qué incluye, qué no incluye, impuesto incluido, garantía y visita previa). Las diez instancias son opcionales. Sin backfill: las ofertas ya guardadas no se tocan y responden null en los diez.', [
     '@type' => MYAPI_SERVICES_OFFER_TYPE,
+  ]);
+}
+
+/**
+ * SPEC 109: adds provider_id to myapi_notifications and registers the two new
+ * HTML mail keys.
+ *
+ * The column is the single schema change of the spec: it says which provider a
+ * notification is about, so a resident's notice and a provider's notice can
+ * live side by side in the same inbox table. Added with the same idempotent
+ * db_field_exists() guard as myapi_update_7005(), so a second pass is a no-op.
+ *
+ * No backfill: every row saved before this update stays NULL, which is exactly
+ * what it means — none of them is a provider notice.
+ *
+ * myapi_mail_system_register() walks myapi_html_mail_keys(), so it re-registers
+ * the previous keys too (a no-op for the ones already mapped) and maps the two
+ * new ones; without it their HTML body would arrive converted to plain text.
+ *
+ * @return string
+ *   A summary line, shown by drush and by update.php.
+ */
+function myapi_update_7036() {
+  if (!db_field_exists('myapi_notifications', 'provider_id')) {
+    db_add_field('myapi_notifications', 'provider_id', [
+      'description' => 'Logical FK to the provider node (nid) this notification is about. NULL on every notification that is not addressed to a provider.',
+      'type'        => 'int',
+      'unsigned'    => TRUE,
+      'not null'    => FALSE,
+    ]);
+  }
+
+  myapi_mail_system_register();
+
+  return t('SPEC 109: añadida la columna provider_id a myapi_notifications (sin backfill: las filas anteriores quedan en NULL) y registradas las claves de correo HTML (@count en total).', [
+    '@count' => count(myapi_html_mail_keys()),
   ]);
 }
