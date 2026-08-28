@@ -1128,10 +1128,20 @@ The response is the **same nineteen-key object**
 not exist a moment ago), `closed_at: null` — and `transactions` holding the
 initial entry, which **does** already exist.
 
+**Creating a request notifies the providers** (SPEC 109): every **active**
+provider of the request's category when it is born `open`, only the awarded one
+when it is born `direct`, through inbox, push and email — plus a detail email to
+the `backend` role. The `201` below is unchanged by it, and so is everything
+else on this page: the trigger is best-effort and its failures never reach the
+response. The full contract (audiences, texts, what a provider is never told) is
+in [service-request-notifications.md](service-request-notifications.md).
+
 Out of scope of this endpoint: editing, cancelling, closing or awarding a
 request already created — the first two have routes of their own, the other two
 do not exist yet; offering on a request, which has its own route
-([service-offer.md](service-offer.md)); any notification on creation;
+([service-offer.md](service-offer.md)); notifying anybody of anything other than
+the creation, and notifying a request created outside this endpoint (the back
+office, drush, an import) at all;
 restricting a `direct` request's visibility to the provider it names — a
 provider not of the chosen category still cannot see it, but one of the same
 category the resident did **not** pick still can, exactly like every other
@@ -1554,8 +1564,11 @@ a later `GET` holds exactly the same elements as before. That is a decision, not
 an omission — the timeline records **status changes**, and an edit is not one.
 
 **No notification and no email** to anybody — not even to the provider of a
-`direct` request whose statement just changed; the marketplace has no notifier
-at all yet — and `field_request_status` does not move. What does change is
+`direct` request whose statement just changed. The marketplace does have a
+notifier since SPEC 109, but it fires on **creation only**
+([service-request-notifications.md](service-request-notifications.md)); every
+other event of the lifecycle, this one included, is still silent — and
+`field_request_status` does not move. What does change is
 `{node}.changed`, which is the `node_save()` doing its job.
 
 The endpoint is **not idempotent and does not need to be**: two edits in a row

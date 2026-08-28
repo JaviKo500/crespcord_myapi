@@ -96,7 +96,7 @@ matches the filtered list the user is looking at.
         "type": "bulletin",
         "title": "Corte de agua programado",
         "body": "El sábado de 8:00 a 12:00 se suspende el servicio...",
-        "deep_link": { "target": "bulletin", "id": 812, "unit": null, "condominium": null },
+        "deep_link": { "target": "bulletin", "id": 812, "unit": null, "condominium": null, "provider": null },
         "is_read": false,
         "created_at": 1752566400,
         "read_at": null
@@ -120,6 +120,11 @@ matches the filtered list the user is looking at.
   `condominium` is set only for `Condominio`-scope bulletins (every recipient
   belongs to that one condominium); it stays `NULL` for `General` and
   `Personalizado` bulletins, which span several or unrelated condominiums.
+- `deep_link.provider` (SPEC 109) is the `provider` node this notification is
+  **about**, and it is `NULL` on every notification addressed to a resident —
+  that is, on every notification that existed before that spec. It is set only
+  by the service request triggers, where it tells the app which provider to
+  enter as. See `docs/service-request-notifications.md`.
 
 **Possible errors**
 | Code | When |
@@ -153,7 +158,7 @@ matches nothing, and returns `404`.
     "type": "bulletin",
     "title": "Corte de agua programado",
     "body": "El sábado de 8:00 a 12:00 se suspende el servicio...",
-    "deep_link": { "target": "bulletin", "id": 812, "unit": null, "condominium": null },
+    "deep_link": { "target": "bulletin", "id": 812, "unit": null, "condominium": null, "provider": null },
     "is_read": true,
     "created_at": 1752566400,
     "read_at": 1752570000
@@ -263,6 +268,31 @@ balances reuses the same `$node` object, so `$node->original` keeps its stale
 pre-transition status); a `drupal_static` guard in `myapi_fee_notify_issued()`
 prevents the duplicate row.
 
+## Service request trigger (SPEC 109)
+
+When a resident creates a service request from
+`POST /api/v1/service-requests`, the providers that can answer it are notified —
+every **active** provider of the request's category when it is born `open`, and
+only the awarded one when it is born `direct`. One call per provider, so the
+rows of a batch all carry the same `provider_id`.
+
+| Case | `source_type` | `type` | `title` |
+|---|---|---|---|
+| Open request | `service_request` | `service_request_open` | `Nueva solicitud de servicio` |
+| Direct request | `service_request` | `service_request_direct` | `Nueva solicitud directa para ti` |
+
+**Deep link:** `deep_link.target` = `service_request_provider` (deliberately not
+the resident's `service_request`: the same nid opens a different screen
+depending on which side is looking) and `deep_link.id` = the request's nid.
+`deep_link.condominium` carries `field_condominium`, `deep_link.unit` is
+**always `NULL`** — a provider does not learn which home asked — and
+`deep_link.provider` carries the nid of the provider that notice is about.
+
+The push `data` of these two is the one place `audience` is `provider`.
+
+The full contract — audiences, texts, the two emails and what a provider is
+never told — is in `docs/service-request-notifications.md`.
+
 ## OneSignal configuration
 
 Set as Drupal variables (in `settings.php` via `$conf[...]` or with
@@ -275,10 +305,21 @@ Set as Drupal variables (in `settings.php` via `$conf[...]` or with
 
 If either is missing, the fan-out to the inbox still happens; only the push is
 skipped, with a `watchdog(WATCHDOG_WARNING)`. The push `data` payload is
-`{ "target": "bulletin", "id": <nid>, "unit": null, "condominium": <nid|null>, "notification_type": "bulletin" }`.
+`{ "target": "bulletin", "id": <nid>, "unit": null, "condominium": <nid|null>, "notification_type": "bulletin", "audience": "resident", "provider": null }`.
 `unit`/`condominium` mirror `deep_link.unit`/`deep_link.condominium`: `unit` is
 always `NULL` for `bulletin` notifications and `condominium` carries the
 condominium nid only for `Condominio`-scope bulletins (`NULL` otherwise).
+
+`audience` and `provider` (SPEC 109) travel in the `data` of **every** push of
+the module, and `provider` mirrors `deep_link.provider`:
+
+| Key | Values | Meaning |
+|---|---|---|
+| `audience` | `resident` · `provider` | Which side of the app the notice belongs to. Every trigger written before SPEC 109 — bulletin, approved payment, cancelled payment, receipt, extra fee, claims, reservations — emits `resident`, and none of them changed in any other way. |
+| `provider` | `<nid>` · `null` | The provider the notice is about, so the app knows which provider to enter with. `null` for every `resident` push. |
+
+Unlike `provider`, `audience` is **not** stored: it is derivable from the row's
+`type` and `provider_id`, so it exists only in the payload.
 External ids are chunked to OneSignal's 2000-per-request limit. A transport
 failure re-queues the batch for the next cron (standard Queue API behaviour),
 which may deliver a push twice — the inbox is never duplicated.
