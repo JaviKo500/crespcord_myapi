@@ -221,6 +221,19 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'service_offer_not_acceptable'       => 'This offer can no longer be accepted.',
       'service_offer_expired'              => 'This offer has expired.',
       'service_request_not_assignable'     => 'This request can no longer be awarded.',
+      // SPEC 108. Closing a request, and THREE keys: one success and two
+      // refusals. not_closable is its own key and not a reuse of
+      // not_cancellable because the resident is told a different thing — a
+      // request that cannot be closed may still be cancellable, and the other
+      // way round. provider_missing only ever reaches a corrupt node: every
+      // direct is born with an assigned provider and every assigned one gets
+      // it when the offer is awarded. Everything else this endpoint answers —
+      // missing_field, invalid_field, field_too_long, service_request_not_found,
+      // service_request_forbidden, missing_authorization, invalid_token and
+      // method_not_allowed — is reused above, unchanged.
+      'service_request_closed'             => 'Service request closed successfully.',
+      'service_request_not_closable'       => 'This service request can no longer be closed.',
+      'service_request_provider_missing'   => 'This service request has no assigned provider and cannot be rated.',
     ],
     'es' => [
       'invalid_credentials'    => 'Usuario o contraseña incorrectos.',
@@ -342,6 +355,10 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'service_offer_not_acceptable'       => 'Esta oferta ya no se puede aceptar.',
       'service_offer_expired'              => 'Esta oferta ha caducado.',
       'service_request_not_assignable'     => 'Esta solicitud ya no admite adjudicar una oferta.',
+      // SPEC 108 — see the note next to the English block.
+      'service_request_closed'             => 'Solicitud cerrada correctamente.',
+      'service_request_not_closable'       => 'Esta solicitud ya no se puede cerrar.',
+      'service_request_provider_missing'   => 'Esta solicitud no tiene proveedor asignado y no se puede calificar.',
     ],
   ];
 
