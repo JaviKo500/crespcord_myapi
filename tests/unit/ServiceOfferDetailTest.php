@@ -13,6 +13,7 @@ require_once __DIR__ . '/../../includes/myapi.service_offer.inc';
 require_once __DIR__ . '/../../includes/myapi.service_offer_query.inc';
 require_once __DIR__ . '/../../includes/myapi.service_request_query.inc';
 require_once __DIR__ . '/../../includes/myapi.service_request_detail.inc';
+require_once __DIR__ . '/../../includes/myapi.provider_card.inc';
 require_once __DIR__ . '/../../resources/service_offer.resource.inc';
 // SPEC 103, decision 4: `condominium` and `requester` are built in THREE places
 // on purpose. This suite is what keeps the three in agreement, so it has to be
@@ -565,7 +566,9 @@ class ServiceOfferDetailTest extends TestCase {
 
     $context = myapi_service_offer_build_context($row, TRUE, TRUE);
     $listing = myapi_service_request_provider_build_item($row, [], [self::PROVIDER_NID]);
-    $detail = myapi_service_request_build_detail($row, 'requester', [], [], 0, []);
+    // The seventh argument is the awarded provider's card (SPEC 89); this row
+    // carries no award, so NULL is what the endpoint would pass too.
+    $detail = myapi_service_request_build_detail($row, 'requester', [], [], 0, [], NULL);
 
     foreach (['condominium', 'requester'] as $key) {
       $this->assertSame($listing[$key], $context[$key], $key . ': the provider listing and the context agree');

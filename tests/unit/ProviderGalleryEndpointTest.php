@@ -16,6 +16,7 @@ require_once __DIR__ . '/../../includes/myapi.provider_files.inc';
 // The third owner myapi_file_download() asks since SPEC 89. This file exercises
 // that chain end to end, so every link of it has to be loaded here.
 require_once __DIR__ . '/../../includes/myapi.service_request_files.inc';
+require_once __DIR__ . '/../../includes/myapi.provider_card.inc';
 require_once __DIR__ . '/../../resources/provider.resource.inc';
 require_once __DIR__ . '/../../myapi.module';
 

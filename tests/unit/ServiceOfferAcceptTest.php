@@ -15,6 +15,7 @@ require_once __DIR__ . '/../../includes/myapi.service_offer_query.inc';
 require_once __DIR__ . '/../../includes/myapi.service_request_query.inc';
 require_once __DIR__ . '/../../includes/myapi.service_request_detail.inc';
 require_once __DIR__ . '/../../includes/myapi.user.inc';
+require_once __DIR__ . '/../../includes/myapi.provider_card.inc';
 require_once __DIR__ . '/../../resources/service_offer.resource.inc';
 require_once __DIR__ . '/../../myapi.module';
 
@@ -1032,6 +1033,50 @@ class ServiceOfferAcceptTest extends TestCase {
     ], array_keys($result['json']['data']['service_request']));
 
     $this->assertSame('requester', $result['json']['data']['service_request']['viewer']);
+  }
+
+  /**
+   * THE AWARD THIS CALL JUST MADE TRAVELS WHOLE (SPEC 89). This is the response
+   * in which the resident first sees what they accepted, so `assigned_provider`
+   * is the eight-key card of GET /api/v1/providers and `assigned_offer` is the
+   * very item of `offers` — not an id and a name.
+   *
+   * The fixture states the award the way a REREAD would find it, which is what
+   * this response is: node_save() does not persist at this layer, so the
+   * columns the endpoint wrote are seeded rather than echoed. That is the same
+   * argument testTheResponseIsRebuiltFromTheDatabase() makes from the other
+   * side.
+   */
+  public function testTheAwardItJustMadeTravelsWhole() {
+    $this->seed([], [
+      'assigned_offer_id'      => (string) self::OFFER_NID,
+      'assigned_offer_status'  => 'selected',
+      'assigned_offer_raw'     => (string) self::OFFER_NID,
+      'assigned_provider_id'   => (string) self::PROVIDER_NID,
+      'assigned_provider_name' => 'Plomería Torres',
+      'assigned_provider_raw'  => (string) self::PROVIDER_NID,
+    ]);
+    $this->authenticate();
+
+    $sr = $this->dispatch()['json']['data']['service_request'];
+
+    // The card: the listing's eight keys, in the listing's order. `title` is
+    // the company's name in it, and `rating_count` is 0 and never null for a
+    // provider nobody has rated yet.
+    $this->assertSame(
+      ['id', 'logo', 'title', 'categories', 'rating_avg', 'rating_count', 'short_description', 'hourly_rate'],
+      array_keys($sr['assigned_provider'])
+    );
+    $this->assertSame(self::PROVIDER_NID, $sr['assigned_provider']['id']);
+    $this->assertSame('Plomería Torres', $sr['assigned_provider']['title']);
+    $this->assertNull($sr['assigned_provider']['rating_avg']);
+    $this->assertSame(0, $sr['assigned_provider']['rating_count']);
+
+    // The offer: the SAME object the list carries, taken out of it and never
+    // read again.
+    $this->assertSame($sr['offers'][0], $sr['assigned_offer']);
+    $this->assertSame(self::OFFER_NID, $sr['assigned_offer']['id']);
+    $this->assertCount(15, $sr['assigned_offer']);
   }
 
   /**

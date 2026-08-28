@@ -14,6 +14,7 @@ require_once __DIR__ . '/../../includes/myapi.user.inc';
 require_once __DIR__ . '/../../includes/myapi.service_offer.inc';
 require_once __DIR__ . '/../../includes/myapi.service_request_query.inc';
 require_once __DIR__ . '/../../includes/myapi.service_request_detail.inc';
+require_once __DIR__ . '/../../includes/myapi.provider_card.inc';
 require_once __DIR__ . '/../../resources/service_request.resource.inc';
 
 /**
@@ -184,9 +185,13 @@ class ServiceRequestCreateEndpointTest extends TestCase {
   private function providerRows($nid, array $categories, $status = '1', $expiry = NULL) {
     $expiry = $expiry === NULL ? (string) (REQUEST_TIME + 86400) : $expiry;
 
+    // `title` is what the CARD of SPEC 89 reads: a 'direct' request is born
+    // awarded, so the 201 answers this provider's card and the fixture has to
+    // carry the node column that card is built from.
     if (empty($categories)) {
       return [[
         'nid' => (string) $nid, 'type' => MYAPI_SERVICES_PROVIDER_TYPE,
+        'title' => 'Plomería Rivas',
         'status' => $status, 'license_expiry' => $expiry, 'category_tid' => NULL,
       ]];
     }
@@ -194,6 +199,7 @@ class ServiceRequestCreateEndpointTest extends TestCase {
     return array_map(function ($tid) use ($nid, $status, $expiry) {
       return [
         'nid' => (string) $nid, 'type' => MYAPI_SERVICES_PROVIDER_TYPE,
+        'title' => 'Plomería Rivas',
         'status' => $status, 'license_expiry' => $expiry, 'category_tid' => (string) $tid,
       ];
     }, $categories);
@@ -835,8 +841,16 @@ class ServiceRequestCreateEndpointTest extends TestCase {
     $this->assertSame(201, $result['status']);
     $sr = $result['json']['data']['service_request'];
     $this->assertSame('direct', $sr['status']);
+    // THE WHOLE CARD, not a name (SPEC 89): the same eight keys
+    // GET /api/v1/providers answers, so the company travels with its logo, its
+    // categories and its rating and the app paints it with the widget it
+    // already has. `title` IS the name here — the card's own key.
+    $this->assertSame(
+      ['id', 'logo', 'title', 'categories', 'rating_avg', 'rating_count', 'short_description', 'hourly_rate'],
+      array_keys($sr['assigned_provider'])
+    );
     $this->assertSame(self::PROVIDER, $sr['assigned_provider']['id']);
-    $this->assertSame('Plomería Rivas', $sr['assigned_provider']['name']);
+    $this->assertSame('Plomería Rivas', $sr['assigned_provider']['title']);
     // A direct award never adjudicates an offer.
     $this->assertNull($sr['assigned_offer']);
 

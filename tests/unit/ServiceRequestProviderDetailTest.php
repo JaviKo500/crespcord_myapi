@@ -13,6 +13,7 @@ require_once __DIR__ . '/../../includes/myapi.provider_role.inc';
 require_once __DIR__ . '/../../includes/myapi.service_offer.inc';
 require_once __DIR__ . '/../../includes/myapi.service_request_query.inc';
 require_once __DIR__ . '/../../includes/myapi.service_request_detail.inc';
+require_once __DIR__ . '/../../includes/myapi.provider_card.inc';
 require_once __DIR__ . '/../../resources/service_request.resource.inc';
 
 /**
@@ -196,6 +197,33 @@ class ServiceRequestProviderDetailTest extends TestCase {
       'type'           => MYAPI_SERVICES_PROVIDER_TYPE,
       'status'         => $status,
       'license_expiry' => $expiry === NULL ? (string) (REQUEST_TIME + 86400) : $expiry,
+      // The columns the CARD of SPEC 89 is built from: since `assigned_provider`
+      // is the same eight-key object GET /api/v1/providers answers, the node
+      // that wins a request has to carry what a card is made of. `title` is the
+      // company's name in that card.
+      'title'             => 'Proveedor ' . $nid,
+      'rating_avg'        => '4.5',
+      'rating_count'      => '12',
+      'short_description' => 'Reparaciones en el día.',
+      'hourly_rate'       => '25.50',
+      'logo_uri'          => NULL,
+    ];
+  }
+
+  /**
+   * The eight keys of a provider card, as this suite expects them for the node
+   * providerNode() seeds — the very same object GET /api/v1/providers answers.
+   */
+  private function providerCard($nid) {
+    return [
+      'id'                => (int) $nid,
+      'logo'              => NULL,
+      'title'             => 'Proveedor ' . $nid,
+      'categories'        => [],
+      'rating_avg'        => 4.5,
+      'rating_count'      => 12,
+      'short_description' => 'Reparaciones en el día.',
+      'hourly_rate'       => 25.5,
     ];
   }
 
@@ -913,11 +941,32 @@ class ServiceRequestProviderDetailTest extends TestCase {
       myapi_test_static_reset();
       $detail = $this->item($this->dispatch());
 
+      // THE TWO AWARD KEYS ARE THE DOCUMENTED EXCEPTION (SPEC 89). A listing
+      // answers many requests and can only afford to NAME the award; the detail
+      // answers one and widens it — `assigned_offer` to the whole offer and
+      // `assigned_provider` to the whole card. Everything else, ids and order
+      // included, is still the listing's byte for byte, which is what keeps the
+      // two routes from disagreeing about the same request.
+      $award = ['assigned_offer', 'assigned_provider'];
+      $listed_rest = array_diff_key($listed, array_flip($award));
+      $detail_rest = array_diff_key(array_slice($detail, 0, 13, TRUE), array_flip($award));
+
       $this->assertSame(
-        $listed,
-        array_slice($detail, 0, 13, TRUE),
+        $listed_rest,
+        $detail_rest,
         'the first thirteen keys differ — ' . $label
       );
+
+      // And the two that do differ still say the SAME THING about who won: the
+      // ids match, only the amount of detail around them changes.
+      foreach ($award as $key) {
+        if ($listed[$key] === NULL) {
+          $this->assertNull($detail[$key], $key . ' — ' . $label);
+        }
+        else {
+          $this->assertSame($listed[$key]['id'], $detail[$key]['id'], $key . ' — ' . $label);
+        }
+      }
     }
   }
 
@@ -1465,7 +1514,14 @@ class ServiceRequestProviderDetailTest extends TestCase {
 
   /**
    * `assigned_provider` names the winner EVEN WHEN IT IS A RIVAL, unmasked
-   * (decision 10 of SPEC 98, inherited here without change).
+   * (decision 10 of SPEC 98, inherited here without change) — and since SPEC 89
+   * it names it with the WHOLE CARD, not with a name.
+   *
+   * THE CARD IS PUBLIC DATA and that is why it travels to a rival: those eight
+   * keys are what GET /api/v1/providers already shows to everybody holding a
+   * token. What the loser must not learn is the PRICE that beat them, and that
+   * is `assigned_offer`, which this same detail redacts — see
+   * testTheWinningQuoteIsRedactedForTheProviderThatLost().
    */
   public function testTheWinningRivalIsNamed() {
     $result = $this->detail([
@@ -1475,12 +1531,109 @@ class ServiceRequestProviderDetailTest extends TestCase {
       'field_data_field_assigned_provider' => [
         $this->assignment(self::NID, self::FOREIGN_PROVIDER),
       ],
+      // Both provider nodes: the reader's own (the access rules read it) and
+      // the rival's, which is the one the card is built from.
+      'node' => [
+        $this->providerNode(self::PROVIDER_A),
+        $this->providerNode(self::FOREIGN_PROVIDER),
+      ],
     ]);
 
     $this->assertSame(
-      ['id' => self::FOREIGN_PROVIDER, 'name' => 'Proveedor ' . self::FOREIGN_PROVIDER],
+      $this->providerCard(self::FOREIGN_PROVIDER),
       $this->item($result)['assigned_provider']
     );
+  }
+
+  /**
+   * THE WINNING QUOTE IS REDACTED FOR THE PROVIDER THAT LOST (SPEC 89).
+   *
+   * `assigned_offer` is the whole fifteen-key offer on this route too — taken
+   * out of `my_offers`, which is the list this reader is allowed to see. A
+   * bidder who lost is not in that list, and widening the key out of it would
+   * have handed them the price that beat them: the very leak the trim of
+   * `my_offers` exists to prevent. So the fifteen keys travel with the thirteen
+   * that describe the quote empty, and only `id` and `status` — the two the
+   * old two-key shape already carried — say anything.
+   */
+  public function testTheWinningQuoteIsRedactedForTheProviderThatLost() {
+    $result = $this->detail([
+      $this->awarded(self::NID, self::FOREIGN_PROVIDER, MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED, [
+        'assigned_offer_raw'             => '901',
+        'assigned_offer_id'              => '901',
+        'assigned_offer_status'          => 'selected',
+        'field_assigned_offer_target_id' => '901',
+      ]),
+    ], [
+      'field_data_field_request' => [
+        // Mine, which is what grants me the access...
+        $this->offer(self::NID, self::PROVIDER_A, 900, ['amount' => '210.00']),
+        // ...and the rival's, the one that won.
+        $this->offer(self::NID, self::FOREIGN_PROVIDER, 901, [
+          'amount'                        => '150.50',
+          'fost.field_offer_status_value' => 'selected',
+        ]),
+      ],
+      'field_data_field_assigned_provider' => [
+        $this->assignment(self::NID, self::FOREIGN_PROVIDER),
+      ],
+      'node' => [
+        $this->providerNode(self::PROVIDER_A),
+        $this->providerNode(self::FOREIGN_PROVIDER),
+      ],
+    ]);
+
+    $item = $this->item($result);
+
+    // My own offer, and only my own.
+    $this->assertSame([900], array_column($item['my_offers'], 'id'));
+
+    $this->assertSame(901, $item['assigned_offer']['id']);
+    $this->assertSame('selected', $item['assigned_offer']['status']);
+    $this->assertNull($item['assigned_offer']['amount']);
+    $this->assertNull($item['assigned_offer']['provider']);
+    $this->assertNull($item['assigned_offer']['created']);
+    // The same fifteen keys as an offer of the list: a redaction is a content,
+    // never a shape.
+    $this->assertSame(
+      array_keys($item['my_offers'][0]),
+      array_keys($item['assigned_offer'])
+    );
+    // The winning price never left the server.
+    $this->assertStringNotContainsString('150.5', $result['output']);
+  }
+
+  /**
+   * THE PROVIDER THAT WON READS ITS OWN QUOTE WHOLE, and reads it as the very
+   * object `my_offers` carries: the redaction above is a rule about offers the
+   * reader may not see, not a rule about providers.
+   */
+  public function testTheAwardedOfferIsTheSameObjectAsItsItemInMyOffers() {
+    $result = $this->detail([
+      $this->awarded(self::NID, self::PROVIDER_A, MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED, [
+        'assigned_offer_raw'             => '900',
+        'assigned_offer_id'              => '900',
+        'assigned_offer_status'          => 'selected',
+        'field_assigned_offer_target_id' => '900',
+      ]),
+    ], [
+      'field_data_field_request' => [
+        $this->offer(self::NID, self::PROVIDER_A, 900, [
+          'amount'                        => '210.50',
+          'fost.field_offer_status_value' => 'selected',
+        ]),
+      ],
+      'field_data_field_assigned_provider' => [
+        $this->assignment(self::NID, self::PROVIDER_A),
+      ],
+    ]);
+
+    $item = $this->item($result);
+
+    $this->assertSame($item['my_offers'][0], $item['assigned_offer']);
+    $this->assertSame(210.5, $item['assigned_offer']['amount']);
+    // And the winner is my own company, as its whole card.
+    $this->assertSame($this->providerCard(self::PROVIDER_A), $item['assigned_provider']);
   }
 
   /* -------------------------------------------------------------------------
@@ -1593,7 +1746,15 @@ class ServiceRequestProviderDetailTest extends TestCase {
     $body = $this->functionBodies()['myapi_service_request_provider_build_detail'];
 
     $this->assertStringContainsString('myapi_service_request_provider_build_item', $body);
-    $this->assertStringNotContainsString("'assigned_provider'", $body, 'the unit rule is not rewritten here');
+    // The `unit` rule — the one thing about this response that genuinely
+    // differs from the resident's — is NOT rewritten here: it lives in
+    // myapi_service_request_provider_build_item() and nowhere else.
+    $this->assertStringNotContainsString("\$item['unit']", $body, 'the unit rule is not rewritten here');
+    // The two award keys ARE widened here, and by the SHARED helpers of SPEC 89
+    // rather than by a copy of them — that is what keeps the two details from
+    // answering two different things about one award.
+    $this->assertStringContainsString('myapi_service_request_assigned_offer_item', $body);
+    $this->assertStringNotContainsString('myapi_provider_build_item', $body, 'the card is not rebuilt here');
   }
 
   /**

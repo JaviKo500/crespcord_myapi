@@ -11,6 +11,7 @@ require_once __DIR__ . '/../../includes/myapi.services_common.inc';
 require_once __DIR__ . '/../../includes/myapi.provider_files.inc';
 require_once __DIR__ . '/../../includes/myapi.provider_query.inc';
 require_once __DIR__ . '/../../includes/myapi.text.inc';
+require_once __DIR__ . '/../../includes/myapi.provider_card.inc';
 require_once __DIR__ . '/../../resources/provider.resource.inc';
 
 /**

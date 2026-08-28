@@ -16,6 +16,7 @@ require_once __DIR__ . '/../../includes/myapi.user.inc';
 require_once __DIR__ . '/../../includes/myapi.service_offer.inc';
 require_once __DIR__ . '/../../includes/myapi.service_request_query.inc';
 require_once __DIR__ . '/../../includes/myapi.service_request_detail.inc';
+require_once __DIR__ . '/../../includes/myapi.provider_card.inc';
 require_once __DIR__ . '/../../resources/service_request.resource.inc';
 
 /**
@@ -305,7 +306,7 @@ class ServiceRequestUpdateTest extends TestCase {
    * Seeds the token, the user and the request row. Extra tables let a case add
    * the images the response paints or the offers that close the gate.
    */
-  private function seed(array $extra_tables = [], array $row_overrides = []) {
+  private function seed(array $extra_tables = [], array $row_overrides = [], array $extra_nodes = []) {
     $GLOBALS['myapi_test_users'][self::UID] = ['uid' => self::UID, 'name' => 'aperez', 'status' => 1];
 
     myapi_test_db_seed($extra_tables + [
@@ -322,7 +323,10 @@ class ServiceRequestUpdateTest extends TestCase {
         'first_name' => 'Ana',
         'last_name'  => 'Pérez',
       ]],
-      'node' => [$this->requestRow($row_overrides)],
+      // The request, plus whatever other node the case needs in that table — a
+      // provider node, when the request is awarded and the response therefore
+      // carries its card (SPEC 89).
+      'node' => array_merge([$this->requestRow($row_overrides)], $extra_nodes),
     ]);
 
     $_SERVER['HTTP_AUTHORIZATION'] = 'Bearer ' . self::TOKEN;
@@ -501,7 +505,18 @@ class ServiceRequestUpdateTest extends TestCase {
       'assigned_provider_id'           => '501',
       'assigned_provider_name'         => 'Servicios Díaz',
       'assigned_provider_raw'          => '501',
-    ]);
+    ], [[
+      // The provider node the card of SPEC 89 is built from.
+      'nid'               => '501',
+      'type'              => MYAPI_SERVICES_PROVIDER_TYPE,
+      'status'            => '1',
+      'title'             => 'Servicios Díaz',
+      'rating_avg'        => '4.5',
+      'rating_count'      => '12',
+      'short_description' => 'Plomería y gas.',
+      'hourly_rate'       => '25.50',
+      'logo_uri'          => NULL,
+    ]]);
     myapi_test_node_seed([self::NID => [
       'nid' => self::NID, 'type' => MYAPI_SERVICES_REQUEST_TYPE, 'uid' => 41,
       'status' => 1, 'created' => 1750000000, 'title' => 'Fuga en el calentador',
@@ -518,7 +533,18 @@ class ServiceRequestUpdateTest extends TestCase {
 
     $this->assertSame(200, $result['status']);
     $this->assertSame(MYAPI_SERVICES_REQUEST_STATUS_DIRECT, $item['status']);
-    $this->assertSame(['id' => 501, 'name' => 'Servicios Díaz'], $item['assigned_provider']);
+    // THE WHOLE CARD (SPEC 89), the same eight keys GET /api/v1/providers
+    // answers — an edit does not narrow what the detail says about the award.
+    $this->assertSame([
+      'id'                => 501,
+      'logo'              => NULL,
+      'title'             => 'Servicios Díaz',
+      'categories'        => [],
+      'rating_avg'        => 4.5,
+      'rating_count'      => 12,
+      'short_description' => 'Plomería y gas.',
+      'hourly_rate'       => 25.5,
+    ], $item['assigned_provider']);
     $this->assertCount(16, $item, 'the shape does not change with the status');
 
     $node = myapi_test_node_saves()[0];

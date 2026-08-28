@@ -14,6 +14,7 @@ require_once __DIR__ . '/../../includes/myapi.service_request_files.inc';
 require_once __DIR__ . '/../../includes/myapi.service_offer.inc';
 require_once __DIR__ . '/../../includes/myapi.service_request_query.inc';
 require_once __DIR__ . '/../../includes/myapi.service_request_detail.inc';
+require_once __DIR__ . '/../../includes/myapi.provider_card.inc';
 require_once __DIR__ . '/../../resources/service_request.resource.inc';
 require_once __DIR__ . '/../../myapi.module';
 
@@ -89,6 +90,13 @@ class ServiceRequestDetailEndpointTest extends TestCase {
    * A second provider operator, with no provider node behind them.
    */
   const STRANGER_UID = 7;
+
+  /**
+   * The 'provider' node an AWARD points at (SPEC 89): the company that wins the
+   * request, and never the reader's own — the card of a winner and the card of
+   * the reader have to be tellable apart.
+   */
+  const AWARDED_NID = 7;
 
   /**
    * The request under test, and its category.
@@ -348,6 +356,7 @@ class ServiceRequestDetailEndpointTest extends TestCase {
           'field_categories_tid' => (string) $tid,
         ];
       }, $categories),
+      'field_data_field_category_code' => [],
     ];
   }
 
@@ -365,7 +374,167 @@ class ServiceRequestDetailEndpointTest extends TestCase {
       'type'           => MYAPI_SERVICES_PROVIDER_TYPE,
       'status'         => $status,
       'license_expiry' => $expiry === NULL ? (string) (REQUEST_TIME + 86400) : $expiry,
+      // The node column the CARD of SPEC 89 reads as the company's name. The
+      // four value columns of a card are deliberately NOT seeded here: a
+      // provider with nothing filled in still has a card, and this is the
+      // fixture that says so.
+      'title'          => 'Servicios Díaz',
     ];
+  }
+
+  /**
+   * The provider node an award points at, seeded with everything a CARD is
+   * built from (SPEC 89): `title` is the company's name in it, and the four
+   * value columns plus the logo are what myapi_provider_build_item() types.
+   *
+   * A SECOND provider node, and not PROVIDER_NID: the awarded company and the
+   * reader's own company have to be tellable apart, which is exactly the case
+   * the redaction of a lost bid lives in.
+   */
+  private function providerCardNode(array $overrides = []) {
+    return $overrides + [
+      'nid'               => (string) self::AWARDED_NID,
+      'type'              => MYAPI_SERVICES_PROVIDER_TYPE,
+      'status'            => '1',
+      'title'             => 'Plomería Rivas',
+      // Read by no query of the card — it is the marketplace's rule and not the
+      // card's — and seeded so a case can expire it and prove exactly that.
+      'license_expiry'    => (string) (REQUEST_TIME + 86400),
+      'rating_avg'        => '4.80',
+      'rating_count'      => '31',
+      'short_description' => 'Plomería y gas, 24 h.',
+      'hourly_rate'       => '25.50',
+      'logo_uri'          => 'public://logos/rivas.png',
+    ];
+  }
+
+  /**
+   * One row of field_data_field_categories for the awarded provider, joined to
+   * its term — the shape GET /api/v1/providers reads.
+   *
+   * 'fc.entity_id' is written QUALIFIED, like the provider listing's own
+   * fixture: the categories query projects that column under the alias `nid`,
+   * and the rows providerTables() seeds carry the bare name for the
+   * provider_role queries. Two readers, two forms, one flat row each.
+   */
+  private function cardCategoryRow() {
+    return [
+      'fc.entity_id'         => (string) self::AWARDED_NID,
+      'entity_id'            => (string) self::AWARDED_NID,
+      'entity_type'          => 'node',
+      'deleted'              => '0',
+      'delta'                => '0',
+      'field_categories_tid' => (string) self::CATEGORY,
+      'tid'                  => (string) self::CATEGORY,
+      'name'                 => 'Plomería',
+      'code'                 => 'plumbing',
+    ];
+  }
+
+  /**
+   * The categories cardCategoryRow() answers, already shaped.
+   */
+  private function cardCategories() {
+    return [['id' => self::CATEGORY, 'code' => 'plumbing', 'name' => 'Plomería']];
+  }
+
+  /**
+   * The eight keys GET /api/v1/providers answers for providerCardNode(),
+   * already typed: this is what `assigned_provider` must equal, and it is
+   * written as the LISTING's item so a divergence between the two shows up
+   * here.
+   */
+  private function providerCard(array $categories = []) {
+    return [
+      'id'                => self::AWARDED_NID,
+      'logo'              => file_create_url('public://logos/rivas.png'),
+      'title'             => 'Plomería Rivas',
+      'categories'        => $categories,
+      'rating_avg'        => 4.8,
+      'rating_count'      => 31,
+      'short_description' => 'Plomería y gas, 24 h.',
+      'hourly_rate'       => 25.5,
+    ];
+  }
+
+  /**
+   * The award columns of a request assigned to AWARDED_NID through offer 45.
+   */
+  private function awardOverrides(array $overrides = []) {
+    return $overrides + [
+      'frs.field_request_status_value' => MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED,
+      'assigned_offer_id'              => '45',
+      'assigned_offer_status'          => 'selected',
+      'assigned_offer_raw'             => '45',
+      'assigned_provider_id'           => (string) self::AWARDED_NID,
+      'assigned_provider_name'         => 'Plomería Rivas',
+      'assigned_provider_raw'          => (string) self::AWARDED_NID,
+    ];
+  }
+
+  /**
+   * A whole awarded scenario: the request, two offers — the winner's and a
+   * rival's — the awarded provider's node and its category.
+   *
+   * @param array $requestOverrides  Extra columns of the request row.
+   * @param array $nodes             The nodes to seed BESIDES the request.
+   *                                 Defaults to the awarded provider's; an
+   *                                 empty list is how "the provider is gone" is
+   *                                 reproduced.
+   */
+  private function awardedTables(array $requestOverrides = [], $nodes = NULL) {
+    $nodes = $nodes === NULL ? [$this->providerCardNode()] : $nodes;
+
+    return [
+      'field_data_field_request' => [
+        $this->offer(46, self::CREATED + 10, self::PROVIDER_NID, ['amount' => '95.50']),
+        $this->offer(45, self::CREATED, self::AWARDED_NID, [
+          'provider_id'                   => (string) self::AWARDED_NID,
+          'provider_name'                 => 'Plomería Rivas',
+          'amount'                        => '150.50',
+          'fost.field_offer_status_value' => 'selected',
+        ]),
+      ],
+      'field_data_field_categories' => [$this->cardCategoryRow()],
+      'node' => array_merge(
+        [$this->request($this->awardOverrides($requestOverrides))],
+        $nodes
+      ),
+    ];
+  }
+
+  /**
+   * Authenticates, seeds an awarded request and runs the detail as its
+   * requester.
+   */
+  private function awardedDetail(array $requestOverrides = []) {
+    $this->authenticate();
+    $this->seed($this->awardedTables($requestOverrides), self::UID);
+
+    return $this->dispatch();
+  }
+
+  /**
+   * The recorded queries that are the CARD's, recognised by the one condition
+   * no other read of this endpoint carries: the 'provider' bundle over `node`.
+   *
+   * The provider_role queries read that table too — for the licence and for the
+   * visible requests — and neither of them states n.type = 'provider', so this
+   * filter isolates the card and nothing else.
+   */
+  private function cardQueries() {
+    return array_values(array_filter(myapi_test_db_queries(), function ($query) {
+      if ($query['table'] !== 'node') {
+        return FALSE;
+      }
+      foreach ($query['conditions'] as $condition) {
+        if ($condition['field'] === 'n.type' && $condition['value'] === MYAPI_SERVICES_PROVIDER_TYPE) {
+          return TRUE;
+        }
+      }
+
+      return FALSE;
+    }));
   }
 
   /**
@@ -1187,6 +1356,265 @@ class ServiceRequestDetailEndpointTest extends TestCase {
       $this->assertSame(200, $result['status'], $status);
       $this->assertSame('provider', $this->item($result)['viewer'], $status);
     }
+  }
+
+  /* -------------------------------------------------------------------------
+   * The award, answered whole (SPEC 89).
+   *
+   * The listing names the award — {id, name} for the provider, {id, status} for
+   * the offer — because it answers twenty requests and can afford nothing more.
+   * The detail answers ONE, and it is the screen where the resident decides: it
+   * therefore serves `assigned_provider` as the SAME eight-key card
+   * GET /api/v1/providers answers, and `assigned_offer` as the SAME fifteen-key
+   * object an item of `offers` is. Two objects the app already knows how to
+   * paint, and no second round trip to find out who won and for how much.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * `assigned_provider` IS THE CARD OF THE LISTING, byte for byte: the eight
+   * keys, in the listing's order, with the listing's typing — the logo an
+   * absolute public URL, `rating_avg` a float, `rating_count` an int,
+   * `hourly_rate` a float and the categories as {id, code, name}.
+   *
+   * `title` IS THE COMPANY'S NAME. The two-key shape called it `name`; the card
+   * calls it `title`, and no `name` is added next to it — a card that is not the
+   * listing's card is exactly the divergence this change exists to prevent.
+   */
+  public function testTheAwardedProviderTravelsAsTheWholeCard() {
+    $result = $this->awardedDetail();
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame(
+      $this->providerCard($this->cardCategories()),
+      $this->item($result)['assigned_provider']
+    );
+  }
+
+  /**
+   * `assigned_offer` IS THE SAME OBJECT AS ITS ITEM IN `offers` — the identity
+   * is asserted with the list itself and not against a literal, which is what
+   * makes it impossible for the two to drift: the awarded offer of a request IS
+   * one of that request's offers, and the detail says so once.
+   */
+  public function testTheAwardedOfferIsTheSameObjectAsItsItemInTheList() {
+    $item = $this->item($this->awardedDetail());
+
+    $listed = NULL;
+    foreach ($item['offers'] as $offer) {
+      if ($offer['id'] === 45) {
+        $listed = $offer;
+      }
+    }
+
+    $this->assertNotNull($listed, 'the awarded offer is in the list');
+    $this->assertSame($listed, $item['assigned_offer']);
+    $this->assertSame(
+      [
+        'id', 'provider', 'amount', 'message', 'status', 'created',
+        'amount_type', 'valid_until', 'available_from', 'duration',
+        'includes', 'excludes', 'tax_included', 'warranty_days',
+        'requires_visit',
+      ],
+      array_keys($item['assigned_offer'])
+    );
+    $this->assertSame(150.5, $item['assigned_offer']['amount']);
+    $this->assertSame('selected', $item['assigned_offer']['status']);
+  }
+
+  /**
+   * TAKING THE OFFER OUT OF THE LIST COSTS NO QUERY: the detail reads the
+   * offers of the request exactly once, awarded or not. What the award adds is
+   * the provider's card, and nothing else.
+   */
+  public function testTheAwardedOfferCostsNoExtraQuery() {
+    $this->awardedDetail();
+    $awarded = count(myapi_test_db_queries());
+
+    $this->authenticate();
+    $this->seed($this->awardedTables(['assigned_offer_id' => NULL, 'assigned_offer_status' => NULL, 'assigned_offer_raw' => NULL]), self::UID);
+    $this->dispatch();
+
+    $this->assertSame(count(myapi_test_db_queries()), $awarded, 'the awarded offer is free');
+  }
+
+  /**
+   * A REQUEST WITH NO AWARD NEVER ASKS FOR A CARD. The card is two queries, and
+   * they are paid only when there is something to build — which is what keeps
+   * the detail of an 'open' request costing exactly what it cost before.
+   */
+  public function testAnUnawardedRequestNeverAsksForACard() {
+    $this->detailFor(self::UID, [
+      'field_data_field_request' => [$this->offer(46, self::CREATED, self::PROVIDER_NID)],
+    ]);
+
+    $this->assertSame([], $this->cardQueries(), 'no provider was read');
+  }
+
+  /**
+   * THE CARD OF AN AWARDED PROVIDER TRAVELS EVEN WITH THE LICENCE EXPIRED, and
+   * that is the one rule of the marketplace this loader deliberately does not
+   * apply: whoever is doing the job is who the resident must keep seeing.
+   * Answering `assigned_provider: null` on a request that plainly has one would
+   * be a lie about the state of the request.
+   */
+  public function testTheCardIsAnsweredEvenWhenTheLicenceHasExpired() {
+    $this->authenticate();
+    $this->seed(
+      $this->awardedTables([], [
+        $this->providerCardNode(['license_expiry' => (string) (REQUEST_TIME - 86400)]),
+      ]),
+      self::UID
+    );
+
+    $this->assertSame(
+      $this->providerCard($this->cardCategories()),
+      $this->item($this->dispatch())['assigned_provider']
+    );
+  }
+
+  /**
+   * AN AWARD POINTING AT A PROVIDER THAT IS NO LONGER THERE ANSWERS NULL, and
+   * never half a card: the same answer the joined listing already gives for a
+   * deleted or unpublished provider node. One empty case for the app to paint,
+   * not two.
+   */
+  public function testAnAwardWhoseProviderNodeIsGoneAnswersNull() {
+    $this->authenticate();
+    // The award columns are filled in; the provider node is simply not seeded.
+    $this->seed($this->awardedTables([], []), self::UID);
+
+    $this->assertNull($this->item($this->dispatch())['assigned_provider']);
+  }
+
+  /**
+   * THE WINNING QUOTE IS REDACTED FOR THE PROVIDER THAT LOST, and this is the
+   * one case in which `assigned_offer` is not the object the list carries.
+   *
+   * Rule 2 of myapi_service_request_viewer() keeps a bidder's access after the
+   * request is awarded to somebody else — an offer with a 403 behind it is an
+   * offer with no explanation — and `offers` is trimmed to their own. Widening
+   * `assigned_offer` out of a list they are not in would have handed them the
+   * price that beat them, which is precisely what the trim exists to prevent.
+   * So the fifteen keys travel with the thirteen that describe the quote empty:
+   * the loser learns THAT there is a winner and WHO it is (the card is public
+   * data), never WHAT they charged.
+   */
+  public function testTheWinningQuoteIsRedactedForTheProviderThatLost() {
+    $tables = $this->providerTables(self::PROVIDER_NID, [self::CATEGORY]);
+    // The reader's own category rows and the winner's, in the same table: the
+    // card's query must pick exactly one of them, which is the point.
+    $tables['field_data_field_categories'][] = $this->cardCategoryRow();
+
+    $this->authenticate();
+    $this->seed(
+      $tables + [
+        'field_data_field_request' => [
+          // The reader's own, which is what grants them the access...
+          $this->offer(46, self::CREATED + 10, self::PROVIDER_NID, ['amount' => '210.00']),
+          // ...and the rival's, the one that won.
+          $this->offer(45, self::CREATED, self::AWARDED_NID, [
+            'provider_id'   => (string) self::AWARDED_NID,
+            'provider_name' => 'Plomería Rivas',
+            'amount'        => '150.50',
+            'fost.field_offer_status_value' => 'selected',
+          ]),
+        ],
+        'node' => [
+          $this->request($this->awardOverrides()),
+          $this->providerNode(),
+          $this->providerCardNode(),
+        ],
+      ],
+      self::PROVIDER_UID
+    );
+
+    $result = $this->dispatch();
+    $item = $this->item($result);
+
+    $this->assertSame('provider', $item['viewer']);
+    // Their own offer, and only their own.
+    $this->assertSame([46], array_column($item['offers'], 'id'));
+
+    // The award: the id and the status carry, exactly as the two-key shape
+    // already carried them, and nothing else does.
+    $this->assertSame(45, $item['assigned_offer']['id']);
+    $this->assertSame('selected', $item['assigned_offer']['status']);
+    $this->assertNull($item['assigned_offer']['amount']);
+    $this->assertNull($item['assigned_offer']['provider']);
+    $this->assertSame('', $item['assigned_offer']['message']);
+    $this->assertNull($item['assigned_offer']['created']);
+    $this->assertFalse($item['assigned_offer']['requires_visit']);
+    // The very same fifteen keys as an offer of the list: a redaction is a
+    // content, never a shape.
+    $this->assertSame(
+      array_keys($item['offers'][0]),
+      array_keys($item['assigned_offer'])
+    );
+    // The winning price never left the server.
+    $this->assertStringNotContainsString('150.5', $result['output']);
+
+    // The winner is still NAMED, whole: the card is what
+    // GET /api/v1/providers already shows to everybody.
+    $this->assertSame(
+      $this->providerCard($this->cardCategories()),
+      $item['assigned_provider']
+    );
+  }
+
+  /**
+   * THE PROVIDER THAT WON READS ITS OWN QUOTE WHOLE. The redaction above is not
+   * a rule about providers, it is a rule about offers the reader may not see —
+   * and the winner's own offer is in their own list.
+   */
+  public function testTheProviderThatWonReadsItsOwnQuoteWhole() {
+    $this->authenticate();
+    $this->seed(
+      $this->providerTables(self::PROVIDER_NID, [self::CATEGORY]) + [
+        'field_data_field_request' => [
+          $this->offer(45, self::CREATED, self::PROVIDER_NID, [
+            'amount' => '150.50',
+            'fost.field_offer_status_value' => 'selected',
+          ]),
+        ],
+        'node' => [
+          $this->request($this->awardOverrides([
+            'assigned_provider_id'   => (string) self::PROVIDER_NID,
+            'assigned_provider_name' => 'Servicios Díaz',
+            'assigned_provider_raw'  => (string) self::PROVIDER_NID,
+          ])),
+          $this->providerNode(),
+        ],
+      ],
+      self::PROVIDER_UID
+    );
+
+    $item = $this->item($this->dispatch());
+
+    $this->assertSame($item['offers'][0], $item['assigned_offer']);
+    $this->assertSame(150.5, $item['assigned_offer']['amount']);
+  }
+
+  /**
+   * THE TWO KEYS GO NULL INDEPENDENTLY, and widening them changed nothing about
+   * that: a 'direct' request is born with a provider and no offer, which is the
+   * whole reason they are two keys and not one.
+   */
+  public function testADirectRequestAnswersACardWithNoOffer() {
+    $this->authenticate();
+    $this->seed(
+      $this->awardedTables([
+        'frs.field_request_status_value' => MYAPI_SERVICES_REQUEST_STATUS_DIRECT,
+        'assigned_offer_id'              => NULL,
+        'assigned_offer_status'          => NULL,
+        'assigned_offer_raw'             => NULL,
+      ]),
+      self::UID
+    );
+
+    $item = $this->item($this->dispatch());
+
+    $this->assertNull($item['assigned_offer']);
+    $this->assertSame($this->providerCard($this->cardCategories()), $item['assigned_provider']);
   }
 
   /* -------------------------------------------------------------------------
