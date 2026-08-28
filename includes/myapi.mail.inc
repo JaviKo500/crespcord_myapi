@@ -689,6 +689,153 @@ function myapi_mail_payment_admin_html($params) {
   );
 }
 
+/* ---------------------------------------------------------------------------
+ * Service request emails (SPEC 109).
+ *
+ * Two keys, fired together by myapi_service_request_notify_created() from
+ * POST /api/v1/service-requests:
+ * - 'service_request_provider': the heads-up every account of a notified
+ *   provider gets. Four lines and NO button — a provider has no back office to
+ *   land on, so the call to action is the app itself.
+ * - 'service_request_admin': the whole request, sent to the 'backend' role,
+ *   with the button that opens the node.
+ *
+ * Same shell as the reservation, claim and payment emails, for the same reason
+ * (rule 3 of CLAUDE.md).
+ *
+ * Every value in $params arrives ALREADY RESOLVED AND ESCAPED from
+ * myapi_service_request_provider_mail_params() /
+ * myapi_service_request_admin_mail_params(), because the mail queue drains on
+ * cron long after the request was saved: a condominium renamed or a provider
+ * deleted in between must not change the message. Nothing here escapes
+ * anything.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Formats the heads-up email sent to a notified provider's accounts.
+ *
+ * Called from myapi_mail() (in myapi.module) for the 'service_request_provider'
+ * key. The subject says which of the two notices this is, because a direct
+ * request is already the provider's and an open one is a race — the same split
+ * the push title draws.
+ *
+ * @param array $message  Mail message array, altered by reference.
+ * @param array $params   'nid', 'title', 'category', 'desired_start',
+ *                        'condominium' and 'is_direct', already escaped.
+ */
+function myapi_mail_format_service_request_provider(&$message, $params) {
+  $heading = !empty($params['is_direct'])
+    ? 'Nueva solicitud directa'
+    : 'Nueva solicitud de servicio';
+
+  // A subject is plain text, so the escaped title is decoded back: a request
+  // titled 'Fuga en el baño A&B' must not read 'A&amp;B' in the inbox list.
+  $message['subject'] = $heading . ' — ' . decode_entities($params['title']);
+  $message['body'][] = myapi_mail_service_request_provider_html($params);
+
+  $message['headers']['Content-Type'] = 'text/html; charset=UTF-8';
+}
+
+/**
+ * Builds the HTML body of that email.
+ *
+ * Four lines and not one more: the unit, the requester and the description are
+ * deliberately absent from every channel a provider reads (SPEC 109), and the
+ * detail endpoint is what decides when they stop being absent.
+ *
+ * No button, unlike the other four admin-facing emails of this module: the
+ * provider's next step is the app, and a link into the back office would land
+ * them on an access-denied page.
+ *
+ * @param array $params  Already-escaped values (see the formatter).
+ *
+ * @return string  Full HTML document.
+ */
+function myapi_mail_service_request_provider_html($params) {
+  $is_direct = !empty($params['is_direct']);
+
+  $intro = $is_direct
+    ? 'Un residente creó una solicitud de servicio y te la asignó directamente.'
+    : 'Un residente creó una solicitud de servicio en una de tus categorías.';
+
+  $lines = array(
+    'Asunto'          => $params['title'],
+    'Categoría'       => $params['category'],
+    'Fecha de inicio' => $params['desired_start'],
+    'Condominio'      => $params['condominium'],
+  );
+
+  return myapi_mail_reservation_html(
+    'Solicitud #' . $params['nid'],
+    $is_direct ? 'Nueva solicitud directa' : 'Nueva solicitud de servicio',
+    $intro,
+    $lines,
+    'Revisa la solicitud en la app.'
+  );
+}
+
+/**
+ * Formats the service request detail email sent to the 'backend' role.
+ *
+ * Called from myapi_mail() (in myapi.module) for the 'service_request_admin'
+ * key. The subject carries the nid and the condominium, the two values an
+ * operator triages requests by, and the nid keeps two requests with the same
+ * title from collapsing into one thread.
+ *
+ * @param array $message  Mail message array, altered by reference.
+ * @param array $params   'nid', 'title', 'type', 'category', 'desired_start',
+ *                        'unit', 'condominium', 'requester', 'requester_email',
+ *                        'description', 'created' and 'node_url', already
+ *                        escaped.
+ */
+function myapi_mail_format_service_request_admin(&$message, $params) {
+  $message['subject'] = 'Nueva solicitud de servicio #' . $params['nid']
+    . ' — ' . decode_entities($params['condominium']);
+  $message['body'][] = myapi_mail_service_request_admin_html($params);
+
+  $message['headers']['Content-Type'] = 'text/html; charset=UTF-8';
+}
+
+/**
+ * Builds the HTML body of that email.
+ *
+ * The ten lines are the whole request as it was born, in the order an operator
+ * reads it: what is being asked, whether it is open to the market or already
+ * awarded, where and when, and who asked. 'Tipo' comes resolved from the params
+ * builder, which is where the "Directa a {trade name}" branch is tested.
+ *
+ * The button points at the node view and not at the edit form: unlike a payment
+ * (SPEC 80), whose next action is a status change, a request is read before it
+ * is touched.
+ *
+ * @param array $params  Already-escaped values (see the formatter).
+ *
+ * @return string  Full HTML document.
+ */
+function myapi_mail_service_request_admin_html($params) {
+  $lines = array(
+    'Asunto'                => $params['title'],
+    'Tipo'                  => $params['type'],
+    'Categoría'             => $params['category'],
+    'Fecha de inicio'       => $params['desired_start'],
+    'Vivienda'              => $params['unit'],
+    'Condominio'            => $params['condominium'],
+    'Solicitante'           => $params['requester'],
+    'Email del solicitante' => $params['requester_email'],
+    'Descripción'           => $params['description'],
+    'Creada el'             => $params['created'],
+  );
+
+  return myapi_mail_reservation_html(
+    'Solicitud #' . $params['nid'],
+    'Nueva solicitud de servicio',
+    'Un residente creó una solicitud de servicio desde la aplicación.',
+    $lines,
+    'Solicitud #' . $params['nid'],
+    array('label' => 'Ver solicitud', 'url' => $params['node_url'])
+  );
+}
+
 /**
  * Shared HTML shell of the reservation emails — and, since SPEC 68, of the five
  * claim ones.
