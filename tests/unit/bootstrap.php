@@ -559,6 +559,7 @@ class MyapiTestSelectQuery implements IteratorAggregate {
   private $range = NULL;
   private $count_mode = FALSE;
   private $group_by = [];
+  private $distinct = FALSE;
   private $expressions = [];
   private $tags = [];
   private $extenders = [];
@@ -841,6 +842,26 @@ class MyapiTestSelectQuery implements IteratorAggregate {
     return $alias;
   }
 
+  /**
+   * SELECT DISTINCT (SPEC 109).
+   *
+   * Two production queries reach the fixture through it — the 'backend' role
+   * lookup of myapi_notification_role_uids() and the provider-accounts lookup
+   * of myapi_service_request_provider_uids() — and both write it for the same
+   * reason: a user holding the role twice, or listed twice on
+   * field_provider_users, must be notified once. A builder that threw on
+   * distinct() left the whole notification trigger untestable here.
+   *
+   * Applied over the PROJECTED rows, which is where SQL applies it: it
+   * collapses duplicates of the columns actually selected, not of the fixture
+   * rows behind them.
+   */
+  public function distinct($distinct = TRUE) {
+    $this->distinct = (bool) $distinct;
+
+    return $this;
+  }
+
   public function orderBy($field, $direction = 'ASC') {
     $this->order[] = ['field' => $field, 'direction' => strtoupper($direction)];
 
@@ -878,6 +899,7 @@ class MyapiTestSelectQuery implements IteratorAggregate {
       'range'      => $this->range,
       'count'      => $this->count_mode,
       'group_by'   => $this->group_by,
+      'distinct'   => $this->distinct,
       'expressions' => $this->expressions,
       'tags'       => $this->tags,
       'extenders'  => $this->extenders,
@@ -902,9 +924,9 @@ class MyapiTestSelectQuery implements IteratorAggregate {
     if ($this->group_by || $this->hasAggregate()) {
       $rows = $this->sort($this->aggregate($this->matchedRows()));
 
-      return $this->range !== NULL
+      return $this->dedupe($this->range !== NULL
         ? array_slice($rows, $this->range['start'], $this->range['length'])
-        : $rows;
+        : $rows);
     }
 
     $rows = $this->matchedRows();
@@ -925,7 +947,28 @@ class MyapiTestSelectQuery implements IteratorAggregate {
       $rows = array_slice($rows, $this->range['start'], $this->range['length']);
     }
 
-    return array_map([$this, 'project'], $rows);
+    return $this->dedupe(array_map([$this, 'project'], $rows));
+  }
+
+  /**
+   * Collapses identical projected rows when distinct() was asked for.
+   */
+  private function dedupe(array $rows) {
+    if (!$this->distinct) {
+      return $rows;
+    }
+
+    $seen = [];
+    $unique = [];
+    foreach ($rows as $row) {
+      $key = serialize($row);
+      if (!isset($seen[$key])) {
+        $seen[$key] = TRUE;
+        $unique[] = $row;
+      }
+    }
+
+    return $unique;
   }
 
   /**
