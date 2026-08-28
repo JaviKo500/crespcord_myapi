@@ -509,3 +509,83 @@ function myapi_service_transaction_accept_comment($provider_name, $amount, $amou
     '@importe'   => number_format((float) $amount, 2, ',', '.'),
   ));
 }
+
+/**
+ * The timeline text of a close (SPEC 108).
+ *
+ * Three variants, because closing a request means two different things and one
+ * of them has two shapes:
+ *   - closed with NO award, from 'offered': there is nobody to rate, and the
+ *     resident's own close_reason IS the entry. It travels VERBATIM, with no
+ *     label and no prefix — the providers whose offers were left hanging are
+ *     the audience of that sentence, and wrapping it in a formula would bury
+ *     the one thing they need to read;
+ *   - closed WITH a rating and a known provider: the entry records who was
+ *     rated and with how many stars, which is the part of the act worth
+ *     keeping;
+ *   - closed with a rating and no provider name: the entry still has to read
+ *     as a whole sentence.
+ *
+ * THE RATING'S COMMENT DOES NOT COME HERE, and that is a decision and not an
+ * omission. It lives in field_rating_comment, which is its place; copying it
+ * into field_comment would be two copies of the same text that drift apart the
+ * day the back office edits one. The timeline says THAT the provider was rated
+ * and with how many stars; the words live in their own field.
+ *
+ * THE close_reason TRAVELS WITHOUT check_plain(), like the reason of
+ * myapi_service_request_cancel_comment(): field_comment is stored raw and
+ * whoever renders it escapes it. The provider name goes through a '@' placeholder
+ * and is therefore escaped by t(), same as in accept_comment() above — the
+ * difference is that one is the whole return value and the other is a fragment
+ * substituted into a sentence.
+ *
+ * NEVER EMPTY, which is the promise SPEC 92 made for every transaction of this
+ * bundle: a close with neither a reason nor stars — reachable only through a
+ * programmatic call, since the endpoint's validation refuses both shapes —
+ * still answers a sentence and not an empty string.
+ *
+ * Pure by design (t() only), like the two builders above: the comments of a
+ * transaction belong to the transactions' file, and being pure is what puts the
+ * whole matrix inside tests/unit with no site booted.
+ *
+ * @param string|null $reason
+ *   The close_reason the resident wrote, already trimmed and length-checked, on
+ *   the no-award path. NULL or empty on the rating path, where the endpoint
+ *   ignores the key.
+ * @param mixed $stars
+ *   field_stars as validated, or NULL when the close required no rating. It is
+ *   this argument, and not $reason, that decides which of the two acts is being
+ *   recorded: a non-numeric value reads as "no rating".
+ * @param string|null $provider_name
+ *   node.title of the rated provider. Empty or NULL degrades to the nameless
+ *   variant.
+ *
+ * @return string
+ *   Never empty.
+ */
+function myapi_service_transaction_close_comment($reason, $stars, $provider_name) {
+  $rated = $stars !== NULL && $stars !== '' && is_numeric($stars);
+
+  if (!$rated) {
+    $reason = ($reason === NULL) ? '' : trim((string) $reason);
+
+    // The resident's own words, verbatim. The fallback is unreachable from the
+    // endpoint — close_reason is required on this path — and exists so that a
+    // programmatic close cannot create the commentless transaction SPEC 92
+    // ruled out.
+    return $reason !== '' ? $reason : t('Servicio cerrado.');
+  }
+
+  $provider_name = ($provider_name === NULL) ? '' : trim((string) $provider_name);
+
+  if ($provider_name === '') {
+    return t('Servicio cerrado y calificado con @estrellas estrellas.', array(
+      '@estrellas' => (int) $stars,
+    ));
+  }
+
+  return t('Servicio cerrado. @proveedor calificado con @estrellas estrellas.', array(
+    '@proveedor' => $provider_name,
+    '@estrellas' => (int) $stars,
+  ));
+}
