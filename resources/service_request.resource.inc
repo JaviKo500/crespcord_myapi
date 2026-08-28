@@ -21,6 +21,10 @@
  *     it is still 'open' or 'direct' and nobody has bid (SPEC 96).
  *   - PUT /api/v1/service-requests/%/cancel — the requester cancels, which
  *     writes the status and one entry on the timeline (SPEC 95).
+ *   - PUT /api/v1/service-requests/%/close — the requester closes their own
+ *     request and, when a provider did the job, rates it: one 'service_rating'
+ *     node, the status, field_closed_at and one entry on the timeline
+ *     (SPEC 108).
  *   - GET /api/v1/service-requests/%/files/% — the bytes of one image or of the
  *     attachment, both private:// since SPEC 77 (SPEC 89).
  *
@@ -2882,4 +2886,553 @@ function myapi_service_request_update($nid) {
   unset($detail['offers_count'], $detail['offers'], $detail['transactions']);
 
   myapi_respond(['service_request' => $detail], 200, 'service_request_updated');
+}
+
+/* ---------------------------------------------------------------------------
+ * Closing a request, and rating the provider that did the job (SPEC 108).
+ *
+ * The exit 'closed' never had. 'cancelled' has had a door since SPEC 95,
+ * 'assigned' since SPEC 106, 'offered' since SPEC 100, and 'open' and 'direct'
+ * are birth statuses — an awarded request simply could not END, and the
+ * provider who did the work earned no reputation for it.
+ *
+ * CLOSING IS RATING, WHICH IS WHY THEY ARE ONE ENDPOINT.
+ * myapi_services_close_requires_rating() (includes/myapi.services_common.inc)
+ * has existed since SPEC 77 and nobody had ever called it; it says that
+ * closing from 'assigned' and from 'direct' demands a rating. Splitting the
+ * verb into two calls would open a window in which the request is closed and
+ * unrated, which is exactly the state that function was written to forbid.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Dispatcher for /api/v1/service-requests/%/close (SPEC 108).
+ *
+ * PUT and nothing else, the same single-method shape as
+ * myapi_service_request_cancel_dispatch() above, and the same shape as the
+ * module's other three '/cancel' routes and as api/v1/claims/%/close — the
+ * route SPEC 70 gave the very same verb, on another resource, to the very same
+ * actor.
+ *
+ * THE METHOD IS CHECKED BEFORE THE TOKEN, like every other dispatcher of this
+ * file: a GET on this path is answered 405 with no Authorization header and
+ * without the request having to exist, because the answer is about the VERB and
+ * not about what is behind it.
+ *
+ * @param mixed $nid  The route's wildcard, raw.
+ */
+function myapi_service_request_close_dispatch($nid) {
+  if (myapi_request_method() === 'PUT') {
+    myapi_service_request_close($nid);
+  }
+  else {
+    myapi_error('method_not_allowed', 405);
+  }
+}
+
+/**
+ * PUT /api/v1/service-requests/%/close — the resident closes and rates
+ * (SPEC 108).
+ *
+ * Seven numbered gate steps and then three writes, in the order the sections
+ * below defend. Steps 1 to 5 are, line for line, the ones of
+ * myapi_service_request_cancel() with 'closed' where that one writes
+ * 'cancelled' and with its own 409 key. That is not copying for convenience:
+ * the two endpoints are the same act — the resident ends their request — with
+ * two different meanings, and the day the access rule changes it has to change
+ * in both.
+ *
+ * WHO MAY CLOSE: THE field_requester, EXACTLY, and nobody else. Not the
+ * assigned provider — the rating is the resident's opinion OF the provider, and
+ * a close executed by the provider would arrive without the one thing the
+ * catalogue demands it carry, or would ask the provider to score itself. Not an
+ * operator through this endpoint either; the back office edits the node. It is
+ * also the rule SPEC 95 fixed for the sibling verb and the one SPEC 70 fixed for
+ * this same verb on claims: whoever opens is whoever closes. The price — a
+ * request that stays 'assigned' forever because the resident never opens the app
+ * again — is SPEC 108's risk 1, accepted and documented, and its fix needs new
+ * schema.
+ *
+ * WHICH STATUSES ADMIT IT IS NOT WRITTEN HERE, exactly as in the cancellation:
+ * the question goes to myapi_services_transition_allowed(), which owns the
+ * graph. Out of that comes free that 'open' answers 409 — there is no edge, and
+ * a request nobody has bid on is CANCELLED, which is what it means — and that a
+ * request already 'closed' or 'cancelled' answers 409 too, both being terminal.
+ * And because that function answers FALSE to an unknown value by design, a
+ * corrupt field_request_status is a 409 and never a 500.
+ *
+ * THE BODY HAS TWO SHAPES AND THE STATUS PICKS ONE. Closing a job, the rating's
+ * comment IS the text of the close, so demanding a close_reason on top would be
+ * asking for the same thing twice; closing with nothing awarded there is nobody
+ * to rate and the reason is all that is left. The shape is chosen by
+ * myapi_services_close_requires_rating(), read at step 5 and spent at step 6,
+ * which is the order that lets ONE pure validator decide between the two
+ * without looking at the node again.
+ *
+ * THE PROVIDER IS READ FROM THE NODE AND NOT FROM myapi_service_request_detail_
+ * row(), the opposite of SPEC 106. The node_load() is already paid for — this
+ * endpoint has to SAVE the request — and the detail row's assigned_provider_id
+ * arrives FILTERED BY status = 1, so an unpublished provider would leave it NULL
+ * and this endpoint would answer 409 to a resident who really did have somebody
+ * doing the work. On the node every column is raw.
+ *
+ * THE ORDER OF THE THREE WRITES IS THE MOST IMPORTANT DECISION OF THIS
+ * ENDPOINT:
+ *
+ *   - THE RATING FIRST. It is the only irrecoverable step. If it fails, the
+ *     request is still 'assigned', the resident retries and nothing is lost.
+ *     The other way round, with the request already 'closed' — terminal, second
+ *     close answers 409 — a rating that failed can NEVER be retried, and that
+ *     provider loses the reputation of a job it did. Same reasoning that put the
+ *     losing offers before the request in SPEC 106, applied to the step that
+ *     costs most to lose.
+ *   - THE REQUEST BEFORE THE TRANSACTION, and that is not style.
+ *     myapi_service_transaction_sync_request_status() (SPEC 94) hangs off
+ *     hook_node_insert() and rewrites the parent request's status from the
+ *     transaction's; writing the request first makes it compare two equal
+ *     statuses and return WITHOUT saving again. SPEC 95 and SPEC 106 each warn
+ *     about this in their own place; this is the third time and it is still the
+ *     same property.
+ *   - THE COUNTERS ARE A FOURTH WRITE AND THEY ARE NOT THIS ENDPOINT'S. The
+ *     'service_rating' branch of myapi_node_insert() fires inside the
+ *     node_save() of the first write — see includes/myapi.service_rating.inc for
+ *     why the hook and not this function.
+ *
+ * field_closed_at IS WRITTEN HERE FOR THE FIRST TIME. It is the last field of
+ * the bundle that had no writer at all, installed by SPEC 77 and empty ever
+ * since. It goes in the same node_save() as the status because they are the same
+ * fact — the request closed, and this is the instant — and it is REQUEST_TIME
+ * and not time(), like every timestamp of this module.
+ *
+ * NOTHING ELSE OF THE REQUEST MOVES. The category, the unit, the description,
+ * the files and BOTH award fields stay exactly as they were, and the node stays
+ * published: closing neither unpublishes nor deletes. The award fields in
+ * particular are what a closed request is audited by.
+ *
+ * NOT IDEMPOTENT, on purpose and for the third time in this module: a second
+ * call answers 409 service_request_not_closable and writes nothing — no second
+ * rating and no second timeline entry. A silent 200 would hide from the app that
+ * its first call did arrive.
+ *
+ * THE 200 ANSWERS THE WHOLE DETAIL plus one key, the third time this module
+ * takes that decision and for the same reason as the other two: the app is on
+ * the detail screen, and returning the complete object rebuilt AFTER the writes
+ * saves it a GET and makes it impossible for this response to drift from what
+ * that GET would answer, because it IS what it would answer.
+ *
+ * @param mixed $nid  The route's wildcard, raw.
+ */
+function myapi_service_request_close($nid) {
+  // 1. The nid, before anything else and before the token. Same guard as the
+  // cancellation: ctype_digit() over the string form rejects 'abc', '-3', '1.5'
+  // and '' alike, and the > 0 then rejects '0'. Costs no query.
+  if (!is_scalar($nid) || !ctype_digit((string) $nid) || (int) $nid <= 0) {
+    myapi_error('service_request_not_found', 404);
+  }
+  $nid = (int) $nid;
+
+  // 2. Authentication. Answers 401 missing_authorization / invalid_token on its
+  // own and never returns on failure.
+  $token = myapi_auth_require_access_token();
+  $uid = (int) $token->uid;
+
+  // 3. The request itself. node_load() and not a joined query, for the reason
+  // the cancellation gives: what comes next SAVES this node, and a write needs
+  // the whole entity with its fields. FALSE, the wrong bundle and the
+  // unpublished one are all "no such request".
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+
+  $node = node_load($nid);
+  if (!$node || $node->type !== MYAPI_SERVICES_REQUEST_TYPE || (int) $node->status !== 1) {
+    myapi_error('service_request_not_found', 404);
+  }
+
+  // 4. WHO IS ASKING. field_requester, never $node->uid. A request with no
+  // requester at all resolves to NULL and is a 403: nobody owns it, so nobody
+  // may close it. THE ASSIGNED PROVIDER LANDS HERE TOO, which is the point of
+  // decision 1.
+  $requester_id = myapi_building_admin_field_target_id($node, 'field_requester');
+  if ($requester_id === NULL || (int) $requester_id !== $uid) {
+    myapi_error('service_request_forbidden', 403);
+  }
+
+  // 5. The graph, asked and not transcribed. 'open' lands here as a 409 because
+  // the graph carries no open -> closed edge, and so does an already-closed or
+  // cancelled request, and so does a corrupt status.
+  $status = myapi_building_admin_field_value($node, 'field_request_status');
+  if (!myapi_services_transition_allowed($status, MYAPI_SERVICES_REQUEST_STATUS_CLOSED)) {
+    myapi_error('service_request_not_closable', 409);
+  }
+
+  // 6. The body, AFTER the 403 and the 409, and IN THE SHAPE THIS STATUS ASKS
+  // FOR. A 422 arriving before the resident even knows whether they may close
+  // would tell the client to fix the form when the problem is another one.
+  $requires_rating = myapi_services_close_requires_rating($status);
+  $body = myapi_service_request_validate_close_body(myapi_request_body(), $requires_rating);
+  if (!$body['ok']) {
+    myapi_error($body['error_code'], 422, $body['replacements']);
+  }
+
+  // 7. The provider, and ONLY when the status demands a rating. Last condition
+  // of the gate and there only for the corrupt case: field_assigned_provider is
+  // written by SPEC 90 on every 'direct' and by SPEC 106 on every 'assigned', so
+  // its absence means a node edited by hand or a broken reference. Without a
+  // provider the rating cannot be saved — field_rating_provider is REQUIRED on
+  // the bundle — so the whole close stops here, BEFORE writing anything, rather
+  // than closing the request and then failing to rate.
+  $provider_nid = NULL;
+  $provider_name = NULL;
+  if ($requires_rating) {
+    $provider_nid = myapi_building_admin_field_target_id($node, 'field_assigned_provider');
+    if (empty($provider_nid)) {
+      myapi_error('service_request_provider_missing', 409);
+    }
+
+    // The provider's name, for the timeline entry alone. node_load() and not a
+    // query: Drupal 7's entity static cache means hook_node_presave() resolving
+    // the same provider for the rating's title a few lines below pays nothing
+    // for it. A provider that cannot be loaded degrades the timeline text to its
+    // nameless variant and stops nothing — the nid is what the rating stores.
+    $provider = node_load($provider_nid);
+    if ($provider && $provider->type === MYAPI_SERVICES_PROVIDER_TYPE) {
+      $provider_name = $provider->title;
+    }
+  }
+
+  // 8. The three writes, in the order the docblock defends.
+  //
+  // 8a. THE RATING, FIRST, and only when the status demands it. Closing from
+  // 'offered' skips this step whole and the rest does not notice.
+  //
+  // field_rating_offer travels as whatever the request has — a 'direct' has
+  // none, which is exactly why SPEC 87 made that instance optional — and
+  // field_unit likewise. The title is NOT set here:
+  // myapi_service_rating_set_title() puts it in from hook_node_presave(), and
+  // the two reputation counters are written by the 'service_rating' branch of
+  // myapi_node_insert(), both inside the node_save() this call makes.
+  $rating_id = NULL;
+  if ($requires_rating) {
+    module_load_include('inc', 'myapi', 'includes/myapi.service_rating');
+
+    $rating = myapi_service_rating_record(
+      $provider_nid,
+      myapi_building_admin_field_target_id($node, 'field_assigned_offer'),
+      myapi_building_admin_field_target_id($node, 'field_unit'),
+      // The resident behind the token, which is also what SPEC 84 reads to
+      // abbreviate `author_name` on the provider's detail.
+      $uid,
+      $body['values']['stars'],
+      $body['values']['comment']
+    );
+    $rating_id = (int) $rating->nid;
+  }
+
+  // 8b. THE REQUEST. Its status and its closing instant, and nothing else: the
+  // category, the unit, the description, the files and both award fields stay
+  // as they were, and the node stays published.
+  //
+  // field_closed_at is 'datestamp' (SPEC 77), so what goes in is the integer
+  // REQUEST_TIME and not a formatted string — the same shape
+  // includes/myapi.service_request_query.inc reads back to serve `closed_at`.
+  $node->field_request_status[LANGUAGE_NONE][0]['value'] = MYAPI_SERVICES_REQUEST_STATUS_CLOSED;
+  $node->field_closed_at[LANGUAGE_NONE][0]['value'] = REQUEST_TIME;
+  node_save($node);
+
+  // 8c. THE TRANSACTION, last, and after the request for the SPEC 94 reason the
+  // docblock gives. The rating's own comment does NOT come here: it lives in
+  // field_rating_comment, and two copies of one text drift apart the day the
+  // back office edits one.
+  myapi_service_transaction_record(
+    $node->nid,
+    MYAPI_SERVICES_REQUEST_STATUS_CLOSED,
+    // The resident who closed, which is who is behind the token.
+    $uid,
+    myapi_service_transaction_close_comment(
+      $body['values']['close_reason'],
+      $body['values']['stars'],
+      $provider_name
+    )
+  );
+
+  // 9. The answer: THE SAME NINETEEN-KEY OBJECT the detail serves, rebuilt from
+  // the database AFTER the writes with SPEC 89's own loaders and serialiser, so
+  // `status` already reads 'closed' and `closed_at` already carries the instant.
+  //
+  // `viewer` is always 'requester': step 4 proved whoever got here is the
+  // field_requester, and nobody else reaches this line.
+  $row = myapi_service_request_detail_row($node->nid);
+
+  // THE DEGRADED BRANCH, exactly as in SPEC 95 and SPEC 106.
+  // myapi_service_request_detail_row() INNER JOINs the category term, so a
+  // request whose term was deleted resolves to FALSE. The close is ALREADY
+  // written at this point and it is CORRECT, so the truthful answer is still
+  // 200 with the two keys that are known without a query, plus rating_id, and
+  // the inconsistency is logged instead of swallowed. A 500 would lie about an
+  // operation that succeeded and would send the client into a retry that
+  // answers 409.
+  if (!$row) {
+    watchdog(
+      'myapi',
+      'Service request @nid was closed but its detail could not be built: its category term is missing. The response was degraded.',
+      ['@nid' => $node->nid],
+      WATCHDOG_ERROR
+    );
+
+    myapi_respond(
+      [
+        'service_request' => [
+          'id' => (int) $node->nid,
+          'status' => MYAPI_SERVICES_REQUEST_STATUS_CLOSED,
+        ],
+        'rating_id' => $rating_id,
+      ],
+      200,
+      'service_request_closed'
+    );
+  }
+
+  $row->requester_name = NULL;
+  $names = myapi_user_display_names([$uid]);
+  if (isset($names[$uid])) {
+    $row->requester_name = $names[$uid];
+  }
+
+  $images = myapi_service_request_load_images($node->nid);
+
+  // The requester's answer is EVERY offer, so the trim is the empty list — the
+  // same argument the detail and the cancellation pass for this reader. Closing
+  // moves no offer: whatever SPEC 106 left them at is what comes back.
+  $offers = array_map(
+    'myapi_service_offer_build',
+    myapi_service_request_load_offers($node->nid, [])
+  );
+
+  $offer_counts = myapi_service_request_offer_counts_by_nid([$node->nid]);
+  $offers_count = isset($offer_counts[$node->nid]) ? $offer_counts[$node->nid] : 0;
+
+  // The timeline, with the close entry already the last of it. This is why the
+  // response carries no separate 'transaction' key: it would be the same object
+  // twice.
+  $transactions = myapi_service_request_load_transactions($node->nid);
+
+  // rating_id is a SIBLING of service_request and not a twentieth key of it, so
+  // the object under 'service_request' stays byte-identical to the detail's and
+  // the app can swap it in with no special case. It is ALWAYS PRESENT, NULL when
+  // the close needed no rating: no key of this module appears and disappears
+  // with the case.
+  myapi_respond(
+    [
+      'service_request' => myapi_service_request_build_detail(
+        $row,
+        'requester',
+        $images,
+        $offers,
+        $offers_count,
+        $transactions
+      ),
+      'rating_id' => $rating_id,
+    ],
+    200,
+    'service_request_closed'
+  );
+}
+
+/**
+ * Validates the body of a close, in the shape the status asks for (SPEC 108).
+ *
+ * Pure: takes the already-decoded body and a boolean, and returns a verdict,
+ * never touching HTTP output nor the node, so the caller decides when to abort.
+ * Same ['ok' => TRUE, 'values' => [...]] contract as
+ * myapi_service_offer_validate_body() (SPEC 100), and the same one
+ * myapi_service_request_validate_cancel_reason() carries in its single-value
+ * form.
+ *
+ * TWO SHAPES, ONE FUNCTION, AND THE CALLER HAS ALREADY ASKED WHICH.
+ * $requires_rating is myapi_services_close_requires_rating() of the status the
+ * gate read at step 5, so this function never looks at the node and the decision
+ * lives in exactly one place:
+ *
+ *   A. TRUE ('assigned', 'direct') — { "stars": 5, "comment": "..." }
+ *      `stars` is required and must be a key of myapi_services_star_values();
+ *      `comment` is optional, up to 1000 characters; `close_reason` is IGNORED
+ *      IN SILENCE, because here the rating's comment is the text of the close.
+ *
+ *   B. FALSE ('offered') — { "close_reason": "..." }
+ *      `close_reason` is required, 1 to 1000 characters; `stars` and `comment`
+ *      are IGNORED IN SILENCE, because there is nobody to rate.
+ *
+ * Whichever shape runs, the three keys always come back, the two that do not
+ * apply as NULL — the same rule the response follows for rating_id.
+ *
+ * THE CATALOGUE IS ASKED, NOT TRANSCRIBED. The valid star values come from
+ * myapi_services_star_values() (SPEC 77), which is the same source myapi.install
+ * builds field_stars' allowed_values from; writing 1..5 here would create a
+ * second truth that drifts the day the scale changes.
+ *
+ * BOOLEANS AND FLOATS ARE REFUSED EXPLICITLY. (int) TRUE is 1, which IS a key of
+ * the catalogue, so `"stars": true` would sneak a one-star rating through a bare
+ * cast; and 2.5 is not a star value even though it sits inside the range. Only an
+ * int, or a string of digits, are accepted — which is what makes 5 and "5"
+ * identical, as a JSON client that quotes its numbers deserves.
+ *
+ * close_reason IS REQUIRED WHILE THE CANCELLATION'S reason IS OPTIONAL, and the
+ * difference is not an oversight. Cancelling is walking away and the reason
+ * explains itself; CLOSING WITH NOTHING AWARDED, having received offers, leaves
+ * the providers who sent them hanging, and that timeline entry is the only thing
+ * left to explain it to them. It is also the treatment SPEC 70 already gives the
+ * same word on the other resource.
+ *
+ * 1000 CHARACTERS AND NOT 255. The 255 of SPEC 95 is for a one-line reason; both
+ * texts here are a resident's written opinion about a service, and the module's
+ * precedent for that is the close_reason of SPEC 70. Measured with
+ * drupal_strlen() (characters) and not strlen() (bytes), so a resident writing
+ * in Spanish does not see 1000 accented characters rejected for nothing.
+ *
+ * KEYS THAT ARE LEFT OVER ARE NOT A 422, same criterion as the rest of the
+ * module: what is named is validated and nothing else. An app that sends the
+ * whole form in both cases works, which is what one wants from an app.
+ *
+ * @param mixed $body
+ *   Decoded request body, or anything at all when there was none.
+ * @param bool $requires_rating
+ *   myapi_services_close_requires_rating() of the request's current status.
+ *
+ * @return array
+ *   ['ok' => TRUE, 'values' => ['stars' => int|NULL, 'comment' => string|NULL,
+ *   'close_reason' => string|NULL]] when accepted, or ['ok' => FALSE,
+ *   'error_code' => string, 'replacements' => array] when it must answer 422.
+ */
+function myapi_service_request_validate_close_body($body, $requires_rating) {
+  if (!is_array($body)) {
+    $body = [];
+  }
+
+  $values = ['stars' => NULL, 'comment' => NULL, 'close_reason' => NULL];
+
+  /* ---- B. No award: close_reason and nothing else. ---- */
+  if (!$requires_rating) {
+    if (!array_key_exists('close_reason', $body)) {
+      return _myapi_service_request_close_invalid('missing_field', 'close_reason');
+    }
+    // Present but not a string (array, number, boolean, NULL): the client sent
+    // the key on purpose with the wrong type, so this one IS an error.
+    if (!is_string($body['close_reason'])) {
+      return _myapi_service_request_close_invalid('invalid_field', 'close_reason');
+    }
+
+    $close_reason = trim($body['close_reason']);
+    // Empty after the trim is the SAME as absent, and both are missing_field:
+    // a reason made of spaces explains nothing to the providers who bid.
+    if ($close_reason === '') {
+      return _myapi_service_request_close_invalid('missing_field', 'close_reason');
+    }
+    if (drupal_strlen($close_reason) > 1000) {
+      return _myapi_service_request_close_invalid('field_too_long', 'close_reason');
+    }
+
+    $values['close_reason'] = $close_reason;
+
+    return ['ok' => TRUE, 'values' => $values];
+  }
+
+  /* ---- A. There was a provider: stars, and an optional comment. ---- */
+  if (!array_key_exists('stars', $body)) {
+    return _myapi_service_request_close_invalid('missing_field', 'stars');
+  }
+
+  $stars = myapi_service_request_parse_stars($body['stars']);
+  if ($stars === NULL) {
+    return _myapi_service_request_close_invalid('invalid_field', 'stars');
+  }
+  $values['stars'] = $stars;
+
+  if (array_key_exists('comment', $body)) {
+    if (!is_string($body['comment'])) {
+      return _myapi_service_request_close_invalid('invalid_field', 'comment');
+    }
+
+    $comment = trim($body['comment']);
+    if (drupal_strlen($comment) > 1000) {
+      return _myapi_service_request_close_invalid('field_too_long', 'comment');
+    }
+    // Empty after the trim is the same as absent, and NOT an error: the comment
+    // is optional, and a resident who rates without writing owes nobody words.
+    if ($comment !== '') {
+      $values['comment'] = $comment;
+    }
+  }
+
+  return ['ok' => TRUE, 'values' => $values];
+}
+
+/**
+ * Resolves a raw `stars` value to a key of the catalogue, or to nothing
+ * (SPEC 108).
+ *
+ * Extracted from the validator above so that "what counts as a star value" is
+ * one decision in one place, and so the validator reads as the list of its
+ * fields. Pure, and the whole matrix of refusals fits in tests/unit.
+ *
+ * WHAT IS ACCEPTED: an integer, or a string made only of digits. Nothing else.
+ * That is what makes 5 and "5" resolve to the same int — a JSON client that
+ * quotes its numbers is not wrong — while it refuses, on purpose:
+ *   - booleans, because (int) TRUE is 1 and 1 IS a valid star value, so a bare
+ *     cast would turn `"stars": true` into a one-star rating nobody wrote;
+ *   - floats, because 2.5 is not a star even though it sits inside the range;
+ *   - '-3' and '1.5', because ctype_digit() refuses the sign and the dot;
+ *   - arrays, objects and NULL, which are not scalars at all.
+ *
+ * THE RANGE IS NOT WRITTEN HERE. Whether the resulting integer is a star is
+ * asked of myapi_services_star_values() (SPEC 77) — the same catalogue
+ * myapi.install builds field_stars' allowed_values from — so 0 and 6 are
+ * refused by the catalogue and not by a literal, and the day the scale changes
+ * nothing here has to.
+ *
+ * @param mixed $raw
+ *   The `stars` value as it came out of the JSON body.
+ *
+ * @return int|null
+ *   The number of stars, or NULL when the value is not one.
+ */
+function myapi_service_request_parse_stars($raw) {
+  if (is_bool($raw) || !is_scalar($raw)) {
+    return NULL;
+  }
+
+  if (is_int($raw)) {
+    $stars = $raw;
+  }
+  elseif (is_string($raw) && ctype_digit($raw)) {
+    $stars = (int) $raw;
+  }
+  else {
+    return NULL;
+  }
+
+  $star_values = myapi_services_star_values();
+
+  return isset($star_values[$stars]) ? $stars : NULL;
+}
+
+/**
+ * The 422 verdict of myapi_service_request_validate_close_body() (SPEC 108).
+ *
+ * Six call sites in one function say the same three-key array; this is that
+ * array, written once. Underscore-prefixed and not documented in docs/: it is
+ * private to the close validator, exactly like _myapi_service_offer_invalid()
+ * is to SPEC 100's.
+ *
+ * @param string $error_code
+ *   'missing_field', 'invalid_field' or 'field_too_long'.
+ * @param string $field
+ *   The body key that failed, as it travels in the message's @field.
+ *
+ * @return array
+ *   ['ok' => FALSE, 'error_code' => string, 'replacements' => array].
+ */
+function _myapi_service_request_close_invalid($error_code, $field) {
+  return [
+    'ok' => FALSE,
+    'error_code' => $error_code,
+    'replacements' => ['@field' => $field],
+  ];
 }

@@ -510,6 +510,27 @@ function myapi_menu() {
     'file'             => 'resources/service_request.resource.inc',
   ];
 
+  // The requester closes their own request and rates the provider that did the
+  // job (SPEC 108). FIVE COMPONENTS, like 'api/v1/service-requests/%/cancel'
+  // just above and 'api/v1/service-requests/%/offers' just below, and the three
+  // are told apart by the literal in the fifth position — Drupal 7 compares the
+  // number of components first, which already separates all three from the
+  // four-part routes and from the six-part file one, and 'close' cannot be
+  // confused with 'cancel' or with 'offers'.
+  //
+  // Its own single-method dispatcher and not a branch of
+  // myapi_service_request_item_dispatch(), the same shape and the same argument
+  // as the cancellation: a state transition is not an edition of the resource.
+  // It is the SECOND '/close' of the module, after api/v1/claims/%/close, which
+  // SPEC 70 gave to the very same actor for the very same verb.
+  $items['api/v1/service-requests/%/close'] = [
+    'page callback'    => 'myapi_service_request_close_dispatch',
+    'page arguments'   => [3],
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/service_request.resource.inc',
+  ];
+
   // A provider bids on a request (SPEC 100). FIVE COMPONENTS, exactly like
   // 'api/v1/service-requests/%/cancel' above, and the two are told apart by the
   // literal in the fifth position — Drupal 7 compares the number of components
