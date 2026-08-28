@@ -52,6 +52,22 @@ define('MYAPI_NOTIFICATION_TYPE_PAYMENT_CANCELLED', 'payment_cancelled');
 define('MYAPI_NOTIFICATION_DEEP_LINK_PAYMENT', 'payment');
 
 /**
+ * Audience of a push: the notice is addressed to a resident (SPEC 109).
+ *
+ * Default of myapi_notification_create(), so every trigger written before that
+ * spec keeps emitting it without changing a line.
+ */
+define('MYAPI_NOTIFICATION_AUDIENCE_RESIDENT', 'resident');
+
+/**
+ * Audience of a push: the notice is addressed to a provider (SPEC 109).
+ *
+ * The app reads it together with the 'provider' key of the same payload to
+ * decide which side of itself to open.
+ */
+define('MYAPI_NOTIFICATION_AUDIENCE_PROVIDER', 'provider');
+
+/**
  * Name of the cron queue that carries OneSignal push batches.
  *
  * Also defined in myapi.module (always loaded) so hook_cron_queue_info() can
@@ -355,7 +371,9 @@ function myapi_notification_building_admin_uids($condominium_id) {
  *
  * @param array $params  Keys: 'source_type', 'source_nid', 'type', 'title',
  *                       'body', 'deep_link_target', 'deep_link_id', 'uids',
- *                       'condominium_id' (optional), 'unit_id' (optional).
+ *                       'condominium_id' (optional), 'unit_id' (optional),
+ *                       'provider_id' (optional, SPEC 109) and 'audience'
+ *                       (optional, SPEC 109: 'resident' by default).
  *
  * @return int  Number of rows inserted (recipients).
  */
@@ -374,11 +392,17 @@ function myapi_notification_create(array $params) {
   $deep_link_id = isset($params['deep_link_id']) ? $params['deep_link_id'] : NULL;
   $condominium_id = isset($params['condominium_id']) ? (int) $params['condominium_id'] : NULL;
   $unit_id = isset($params['unit_id']) ? (int) $params['unit_id'] : NULL;
+  // SPEC 109. provider_id is persisted AND travels in the push; audience only
+  // travels in the push (it is derivable from the type and the provider, so
+  // there is nothing to gain from storing it). Every caller before this spec
+  // passes neither, and so keeps provider_id = NULL and audience = 'resident'.
+  $provider_id = isset($params['provider_id']) ? (int) $params['provider_id'] : NULL;
+  $audience = isset($params['audience']) ? $params['audience'] : MYAPI_NOTIFICATION_AUDIENCE_RESIDENT;
 
   $insert = db_insert('myapi_notifications')->fields([
     'uid', 'source_type', 'source_nid', 'type', 'title', 'body',
     'deep_link_target', 'deep_link_id', 'condominium_id', 'unit_id',
-    'is_read', 'created', 'read_at',
+    'provider_id', 'is_read', 'created', 'read_at',
   ]);
   foreach ($uids as $uid) {
     $insert->values([
@@ -392,6 +416,7 @@ function myapi_notification_create(array $params) {
       'deep_link_id'     => $deep_link_id,
       'condominium_id'   => $condominium_id,
       'unit_id'          => $unit_id,
+      'provider_id'      => $provider_id,
       'is_read'          => 0,
       'created'          => $now,
       'read_at'          => NULL,
@@ -406,6 +431,8 @@ function myapi_notification_create(array $params) {
     'unit'               => $unit_id,
     'condominium'        => $condominium_id,
     'notification_type'  => $params['type'],
+    'audience'           => $audience,
+    'provider'           => $provider_id,
   ];
   $queue = DrupalQueue::get(MYAPI_ONESIGNAL_QUEUE);
   foreach (array_chunk($uids, MYAPI_ONESIGNAL_MAX_EXTERNAL_IDS) as $chunk) {
