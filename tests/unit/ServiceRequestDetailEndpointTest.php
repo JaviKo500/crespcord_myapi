@@ -2212,9 +2212,18 @@ class ServiceRequestDetailEndpointTest extends TestCase {
     // includes/myapi.service_offer.inc as myapi_service_offer_reject_live();
     // neither file below holds it any more, so the entry went with it rather
     // than staying on as a permission for a function that is not here.
+    //
+    // SPEC 108 took the same decision a third time, for the close, on the same
+    // grounds and with one addition: besides loading the request it is about to
+    // save, it loads the RATED PROVIDER to put its name in the timeline entry.
+    // That second load is paid once per close and costs nothing extra —
+    // hook_node_presave() resolves the same provider for the rating's title a
+    // few lines later, and Drupal 7's entity static cache answers it — while a
+    // query would be a second reader of a row the write path already holds.
     $allowed = [
       'myapi_service_request_cancel',
       'myapi_service_request_update',
+      'myapi_service_request_close',
     ];
 
     // BOTH halves of the detail: the endpoints left in the resource and the six
