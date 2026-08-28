@@ -187,3 +187,216 @@ function myapi_service_request_provider_uids($provider_id) {
 
   return array_map('intval', $query->execute()->fetchCol());
 }
+
+/* ---------------------------------------------------------------------------
+ * Pure text builders.
+ *
+ * No database and no node loading: they receive values already resolved by the
+ * orchestrator and return strings or arrays. That is what makes the four of
+ * them — the two the resident never sees and the two the back office reads —
+ * assertable character by character in tests/unit with no site booted.
+ *
+ * Two rules run through all of them:
+ * - An unresolvable value prints as MYAPI_SERVICE_REQUEST_MAIL_EMPTY, never as
+ *   an empty line. A deleted category or a condominium with no title must not
+ *   turn a notification into a hole.
+ * - The push and the inbox row carry PLAIN text (an HTML banner would show
+ *   literal tags); the mail params are escaped here with check_plain(), once,
+ *   because the queue drains on cron and the message must describe what was
+ *   true at the instant of the trigger.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Plain-text value of a resolved field, or the placeholder.
+ *
+ * For the push and the inbox row: no escaping, because neither is HTML.
+ *
+ * @param string|null $value  Already-resolved value.
+ *
+ * @return string  The value, or MYAPI_SERVICE_REQUEST_MAIL_EMPTY.
+ */
+function myapi_service_request_notification_label($value) {
+  if ($value === NULL || $value === '') {
+    return MYAPI_SERVICE_REQUEST_MAIL_EMPTY;
+  }
+
+  return $value;
+}
+
+/**
+ * Escaped value of a resolved field, or the placeholder.
+ *
+ * For the two emails, whose params are enqueued already escaped.
+ *
+ * @param string|null $value  Already-resolved value.
+ *
+ * @return string  Escaped value, or MYAPI_SERVICE_REQUEST_MAIL_EMPTY.
+ */
+function myapi_service_request_mail_label($value) {
+  if ($value === NULL || $value === '') {
+    return MYAPI_SERVICE_REQUEST_MAIL_EMPTY;
+  }
+
+  return check_plain($value);
+}
+
+/**
+ * Human label of a timestamp, or the placeholder.
+ *
+ * Resolved ONCE per request and shared by the push and both emails, so the
+ * three channels can never disagree about when the work is meant to start.
+ * The output has no character check_plain() would touch, which is why it is
+ * safe in the plain-text push and in the HTML mails alike.
+ *
+ * @param int|null $timestamp  Unix timestamp, or NULL/0 when the field is empty.
+ *
+ * @return string  'd/m/Y H:i', or MYAPI_SERVICE_REQUEST_MAIL_EMPTY.
+ */
+function myapi_service_request_date_label($timestamp) {
+  $timestamp = (int) $timestamp;
+  if ($timestamp <= 0) {
+    return MYAPI_SERVICE_REQUEST_MAIL_EMPTY;
+  }
+
+  return format_date($timestamp, 'custom', 'd/m/Y H:i');
+}
+
+/**
+ * Title of the push and of the inbox row sent to a provider.
+ *
+ * Two texts and not one with a suffix: a direct request is already theirs and
+ * an open one is a race, and the provider decides whether to open the app on
+ * the title alone.
+ *
+ * @param bool $is_direct  TRUE when the request was born with an assigned
+ *   provider.
+ *
+ * @return string  Fixed Spanish text.
+ */
+function myapi_service_request_push_title($is_direct) {
+  return $is_direct
+    ? 'Nueva solicitud directa para ti'
+    : 'Nueva solicitud de servicio';
+}
+
+/**
+ * Body of the push and of the inbox row sent to a provider.
+ *
+ * The same four lines in both cases — subject, category, condominium and start
+ * — because what changes between an open and a direct request is who is being
+ * told, not what they are told. What is deliberately NOT here: the unit, the
+ * requester and the description, which no provider sees until they open the
+ * detail endpoint.
+ *
+ * myapi_onesignal_truncate_body() cuts this to 200 characters for the banner;
+ * the inbox keeps the whole text.
+ *
+ * @param string|null $title           node.title of the request.
+ * @param string|null $category        Term name of field_category.
+ * @param string|null $condominium     node.title of field_condominium.
+ * @param string|null $desired_start   Already formatted by
+ *   myapi_service_request_date_label().
+ *
+ * @return string  Four lines separated by "\n".
+ */
+function myapi_service_request_push_body($title, $category, $condominium, $desired_start) {
+  return implode("\n", [
+    myapi_service_request_notification_label($title),
+    'Categoría: ' . myapi_service_request_notification_label($category),
+    'Condominio: ' . myapi_service_request_notification_label($condominium),
+    'Inicio: ' . myapi_service_request_notification_label($desired_start),
+  ]);
+}
+
+/**
+ * Params of the heads-up email sent to a notified provider's accounts.
+ *
+ * The same four values as the push and nothing else: the email is a copy of the
+ * notice for the account that does not have the app open, not a richer version
+ * of it. 'is_direct' travels because the subject depends on it.
+ *
+ * @param int   $nid     nid of the request.
+ * @param array $values  Already-resolved 'title', 'category', 'desired_start'
+ *   (formatted), 'condominium' and 'is_direct'.
+ *
+ * @return array  Escaped params for myapi_mail_format_service_request_provider().
+ */
+function myapi_service_request_provider_mail_params($nid, array $values) {
+  $values += [
+    'title'         => NULL,
+    'category'      => NULL,
+    'desired_start' => NULL,
+    'condominium'   => NULL,
+    'is_direct'     => FALSE,
+  ];
+
+  return [
+    'nid'           => (int) $nid,
+    'title'         => myapi_service_request_mail_label($values['title']),
+    'category'      => myapi_service_request_mail_label($values['category']),
+    'desired_start' => myapi_service_request_mail_label($values['desired_start']),
+    'condominium'   => myapi_service_request_mail_label($values['condominium']),
+    'is_direct'     => (bool) $values['is_direct'],
+  ];
+}
+
+/**
+ * Params of the detail email sent to the 'backend' role.
+ *
+ * The whole request, because the back office is the one audience allowed to see
+ * it: the unit, the requester, their email and the description are here and in
+ * no other channel of this spec.
+ *
+ * 'type' is built here rather than in the formatter so the branch that says
+ * "Abierta" or "Directa a {trade name}" is covered by the same pure test as the
+ * rest of the lines. A direct request whose provider name did not resolve reads
+ * "Directa a —": still the fact that it is direct, which is what the operator
+ * triages by.
+ *
+ * @param int   $nid     nid of the request.
+ * @param array $values  Already-resolved 'title', 'provider_name' (NULL on an
+ *   open request), 'category', 'desired_start' (formatted), 'unit',
+ *   'condominium', 'requester', 'requester_email', 'description' and 'created'
+ *   (formatted).
+ *
+ * @return array  Escaped params for myapi_mail_format_service_request_admin().
+ */
+function myapi_service_request_admin_mail_params($nid, array $values) {
+  $values += [
+    'title'           => NULL,
+    'provider_name'   => NULL,
+    'category'        => NULL,
+    'desired_start'   => NULL,
+    'unit'            => NULL,
+    'condominium'     => NULL,
+    'requester'       => NULL,
+    'requester_email' => NULL,
+    'description'     => NULL,
+    'created'         => NULL,
+    'is_direct'       => FALSE,
+  ];
+
+  $type = $values['is_direct']
+    ? 'Directa a ' . myapi_service_request_mail_label($values['provider_name'])
+    : 'Abierta';
+
+  return [
+    'nid'             => (int) $nid,
+    'title'           => myapi_service_request_mail_label($values['title']),
+    'type'            => $type,
+    'category'        => myapi_service_request_mail_label($values['category']),
+    'desired_start'   => myapi_service_request_mail_label($values['desired_start']),
+    'unit'            => myapi_service_request_mail_label($values['unit']),
+    'condominium'     => myapi_service_request_mail_label($values['condominium']),
+    'requester'       => myapi_service_request_mail_label($values['requester']),
+    'requester_email' => myapi_service_request_mail_label($values['requester_email']),
+    'description'     => myapi_service_request_mail_label($values['description']),
+    'created'         => myapi_service_request_mail_label($values['created']),
+    // Absolute so the link works from any mail client; check_plain() because
+    // url() does not encode the '&' between query arguments for HTML output.
+    // The node view and not the edit form: the operator reads a request before
+    // touching it, unlike a payment (SPEC 80) whose next action is a status
+    // change.
+    'node_url'        => check_plain(url('node/' . (int) $nid, ['absolute' => TRUE])),
+  ];
+}
