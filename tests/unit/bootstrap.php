@@ -1576,6 +1576,21 @@ if (!function_exists('watchdog')) {
   }
 }
 
+/**
+ * Core's watchdog_exception(), reduced to what it is here: one more watchdog
+ * entry (SPEC 109).
+ *
+ * The best-effort trigger of a service request catches its own failures and
+ * logs them through this function, so without the stub a swallowed exception
+ * fatals on the way to the log — turning the very construct that must never
+ * break the 201 into the thing that breaks it.
+ */
+if (!function_exists('watchdog_exception')) {
+  function watchdog_exception($type, Exception $exception, $message = NULL, $variables = [], $severity = WATCHDOG_ERROR, $link = NULL) {
+    watchdog($type, $message !== NULL ? $message : $exception->getMessage(), $variables, $severity, $link);
+  }
+}
+
 if (!function_exists('field_read_field')) {
   /**
    * The stored definition, or FALSE for a field this site does not have —

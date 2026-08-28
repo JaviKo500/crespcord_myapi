@@ -2051,6 +2051,17 @@ function myapi_service_request_build_node($uid, $title, $unit_id, $condominium_i
  * with `offers` and `offers_count` below: those two are known to be empty, this
  * one is known NOT to be, so it is queried and not assumed.
  *
+ * SINCE SPEC 109 THE CREATION ALSO NOTIFIES, and that trigger lives here and
+ * not in hook_node_insert() — the opposite choice to the transaction above, and
+ * deliberately so: a request typed into node/add/service_request by an operator
+ * must not push anybody, the same criterion as payments (SPEC 80) and
+ * reservations (SPEC 48). myapi_service_request_notify_created() reaches every
+ * active provider of the category — or only the awarded one when the request is
+ * born 'direct' — plus the detail email to the 'backend' role, and it swallows
+ * its own failures into watchdog, so the 201 below is not conditional on any of
+ * it. See includes/myapi.service_request_notification.inc and
+ * docs/service-request-notifications.md.
+ *
  * The 201 response reuses myapi_service_request_detail_row() +
  * myapi_user_display_names() + myapi_service_request_load_images() +
  * myapi_service_request_load_transactions() +
@@ -2211,7 +2222,23 @@ function myapi_service_request_create() {
     file_usage_add($attachment_file, 'myapi', 'node', $node->nid);
   }
 
-  // 13. Respond 201 with the same nineteen-key shape as
+  // 13. Notify (SPEC 109). After the files are tied to the node, so a failure
+  // in here can never leave one orphaned, and before the 201 is built, so the
+  // response the resident reads is the last thing that happens. The trigger
+  // lives on this endpoint and not on hook_node_insert(): a request typed into
+  // the back office notifies nobody. Best-effort end to end — the function
+  // swallows its own failures into watchdog, so nothing below is conditional
+  // on it.
+  module_load_include('inc', 'myapi', 'includes/myapi.service_request_notification');
+  myapi_service_request_notify_created($node, [
+    'unit_id'              => $unit_id,
+    'condominium_id'       => $condominium_id,
+    'category_id'          => $category_id,
+    'assigned_provider_id' => $assigned_provider_id,
+    'requester_uid'        => $uid,
+  ]);
+
+  // 14. Respond 201 with the same nineteen-key shape as
   // GET /api/v1/service-requests/%, reusing SPEC 89's own serialiser. `viewer`
   // is always 'requester' here: the creator IS the requester. `offers` and
   // `offers_count` are put directly as `[]` and `0`, while `transactions` IS

@@ -15,6 +15,11 @@ require_once __DIR__ . '/../../includes/myapi.service_offer.inc';
 require_once __DIR__ . '/../../includes/myapi.service_request_query.inc';
 require_once __DIR__ . '/../../includes/myapi.service_request_detail.inc';
 require_once __DIR__ . '/../../includes/myapi.provider_card.inc';
+require_once __DIR__ . '/../../includes/myapi.provider_query.inc';
+require_once __DIR__ . '/../../includes/myapi.provider_role.inc';
+require_once __DIR__ . '/../../includes/myapi.notification.inc';
+require_once __DIR__ . '/../../includes/myapi.mail_queue.inc';
+require_once __DIR__ . '/../../includes/myapi.service_request_notification.inc';
 require_once __DIR__ . '/../../resources/service_request.resource.inc';
 
 /**
