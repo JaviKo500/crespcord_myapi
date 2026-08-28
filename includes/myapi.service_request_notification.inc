@@ -400,3 +400,261 @@ function myapi_service_request_admin_mail_params($nid, array $values) {
     'node_url'        => check_plain(url('node/' . (int) $nid, ['absolute' => TRUE])),
   ];
 }
+
+/* ---------------------------------------------------------------------------
+ * Resolution of the values the three channels share.
+ *
+ * Each of these runs ONCE per request, no matter how many providers are being
+ * notified: the category, the condominium and the unit are properties of the
+ * request, not of the recipient. Every one of them degrades to NULL rather than
+ * throwing, because a deleted term or an unpublished node must cost a dash in a
+ * line and never the 201 of the endpoint.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Title of one node, or NULL.
+ *
+ * db_select() and not node_load(): three titles are needed (condominium, unit
+ * and, on a direct request, the provider) and none of their bodies is, so
+ * loading three full entities to read three strings would be the expensive way
+ * of asking. No status condition — the back office email must still name the
+ * unit of a request whose unit was unpublished a minute later.
+ *
+ * @param int|null $nid  Node id.
+ *
+ * @return string|null  The title, or NULL when the node is gone.
+ */
+function myapi_service_request_node_title($nid) {
+  $nid = (int) $nid;
+  if ($nid <= 0) {
+    return NULL;
+  }
+
+  $title = db_select('node', 'n')
+    ->fields('n', ['title'])
+    ->condition('n.nid', $nid)
+    ->execute()
+    ->fetchField();
+
+  return ($title === FALSE || $title === '') ? NULL : $title;
+}
+
+/**
+ * Name of one taxonomy term, or NULL.
+ *
+ * @param int|null $tid  Term id.
+ *
+ * @return string|null  The name, or NULL when the term is gone.
+ */
+function myapi_service_request_term_name($tid) {
+  $tid = (int) $tid;
+  if ($tid <= 0) {
+    return NULL;
+  }
+
+  $name = db_select('taxonomy_term_data', 'td')
+    ->fields('td', ['name'])
+    ->condition('td.tid', $tid)
+    ->execute()
+    ->fetchField();
+
+  return ($name === FALSE || $name === '') ? NULL : $name;
+}
+
+/**
+ * Email address of one account, or NULL.
+ *
+ * @param int|null $uid  User id.
+ *
+ * @return string|null  The address, or NULL when empty or the account is gone.
+ */
+function myapi_service_request_user_mail($uid) {
+  $uid = (int) $uid;
+  if ($uid <= 0) {
+    return NULL;
+  }
+
+  $mail = db_select('users', 'u')
+    ->fields('u', ['mail'])
+    ->condition('u.uid', $uid)
+    ->execute()
+    ->fetchField();
+
+  return ($mail === FALSE || $mail === '') ? NULL : $mail;
+}
+
+/**
+ * Notifies the creation of a service request. THE ENTRY POINT OF THIS SPEC.
+ *
+ * Called from myapi_service_request_create() after node_save() and after the
+ * file_usage_add() calls, so nothing here can leave a file orphaned, and never
+ * from a node hook: a request typed into the back office notifies nobody.
+ *
+ * Order of the work, and why:
+ * 1. Resolve every shared label ONCE — the category, the condominium, the unit,
+ *    the requester and the dates are the same for all recipients.
+ * 2. Decide the audience. A direct request goes to its awarded provider and to
+ *    nobody else; an open one, to every ACTIVE provider of its category. The
+ *    direct branch does NOT re-check that the provider is active:
+ *    myapi_service_request_validate_provider() (SPEC 90) checked it two steps
+ *    earlier in this same request, and restating the rule here would be its
+ *    third home.
+ * 3. One myapi_notification_create() PER PROVIDER, not one for all of them:
+ *    provider_id is a column of the row, so an account operating two active
+ *    providers of the category deliberately gets two rows and two pushes, one
+ *    per provider (the spec's accepted consequence).
+ * 4. One mail per ACCOUNT, because a mail goes to an address and not to a
+ *    company.
+ * 5. The back office mail last, so a failure there cannot cost the providers
+ *    their notice.
+ *
+ * Best-effort from end to end: the whole body is wrapped, every failure lands in
+ * watchdog, and none of them undoes the node or changes the 201. Three empty
+ * sets are normal and not errors — a category nobody serves, a provider with no
+ * account attached, and an empty 'backend' role.
+ *
+ * @param object $node     The just-saved 'service_request' node.
+ * @param array  $context  Ids already resolved and validated by the endpoint:
+ *   'unit_id', 'condominium_id', 'category_id', 'assigned_provider_id' (NULL on
+ *   an open request) and 'requester_uid'.
+ *
+ * @return void
+ */
+function myapi_service_request_notify_created($node, array $context = []) {
+  try {
+    module_load_include('inc', 'myapi', 'includes/myapi.notification');
+    module_load_include('inc', 'myapi', 'includes/myapi.mail_queue');
+    module_load_include('inc', 'myapi', 'includes/myapi.user');
+
+    $context += [
+      'unit_id'              => NULL,
+      'condominium_id'       => NULL,
+      'category_id'          => NULL,
+      'assigned_provider_id' => NULL,
+      'requester_uid'        => NULL,
+    ];
+
+    $nid = (int) $node->nid;
+    $is_direct = !empty($context['assigned_provider_id']);
+
+    // The audience. Keyed by nid => trade name in both branches, so the loop
+    // below does not care which of the two produced it.
+    $providers = $is_direct
+      ? [(int) $context['assigned_provider_id'] => myapi_service_request_node_title($context['assigned_provider_id'])]
+      : myapi_service_request_active_providers_for_category($context['category_id']);
+
+    // The shared labels, resolved once.
+    $category = myapi_service_request_term_name($context['category_id']);
+    $condominium = myapi_service_request_node_title($context['condominium_id']);
+    $desired_start = myapi_service_request_date_label(
+      isset($node->field_desired_start[LANGUAGE_NONE][0]['value'])
+        ? $node->field_desired_start[LANGUAGE_NONE][0]['value']
+        : NULL
+    );
+
+    $push_title = myapi_service_request_push_title($is_direct);
+    $push_body = myapi_service_request_push_body($node->title, $category, $condominium, $desired_start);
+
+    $provider_params = myapi_service_request_provider_mail_params($nid, [
+      'title'         => $node->title,
+      'category'      => $category,
+      'desired_start' => $desired_start,
+      'condominium'   => $condominium,
+      'is_direct'     => $is_direct,
+    ]);
+
+    foreach ($providers as $provider_id => $provider_name) {
+      $uids = myapi_service_request_provider_uids($provider_id);
+      if (empty($uids)) {
+        continue;
+      }
+
+      myapi_notification_create([
+        'source_type'      => MYAPI_NOTIFICATION_SOURCE_SERVICE_REQUEST,
+        'source_nid'       => $nid,
+        'type'             => $is_direct
+          ? MYAPI_NOTIFICATION_TYPE_SERVICE_REQUEST_DIRECT
+          : MYAPI_NOTIFICATION_TYPE_SERVICE_REQUEST_OPEN,
+        'title'            => $push_title,
+        'body'             => $push_body,
+        'deep_link_target' => MYAPI_NOTIFICATION_DEEP_LINK_SERVICE_REQUEST_PROVIDER,
+        'deep_link_id'     => $nid,
+        'condominium_id'   => $context['condominium_id'],
+        // Never the unit: a provider does not learn which home asked until
+        // they open the detail endpoint.
+        'unit_id'          => NULL,
+        'provider_id'      => (int) $provider_id,
+        'audience'         => MYAPI_NOTIFICATION_AUDIENCE_PROVIDER,
+        'uids'             => $uids,
+      ]);
+
+      foreach (user_load_multiple($uids) as $account) {
+        myapi_mail_queue_enqueue(
+          MYAPI_SERVICE_REQUEST_PROVIDER_MAIL_KEY,
+          (string) $account->mail,
+          $provider_params
+        );
+      }
+    }
+
+    myapi_service_request_enqueue_admin_mail($node, $context, [
+      'category'      => $category,
+      'condominium'   => $condominium,
+      'desired_start' => $desired_start,
+      'is_direct'     => $is_direct,
+      'provider_name' => $is_direct ? reset($providers) : NULL,
+    ]);
+  }
+  catch (Exception $e) {
+    watchdog_exception('myapi', $e);
+  }
+}
+
+/**
+ * Enqueues the detail email of a new request to the 'backend' role.
+ *
+ * Split out of the orchestrator because it is the one part that resolves values
+ * NO other channel uses — the unit, the requester and their address — and
+ * paying those three queries for a role that may be empty would be waste: the
+ * recipients are resolved first and the function returns before anything else
+ * when nobody holds the role.
+ *
+ * Building admins are deliberately not here (they are, for claims, in SPEC 68):
+ * this spec's audience is the 'backend' role and nothing else.
+ *
+ * @param object $node     The just-saved 'service_request' node.
+ * @param array  $context  The ids handed to myapi_service_request_notify_created().
+ * @param array  $labels   Already-resolved 'category', 'condominium',
+ *   'desired_start' (formatted), 'is_direct' and 'provider_name'.
+ *
+ * @return void
+ */
+function myapi_service_request_enqueue_admin_mail($node, array $context, array $labels) {
+  $uids = myapi_notification_role_uids(MYAPI_SERVICE_REQUEST_NOTIFY_ROLE);
+  if (empty($uids)) {
+    return;
+  }
+
+  $requester_uid = (int) $context['requester_uid'];
+  $names = myapi_user_display_names([$requester_uid]);
+
+  $params = myapi_service_request_admin_mail_params((int) $node->nid, [
+    'title'           => $node->title,
+    'provider_name'   => $labels['provider_name'],
+    'category'        => $labels['category'],
+    'desired_start'   => $labels['desired_start'],
+    'unit'            => myapi_service_request_node_title($context['unit_id']),
+    'condominium'     => $labels['condominium'],
+    'requester'       => isset($names[$requester_uid]) ? $names[$requester_uid] : NULL,
+    'requester_email' => myapi_service_request_user_mail($requester_uid),
+    'description'     => isset($node->field_description[LANGUAGE_NONE][0]['value'])
+      ? $node->field_description[LANGUAGE_NONE][0]['value']
+      : NULL,
+    'created'         => myapi_service_request_date_label($node->created),
+    'is_direct'       => $labels['is_direct'],
+  ]);
+
+  foreach (user_load_multiple($uids) as $account) {
+    myapi_mail_queue_enqueue(MYAPI_SERVICE_REQUEST_ADMIN_MAIL_KEY, (string) $account->mail, $params);
+  }
+}
