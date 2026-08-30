@@ -1171,6 +1171,18 @@ function myapi_mail($key, &$message, $params) {
     case 'service_request_cancelled_admin':
       myapi_mail_format_service_request_cancelled_admin($message, $params);
       break;
+
+    // SPEC 114. Fire for PUT /api/v1/service-requests/{id}/close only: a
+    // close made from the back office notifies nobody, same criterion as the
+    // six cases above. The provider key goes out only when the close carried
+    // a rating; the admin key, always, in either form of closing.
+    case 'service_request_rated_provider':
+      myapi_mail_format_service_request_rated_provider($message, $params);
+      break;
+
+    case 'service_request_closed_admin':
+      myapi_mail_format_service_request_closed_admin($message, $params);
+      break;
   }
 }
 

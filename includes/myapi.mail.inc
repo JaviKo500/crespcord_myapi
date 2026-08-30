@@ -1238,6 +1238,136 @@ function myapi_mail_service_request_cancelled_admin_html($params) {
   );
 }
 
+/* ---------------------------------------------------------------------------
+ * Request-closed / rated emails (SPEC 114).
+ *
+ * Two keys, fired together by myapi_service_request_notify_closed() from
+ * PUT /api/v1/service-requests/{id}/close:
+ * - 'service_request_rated_provider': the rated provider, only when the close
+ *   carried a rating (forms 'assigned'/'direct'). NO button, same criterion
+ *   as the rest of the emails to a provider (SPEC 109, 112, 113). Stars and
+ *   comment travel COMPLETE — this is the resident's own opinion of the
+ *   provider's own work, not a competitor's information to withhold.
+ * - 'service_request_closed_admin': the whole close, sent to the 'backend'
+ *   role, ALWAYS, with the button that opens the node — same shape as
+ *   'service_request_admin' (SPEC 109), 'service_request_awarded_admin'
+ *   (SPEC 112) and 'service_request_cancelled_admin' (SPEC 113). Its body is
+ *   CONDITIONAL: the rating section (forms 'assigned'/'direct') or the
+ *   'Motivo' line (form 'offered'), never both — one email for a single
+ *   atomic act (the spec's decision).
+ *
+ * $params arrives ALREADY RESOLVED AND ESCAPED from
+ * myapi_service_request_rated_provider_mail_params() /
+ * myapi_service_request_closed_admin_mail_params() — nothing here escapes
+ * anything.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Formats the rating notice email sent to the rated provider's accounts.
+ *
+ * Called from myapi_mail() (in myapi.module) for the
+ * 'service_request_rated_provider' key.
+ *
+ * @param array $message  Mail message array, altered by reference.
+ * @param array $params   'nid', 'subject', 'stars' and 'comment', already
+ *   escaped.
+ */
+function myapi_mail_format_service_request_rated_provider(&$message, $params) {
+  // A subject is plain text, so the escaped title is decoded back — same
+  // reason myapi_mail_format_service_request_cancelled_provider() does it.
+  $message['subject'] = 'Te calificaron — ' . decode_entities($params['subject']);
+  $message['body'][] = myapi_mail_service_request_rated_provider_html($params);
+
+  $message['headers']['Content-Type'] = 'text/html; charset=UTF-8';
+}
+
+/**
+ * Builds the HTML body of that email.
+ *
+ * Three lines — subject, stars and comment, both complete — and no button,
+ * same rule as the rest of the provider emails of this file.
+ *
+ * @param array $params  Already-escaped values (see the formatter).
+ *
+ * @return string  Full HTML document.
+ */
+function myapi_mail_service_request_rated_provider_html($params) {
+  $lines = array(
+    'Asunto'     => $params['subject'],
+    'Estrellas'  => $params['stars'],
+    'Comentario' => $params['comment'],
+  );
+
+  return myapi_mail_reservation_html(
+    'Solicitud #' . $params['nid'],
+    'Te calificaron',
+    'El residente calificó tu trabajo en esta solicitud de servicio.',
+    $lines,
+    'Revisa la solicitud en la app.'
+  );
+}
+
+/**
+ * Formats the close detail email sent to the 'backend' role.
+ *
+ * Called from myapi_mail() (in myapi.module) for the
+ * 'service_request_closed_admin' key. Same subject pattern as
+ * myapi_mail_format_service_request_cancelled_admin() (SPEC 113): the nid
+ * and the condominium, the two values an operator triages by.
+ *
+ * @param array $message  Mail message array, altered by reference.
+ * @param array $params   'nid', 'subject', 'condominium', 'unit', 'node_url',
+ *   'has_rating' and, depending on it, either 'provider_name'/'stars'/
+ *   'comment' or 'reason', already escaped.
+ */
+function myapi_mail_format_service_request_closed_admin(&$message, $params) {
+  $message['subject'] = 'Solicitud cerrada #' . $params['nid']
+    . ' — ' . decode_entities($params['condominium']);
+  $message['body'][] = myapi_mail_service_request_closed_admin_html($params);
+
+  $message['headers']['Content-Type'] = 'text/html; charset=UTF-8';
+}
+
+/**
+ * Builds the HTML body of that email.
+ *
+ * Two mutually exclusive branches, matching the spec's data model exactly:
+ * the rating section (proveedor calificado, estrellas, comentario) when the
+ * close carried one, or the 'Motivo' line when it did not. Never both, and
+ * never neither — 'Condominio' and 'Vivienda' close every branch the same
+ * way.
+ *
+ * @param array $params  Already-escaped values (see the formatter).
+ *
+ * @return string  Full HTML document.
+ */
+function myapi_mail_service_request_closed_admin_html($params) {
+  $lines = !empty($params['has_rating'])
+    ? array(
+      'Asunto'                => $params['subject'],
+      'Proveedor calificado'  => $params['provider_name'],
+      'Estrellas'             => $params['stars'],
+      'Comentario'            => $params['comment'],
+      'Condominio'            => $params['condominium'],
+      'Vivienda'              => $params['unit'],
+    )
+    : array(
+      'Asunto'      => $params['subject'],
+      'Motivo'      => $params['reason'],
+      'Condominio'  => $params['condominium'],
+      'Vivienda'    => $params['unit'],
+    );
+
+  return myapi_mail_reservation_html(
+    'Solicitud #' . $params['nid'],
+    'Solicitud cerrada',
+    'Se cerró una solicitud de servicio.',
+    $lines,
+    'Solicitud #' . $params['nid'],
+    array('label' => 'Ver solicitud', 'url' => $params['node_url'])
+  );
+}
+
 /**
  * Shared HTML shell of the reservation emails — and, since SPEC 68, of the five
  * claim ones.
