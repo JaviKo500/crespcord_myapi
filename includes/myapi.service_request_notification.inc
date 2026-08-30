@@ -689,6 +689,69 @@ function myapi_service_offer_withdrawn_resident_mail_params($nid, array $values)
 }
 
 /* ---------------------------------------------------------------------------
+ * SPEC 112 — pure text builders for the offer-award notices.
+ *
+ * Same two rules as the blocks above: an unresolvable value degrades to
+ * MYAPI_SERVICE_REQUEST_MAIL_EMPTY rather than an empty line or a thrown
+ * error, and the push/inbox text is plain while the mail params (added in
+ * Step 4, alongside the mail formatters that consume them) are escaped.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Title of the push and of the inbox row sent to the winning provider.
+ *
+ * @return string  Fixed Spanish text.
+ */
+function myapi_service_offer_accepted_push_title() {
+  return '¡Fuiste seleccionado!';
+}
+
+/**
+ * Body of the push and of the inbox row sent to the winning provider.
+ *
+ * Two lines: the request's own subject and the amount of the provider's own
+ * offer, via myapi_service_offer_amount_text() (SPEC 110) — unlike the
+ * withdrawn notice (SPEC 111), the offer is still live here, so the amount is
+ * exactly what the winner is about to be paid, not a stale figure.
+ *
+ * @param string|null $subject      node.title of the request.
+ * @param string      $amount_text  Already built by
+ *   myapi_service_offer_amount_text().
+ *
+ * @return string  Two lines separated by "\n".
+ */
+function myapi_service_offer_accepted_push_body($subject, $amount_text) {
+  return implode("\n", [
+    myapi_service_request_notification_label($subject),
+    'Monto: ' . myapi_service_request_notification_label($amount_text),
+  ]);
+}
+
+/**
+ * Title of the push and of the inbox row sent to each losing provider.
+ *
+ * @return string  Fixed Spanish text.
+ */
+function myapi_service_offer_rejected_push_title() {
+  return 'Ya se seleccionó un proveedor';
+}
+
+/**
+ * Body of the push and of the inbox row sent to each losing provider.
+ *
+ * One line only — the request's own subject. Deliberately WITHOUT the
+ * winner's identity or amount: a competitor does not learn who won the job
+ * nor for how much (the spec's decision).
+ *
+ * @param string|null $subject  node.title of the request.
+ *
+ * @return string  One line.
+ */
+function myapi_service_offer_rejected_push_body($subject) {
+  return myapi_service_request_notification_label($subject);
+}
+
+/* ---------------------------------------------------------------------------
  * Resolution of the values the three channels share.
  *
  * Each of these runs ONCE per request, no matter how many providers are being
