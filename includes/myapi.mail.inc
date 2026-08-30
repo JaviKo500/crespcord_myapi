@@ -1124,6 +1124,120 @@ function myapi_mail_service_request_awarded_admin_html($params) {
   );
 }
 
+/* ---------------------------------------------------------------------------
+ * Request-cancelled emails (SPEC 113).
+ *
+ * Two keys, fired together by myapi_service_request_notify_cancelled() from
+ * PUT /api/v1/service-requests/{id}/cancel:
+ * - 'service_request_cancelled_provider': each provider whose offer was
+ *   'sent' or 'selected' at the instant of cancellation. NO button, same
+ *   criterion as the rest of the emails to a provider (SPEC 109, 112). NO
+ *   reason — the resident's private text never reaches a provider.
+ * - 'service_request_cancelled_admin': the whole cancellation, sent to the
+ *   'backend' role, with the button that opens the node — same shape as
+ *   'service_request_admin' (SPEC 109) and 'service_request_awarded_admin'
+ *   (SPEC 112). Carries the reason when the resident gave one.
+ *
+ * $params arrives ALREADY RESOLVED AND ESCAPED from
+ * myapi_service_request_cancelled_provider_mail_params() /
+ * myapi_service_request_cancelled_admin_mail_params() — nothing here escapes
+ * anything.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Formats the cancellation email sent to an affected provider.
+ *
+ * Called from myapi_mail() (in myapi.module) for the
+ * 'service_request_cancelled_provider' key.
+ *
+ * @param array $message  Mail message array, altered by reference.
+ * @param array $params   'nid' and 'subject', already escaped.
+ */
+function myapi_mail_format_service_request_cancelled_provider(&$message, $params) {
+  // A subject is plain text, so the escaped title is decoded back — same
+  // reason myapi_mail_format_service_offer_accepted_provider() does it.
+  $message['subject'] = 'Solicitud cancelada — ' . decode_entities($params['subject']);
+  $message['body'][] = myapi_mail_service_request_cancelled_provider_html($params);
+
+  $message['headers']['Content-Type'] = 'text/html; charset=UTF-8';
+}
+
+/**
+ * Builds the HTML body of that email.
+ *
+ * One line only — the request's own subject — and no button, same rule as
+ * the push (see myapi_service_request_cancelled_push_body()). No status
+ * distinction and no reason, same rule as the push.
+ *
+ * @param array $params  Already-escaped values (see the formatter).
+ *
+ * @return string  Full HTML document.
+ */
+function myapi_mail_service_request_cancelled_provider_html($params) {
+  $lines = array(
+    'Asunto' => $params['subject'],
+  );
+
+  return myapi_mail_reservation_html(
+    'Solicitud #' . $params['nid'],
+    'Solicitud cancelada',
+    'El residente canceló esta solicitud de servicio.',
+    $lines,
+    'Revisa la solicitud en la app.'
+  );
+}
+
+/**
+ * Formats the cancellation detail email sent to the 'backend' role.
+ *
+ * Called from myapi_mail() (in myapi.module) for the
+ * 'service_request_cancelled_admin' key. Same subject pattern as
+ * myapi_mail_format_service_request_awarded_admin() (SPEC 112): the nid and
+ * the condominium, the two values an operator triages by.
+ *
+ * @param array $message  Mail message array, altered by reference.
+ * @param array $params   'nid', 'subject', 'reason', 'affected_count',
+ *                        'condominium', 'unit' and 'node_url', already
+ *                        escaped.
+ */
+function myapi_mail_format_service_request_cancelled_admin(&$message, $params) {
+  $message['subject'] = 'Solicitud cancelada #' . $params['nid']
+    . ' — ' . decode_entities($params['condominium']);
+  $message['body'][] = myapi_mail_service_request_cancelled_admin_html($params);
+
+  $message['headers']['Content-Type'] = 'text/html; charset=UTF-8';
+}
+
+/**
+ * Builds the HTML body of that email.
+ *
+ * Five lines, in the order the spec's data model dictates: what was asked,
+ * why (when the resident gave a reason), how many providers lost their offer,
+ * and where.
+ *
+ * @param array $params  Already-escaped values (see the formatter).
+ *
+ * @return string  Full HTML document.
+ */
+function myapi_mail_service_request_cancelled_admin_html($params) {
+  $lines = array(
+    'Asunto'                 => $params['subject'],
+    'Motivo'                 => $params['reason'],
+    'Proveedores afectados'  => $params['affected_count'],
+    'Condominio'             => $params['condominium'],
+    'Vivienda'               => $params['unit'],
+  );
+
+  return myapi_mail_reservation_html(
+    'Solicitud #' . $params['nid'],
+    'Solicitud cancelada',
+    'Se canceló una solicitud de servicio.',
+    $lines,
+    'Solicitud #' . $params['nid'],
+    array('label' => 'Ver solicitud', 'url' => $params['node_url'])
+  );
+}
+
 /**
  * Shared HTML shell of the reservation emails — and, since SPEC 68, of the five
  * claim ones.

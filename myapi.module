@@ -1159,6 +1159,18 @@ function myapi_mail($key, &$message, $params) {
     case 'service_request_awarded_admin':
       myapi_mail_format_service_request_awarded_admin($message, $params);
       break;
+
+    // SPEC 113. Fire for PUT /api/v1/service-requests/{id}/cancel only: a
+    // cancellation made from the back office notifies nobody, same criterion
+    // as the five cases above. Once per cancellation, to each provider whose
+    // offer was 'sent' or 'selected', and to the 'backend' role.
+    case 'service_request_cancelled_provider':
+      myapi_mail_format_service_request_cancelled_provider($message, $params);
+      break;
+
+    case 'service_request_cancelled_admin':
+      myapi_mail_format_service_request_cancelled_admin($message, $params);
+      break;
   }
 }
 
