@@ -1951,6 +1951,12 @@ answers `409`, not `200`: it tells the resident their action did nothing, which
 is the truth, and it is what stops a second rating and a duplicate timeline
 entry.
 
+**This call also notifies.** When there was a rating, the rated provider is
+told — push, inbox and email, with the full stars and comment they
+received. The `backend` role is told **always**, in either form, email only
+(SPEC 114). Best-effort, after the three writes above and never blocking the
+`200`. Full contract in `docs/service-request-notifications.md`.
+
 **Authentication:** required (Bearer access token)
 
 **Headers**

@@ -23,6 +23,11 @@ POST of the service marketplace:
   request, every provider whose offer was still `sent` or `selected` and the
   `backend` role are told. See the
   [dedicated section](#request-cancelled-spec-113) further down.
+- **Request closed / rated** (SPEC 114), off
+  `PUT /api/v1/service-requests/{id}/close`: when a resident closes a
+  request, the rated provider (if there was one) and the `backend` role are
+  told. See the
+  [dedicated section](#request-closed--rated-spec-114) further down.
 
 ## Request created (SPEC 109)
 
@@ -63,17 +68,17 @@ requests it created itself.
 
 | File | Role |
 |------|------|
-| `includes/myapi.service_request_notification.inc` | All five behaviors: constants, the recipient resolvers, the pure text builders and the five orchestrators (`myapi_service_request_notify_created()`, `myapi_service_request_notify_offer_received()` (SPEC 110), `myapi_service_request_notify_offer_withdrawn()` (SPEC 111), `myapi_service_request_notify_offer_accepted()` (SPEC 112) and, since SPEC 113, `myapi_service_request_notify_cancelled()`). |
+| `includes/myapi.service_request_notification.inc` | All six behaviors: constants, the recipient resolvers, the pure text builders and the six orchestrators (`myapi_service_request_notify_created()`, `myapi_service_request_notify_offer_received()` (SPEC 110), `myapi_service_request_notify_offer_withdrawn()` (SPEC 111), `myapi_service_request_notify_offer_accepted()` (SPEC 112), `myapi_service_request_notify_cancelled()` (SPEC 113) and, since SPEC 114, `myapi_service_request_notify_closed()`). |
 | `includes/myapi.service_offer.inc` | `myapi_service_offer_sent_offers_for_request()` (SPEC 112) and `myapi_service_offer_live_offers_for_request()` (SPEC 113) — the two read-only queries that list a cancellation's or an award's affected offers, next to `myapi_service_offer_reject_live()`. |
 | `includes/myapi.notification.inc` | `myapi_notification_create()` (inbox rows + push enqueue), which SPEC 109 taught the `provider_id` and `audience` params, and `myapi_notification_role_uids()` for the `backend` audience. |
 | `includes/myapi.provider_query.inc` | `myapi_provider_apply_active_conditions()` — the SQL half of "an active provider" (SPEC 83), reused as-is by the category lookup. |
 | `includes/myapi.mail_queue.inc` | Generic deferred mail queue (`myapi_mail_send`), shared with every other email of the module. |
-| `includes/myapi.mail.inc` | The nine mail formatters (two of SPEC 109, one of SPEC 110, one of SPEC 111, three of SPEC 112, two of SPEC 113) and their HTML builders, on the shared CrespCord shell. |
-| `myapi.module` | Glue only: the nine `hook_mail()` branches. |
-| `resources/service_request.resource.inc` | **Two calls**: `myapi_service_request_create()`, after the `file_usage_add()` calls and before the `201`; `myapi_service_request_cancel()` (SPEC 113), after the offer sweep and before the `200`. |
+| `includes/myapi.mail.inc` | The eleven mail formatters (two of SPEC 109, one of SPEC 110, one of SPEC 111, three of SPEC 112, two of SPEC 113, two of SPEC 114) and their HTML builders, on the shared CrespCord shell. |
+| `myapi.module` | Glue only: the eleven `hook_mail()` branches. |
+| `resources/service_request.resource.inc` | **Three calls**: `myapi_service_request_create()`, after the `file_usage_add()` calls and before the `201`; `myapi_service_request_cancel()` (SPEC 113), after the offer sweep and before the `200`; `myapi_service_request_close()` (SPEC 114), after the rating/request/transaction writes and before the `200`. |
 | `resources/service_offer.resource.inc` | **Three calls**: `myapi_service_offer_create()` (SPEC 110), after the offer/transition/transaction writes and before the `201`; `myapi_service_offer_withdraw()` (SPEC 111), after the `node_save()` and before the `200`; `myapi_service_offer_accept()` (SPEC 112), after the losers are swept and before the `200`. |
 | `resources/notification.resource.inc` | Selects `provider_id` and exposes it as `deep_link.provider`. |
-| `myapi.install` | The `provider_id` column (`myapi_update_7036()`, SPEC 109) and the nine mail keys in `myapi_html_mail_keys()`, registered by `myapi_update_7037()` (SPEC 110), `myapi_update_7038()` (SPEC 111), `myapi_update_7039()` (SPEC 112) and `myapi_update_7040()` (SPEC 113, no schema change either). |
+| `myapi.install` | The `provider_id` column (`myapi_update_7036()`, SPEC 109) and the eleven mail keys in `myapi_html_mail_keys()`, registered by `myapi_update_7037()` (SPEC 110), `myapi_update_7038()` (SPEC 111), `myapi_update_7039()` (SPEC 112), `myapi_update_7040()` (SPEC 113) and `myapi_update_7041()` (SPEC 114, no schema change either). |
 
 After deploying, run:
 
@@ -301,7 +306,7 @@ Solicitud #1420
 |------|-----|
 | A request created from the back office, drush or an import | The trigger lives in the endpoint. Same criterion as payments and reservations. |
 | The resident who created it | They just created it and got the `201` with the full detail. |
-| Any other event of the marketplace | An offer created notifies the resident (SPEC 110), withdrawn notifies the resident (SPEC 111), awarded notifies the winner, the losers and `backend` (SPEC 112), and a cancellation notifies every affected provider and `backend` (SPEC 113) — see their dedicated sections below. Updated (105), an edit (96), a closure or a rating (108): none of them notifies today, and none starts here. |
+| Any other event of the marketplace | An offer created notifies the resident (SPEC 110), withdrawn notifies the resident (SPEC 111), awarded notifies the winner, the losers and `backend` (SPEC 112), a cancellation notifies every affected provider and `backend` (SPEC 113), and a close notifies the rated provider (if there was one) and `backend` (SPEC 114) — see their dedicated sections below. Updated (105) and an edit (96): neither notifies today, and neither starts here. |
 | Providers of the category, when the request is **direct** | Its audience is the awarded provider and nobody else. |
 | Building admins | Out of this spec's audience by decision. |
 
@@ -1017,3 +1022,211 @@ degraded `200` SPEC 95 already documents — wrapped end to end. A failure — a
 broken queue, a deleted provider account, an invalid address — lands in
 `watchdog` and never undoes the cancellation, the sweep, or the `200` of
 `PUT /api/v1/service-requests/{id}/cancel`.
+
+---
+
+## Request closed / rated (SPEC 114)
+
+One behavior hanging off `PUT /api/v1/service-requests/{id}/close`: when a
+resident closes a request, two audiences are told — through push, inbox and
+email for one of them, and email only for the other:
+
+- **The rated provider**, only when the close carried a rating (forms
+  `assigned`/`direct` of SPEC 108) — once, with the full stars and comment
+  the resident gave.
+- The **`backend` role**, once per active user, email only, **always** —
+  with or without a rating — carrying the rating section or a `Motivo` line,
+  never both.
+
+`PUT /api/v1/service-requests/{id}/close` did not change its contract: it
+still answers `200` with the same `service_request` + `rating_id` body of
+SPEC 108. See `docs/service-request.md` for the endpoint itself.
+
+**Same include, one more orchestrator.** `myapi_service_request_notify_closed()`
+lives next to the other five of this file. Its own `source_type`,
+`MYAPI_NOTIFICATION_SOURCE_SERVICE_RATING`, is new — unlike SPEC 110-113,
+which all reuse `MYAPI_NOTIFICATION_SOURCE_SERVICE_OFFER`, a `direct` close
+has no offer to point at (`field_assigned_offer` is empty), but the rating
+node always exists when this notice fires. Reuses
+`MYAPI_NOTIFICATION_DEEP_LINK_SERVICE_REQUEST_PROVIDER`,
+`MYAPI_NOTIFICATION_AUDIENCE_PROVIDER` and `MYAPI_SERVICE_REQUEST_NOTIFY_ROLE`
+unchanged.
+
+**Nothing is re-queried.** `$provider_nid`/`$provider_name` were already
+resolved by the endpoint's own gate (SPEC 108, condition 7) and `$rating_id`
+by the rating write itself (step 8a); the orchestrator receives all three
+already in hand, the same discipline as every trigger of this file.
+
+**The full stars and comment travel to the provider, on purpose.** Unlike a
+losing bidder (SPEC 112), there is no competitor to protect here: it is the
+resident's own opinion of the provider's own work.
+
+**One email to `backend`, never two.** Closing and rating are a single
+atomic act (SPEC 108); `service_request_closed_admin` carries either the
+rating section or the `Motivo` line, mutually exclusive, instead of firing a
+second mail key for the rating.
+
+### Who is notified
+
+| Recipient | Resolved by | Fires when |
+|-----------|-------------|------------|
+| The rated provider | `myapi_service_request_provider_uids($rating['provider_id'])` | The close carried a rating (`assigned`/`direct`). |
+| Every active user holding `backend` | `myapi_notification_role_uids('backend')` | Always, in either form. |
+
+A rated provider with no account attached — `field_provider_users` empty —
+receives nothing; the `backend` email is unaffected. Nobody holding
+`backend` means no admin email; the provider notice (if any) is unaffected.
+A close with no rating (form B — `offered`, with a `close_reason`) skips the
+provider block entirely; the `backend` email still goes out, with the
+`Motivo` line instead of the rating section.
+
+### Push + inbox
+
+One call to `myapi_notification_create()`, only when `$rating !== NULL`:
+
+| Column | Value |
+|--------|-------|
+| `source_type` | `service_rating` |
+| `source_nid` | nid of the rating node |
+| `type` | `service_request_rated` |
+| `deep_link_target` | `service_request_provider` |
+| `deep_link_id` | nid of the request |
+| `condominium_id` | `field_condominium` of the request |
+| `unit_id` | always `NULL` |
+| `provider_id` | nid of the rated provider |
+
+`unit_id` is `NULL` for the same reason as every other provider-facing
+notice of this file: a provider never learns which home asked.
+
+#### The text
+
+```
+Título:  ¡Te calificaron!
+Cuerpo:  Fuga en el calentador
+         5 estrellas — Excelente trabajo
+```
+
+- The body is **two lines**: the request's own subject, and the stars with
+  the comment appended to that same second line — only when there was one.
+  A rating with no comment reads `5 estrellas`, with no trailing dash.
+- Any value that does not resolve prints as `—`, never as an empty line. The
+  text is fixed in Spanish, same criterion as every other push and email of
+  the module.
+
+#### The push payload
+
+```json
+{
+  "target": "service_request_provider",
+  "id": 1420,
+  "unit": null,
+  "condominium": 87,
+  "notification_type": "service_request_rated",
+  "audience": "provider",
+  "provider": 553
+}
+```
+
+### Emails
+
+Both are HTML (same CrespCord shell), enqueued already resolved and
+escaped, delivered on the next cron.
+
+| Mail key | Recipient | Subject | Fires when |
+|----------|-----------|---------|------------|
+| `service_request_rated_provider` | One per account of the rated provider | `Te calificaron — {asunto}` | The close carried a rating. |
+| `service_request_closed_admin` | One per active user holding `backend` | `Solicitud cerrada #{nid} — {condominio}` | Always, in either form. |
+
+#### To the rated provider (`service_request_rated_provider`)
+
+```
+Te calificaron
+
+El residente calificó tu trabajo en esta solicitud de servicio.
+
+  Asunto       Fuga en el calentador
+  Estrellas    5
+  Comentario   Excelente trabajo
+
+Revisa la solicitud en la app.
+```
+
+**No button**, same criterion as every other provider-facing email of this
+module: a provider has no back office to land on. Stars and comment travel
+**complete**, never truncated, up to the rating's own 1000-character limit
+(SPEC 108).
+
+#### To the back office (`service_request_closed_admin`) — with a rating
+
+```
+Solicitud cerrada
+
+Se cerró una solicitud de servicio.
+
+  Asunto                  Fuga en el calentador
+  Proveedor calificado    Plomería Sur
+  Estrellas               5
+  Comentario              Excelente trabajo
+  Condominio              Los Robles
+  Vivienda                Casa 12
+
+  [ Ver solicitud ]   →  node/1420 (absolute)
+
+Solicitud #1420
+```
+
+#### To the back office (`service_request_closed_admin`) — without a rating
+
+```
+Solicitud cerrada
+
+Se cerró una solicitud de servicio.
+
+  Asunto        Fuga en el calentador
+  Motivo        El proveedor no respondió
+  Condominio    Los Robles
+  Vivienda      Casa 12
+
+  [ Ver solicitud ]   →  node/1420 (absolute)
+
+Solicitud #1420
+```
+
+- The two bodies are **mutually exclusive**: a rated close never shows
+  `Motivo`, and a reason-only close never shows `Proveedor calificado`,
+  `Estrellas` or `Comentario`.
+- `Comentario` shows `—` when the resident rated with no comment; `Motivo`
+  never shows `—` — `close_reason` is required on a close with no award
+  (SPEC 108).
+- The button opens the **node view**, same reason as `service_request_admin`
+  (SPEC 109) and the other two admin emails of this file: the operator reads
+  the close before touching it.
+
+### Degraded values
+
+| Case | Behavior |
+|------|----------|
+| The rated provider deleted or unpublished between the close and cron | The line prints `—`; the notice still goes out. |
+| Deleted condominium or unit | The line prints `—`. |
+| The request's category term deleted (SPEC 108's degraded `200`) | The trigger still fires: its `$context` is built from `$node`, not from the detail row that branch is missing. |
+
+### What does NOT notify anybody (request closed)
+
+| Case | Why |
+|------|-----|
+| The resident who closed | They already got the `200` with the full detail (SPEC 108). |
+| Push or inbox for `backend` | Email only, same criterion as the other two admin emails of this file. |
+| A second email to `backend` for the rating | One combined email, by decision — closing and rating are a single atomic act. |
+| A second close attempt on the same request | Rejected `409 service_request_not_closable` by SPEC 108 before this trigger is ever reached. |
+| A close, or a rating created/edited, from the back office or drush | The trigger lives in the endpoint. |
+| Reopening a closed request, or editing/withdrawing a rating from the app | `closed` stays terminal (SPEC 108); no such event exists to notify. |
+
+### Robustness (request closed)
+
+Same discipline as the other five triggers: **best-effort**, run right
+after the three writes (rating → request → transaction) and before the
+`200` is assembled — including the degraded `200` SPEC 108 already
+documents — wrapped end to end. A failure — a broken queue, a deleted
+provider account, an invalid address — lands in `watchdog` and never undoes
+the close, the rating or the transaction of
+`PUT /api/v1/service-requests/{id}/close`.

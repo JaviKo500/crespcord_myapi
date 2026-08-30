@@ -413,6 +413,45 @@ second cancel attempt on the same request never reaches this trigger: SPEC
 The full contract — the texts, the two emails and the admin-only `Motivo`
 line — is in `docs/service-request-notifications.md`.
 
+## Request-closed / rated trigger (SPEC 114)
+
+When a resident closes a request via
+`PUT /api/v1/service-requests/{id}/close` **with a rating** (forms
+`assigned`/`direct` of SPEC 108), the rated provider is notified — plus the
+`backend` role (email only, no push or inbox row; see
+`docs/service-request-notifications.md`), which is told **regardless** of
+whether the close carried a rating.
+
+| `source_type` | `type` | `title` |
+|---|---|---|
+| `service_rating` | `service_request_rated` | `¡Te calificaron!` |
+
+`source_type` is a constant of its own and not `service_offer` (SPEC
+110-113's reuse): a `direct` close has no offer to point at
+(`field_assigned_offer` is empty), but the rating node always exists when
+this notice fires — `source_nid` is that node's nid.
+
+**Deep link:** same shape as the SPEC 109/112/113 provider notices —
+`deep_link.target` = `service_request_provider`, `deep_link.id` = the
+request's nid, `deep_link.unit` **always `NULL`** (a provider never learns
+which home asked), `deep_link.condominium` carries `field_condominium`, and
+`deep_link.provider` carries the nid of the rated provider.
+
+The push `data` is `audience: "provider"`, same as the other provider
+notices of this file. `body` carries the request's subject and the stars,
+with the resident's **full comment** appended to the same line only when
+there was one — no truncation, unlike a losing bidder's push (SPEC 112)
+there is no competitor to protect here.
+
+A close with no rating (form B — `offered`, with a `close_reason`) produces
+no provider row: a `NULL` rating is a silent no-op for this channel — the
+`backend` email still goes out, with a `Motivo` line instead of the rating
+section. A second close attempt on the same request never reaches this
+trigger: SPEC 108's gate answers `409` first.
+
+The full contract — the texts, the two emails and the admin-only
+conditional body — is in `docs/service-request-notifications.md`.
+
 ## OneSignal configuration
 
 Set as Drupal variables (in `settings.php` via `$conf[...]` or with
