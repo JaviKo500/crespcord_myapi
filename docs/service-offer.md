@@ -352,6 +352,14 @@ moved — and `status` is the one **after** the write. On a `direct` it answers
 `"direct"`, which is exactly why the key exists: the client does not have to
 guess whether anything moved.
 
+**This write notifies the resident (SPEC 110).** After the offer is saved (and
+the request/transaction writes above, when they apply), the resident who
+requested it — never the provider that just bid, and never the `backend`
+role, which already knows about the request since SPEC 109 — gets a push, an
+inbox row and an email with a button into the app, once per offer. It is
+best-effort: a failure to notify never changes this `201`. Full contract in
+[`docs/service-request-notifications.md`](service-request-notifications.md#offer-received-spec-110).
+
 ### Possible errors
 
 | Code | `error_code` | When |
@@ -1495,6 +1503,18 @@ key of it, so the app can swap the object in with no special case.
 | 403 | `service_offer_provider_not_active` | The offer's provider is unpublished or its licence has expired. |
 
 ---
+
+## Configuration (SPEC 110)
+
+The offer-received email's button (see the note on
+[`POST /api/v1/service-requests/{id}/offers`](#post-apiv1service-requestsidoffers)
+above) opens the request in the app through a custom-scheme deep link, the
+same pattern [`myapi_password_reset_deep_link_base`](auth.md) uses for the
+password-reset email:
+
+| Variable | Default | Note |
+|----------|---------|------|
+| `myapi_service_request_deep_link_base` | `myapp://service-requests` | Base of the button's URL — the app opens `{base}/{request_nid}`. Set with `drush vset myapi_service_request_deep_link_base <value>`. **Independent** of `myapi_password_reset_deep_link_base`: changing one never changes the other. |
 
 ## What is still not here
 

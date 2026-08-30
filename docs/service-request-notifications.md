@@ -1,8 +1,17 @@
-# Service request notifications (request created)
+# Service request notifications
 
-This is **not a REST endpoint**. It is one behavior hanging off
-`POST /api/v1/service-requests` (SPEC 109): when a resident creates a service
-request from the app, the providers who can answer it are told.
+This is **not a REST endpoint**. It is two behaviors, each hanging off its own
+POST of the service marketplace:
+
+- **Request created** (SPEC 109), off `POST /api/v1/service-requests`: when a
+  resident creates a service request from the app, the providers who can
+  answer it are told. See the section right below.
+- **Offer received** (SPEC 110), off
+  `POST /api/v1/service-requests/{id}/offers`: when a provider bids on a
+  request, its resident is told. See the
+  [dedicated section](#offer-received-spec-110) further down.
+
+## Request created (SPEC 109)
 
 - A request born **open** notifies **every active provider of its category** —
   one notice per provider — through push, inbox and email.
@@ -41,15 +50,16 @@ requests it created itself.
 
 | File | Role |
 |------|------|
-| `includes/myapi.service_request_notification.inc` | The whole behavior: constants, the two recipient resolvers, the pure text builders and the orchestrator. |
-| `includes/myapi.notification.inc` | `myapi_notification_create()` (inbox rows + push enqueue), which this spec taught the `provider_id` and `audience` params, and `myapi_notification_role_uids()` for the `backend` audience. |
+| `includes/myapi.service_request_notification.inc` | Both behaviors: constants, the recipient resolvers, the pure text builders and the two orchestrators (`myapi_service_request_notify_created()` and, since SPEC 110, `myapi_service_request_notify_offer_received()`). |
+| `includes/myapi.notification.inc` | `myapi_notification_create()` (inbox rows + push enqueue), which SPEC 109 taught the `provider_id` and `audience` params, and `myapi_notification_role_uids()` for the `backend` audience. |
 | `includes/myapi.provider_query.inc` | `myapi_provider_apply_active_conditions()` — the SQL half of "an active provider" (SPEC 83), reused as-is by the category lookup. |
 | `includes/myapi.mail_queue.inc` | Generic deferred mail queue (`myapi_mail_send`), shared with every other email of the module. |
-| `includes/myapi.mail.inc` | The two mail formatters and their HTML builders, on the shared CrespCord shell. |
-| `myapi.module` | Glue only: the two `hook_mail()` branches. |
+| `includes/myapi.mail.inc` | The three mail formatters (two of SPEC 109, one of SPEC 110) and their HTML builders, on the shared CrespCord shell. |
+| `myapi.module` | Glue only: the three `hook_mail()` branches. |
 | `resources/service_request.resource.inc` | **One call**, in `myapi_service_request_create()`, after the `file_usage_add()` calls and before the `201`. |
+| `resources/service_offer.resource.inc` | **One call**, in `myapi_service_offer_create()` (SPEC 110), after the offer/transition/transaction writes and before the `201`. |
 | `resources/notification.resource.inc` | Selects `provider_id` and exposes it as `deep_link.provider`. |
-| `myapi.install` | The `provider_id` column (`myapi_update_7036()`) and the two mail keys in `myapi_html_mail_keys()`. |
+| `myapi.install` | The `provider_id` column (`myapi_update_7036()`, SPEC 109) and the three mail keys in `myapi_html_mail_keys()`, the third registered by `myapi_update_7037()` (SPEC 110, no schema change). |
 
 After deploying, run:
 
@@ -58,8 +68,9 @@ drush updb && drush cc all
 ```
 
 `drush updb` is **not optional**: without `myapi_update_7036()` there is no
-`provider_id` column to write to, and the two mail keys fall back to
-`DefaultMailSystem`, which delivers their HTML body converted to plain text.
+`provider_id` column to write to, and without either update hook the three
+mail keys fall back to `DefaultMailSystem`, which delivers their HTML body
+converted to plain text.
 
 ---
 
@@ -270,19 +281,19 @@ Solicitud #1420
 
 ---
 
-## What does NOT notify anybody
+## What does NOT notify anybody (request created)
 
 | Case | Why |
 |------|-----|
 | A request created from the back office, drush or an import | The trigger lives in the endpoint. Same criterion as payments and reservations. |
 | The resident who created it | They just created it and got the `201` with the full detail. |
-| Any other event of the marketplace | An offer created (SPEC 100), withdrawn or updated (105), an award (106), a cancellation (95), an edit (96), a closure or a rating (108): none of them notifies today, and none starts here. This spec covers **creation** only. |
+| Any other event of the marketplace | An offer created now notifies the resident — see [Offer received (SPEC 110)](#offer-received-spec-110) below. Withdrawn or updated (105), an award (106), a cancellation (95), an edit (96), a closure or a rating (108): none of them notifies today, and none starts here. |
 | Providers of the category, when the request is **direct** | Its audience is the awarded provider and nobody else. |
 | Building admins | Out of this spec's audience by decision. |
 
 ---
 
-## Robustness
+## Robustness (request created)
 
 The whole trigger is **best-effort**. It runs after `node_save()` and after the
 `file_usage_add()` calls, it is wrapped end to end, and every failure — a broken
@@ -293,3 +304,163 @@ stay written: a partial notification beats none.
 
 The provider fan-out runs **before** the back-office email, so a failure mailing
 the operators cannot cost the providers their notice.
+
+---
+
+## Offer received (SPEC 110)
+
+One behavior hanging off `POST /api/v1/service-requests/{id}/offers`: when a
+provider creates an offer on a request, the resident who requested it
+(`field_requester`) is told — through push, inbox and email, **once per
+offer**, whether it is the request's first offer or its fifth.
+
+`POST /api/v1/service-requests/{id}/offers` did not change its contract: it
+still answers `201` with the same `service_offer` (fifteen keys) + `request`
+body of SPEC 100. See `docs/service-offer.md` for the endpoint itself.
+
+**One notice per offer, not one per request.** Unlike the request-created
+fan-out above, this trigger has exactly one recipient — the resident — so
+there is no fan-out to speak of: `myapi_notification_create()` is called once,
+with `uids = [requester_uid]`. A request with three offers from three
+providers produces **three independent rows**, three pushes and three emails,
+all to the same resident — the accepted consequence of "each offer is its own
+event."
+
+**Unlike the provider notice above, this one carries `condominium_id` and
+`unit_id`.** It is the resident's own request; there is no privacy reason to
+withhold either, the way the provider notice withholds `unit_id` to keep a
+provider from learning which home asked.
+
+**`source_type`/`source_nid` name the offer; `deep_link_target`/`deep_link_id`
+name the request.** The event that fired is the offer, but there is no
+per-offer screen to open (SPEC 100 never built one), so the app always lands on
+the resident's own request detail. The two pairs are independent columns of
+`myapi_notification_create()` — nothing forces them to agree, and the
+request-created notice above already uses them independently too.
+
+**The trigger lives in the endpoint, not in a node hook.** Same criterion as
+the request-created trigger: an offer typed into `node/add/service_offer` by an
+operator, or created by drush, notifies nobody.
+
+### Who is notified
+
+| Recipient | Resolved by |
+|-----------|-------------|
+| The resident who created the request (`field_requester`) | `requester_uid`, already resolved by the endpoint's own eligibility gate — nothing here re-queries the request. |
+
+A requester account deleted between the request and the offer costs nothing:
+`user_load()` answers `FALSE`, and the trigger returns without writing or
+enqueuing anything.
+
+### Push + inbox
+
+One call to `myapi_notification_create()`:
+
+| Column | Value |
+|--------|-------|
+| `source_type` | `service_offer` |
+| `source_nid` | nid of the offer that was just created |
+| `type` | `service_offer_received` |
+| `deep_link_target` | `service_request` |
+| `deep_link_id` | nid of the request (not the offer) |
+| `condominium_id` | `field_condominium` of the request |
+| `unit_id` | `field_unit` of the request |
+| `provider_id` | nid of the provider that offered |
+
+#### The texts
+
+```
+Título:  Nueva oferta recibida
+Cuerpo:  Fuga en el calentador
+         Proveedor: Plomería Sur
+         Monto: 150.00 (Precio cerrado)
+```
+
+- The first line is the request's own `title`.
+- `Monto` reads `A presupuestar en sitio` for an `on_site_quote` offer, or
+  `{amount, 2 decimals} ({label})` for `fixed` / `estimate` / `hourly` — the
+  label is `myapi_services_offer_amount_types()`'s (SPEC 100), never retyped.
+  An `amount_type` outside that catalogue (corrupt data) falls back to the
+  `on_site_quote` text rather than breaking the notice.
+- Deliberately **without** the provider's free-text `message`: it can run long
+  and would crowd the push banner. The resident reads it by opening the
+  detail.
+- Any value that does not resolve prints as `—`, never as an empty line. The
+  texts are fixed in Spanish, same criterion as every other push and email of
+  the module.
+
+#### The push payload
+
+```json
+{
+  "target": "service_request",
+  "id": 1420,
+  "unit": 55,
+  "condominium": 87,
+  "notification_type": "service_offer_received",
+  "audience": "resident",
+  "provider": 553
+}
+```
+
+### Email (`service_request_offer_resident`)
+
+HTML (same CrespCord shell as every other mail of the module), enqueued
+already resolved and escaped, delivered on the next cron.
+
+Subject: `Nueva oferta recibida — {asunto}`.
+
+```
+Hola Ana Pérez
+
+Recibiste una nueva oferta para tu solicitud de servicio.
+
+  Asunto      Fuga en el calentador
+  Proveedor   Plomería Sur
+  Monto       150.00 (Precio cerrado)
+
+  [ Ver solicitud ]   →  myapp://service-requests/1420
+
+Puedes ver el detalle completo desde el botón de abajo.
+```
+
+- The greeting reads `Hola {nombre}` when
+  `myapi_user_fetch_profile_fields()` resolves a name, `Hola` alone otherwise
+  — same criterion as the claim emails (SPEC 68).
+- **Unlike the two request-created emails above, this one has a button.** The
+  resident's next step is the app, the same reason the SPEC 07 password-reset
+  email has one.
+
+#### The deep link
+
+The button's URL is built by `myapi_service_request_app_deep_link_url()`:
+
+```php
+$base = variable_get('myapi_service_request_deep_link_base', 'myapp://service-requests');
+return check_plain($base . '/' . $request_nid);
+```
+
+| Variable | Default | Note |
+|----------|---------|------|
+| `myapi_service_request_deep_link_base` | `myapp://service-requests` | Base of the button's deep link. **Independent** of `myapi_password_reset_deep_link_base` (SPEC 07) — same custom-scheme pattern, different variable, changing one never changes the other. |
+
+A resident with no app installed still sees the notice in
+`GET /api/v1/notifications`; the button opening nothing is the same accepted
+trade-off SPEC 07 already made for password reset.
+
+### What does NOT notify anybody (offer received)
+
+| Case | Why |
+|------|-----|
+| The provider who created the offer | They just created it and got the `201` with the full offer object. |
+| The `backend` role | The request itself already told them (SPEC 109); an offer on a request they already know about does not earn a second email. |
+| An offer created from the back office or drush | The trigger lives in the endpoint. |
+| Any other offer event | Withdrawn, edited, awarded, request closed or rated: none of them starts here. Each is its own future spec. |
+
+### Robustness (offer received)
+
+Same discipline as the request-created trigger: **best-effort**, run after the
+offer/transition/transaction writes, wrapped end to end. A failure — a broken
+queue, a deleted requester account, an invalid address — lands in `watchdog`
+and never undoes the offer, the transition, the transaction, or the `201` of
+`POST /api/v1/service-requests/{id}/offers`.

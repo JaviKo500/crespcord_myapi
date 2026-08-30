@@ -121,10 +121,11 @@ matches the filtered list the user is looking at.
   belongs to that one condominium); it stays `NULL` for `General` and
   `Personalizado` bulletins, which span several or unrelated condominiums.
 - `deep_link.provider` (SPEC 109) is the `provider` node this notification is
-  **about**, and it is `NULL` on every notification addressed to a resident —
-  that is, on every notification that existed before that spec. It is set only
-  by the service request triggers, where it tells the app which provider to
-  enter as. See `docs/service-request-notifications.md`.
+  **about**. It is set only by the two service-request triggers: on a
+  `provider`-audience row (SPEC 109) it tells the app which provider to enter
+  as; on the SPEC 110 offer-received `resident`-audience row it is just
+  context (which provider quoted). `NULL` on every other notification. See
+  `docs/service-request-notifications.md`.
 
 **Possible errors**
 | Code | When |
@@ -293,6 +294,34 @@ The push `data` of these two is the one place `audience` is `provider`.
 The full contract — audiences, texts, the two emails and what a provider is
 never told — is in `docs/service-request-notifications.md`.
 
+## Offer-received trigger (SPEC 110)
+
+When a provider creates an offer on a request from
+`POST /api/v1/service-requests/{id}/offers`, the resident who requested it
+(`field_requester`) is notified — once per offer, whether it is the first or a
+repeat. One call to `myapi_notification_create()` per offer, `uids` always
+`[requester_uid]`.
+
+| `source_type` | `type` | `title` |
+|---|---|---|
+| `service_offer` | `service_offer_received` | `Nueva oferta recibida` |
+
+**Deep link:** `deep_link.target` = `service_request` (the resident's own
+request; there is no per-offer screen) and `deep_link.id` = the **request's**
+nid, even though `source_type`/`source_nid` describe the **offer** — the two
+pairs are independent and, unlike every trigger before SPEC 109, are allowed
+to name different nodes on purpose. `deep_link.condominium` and
+`deep_link.unit` are both populated (unlike the provider notice above, this is
+the resident's own request, so there is no privacy reason to withhold either)
+and `deep_link.provider` carries the nid of the provider that offered.
+
+The push `data` of this trigger is `audience: "resident"` **with `provider`
+populated** — the first case where a `resident` push carries a non-`null`
+`provider`. See the corrected table below.
+
+The full contract — the amount text, the email and its deep-link button — is
+in `docs/service-request-notifications.md`.
+
 ## OneSignal configuration
 
 Set as Drupal variables (in `settings.php` via `$conf[...]` or with
@@ -316,10 +345,12 @@ the module, and `provider` mirrors `deep_link.provider`:
 | Key | Values | Meaning |
 |---|---|---|
 | `audience` | `resident` · `provider` | Which side of the app the notice belongs to. Every trigger written before SPEC 109 — bulletin, approved payment, cancelled payment, receipt, extra fee, claims, reservations — emits `resident`, and none of them changed in any other way. |
-| `provider` | `<nid>` · `null` | The provider the notice is about, so the app knows which provider to enter with. `null` for every `resident` push. |
+| `provider` | `<nid>` · `null` | The provider the notice is about. On a `provider`-audience push it is who to enter the app as; on the SPEC 110 offer-received `resident`-audience push it is just context (which provider quoted). `null` on every other `resident` push. |
 
 Unlike `provider`, `audience` is **not** stored: it is derivable from the row's
-`type` and `provider_id`, so it exists only in the payload.
+`type` and `provider_id`, so it exists only in the payload. SPEC 110 is why
+that derivation cannot be "provider_id set ⇒ audience provider": its
+offer-received notice sets both `provider_id` and `audience: "resident"`.
 External ids are chunked to OneSignal's 2000-per-request limit. A transport
 failure re-queues the batch for the next cron (standard Queue API behaviour),
 which may deliver a push twice — the inbox is never duplicated.
