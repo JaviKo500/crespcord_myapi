@@ -1128,6 +1128,13 @@ function myapi_mail($key, &$message, $params) {
     case 'service_request_admin':
       myapi_mail_format_service_request_admin($message, $params);
       break;
+
+    // SPEC 110. Fires for POST /api/v1/service-requests/{id}/offers only: an
+    // offer created from the back office notifies nobody, same criterion as
+    // the two cases above. Once per offer, to the resident who requested it.
+    case 'service_request_offer_resident':
+      myapi_mail_format_service_request_offer_resident($message, $params);
+      break;
   }
 }
 

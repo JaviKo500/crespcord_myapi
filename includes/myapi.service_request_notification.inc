@@ -530,6 +530,37 @@ function myapi_service_request_app_deep_link_url($request_nid) {
   return check_plain($base . '/' . (int) $request_nid);
 }
 
+/**
+ * Params of the offer-received email sent to the resident (SPEC 110).
+ *
+ * The one email of this file with a button: myapi_mail_service_request_offer_resident_html()
+ * points it at the URL built here.
+ *
+ * @param int   $nid     nid of the request (not the offer).
+ * @param array $values  Already-resolved 'name' (resident's, NULL when
+ *   unresolved), 'subject', 'provider_name' and 'amount_text'.
+ *
+ * @return array  Escaped params for
+ *   myapi_mail_format_service_request_offer_resident().
+ */
+function myapi_service_offer_resident_mail_params($nid, array $values) {
+  $values += [
+    'name'          => NULL,
+    'subject'       => NULL,
+    'provider_name' => NULL,
+    'amount_text'   => NULL,
+  ];
+
+  return [
+    'nid'           => (int) $nid,
+    'name'          => $values['name'] !== NULL ? check_plain($values['name']) : NULL,
+    'subject'       => myapi_service_request_mail_label($values['subject']),
+    'provider_name' => myapi_service_request_mail_label($values['provider_name']),
+    'amount_text'   => myapi_service_request_mail_label($values['amount_text']),
+    'deep_link_url' => myapi_service_request_app_deep_link_url($nid),
+  ];
+}
+
 /* ---------------------------------------------------------------------------
  * Resolution of the values the three channels share.
  *

@@ -836,6 +836,71 @@ function myapi_mail_service_request_admin_html($params) {
   );
 }
 
+/* ---------------------------------------------------------------------------
+ * Offer-received email (SPEC 110).
+ *
+ * One key, fired by myapi_service_request_notify_offer_received() from
+ * POST /api/v1/service-requests/{id}/offers, to the resident who created the
+ * request. Unlike the two 'service_request_provider'/'service_request_admin'
+ * emails above, this one carries a button: the resident's next step is the app
+ * (see the deep link on myapi_service_request_app_deep_link_url()), the same
+ * reason SPEC 07's password-reset email has one.
+ *
+ * $params arrives ALREADY RESOLVED AND ESCAPED from
+ * myapi_service_offer_resident_mail_params() — nothing here escapes anything.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Formats the offer-received email sent to the resident.
+ *
+ * Called from myapi_mail() (in myapi.module) for the
+ * 'service_request_offer_resident' key.
+ *
+ * @param array $message  Mail message array, altered by reference.
+ * @param array $params   'nid', 'name', 'subject', 'provider_name',
+ *                        'amount_text' and 'deep_link_url', already escaped.
+ */
+function myapi_mail_format_service_request_offer_resident(&$message, $params) {
+  // A subject is plain text, so the escaped title is decoded back — same
+  // reason myapi_mail_format_service_request_provider() does it.
+  $message['subject'] = 'Nueva oferta recibida — ' . decode_entities($params['subject']);
+  $message['body'][] = myapi_mail_service_request_offer_resident_html($params);
+
+  $message['headers']['Content-Type'] = 'text/html; charset=UTF-8';
+}
+
+/**
+ * Builds the HTML body of that email.
+ *
+ * Three lines — the same three the push carries — and a button to the app.
+ *
+ * @param array $params  Already-escaped values (see the formatter).
+ *
+ * @return string  Full HTML document.
+ */
+function myapi_mail_service_request_offer_resident_html($params) {
+  // Same greeting rule as the request creation emails: 'Hola {name}' when it
+  // resolved, 'Hola' alone otherwise.
+  $heading = (isset($params['name']) && $params['name'] !== '')
+    ? 'Hola ' . $params['name']
+    : 'Hola';
+
+  $lines = array(
+    'Asunto'    => $params['subject'],
+    'Proveedor' => $params['provider_name'],
+    'Monto'     => $params['amount_text'],
+  );
+
+  return myapi_mail_reservation_html(
+    'Solicitud #' . $params['nid'],
+    $heading,
+    'Recibiste una nueva oferta para tu solicitud de servicio.',
+    $lines,
+    'Puedes ver el detalle completo desde el botón de abajo.',
+    array('label' => 'Ver solicitud', 'url' => $params['deep_link_url'])
+  );
+}
+
 /**
  * Shared HTML shell of the reservation emails — and, since SPEC 68, of the five
  * claim ones.
