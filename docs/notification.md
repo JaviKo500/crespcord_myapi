@@ -322,6 +322,32 @@ populated** — the first case where a `resident` push carries a non-`null`
 The full contract — the amount text, the email and its deep-link button — is
 in `docs/service-request-notifications.md`.
 
+## Offer-withdrawn trigger (SPEC 111)
+
+When a provider withdraws their offer via
+`PUT /api/v1/service-offers/{id}/withdraw`, the resident who requested it
+(`field_requester`) is notified — once per withdrawal. One call to
+`myapi_notification_create()`, `uids` always `[requester_uid]`.
+
+| `source_type` | `type` | `title` |
+|---|---|---|
+| `service_offer` | `service_offer_withdrawn` | `Oferta retirada` |
+
+**Deep link:** same shape as the offer-received trigger above —
+`deep_link.target` = `service_request`, `deep_link.id` = the **request's**
+nid, `deep_link.condominium`/`deep_link.unit` both populated, and
+`deep_link.provider` carries the nid of the provider that withdrew.
+
+The push `data` of this trigger is `audience: "resident"` **with `provider`
+populated**, same as the offer-received trigger — a second case of a
+`resident` push carrying a non-`null` `provider`.
+
+A second withdraw attempt on the same offer never reaches this trigger: SPEC
+105's gate answers `409` first.
+
+The full contract — the texts and the email — is in
+`docs/service-request-notifications.md`.
+
 ## OneSignal configuration
 
 Set as Drupal variables (in `settings.php` via `$conf[...]` or with
@@ -345,12 +371,13 @@ the module, and `provider` mirrors `deep_link.provider`:
 | Key | Values | Meaning |
 |---|---|---|
 | `audience` | `resident` · `provider` | Which side of the app the notice belongs to. Every trigger written before SPEC 109 — bulletin, approved payment, cancelled payment, receipt, extra fee, claims, reservations — emits `resident`, and none of them changed in any other way. |
-| `provider` | `<nid>` · `null` | The provider the notice is about. On a `provider`-audience push it is who to enter the app as; on the SPEC 110 offer-received `resident`-audience push it is just context (which provider quoted). `null` on every other `resident` push. |
+| `provider` | `<nid>` · `null` | The provider the notice is about. On a `provider`-audience push it is who to enter the app as; on the SPEC 110 offer-received and SPEC 111 offer-withdrawn `resident`-audience pushes it is just context (which provider quoted, or withdrew). `null` on every other `resident` push. |
 
 Unlike `provider`, `audience` is **not** stored: it is derivable from the row's
 `type` and `provider_id`, so it exists only in the payload. SPEC 110 is why
 that derivation cannot be "provider_id set ⇒ audience provider": its
-offer-received notice sets both `provider_id` and `audience: "resident"`.
+offer-received notice sets both `provider_id` and `audience: "resident"` —
+SPEC 111's offer-withdrawn notice does the same.
 External ids are chunked to OneSignal's 2000-per-request limit. A transport
 failure re-queues the batch for the next cron (standard Queue API behaviour),
 which may deliver a push twice — the inbox is never duplicated.

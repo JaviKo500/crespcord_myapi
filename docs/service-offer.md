@@ -1263,6 +1263,14 @@ Identical in shape to the edit's, with `status` answering `withdrawn`:
 }
 ```
 
+**Notifies the resident (SPEC 111).** Right after the write above, the
+resident who requested it — never the provider that just withdrew, and never
+the `backend` role, which already knows about the request since SPEC 109 —
+gets a push, an inbox row and an email with a button into the app, once per
+withdrawal. It is best-effort: a failure to notify never changes this `200`.
+Full contract in
+[`docs/service-request-notifications.md`](service-request-notifications.md#offer-withdrawn-spec-111).
+
 ### Possible errors
 
 | Code | `error_code` | When |

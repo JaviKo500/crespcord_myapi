@@ -10,6 +10,10 @@ POST of the service marketplace:
   `POST /api/v1/service-requests/{id}/offers`: when a provider bids on a
   request, its resident is told. See the
   [dedicated section](#offer-received-spec-110) further down.
+- **Offer withdrawn** (SPEC 111), off
+  `PUT /api/v1/service-offers/{id}/withdraw`: when a provider withdraws their
+  offer, its resident is told. See the
+  [dedicated section](#offer-withdrawn-spec-111) further down.
 
 ## Request created (SPEC 109)
 
@@ -50,16 +54,16 @@ requests it created itself.
 
 | File | Role |
 |------|------|
-| `includes/myapi.service_request_notification.inc` | Both behaviors: constants, the recipient resolvers, the pure text builders and the two orchestrators (`myapi_service_request_notify_created()` and, since SPEC 110, `myapi_service_request_notify_offer_received()`). |
+| `includes/myapi.service_request_notification.inc` | All three behaviors: constants, the recipient resolvers, the pure text builders and the three orchestrators (`myapi_service_request_notify_created()`, `myapi_service_request_notify_offer_received()` (SPEC 110) and, since SPEC 111, `myapi_service_request_notify_offer_withdrawn()`). |
 | `includes/myapi.notification.inc` | `myapi_notification_create()` (inbox rows + push enqueue), which SPEC 109 taught the `provider_id` and `audience` params, and `myapi_notification_role_uids()` for the `backend` audience. |
 | `includes/myapi.provider_query.inc` | `myapi_provider_apply_active_conditions()` — the SQL half of "an active provider" (SPEC 83), reused as-is by the category lookup. |
 | `includes/myapi.mail_queue.inc` | Generic deferred mail queue (`myapi_mail_send`), shared with every other email of the module. |
-| `includes/myapi.mail.inc` | The three mail formatters (two of SPEC 109, one of SPEC 110) and their HTML builders, on the shared CrespCord shell. |
-| `myapi.module` | Glue only: the three `hook_mail()` branches. |
+| `includes/myapi.mail.inc` | The four mail formatters (two of SPEC 109, one of SPEC 110, one of SPEC 111) and their HTML builders, on the shared CrespCord shell. |
+| `myapi.module` | Glue only: the four `hook_mail()` branches. |
 | `resources/service_request.resource.inc` | **One call**, in `myapi_service_request_create()`, after the `file_usage_add()` calls and before the `201`. |
-| `resources/service_offer.resource.inc` | **One call**, in `myapi_service_offer_create()` (SPEC 110), after the offer/transition/transaction writes and before the `201`. |
+| `resources/service_offer.resource.inc` | **Two calls**: `myapi_service_offer_create()` (SPEC 110), after the offer/transition/transaction writes and before the `201`; `myapi_service_offer_withdraw()` (SPEC 111), after the `node_save()` and before the `200`. |
 | `resources/notification.resource.inc` | Selects `provider_id` and exposes it as `deep_link.provider`. |
-| `myapi.install` | The `provider_id` column (`myapi_update_7036()`, SPEC 109) and the three mail keys in `myapi_html_mail_keys()`, the third registered by `myapi_update_7037()` (SPEC 110, no schema change). |
+| `myapi.install` | The `provider_id` column (`myapi_update_7036()`, SPEC 109) and the four mail keys in `myapi_html_mail_keys()`, registered by `myapi_update_7037()` (SPEC 110) and `myapi_update_7038()` (SPEC 111, no schema change either). |
 
 After deploying, run:
 
@@ -455,7 +459,7 @@ trade-off SPEC 07 already made for password reset.
 | The provider who created the offer | They just created it and got the `201` with the full offer object. |
 | The `backend` role | The request itself already told them (SPEC 109); an offer on a request they already know about does not earn a second email. |
 | An offer created from the back office or drush | The trigger lives in the endpoint. |
-| Any other offer event | Withdrawn, edited, awarded, request closed or rated: none of them starts here. Each is its own future spec. |
+| Any other offer event | Edited (without withdrawing), awarded, request closed or rated: none of them starts here. Each is its own future spec. Withdrawn is covered — see [Offer withdrawn (SPEC 111)](#offer-withdrawn-spec-111) below. |
 
 ### Robustness (offer received)
 
@@ -464,3 +468,137 @@ offer/transition/transaction writes, wrapped end to end. A failure — a broken
 queue, a deleted requester account, an invalid address — lands in `watchdog`
 and never undoes the offer, the transition, the transaction, or the `201` of
 `POST /api/v1/service-requests/{id}/offers`.
+
+---
+
+## Offer withdrawn (SPEC 111)
+
+One behavior hanging off `PUT /api/v1/service-offers/{id}/withdraw`: when a
+provider withdraws their offer, the resident who requested it
+(`field_requester`) is told — through push, inbox and email, **once per
+withdrawal**.
+
+`PUT /api/v1/service-offers/{id}/withdraw` did not change its contract: it
+still answers `200` with the same `service_offer` + `request` body of
+SPEC 105. See `docs/service-offer.md` for the endpoint itself.
+
+**Same shape as the offer-received notice above, minus the amount.** One
+recipient, one call to `myapi_notification_create()` with
+`uids = [requester_uid]`, `condominium_id`/`unit_id` populated (no privacy
+reason to withhold them from the resident's own request), and
+`source_type`/`source_nid` naming the offer while `deep_link_target`/
+`deep_link_id` name the request — same reasoning as SPEC 110. The one
+difference: the withdrawn offer's amount is **not** part of the content, since
+it is no longer information the resident can act on.
+
+**A second withdraw attempt never produces a second notice.** SPEC 105's gate
+answers `409 service_offer_not_withdrawable` before this trigger is ever
+reached, so exactly one notice exists per successful withdrawal.
+
+**The trigger lives in the endpoint, not in a node hook.** Same criterion as
+the other two triggers of this file: a withdrawal made from the back office or
+by drush notifies nobody.
+
+### Who is notified
+
+| Recipient | Resolved by |
+|-----------|-------------|
+| The resident who created the request (`field_requester`) | `requester_uid`, already resolved by `myapi_service_offer_withdraw()`'s own write gate — nothing here re-queries the offer or the request. |
+
+A requester account deleted between the request and the withdrawal costs
+nothing: `user_load()` answers `FALSE`, and the trigger returns without
+writing or enqueuing anything.
+
+### Push + inbox
+
+One call to `myapi_notification_create()`:
+
+| Column | Value |
+|--------|-------|
+| `source_type` | `service_offer` |
+| `source_nid` | nid of the offer that was just withdrawn |
+| `type` | `service_offer_withdrawn` |
+| `deep_link_target` | `service_request` |
+| `deep_link_id` | nid of the request (not the offer) |
+| `condominium_id` | `field_condominium` of the request |
+| `unit_id` | `field_unit` of the request |
+| `provider_id` | nid of the provider that withdrew |
+
+#### The texts
+
+```
+Título:  Oferta retirada
+Cuerpo:  Fuga en el calentador
+         Proveedor: Plomería Sur
+```
+
+- The first line is the request's own `title`.
+- **No amount anywhere** — the offer is no longer valid, so its figure is not
+  something the resident needs to decide on.
+- Any value that does not resolve prints as `—`, never as an empty line. The
+  texts are fixed in Spanish, same criterion as every other push and email of
+  the module.
+
+#### The push payload
+
+```json
+{
+  "target": "service_request",
+  "id": 1420,
+  "unit": 55,
+  "condominium": 87,
+  "notification_type": "service_offer_withdrawn",
+  "audience": "resident",
+  "provider": 553
+}
+```
+
+### Email (`service_request_offer_withdrawn_resident`)
+
+HTML (same CrespCord shell as every other mail of the module), enqueued
+already resolved and escaped, delivered on the next cron.
+
+Subject: `Oferta retirada — {asunto}`.
+
+```
+Hola Ana Pérez
+
+El proveedor retiró la oferta que había enviado para tu solicitud de servicio.
+
+  Asunto      Fuga en el calentador
+  Proveedor   Plomería Sur
+
+  [ Ver solicitud ]   →  myapp://service-requests/1420
+
+Puedes ver el detalle completo desde el botón de abajo.
+```
+
+- The greeting reads `Hola {nombre}` when
+  `myapi_user_fetch_profile_fields()` resolves a name, `Hola` alone otherwise
+  — same criterion as the offer-received email.
+- **Has a button**, same reason as the offer-received email: the resident's
+  next step is the app.
+
+#### The deep link
+
+Reuses `myapi_service_request_app_deep_link_url()` and
+`myapi_service_request_deep_link_base` unchanged — see
+[the offer-received section](#the-deep-link) above. No new variable.
+
+### What does NOT notify anybody (offer withdrawn)
+
+| Case | Why |
+|------|-----|
+| The provider who withdrew | They just received the `200` with the full offer object. |
+| The `backend` role | The request itself already told them (SPEC 109); a withdrawal on a request they already know about does not earn a second email. |
+| A withdrawal made from the back office or drush | The trigger lives in the endpoint. |
+| A second withdraw attempt on the same offer | Rejected `409` by SPEC 105 before this trigger is ever reached. |
+| Any other offer event | Edited (without withdrawing), awarded, request closed or rated: none of them starts here. |
+
+### Robustness (offer withdrawn)
+
+Same discipline as the other two triggers: **best-effort**, run right after
+the `node_save()` of the withdrawal, wrapped end to end. A failure — a broken
+queue, a deleted requester account, an invalid address — lands in `watchdog`
+and never undoes the withdrawal, or the `200` of
+`PUT /api/v1/service-offers/{id}/withdraw`.
