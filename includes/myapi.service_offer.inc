@@ -1383,6 +1383,68 @@ function myapi_service_offer_sent_offers_for_request($request_nid, $except_nid =
 }
 
 /**
+ * Lists the LIVE offers of a request a cancellation is about to reject
+ * (SPEC 113).
+ *
+ * Read-only, and read BEFORE myapi_service_offer_reject_live() sweeps them to
+ * 'rejected': the same reasoning as
+ * myapi_service_offer_sent_offers_for_request() (SPEC 112) — after the sweep,
+ * an offer that was already 'rejected'/'withdrawn' and one that just became
+ * 'rejected' are indistinguishable by status alone.
+ *
+ * NOT a variant of either existing function. Unlike
+ * myapi_service_offer_reject_live(), this returns a list, not a count.
+ * Unlike myapi_service_offer_sent_offers_for_request(), it includes
+ * 'selected' — a cancellation has no winner to exclude, so BOTH statuses that
+ * function's sibling considers live are notified, with no exception by nid.
+ * Widening either of those two contracts for a caller neither one needs would
+ * make cancel's own reader carry a shape or a filter it never uses.
+ *
+ * LEFT JOIN on the provider, same reason as
+ * myapi_service_offer_sent_offers_for_request(): an unpublished or deleted
+ * provider must not make the affected offer's own row disappear from the
+ * result, only its name — which the caller degrades to
+ * MYAPI_SERVICE_REQUEST_MAIL_EMPTY like every other unresolved label in this
+ * domain.
+ *
+ * @param mixed $request_nid  The request being cancelled.
+ *
+ * @return array  List of (object) ['nid' => int, 'provider_raw' => int|NULL,
+ *   'provider_name' => string|NULL], one per live offer ('sent' or
+ *   'selected'). Empty when the request had no live offer.
+ */
+function myapi_service_offer_live_offers_for_request($request_nid) {
+  if (!is_scalar($request_nid) || !ctype_digit((string) $request_nid) || (int) $request_nid <= 0) {
+    return [];
+  }
+  $request_nid = (int) $request_nid;
+
+  $query = db_select('field_data_field_request', 'fq');
+  $query->condition('fq.entity_type', 'node');
+  $query->condition('fq.deleted', 0);
+  $query->condition('fq.field_request_target_id', $request_nid);
+
+  $query->innerJoin('node', 'no', 'no.nid = fq.entity_id');
+  $query->condition('no.type', MYAPI_SERVICES_OFFER_TYPE);
+  $query->condition('no.status', 1);
+
+  $query->innerJoin('field_data_field_offer_status', 'fos', "fos.entity_id = no.nid AND fos.entity_type = 'node' AND fos.deleted = 0");
+  $query->condition('fos.field_offer_status_value', [
+    MYAPI_SERVICES_OFFER_STATUS_SENT,
+    MYAPI_SERVICES_OFFER_STATUS_SELECTED,
+  ], 'IN');
+
+  $query->innerJoin('field_data_field_provider', 'fp', "fp.entity_id = no.nid AND fp.entity_type = 'node' AND fp.deleted = 0");
+  $query->leftJoin('node', 'pn', 'pn.nid = fp.field_provider_target_id');
+
+  $query->addField('no', 'nid', 'nid');
+  $query->addField('fp', 'field_provider_target_id', 'provider_raw');
+  $query->addField('pn', 'title', 'provider_name');
+
+  return $query->execute()->fetchAll();
+}
+
+/**
  * The four conditions of the AWARD that need no query (SPEC 106).
  *
  * Conditions 6 to 9 of PUT /api/v1/service-offers/{id}/accept:
