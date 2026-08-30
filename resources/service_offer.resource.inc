@@ -62,8 +62,9 @@
  * collection endpoint, and that is still on purpose.
  *
  * NOT IN THIS SPEC: editing or withdrawing an offer, awarding one, the chat,
- * notifying the resident, expiring an offer by its valid_until, and any file.
- * Each of them is its own spec.
+ * expiring an offer by its valid_until, and any file. Each of them is its own
+ * spec. Notifying the resident WAS out of this spec and is SPEC 110's, hung
+ * off the same POST after the three writes below.
  */
 
 module_load_include('inc', 'myapi', 'includes/myapi.request');
@@ -103,6 +104,11 @@ module_load_include('inc', 'myapi', 'includes/myapi.service_transaction');
 // 200 of the award IS that detail, byte for byte, because it is built by these
 // very functions — see the @file docblock of the include.
 module_load_include('inc', 'myapi', 'includes/myapi.service_request_detail');
+// SPEC 110: myapi_service_request_notify_offer_received(), the trigger that
+// tells the resident their request got a new offer. Already listed in
+// myapi.info since SPEC 109, which put the rest of this domain's
+// notifications in the same include.
+module_load_include('inc', 'myapi', 'includes/myapi.service_request_notification');
 
 /**
  * Dispatcher for /api/v1/service-requests/%/offers (SPEC 100).
@@ -369,6 +375,24 @@ function myapi_service_offer_create($nid) {
 
     node_save($transaction);
   }
+
+  // 9d. The resident notice (SPEC 110), after the three writes above so
+  // nothing here can leave any of them half-done, and built from values this
+  // function already has in hand — $request_row and $provider_row answered
+  // the gate three steps ago, and $values is what was just validated and
+  // saved. Best-effort: myapi_service_request_notify_offer_received() never
+  // throws, so a broken queue costs a watchdog entry and never this 201.
+  myapi_service_request_notify_offer_received($offer, [
+    'request_nid'    => $nid,
+    'request_title'  => $request_row->title,
+    'requester_uid'  => $request_row->requester_uid,
+    'condominium_id' => $request_row->condominium_id,
+    'unit_id'        => $request_row->unit_id,
+    'provider_id'    => $provider_id,
+    'provider_name'  => $provider_name,
+    'amount'         => $values['amount'],
+    'amount_type'    => $values['amount_type'],
+  ]);
 
   // 10. The answer. THE OBJECT UNDER 'service_offer' IS BYTE FOR BYTE THE
   // ELEMENT THAT WILL APPEAR IN `my_offers` the next time this provider reads
