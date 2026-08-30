@@ -1494,6 +1494,15 @@ key of it, so the app can swap the object in with no special case.
 > which only the full object carries. This is nearly unreachable — the same join
 > already ran in condition 4.
 
+**Notifies the winning provider, every losing provider and `backend` (SPEC
+112).** Right after the losers are swept and before the `200` above, the
+winner is told they were selected (with the amount of their own offer), each
+provider whose offer just moved to `rejected` is told another was selected
+(without revealing who or for how much), and the `backend` role gets the full
+award detail by email. It is best-effort: a failure to notify never changes
+this `200`. Full contract in
+[`docs/service-request-notifications.md`](service-request-notifications.md#offer-awarded-spec-112).
+
 ### Possible errors
 
 | Code | `error_code` | When |

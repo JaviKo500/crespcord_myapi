@@ -348,6 +348,39 @@ A second withdraw attempt on the same offer never reaches this trigger: SPEC
 The full contract — the texts and the email — is in
 `docs/service-request-notifications.md`.
 
+## Offer-awarded triggers (SPEC 112)
+
+When a resident awards an offer via `PUT /api/v1/service-offers/{id}/accept`,
+three audiences are notified: the winning provider (once), every losing
+provider — every offer that was `sent` on the request and just got swept to
+`rejected` by this same call (once each) — and the `backend` role (email
+only, no push or inbox row; see `docs/service-request-notifications.md`).
+
+| Case | `source_type` | `type` | `title` |
+|---|---|---|---|
+| Winning provider | `service_offer` | `service_offer_accepted` | `¡Fuiste seleccionado!` |
+| Each losing provider | `service_offer` | `service_offer_rejected` | `Ya se seleccionó un proveedor` |
+
+**Deep link:** same shape as the provider notices of SPEC 109 —
+`deep_link.target` = `service_request_provider`, `deep_link.id` = the
+request's nid, `deep_link.unit` **always `NULL`** (a provider never learns
+which home asked), `deep_link.condominium` carries `field_condominium`, and
+`deep_link.provider` carries the nid of **that** notice's own provider — the
+winner's on the accepted row, that specific loser's on each rejected row.
+
+The push `data` of both is `audience: "provider"`, same as the two SPEC 109
+provider notices. The winner's `body` carries the amount of their own offer
+(`myapi_service_offer_amount_text()`, SPEC 110); the loser's carries only the
+request's subject — no amount, no winner identity, in the push, the inbox row
+or the email.
+
+A request with a single offer produces only the winner's row: an empty loser
+set is a silent no-op, not an error. A second accept attempt on the same
+offer never reaches this trigger: SPEC 106's gate answers `409` first.
+
+The full contract — the texts, the three emails and the admin-only channel —
+is in `docs/service-request-notifications.md`.
+
 ## OneSignal configuration
 
 Set as Drupal variables (in `settings.php` via `$conf[...]` or with

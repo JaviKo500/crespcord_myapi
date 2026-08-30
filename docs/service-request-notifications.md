@@ -14,6 +14,10 @@ POST of the service marketplace:
   `PUT /api/v1/service-offers/{id}/withdraw`: when a provider withdraws their
   offer, its resident is told. See the
   [dedicated section](#offer-withdrawn-spec-111) further down.
+- **Offer awarded** (SPEC 112), off `PUT /api/v1/service-offers/{id}/accept`:
+  when a resident awards an offer, the winning provider, every losing
+  provider and the `backend` role are told. See the
+  [dedicated section](#offer-awarded-spec-112) further down.
 
 ## Request created (SPEC 109)
 
@@ -54,16 +58,17 @@ requests it created itself.
 
 | File | Role |
 |------|------|
-| `includes/myapi.service_request_notification.inc` | All three behaviors: constants, the recipient resolvers, the pure text builders and the three orchestrators (`myapi_service_request_notify_created()`, `myapi_service_request_notify_offer_received()` (SPEC 110) and, since SPEC 111, `myapi_service_request_notify_offer_withdrawn()`). |
+| `includes/myapi.service_request_notification.inc` | All four behaviors: constants, the recipient resolvers, the pure text builders and the four orchestrators (`myapi_service_request_notify_created()`, `myapi_service_request_notify_offer_received()` (SPEC 110), `myapi_service_request_notify_offer_withdrawn()` (SPEC 111) and, since SPEC 112, `myapi_service_request_notify_offer_accepted()`). |
+| `includes/myapi.service_offer.inc` | `myapi_service_offer_sent_offers_for_request()` (SPEC 112) — the read-only query that lists the losing offers, next to `myapi_service_offer_reject_live()`. |
 | `includes/myapi.notification.inc` | `myapi_notification_create()` (inbox rows + push enqueue), which SPEC 109 taught the `provider_id` and `audience` params, and `myapi_notification_role_uids()` for the `backend` audience. |
 | `includes/myapi.provider_query.inc` | `myapi_provider_apply_active_conditions()` — the SQL half of "an active provider" (SPEC 83), reused as-is by the category lookup. |
 | `includes/myapi.mail_queue.inc` | Generic deferred mail queue (`myapi_mail_send`), shared with every other email of the module. |
-| `includes/myapi.mail.inc` | The four mail formatters (two of SPEC 109, one of SPEC 110, one of SPEC 111) and their HTML builders, on the shared CrespCord shell. |
-| `myapi.module` | Glue only: the four `hook_mail()` branches. |
+| `includes/myapi.mail.inc` | The seven mail formatters (two of SPEC 109, one of SPEC 110, one of SPEC 111, three of SPEC 112) and their HTML builders, on the shared CrespCord shell. |
+| `myapi.module` | Glue only: the seven `hook_mail()` branches. |
 | `resources/service_request.resource.inc` | **One call**, in `myapi_service_request_create()`, after the `file_usage_add()` calls and before the `201`. |
-| `resources/service_offer.resource.inc` | **Two calls**: `myapi_service_offer_create()` (SPEC 110), after the offer/transition/transaction writes and before the `201`; `myapi_service_offer_withdraw()` (SPEC 111), after the `node_save()` and before the `200`. |
+| `resources/service_offer.resource.inc` | **Three calls**: `myapi_service_offer_create()` (SPEC 110), after the offer/transition/transaction writes and before the `201`; `myapi_service_offer_withdraw()` (SPEC 111), after the `node_save()` and before the `200`; `myapi_service_offer_accept()` (SPEC 112), after the losers are swept and before the `200`. |
 | `resources/notification.resource.inc` | Selects `provider_id` and exposes it as `deep_link.provider`. |
-| `myapi.install` | The `provider_id` column (`myapi_update_7036()`, SPEC 109) and the four mail keys in `myapi_html_mail_keys()`, registered by `myapi_update_7037()` (SPEC 110) and `myapi_update_7038()` (SPEC 111, no schema change either). |
+| `myapi.install` | The `provider_id` column (`myapi_update_7036()`, SPEC 109) and the seven mail keys in `myapi_html_mail_keys()`, registered by `myapi_update_7037()` (SPEC 110), `myapi_update_7038()` (SPEC 111) and `myapi_update_7039()` (SPEC 112, no schema change either). |
 
 After deploying, run:
 
@@ -72,8 +77,8 @@ drush updb && drush cc all
 ```
 
 `drush updb` is **not optional**: without `myapi_update_7036()` there is no
-`provider_id` column to write to, and without either update hook the three
-mail keys fall back to `DefaultMailSystem`, which delivers their HTML body
+`provider_id` column to write to, and without every update hook the mail keys
+they register fall back to `DefaultMailSystem`, which delivers their HTML body
 converted to plain text.
 
 ---
@@ -291,7 +296,7 @@ Solicitud #1420
 |------|-----|
 | A request created from the back office, drush or an import | The trigger lives in the endpoint. Same criterion as payments and reservations. |
 | The resident who created it | They just created it and got the `201` with the full detail. |
-| Any other event of the marketplace | An offer created now notifies the resident — see [Offer received (SPEC 110)](#offer-received-spec-110) below. Withdrawn or updated (105), an award (106), a cancellation (95), an edit (96), a closure or a rating (108): none of them notifies today, and none starts here. |
+| Any other event of the marketplace | An offer created notifies the resident (SPEC 110), withdrawn notifies the resident (SPEC 111), and awarded notifies the winner, the losers and `backend` (SPEC 112) — see their dedicated sections below. Updated (105), a cancellation (95), an edit (96), a closure or a rating (108): none of them notifies today, and none starts here. |
 | Providers of the category, when the request is **direct** | Its audience is the awarded provider and nobody else. |
 | Building admins | Out of this spec's audience by decision. |
 
@@ -593,7 +598,7 @@ Reuses `myapi_service_request_app_deep_link_url()` and
 | The `backend` role | The request itself already told them (SPEC 109); a withdrawal on a request they already know about does not earn a second email. |
 | A withdrawal made from the back office or drush | The trigger lives in the endpoint. |
 | A second withdraw attempt on the same offer | Rejected `409` by SPEC 105 before this trigger is ever reached. |
-| Any other offer event | Edited (without withdrawing), awarded, request closed or rated: none of them starts here. |
+| Any other offer event | Edited (without withdrawing), a request closed or rated: none of them starts here. Awarded is covered — see [Offer awarded (SPEC 112)](#offer-awarded-spec-112) below. |
 
 ### Robustness (offer withdrawn)
 
@@ -602,3 +607,217 @@ the `node_save()` of the withdrawal, wrapped end to end. A failure — a broken
 queue, a deleted requester account, an invalid address — lands in `watchdog`
 and never undoes the withdrawal, or the `200` of
 `PUT /api/v1/service-offers/{id}/withdraw`.
+
+---
+
+## Offer awarded (SPEC 112)
+
+One behavior hanging off `PUT /api/v1/service-offers/{id}/accept`: when a
+resident awards an offer, three audiences are told — through push, inbox and
+email for two of them, and email only for the third:
+
+- The **winning provider**, once, with the amount of their own offer.
+- **Every losing provider** — every other offer that was `sent` on the same
+  request and just swept to `rejected` by this same call — once each, without
+  revealing who won or for how much.
+- The **`backend` role**, once per active user, email only, with the full
+  award detail.
+
+`PUT /api/v1/service-offers/{id}/accept` did not change its contract: it
+still answers `200` with the same `service_request` + `offers_rejected` body
+of SPEC 106. See `docs/service-offer.md` for the endpoint itself.
+
+**Same include, one more orchestrator.** `myapi_service_request_notify_offer_accepted()`
+lives next to the other three of this file, reusing
+`MYAPI_NOTIFICATION_SOURCE_SERVICE_OFFER` and
+`MYAPI_NOTIFICATION_DEEP_LINK_SERVICE_REQUEST_PROVIDER` unchanged — the same
+deep link the request-created provider notice already uses, because there is
+no per-offer screen for a provider to land on.
+
+**The losers are captured BEFORE the sweep, not after.** The endpoint reads
+`myapi_service_offer_sent_offers_for_request($request_nid, $nid)` — every
+`sent` offer of the request except the winner — right before calling
+`myapi_service_offer_reject_live()`. After the sweep runs, an offer that just
+turned `rejected` and one that already was `rejected`/`withdrawn` look
+identical; only the `sent` status, read at that exact moment, tells them
+apart. A provider whose offer was already terminal before this call learns
+nothing new and is not notified.
+
+**A competitor never learns who won, or for how much.** Every channel
+addressed to a loser — push, inbox row and email — carries only the
+request's own subject. No `provider_name`, no `amount`, nothing that
+identifies the winner or their price.
+
+**The `backend` role gets email only**, same criterion as the request-created
+admin email (SPEC 109): the role has no app, so push and inbox make no sense
+for it.
+
+### Who is notified
+
+| Recipient | Resolved by |
+|-----------|-------------|
+| The winning provider | `provider_id`, already resolved by `myapi_service_offer_accept()`'s own gate. |
+| Every losing provider | `myapi_service_offer_sent_offers_for_request()`, read before the sweep. |
+| Every active user holding `backend` | `myapi_notification_role_uids('backend')`. |
+
+A provider (winner or loser) with no account attached — `field_provider_users`
+empty — is skipped; the others are still notified. Nobody holding `backend`
+means no admin email; everything else is unchanged.
+
+### Push + inbox
+
+One call to `myapi_notification_create()` for the winner, and one **per
+losing offer**:
+
+| Column | Winner | Each loser |
+|--------|--------|------------|
+| `source_type` | `service_offer` | `service_offer` |
+| `source_nid` | nid of the awarded offer | nid of **that** losing offer |
+| `type` | `service_offer_accepted` | `service_offer_rejected` |
+| `deep_link_target` | `service_request_provider` | `service_request_provider` |
+| `deep_link_id` | nid of the request | nid of the request |
+| `condominium_id` | `field_condominium` of the request | same |
+| `unit_id` | always `NULL` | always `NULL` |
+| `provider_id` | nid of the winning provider | nid of **that** losing provider |
+
+`unit_id` is `NULL` for the same reason as the request-created provider
+notice (SPEC 109): a provider never learns which home asked.
+
+#### The texts
+
+```
+Ganador
+Título:  ¡Fuiste seleccionado!
+Cuerpo:  Fuga en el calentador
+         Monto: 150.00 (Precio cerrado)
+
+Perdedor
+Título:  Ya se seleccionó un proveedor
+Cuerpo:  Fuga en el calentador
+```
+
+- `Monto` on the winner's notice is `myapi_service_offer_amount_text()`'s
+  (SPEC 110) — the same figure the winner is about to be paid, unlike the
+  withdrawn notice (SPEC 111), whose amount is stale by the time it fires.
+- The loser's body is **one line**: the request's own subject, nothing else.
+- Any value that does not resolve prints as `—`, never as an empty line. The
+  texts are fixed in Spanish, same criterion as every other push and email of
+  the module.
+- A request with a single offer (no losers) produces only the winner's row —
+  a silent no-op for the loser block, not an error.
+
+#### The push payloads
+
+```json
+{
+  "target": "service_request_provider",
+  "id": 1420,
+  "unit": null,
+  "condominium": 87,
+  "notification_type": "service_offer_accepted",
+  "audience": "provider",
+  "provider": 553
+}
+```
+
+```json
+{
+  "target": "service_request_provider",
+  "id": 1420,
+  "unit": null,
+  "condominium": 87,
+  "notification_type": "service_offer_rejected",
+  "audience": "provider",
+  "provider": 601
+}
+```
+
+### Emails
+
+All three are HTML (same CrespCord shell), enqueued already resolved and
+escaped, delivered on the next cron.
+
+| Mail key | Recipient | Subject |
+|----------|-----------|---------|
+| `service_request_offer_accepted_provider` | One per account of the winning provider | `Fuiste seleccionado — {asunto}` |
+| `service_request_offer_rejected_provider` | One per account of each losing provider | `Solicitud adjudicada — {asunto}` |
+| `service_request_awarded_admin` | One per active user holding `backend` | `Solicitud adjudicada #{nid} — {condominio}` |
+
+#### To the winning provider (`service_request_offer_accepted_provider`)
+
+```
+¡Fuiste seleccionado!
+
+Tu oferta fue elegida para esta solicitud de servicio.
+
+  Asunto   Fuga en el calentador
+  Monto    150.00 (Precio cerrado)
+
+Revisa la solicitud en la app.
+```
+
+**No button**, same criterion as `service_request_provider` (SPEC 109): a
+provider has no back office to land on.
+
+#### To each losing provider (`service_request_offer_rejected_provider`)
+
+```
+Ya se seleccionó un proveedor
+
+Se seleccionó a otro proveedor para esta solicitud de servicio.
+
+  Asunto   Fuga en el calentador
+
+Revisa la solicitud en la app.
+```
+
+No button, no amount, no winner identity — the same rule as the push, applied
+to every channel a loser reads.
+
+#### To the back office (`service_request_awarded_admin`)
+
+```
+Solicitud adjudicada
+
+Se adjudicó una solicitud de servicio a un proveedor.
+
+  Asunto                 Fuga en el calentador
+  Proveedor adjudicado   Plomería Sur
+  Monto                  150.00 (Precio cerrado)
+  Condominio             Los Robles
+  Vivienda               Casa 12
+
+  [ Ver solicitud ]   →  node/1420 (absolute)
+
+Solicitud #1420
+```
+
+The button opens the **node view**, same reason as `service_request_admin`
+(SPEC 109): the operator reads the award before touching it.
+
+### Degraded values
+
+| Case | Behavior |
+|------|----------|
+| A losing provider deleted or unpublished between the award and cron | The line prints `—`; the notice still goes out. |
+| Deleted condominium or unit | The line prints `—`. |
+
+### What does NOT notify anybody (offer awarded)
+
+| Case | Why |
+|------|-----|
+| The resident who awarded | They already got the `200` with the full detail (SPEC 106). |
+| The loser learning who won, or for how much | By decision — see the spec's decisions table. |
+| The winner learning who lost | Not part of this notice either. |
+| A provider whose offer was already `withdrawn` or `rejected` before this call | Read before the sweep by `field_offer_status = 'sent'`; already-terminal offers are not in the set. |
+| A second accept attempt on the same offer | Rejected `409 service_offer_not_acceptable` by SPEC 106 before this trigger is ever reached. |
+| An award made from the back office or drush | The trigger lives in the endpoint. |
+| Push or inbox for `backend` | Email only, same criterion as the request-created admin email. |
+
+### Robustness (offer awarded)
+
+Same discipline as the other three triggers: **best-effort**, run right
+after the losers are swept and before the `200` is assembled, wrapped end to
+end. A failure — a broken queue, a deleted provider account, an invalid
+address — lands in `watchdog` and never undoes the award, the sweep, or the
+`200` of `PUT /api/v1/service-offers/{id}/accept`.
