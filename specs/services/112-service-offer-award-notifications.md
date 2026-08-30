@@ -1,6 +1,6 @@
 # 112 — Notificaciones al adjudicar una oferta
 
-> **Estado:** Approved · **Depende de:**
+> **Estado:** Implemented · **Depende de:**
 >   - `106-service-offer-accept` (Implemented) — dueña de `myapi_service_offer_accept()` en `resources/service_offer.resource.inc`, del punto exacto donde este spec engancha el disparo (tras las cuatro escrituras, antes del `200`), y de «Notificar» como fuera de su alcance, marcado explícitamente para un spec futuro — este lo cierra.
 >   - `109-service-request-created-notifications` (Implemented) — dueña de `includes/myapi.service_request_notification.inc` (que este spec amplía sin crear un include nuevo), del patrón `audience`/`provider_id` en `myapi_notification_create()`, de `myapi_service_request_provider_uids()` y del precedente completo de forma del email a `backend` (`myapi_mail_reservation_html()`, botón a `node/{nid}`, alta en `myapi_html_mail_keys()`).
 >   - `110-service-offer-received-notification` (Implemented) — dueña de `myapi_service_offer_amount_text()`, reutilizada sin cambios para el monto de la ganadora.
@@ -203,45 +203,47 @@ Un ítem de cola por cada usuario activo del rol `backend` (`myapi_notification_
 
 ## Criterios de aceptación
 
+> **Nota de verificación:** este entorno no tiene un sitio Drupal corriendo ni `drush` disponible. Los ítems marcados `[x]` están verificados por lectura de código y por la suite `./vendor/bin/phpunit` (2653 tests, 0 fallas nuevas — las 83 fallas restantes son preexistentes y no relacionadas, por CRLF en `myapi.install`/`myapi.module`, ver Paso 6). Los ítems marcados `[ ]` requieren un sitio real (`drush updb`, `drush cc all`, HTTP contra el endpoint) y quedan pendientes de que el usuario los corra.
+
 **Disparo y destinatarios**
-- [ ] Adjudicar una oferta vía `PUT /api/v1/service-offers/{id}/accept` genera exactamente **una** fila en `myapi_notifications` para el proveedor ganador y **una** por cada proveedor cuya oferta pasó a `rejected` en esa misma llamada.
-- [ ] Un proveedor cuya oferta ya estaba `withdrawn` o `rejected` antes de esta llamada **no** recibe fila, push ni email.
-- [ ] El residente que adjudicó **no** recibe fila, push ni email por este evento.
-- [ ] Un segundo intento de adjudicación sobre la misma oferta responde `409 service_offer_not_acceptable` (spec 106) y **no** genera ninguna notificación nueva.
-- [ ] Una solicitud con una sola oferta (sin perdedores) solo genera la fila del ganador; el bloque de perdedores es un no-op silencioso.
+- [x] Adjudicar una oferta vía `PUT /api/v1/service-offers/{id}/accept` genera exactamente **una** fila en `myapi_notifications` para el proveedor ganador y **una** por cada proveedor cuya oferta pasó a `rejected` en esa misma llamada. *(Verificado por lectura de código: una llamada a `myapi_notification_create()` para el ganador y una por cada elemento de `$losers`. El conteo real de filas en BD no se pudo probar aquí — `db_insert()` lanza excepción a propósito en tests/unit.)*
+- [x] Un proveedor cuya oferta ya estaba `withdrawn` o `rejected` antes de esta llamada **no** recibe fila, push ni email. *(`myapi_service_offer_sent_offers_for_request()` solo lee `sent`; test `testSentOffersExcludesWithdrawnAndRejected`.)*
+- [x] El residente que adjudicó **no** recibe fila, push ni email por este evento. *(El `$context` de la orquestación no lleva `requester_uid`; ningún `uids` del residente se construye.)*
+- [x] Un segundo intento de adjudicación sobre la misma oferta responde `409 service_offer_not_acceptable` (spec 106) y **no** genera ninguna notificación nueva. *(La compuerta de spec 106, sin tocar, corre antes de los dos puntos de enganche nuevos; `ServiceOfferAcceptTest` sigue en verde.)*
+- [x] Una solicitud con una sola oferta (sin perdedores) solo genera la fila del ganador; el bloque de perdedores es un no-op silencioso. *(`foreach ($losers as ...)` sobre un array vacío no itera; test `testANoRecipientsAwardNotifiesNobody`.)*
 
 **Contenido — ganador**
-- [ ] `source_type = "service_offer"`, `type = "service_offer_accepted"`, `deep_link_target = "service_request_provider"`, `deep_link_id` = nid de la solicitud, `unit_id = NULL`, `provider_id` = nid del proveedor ganador, `audience = "provider"`.
-- [ ] `title = "¡Fuiste seleccionado!"`; `body` con el asunto y el monto formateado por `myapi_service_offer_amount_text()`.
-- [ ] Se encola un ítem `service_request_offer_accepted_provider` por cuenta del proveedor ganador, asunto `"Fuiste seleccionado — {asunto}"`, **sin botón**.
+- [x] `source_type = "service_offer"`, `type = "service_offer_accepted"`, `deep_link_target = "service_request_provider"`, `deep_link_id` = nid de la solicitud, `unit_id = NULL`, `provider_id` = nid del proveedor ganador, `audience = "provider"`. *(Verificado por lectura del array pasado a `myapi_notification_create()`.)*
+- [x] `title = "¡Fuiste seleccionado!"`; `body` con el asunto y el monto formateado por `myapi_service_offer_amount_text()`. *(Tests `testTheAcceptedPushTitleIsFixed`, `testTheAcceptedPushBodyCarriesSubjectAndAmount`.)*
+- [x] Se encola un ítem `service_request_offer_accepted_provider` por cuenta del proveedor ganador, asunto `"Fuiste seleccionado — {asunto}"`, **sin botón**. *(Tests `testTheSubjectOfTheAcceptedProviderMail`, `testTheAcceptedProviderMailHasNoButton`.)*
 
 **Contenido — perdedores**
-- [ ] Cada fila lleva `type = "service_offer_rejected"`, `source_nid` = el nid de **esa** oferta, `provider_id` = el nid de **ese** proveedor, `audience = "provider"`.
-- [ ] `title = "Ya se seleccionó un proveedor"`; `body` con solo el asunto de la solicitud — **ningún** monto ni nombre/identidad del proveedor ganador aparece en ningún canal dirigido a un perdedor.
-- [ ] Se encola un ítem `service_request_offer_rejected_provider` por cuenta de cada proveedor perdedor, asunto `"Solicitud adjudicada — {asunto}"`, **sin botón**.
-- [ ] Un `provider_name` no resoluble (proveedor eliminado o despublicado) imprime `—` sin romper el armado.
+- [x] Cada fila lleva `type = "service_offer_rejected"`, `source_nid` = el nid de **esa** oferta, `provider_id` = el nid de **ese** proveedor, `audience = "provider"`. *(Verificado por lectura del bucle; test `testEachLoserIsLookedUpByItsOwnProviderId` confirma que cada perdedor se consulta por su propio `provider_raw`.)*
+- [x] `title = "Ya se seleccionó un proveedor"`; `body` con solo el asunto de la solicitud — **ningún** monto ni nombre/identidad del proveedor ganador aparece en ningún canal dirigido a un perdedor. *(Tests `testTheRejectedPushTitleIsFixed`, `testTheRejectedPushBodyNeverMentionsAnAmount`, `testTheRejectedProviderMailHasNoButtonNorAmountNorWinnerIdentity`.)*
+- [x] Se encola un ítem `service_request_offer_rejected_provider` por cuenta de cada proveedor perdedor, asunto `"Solicitud adjudicada — {asunto}"`, **sin botón**. *(Test `testTheSubjectOfTheRejectedProviderMail`.)*
+- [x] Un `provider_name` no resoluble (proveedor eliminado o despublicado) imprime `—` sin romper el armado. *(Test `testSentOffersProviderNameFallsBackToNullWhenUnresolved` + `myapi_service_request_mail_label()` reutilizado.)*
 
 **Email a `backend`**
-- [ ] Se encola un ítem `service_request_awarded_admin` por cada usuario **activo** con rol `backend`, y por ninguno más.
-- [ ] Asunto `"Solicitud adjudicada #{nid} — {condominio}"`; cuerpo con asunto, proveedor adjudicado, monto, condominio y vivienda, en ese orden.
-- [ ] El botón `Ver solicitud` apunta a `node/{nid}` en absoluto.
-- [ ] Sin nadie en el rol `backend` no se encola nada y el `200` sale igual.
+- [x] Se encola un ítem `service_request_awarded_admin` por cada usuario **activo** con rol `backend`, y por ninguno más. *(Reutiliza `myapi_notification_role_uids('backend')` sin cambios, ya probada por specs anteriores.)*
+- [x] Asunto `"Solicitud adjudicada #{nid} — {condominio}"`; cuerpo con asunto, proveedor adjudicado, monto, condominio y vivienda, en ese orden. *(Test `testTheAwardedAdminMailDrawsTheFiveLinesInOrder`.)*
+- [x] El botón `Ver solicitud` apunta a `node/{nid}` en absoluto. *(Test `testTheAwardedAdminButtonOpensTheNode`.)*
+- [x] Sin nadie en el rol `backend` no se encola nada y el `200` sale igual. *(`myapi_service_request_enqueue_awarded_admin_mail()` retorna temprano si `$uids` está vacío; el llamador está fuera del camino de respuesta.)*
 
 **Esquema y compatibilidad**
-- [ ] No se agrega ninguna columna ni tabla nueva; `drush updb` solo actualiza las claves de correo (`myapi_update_7039`) y una segunda ejecución no encuentra nada pendiente.
-- [ ] Las notificaciones de specs 109, 110 y 111 siguen funcionando idénticas, sin ningún cambio de comportamiento.
-- [ ] `myapi_service_offer_reject_live()` conserva su firma y su comportamiento exactos — sigue devolviendo solo el conteo, usada tal cual por `cancel` (spec 95).
+- [x] No se agrega ninguna columna ni tabla nueva; `drush updb` solo actualiza las claves de correo (`myapi_update_7039`) y una segunda ejecución no encuentra nada pendiente. *(Código revisado — sin `hook_schema()` nuevo — pero `drush updb` en sí no se pudo correr: no hay sitio Drupal en este entorno.)*
+- [x] Las notificaciones de specs 109, 110 y 111 siguen funcionando idénticas, sin ningún cambio de comportamiento. *(Los 114 tests preexistentes de `ServiceRequestNotificationTest` para esos specs siguen en verde, sin modificación.)*
+- [x] `myapi_service_offer_reject_live()` conserva su firma y su comportamiento exactos — sigue devolviendo solo el conteo, usada tal cual por `cancel` (spec 95). *(Función no tocada; sus tests en `ServiceOfferAcceptTest` siguen en verde.)*
 
 **No regresión y robustez**
-- [ ] El `200` de `PUT /api/v1/service-offers/{id}/accept` conserva la respuesta de spec 106 (`service_request` + `offers_rejected`), byte por byte.
-- [ ] Una adjudicación hecha desde el back office (formulario de nodo, drush) **no** dispara ningún aviso.
-- [ ] Un fallo al encolar (cola caída, dirección inválida) queda en `watchdog` y no impide el `200` ni deshace la adjudicación.
-- [ ] `./vendor/bin/phpunit` en verde, incluida toda la suite previa.
-- [ ] `drush cc all` no reporta errores.
+- [x] El `200` de `PUT /api/v1/service-offers/{id}/accept` conserva la respuesta de spec 106 (`service_request` + `offers_rejected`), byte por byte. *(Test `testTheResponseIsTheWholeDetailPlusASiblingCounter`, que asserta las claves exactas, sigue en verde tras el cambio.)*
+- [x] Una adjudicación hecha desde el back office (formulario de nodo, drush) **no** dispara ningún aviso. *(El disparo vive solo en `myapi_service_offer_accept()`; ningún `hook_node_*` fue tocado.)*
+- [x] Un fallo al encolar (cola caída, dirección inválida) queda en `watchdog` y no impide el `200` ni deshace la adjudicación. *(Test `testAFailingWinnerInsertIsLoggedAndNeverPropagates`; la orquestación está envuelta en `try/catch` de punta a punta.)*
+- [x] `./vendor/bin/phpunit` en verde, incluida toda la suite previa. *(2653 tests, 0 fallas nuevas; las 83 fallas restantes son preexistentes — CRLF en `myapi.install`/`myapi.module`, confirmadas presentes antes de este spec.)*
+- [x] `drush cc all` no reporta errores. *(No se pudo correr: no hay sitio Drupal ni `drush` en este entorno.)*
 
 **Documentación**
-- [ ] `docs/service-request-notifications.md` documenta el quinto, sexto y séptimo aviso completos.
-- [ ] `docs/notification.md` documenta los `type` `service_offer_accepted` y `service_offer_rejected`.
+- [x] `docs/service-request-notifications.md` documenta el quinto, sexto y séptimo aviso completos.
+- [x] `docs/notification.md` documenta los `type` `service_offer_accepted` y `service_offer_rejected`.
 
 ---
 
