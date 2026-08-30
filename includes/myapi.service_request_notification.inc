@@ -294,6 +294,35 @@ function myapi_service_request_provider_uids($provider_id) {
 }
 
 /* ---------------------------------------------------------------------------
+ * SPEC 113 — the request-cancelled notice to each affected provider and to
+ * 'backend'.
+ *
+ * One event: the resident cancels a request
+ * (PUT /api/v1/service-requests/{id}/cancel). Three channels — inbox row,
+ * push and email — go to each provider whose offer was 'sent' or 'selected'
+ * at that instant (no distinction between the two, and no reason revealed to
+ * them), plus a fourth, email-only channel to the 'backend' role, which does
+ * see the reason when the resident gave one. Reuses
+ * MYAPI_NOTIFICATION_SOURCE_SERVICE_OFFER and
+ * MYAPI_NOTIFICATION_DEEP_LINK_SERVICE_REQUEST_PROVIDER unchanged.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Notification type of the "the request you offered on was cancelled" event.
+ */
+define('MYAPI_NOTIFICATION_TYPE_SERVICE_REQUEST_CANCELLED', 'service_request_cancelled');
+
+/**
+ * drupal_mail() key of the cancellation notice sent to an affected provider.
+ */
+define('MYAPI_SERVICE_REQUEST_CANCELLED_PROVIDER_MAIL_KEY', 'service_request_cancelled_provider');
+
+/**
+ * drupal_mail() key of the cancellation detail sent to the 'backend' role.
+ */
+define('MYAPI_SERVICE_REQUEST_CANCELLED_ADMIN_MAIL_KEY', 'service_request_cancelled_admin');
+
+/* ---------------------------------------------------------------------------
  * Pure text builders.
  *
  * No database and no node loading: they receive values already resolved by the
