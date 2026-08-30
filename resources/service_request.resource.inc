@@ -3276,6 +3276,34 @@ function myapi_service_request_close($nid) {
     )
   );
 
+  // Notify (SPEC 114). After the three writes, so a failure in here can never
+  // undo any of them, and before the 9th step builds the response — including
+  // the degraded branch below, which still fires this trigger even though its
+  // own detail could not be built: the context comes from $node, not from the
+  // $row that branch is missing. Best-effort end to end — the function
+  // swallows its own failures into watchdog, so nothing below is conditional
+  // on it.
+  //
+  // $rating reuses the name of the just-saved rating node above: that node's
+  // one job (yielding $rating_id) is already done, and this is the same event
+  // reduced to what the notifier needs, not a second entity.
+  $rating = $requires_rating ? [
+    'rating_id'     => $rating_id,
+    'provider_id'   => $provider_nid,
+    'provider_name' => $provider_name,
+    'stars'         => $body['values']['stars'],
+    'comment'       => $body['values']['comment'],
+  ] : NULL;
+
+  module_load_include('inc', 'myapi', 'includes/myapi.service_request_notification');
+  myapi_service_request_notify_closed($node, $rating, [
+    'request_nid'    => $node->nid,
+    'request_title'  => $node->title,
+    'condominium_id' => myapi_building_admin_field_target_id($node, 'field_condominium'),
+    'unit_id'        => myapi_building_admin_field_target_id($node, 'field_unit'),
+    'close_reason'   => $body['values']['close_reason'],
+  ]);
+
   // 9. The answer: THE SAME NINETEEN-KEY OBJECT the detail serves, rebuilt from
   // the database AFTER the writes with SPEC 89's own loaders and serialiser, so
   // `status` already reads 'closed' and `closed_at` already carries the instant.

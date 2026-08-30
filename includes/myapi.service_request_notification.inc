@@ -1047,6 +1047,83 @@ function myapi_service_request_rated_push_body($subject, $stars, $comment) {
   ]);
 }
 
+/**
+ * Params of the rating notice email sent to the rated provider's accounts.
+ *
+ * No 'name' field, unlike the resident-facing emails of this file: the
+ * provider emails never greet by name, only the resident ones do — same
+ * criterion as myapi_service_request_cancelled_provider_mail_params() (SPEC
+ * 113). Stars and comment travel COMPLETE, on purpose (the spec's decision):
+ * unlike a losing bidder (SPEC 112), there is no competitor to protect here —
+ * this is the resident's own opinion of the provider's own work.
+ *
+ * @param int   $nid     nid of the request.
+ * @param array $values  Already-resolved 'subject', 'stars' (1-5, NULL only
+ *   when the caller has nothing to report) and 'comment' (NULL when the
+ *   resident gave none).
+ *
+ * @return array  Escaped params for
+ *   myapi_mail_format_service_request_rated_provider().
+ */
+function myapi_service_request_rated_provider_mail_params($nid, array $values) {
+  $values += [
+    'subject' => NULL,
+    'stars'   => NULL,
+    'comment' => NULL,
+  ];
+
+  return [
+    'nid'     => (int) $nid,
+    'subject' => myapi_service_request_mail_label($values['subject']),
+    'stars'   => myapi_service_request_mail_label($values['stars'] !== NULL ? (string) (int) $values['stars'] : NULL),
+    'comment' => myapi_service_request_mail_label($values['comment']),
+  ];
+}
+
+/**
+ * Params of the close detail email sent to the 'backend' role.
+ *
+ * Builds BOTH branches' fields every time and lets 'has_rating' decide which
+ * of them myapi_mail_service_request_closed_admin_html() renders — the same
+ * either/or the spec's data model states, never both lines together.
+ *
+ * @param int   $nid     nid of the request.
+ * @param array $values  Already-resolved 'subject', 'condominium', 'unit',
+ *   'has_rating' and, depending on it, either 'provider_name'/'stars'/
+ *   'comment' (form A) or 'reason' (form B, NULL on form A).
+ *
+ * @return array  Escaped params for
+ *   myapi_mail_format_service_request_closed_admin().
+ */
+function myapi_service_request_closed_admin_mail_params($nid, array $values) {
+  $values += [
+    'subject'       => NULL,
+    'condominium'   => NULL,
+    'unit'          => NULL,
+    'has_rating'    => FALSE,
+    'provider_name' => NULL,
+    'stars'         => NULL,
+    'comment'       => NULL,
+    'reason'        => NULL,
+  ];
+
+  return [
+    'nid'           => (int) $nid,
+    'subject'       => myapi_service_request_mail_label($values['subject']),
+    'condominium'   => myapi_service_request_mail_label($values['condominium']),
+    'unit'          => myapi_service_request_mail_label($values['unit']),
+    'has_rating'    => (bool) $values['has_rating'],
+    'provider_name' => myapi_service_request_mail_label($values['provider_name']),
+    'stars'         => myapi_service_request_mail_label($values['stars'] !== NULL ? (string) (int) $values['stars'] : NULL),
+    'comment'       => myapi_service_request_mail_label($values['comment']),
+    'reason'        => myapi_service_request_mail_label($values['reason']),
+    // Absolute so the link works from any mail client; check_plain() because
+    // url() does not encode the '&' between query arguments for HTML output.
+    // Same pattern as every other admin email of this file.
+    'node_url'      => check_plain(url('node/' . (int) $nid, ['absolute' => TRUE])),
+  ];
+}
+
 /* ---------------------------------------------------------------------------
  * Resolution of the values the three channels share.
  *
@@ -1811,5 +1888,163 @@ function myapi_service_request_enqueue_cancelled_admin_mail($request_nid, array 
 
   foreach (user_load_multiple($uids) as $account) {
     myapi_mail_queue_enqueue(MYAPI_SERVICE_REQUEST_CANCELLED_ADMIN_MAIL_KEY, (string) $account->mail, $params);
+  }
+}
+
+/**
+ * Notifies the close of a service request, rating the provider or not. SPEC
+ * 114'S ENTRY POINT.
+ *
+ * Called from myapi_service_request_close() right after the three writes
+ * (rating -> request -> transaction) and before the 200 is assembled, so
+ * nothing here can undo any of them, and never from a node hook: a close made
+ * from the back office notifies nobody, same criterion as the five
+ * orchestrators above.
+ *
+ * EVERY VALUE IN $context ARRIVES ALREADY RESOLVED, built from $node and not
+ * from $row (the endpoint's post-write detail): $row can be FALSE in the
+ * degraded case SPEC 108 already contemplates (a deleted category), and this
+ * notice must not depend on the HTTP response having been assembled — same
+ * reason as myapi_service_request_notify_cancelled() (SPEC 113). $rating is
+ * the ONE exception: it is what the caller already has in hand from the rating
+ * write itself (step 8a), not a value this file re-derives.
+ *
+ * No 'requester_uid' in $context, on purpose: the resident who closed is out
+ * of this spec's audience (already has the 200's own detail).
+ *
+ * $rating is NULL on a close with no award (form B — 'offered' with a close
+ * reason) and an array on a rated close (form A — 'assigned'/'direct'), with
+ * 'rating_id', 'provider_id', 'provider_name', 'stars' and 'comment'. Which
+ * one it is decides everything below:
+ *
+ * Order of the work, and why:
+ * 1. The rated provider, ONLY when $rating is not NULL — one notification and
+ *    one email set, with the full stars and comment they received.
+ * 2. The 'backend' role, ALWAYS, in either form — same ordering rule as the
+ *    five orchestrators above (last, so a failure there cannot cost the
+ *    provider its notice), but unlike the provider step, this one does not
+ *    depend on $rating at all: a close with no award is still operational
+ *    information for 'backend'.
+ *
+ * Best-effort from end to end, same discipline as the rest of this file: the
+ * whole body is wrapped, a failure lands in watchdog, and none of it undoes
+ * the close, the rating or the transaction that were just saved.
+ *
+ * @param object     $node     The just-saved (closed) 'service_request' node.
+ * @param array|null $rating   NULL on a close with no award, or an array with
+ *   'rating_id', 'provider_id', 'provider_name', 'stars' and 'comment' on a
+ *   rated close.
+ * @param array      $context  Values already resolved by
+ *   myapi_service_request_close(): 'request_nid', 'request_title',
+ *   'condominium_id', 'unit_id' and 'close_reason' (NULL on a rated close).
+ *
+ * @return void
+ */
+function myapi_service_request_notify_closed($node, $rating, array $context = []) {
+  try {
+    module_load_include('inc', 'myapi', 'includes/myapi.notification');
+    module_load_include('inc', 'myapi', 'includes/myapi.mail_queue');
+
+    $context += [
+      'request_nid'    => NULL,
+      'request_title'  => NULL,
+      'condominium_id' => NULL,
+      'unit_id'        => NULL,
+      'close_reason'   => NULL,
+    ];
+
+    $request_nid = (int) $context['request_nid'];
+
+    if ($rating !== NULL) {
+      $rating += [
+        'rating_id'     => NULL,
+        'provider_id'   => NULL,
+        'provider_name' => NULL,
+        'stars'         => NULL,
+        'comment'       => NULL,
+      ];
+
+      $uids = myapi_service_request_provider_uids($rating['provider_id']);
+      if (!empty($uids)) {
+        myapi_notification_create([
+          'source_type'      => MYAPI_NOTIFICATION_SOURCE_SERVICE_RATING,
+          'source_nid'       => (int) $rating['rating_id'],
+          'type'             => MYAPI_NOTIFICATION_TYPE_SERVICE_REQUEST_RATED,
+          'title'            => myapi_service_request_rated_push_title(),
+          'body'             => myapi_service_request_rated_push_body($context['request_title'], $rating['stars'], $rating['comment']),
+          'deep_link_target' => MYAPI_NOTIFICATION_DEEP_LINK_SERVICE_REQUEST_PROVIDER,
+          'deep_link_id'     => $request_nid,
+          'condominium_id'   => $context['condominium_id'],
+          // Never the unit: same rule as every other provider notice in this
+          // file.
+          'unit_id'          => NULL,
+          'provider_id'      => (int) $rating['provider_id'],
+          'audience'         => MYAPI_NOTIFICATION_AUDIENCE_PROVIDER,
+          'uids'             => $uids,
+        ]);
+
+        $provider_params = myapi_service_request_rated_provider_mail_params($request_nid, [
+          'subject' => $context['request_title'],
+          'stars'   => $rating['stars'],
+          'comment' => $rating['comment'],
+        ]);
+
+        foreach (user_load_multiple($uids) as $account) {
+          myapi_mail_queue_enqueue(MYAPI_SERVICE_REQUEST_RATED_PROVIDER_MAIL_KEY, (string) $account->mail, $provider_params);
+        }
+      }
+    }
+
+    myapi_service_request_enqueue_closed_admin_mail($request_nid, $context, $rating);
+  }
+  catch (Exception $e) {
+    watchdog_exception('myapi', $e);
+  }
+}
+
+/**
+ * Enqueues the close detail email of a closed request to the 'backend' role.
+ *
+ * Split out of the orchestrator for the same reason as
+ * myapi_service_request_enqueue_cancelled_admin_mail() (SPEC 113): it resolves
+ * values NO other channel of this event uses — the condominium's and the
+ * unit's own titles — and paying those two queries for a role that may be
+ * empty would be waste. Push/inbox are deliberately out of scope for this
+ * audience, same criterion as the other three admin emails of this file.
+ *
+ * Fires regardless of $rating: unlike the provider step of the orchestrator,
+ * this channel does not depend on there being an award (the spec's decision).
+ *
+ * @param int        $request_nid  nid of the closed request.
+ * @param array      $context      The values handed to
+ *   myapi_service_request_notify_closed(): 'request_title', 'condominium_id',
+ *   'unit_id' and 'close_reason'.
+ * @param array|null $rating       The same value handed to
+ *   myapi_service_request_notify_closed(): NULL, or an array with
+ *   'provider_name', 'stars' and 'comment'.
+ *
+ * @return void
+ */
+function myapi_service_request_enqueue_closed_admin_mail($request_nid, array $context, $rating) {
+  $uids = myapi_notification_role_uids(MYAPI_SERVICE_REQUEST_NOTIFY_ROLE);
+  if (empty($uids)) {
+    return;
+  }
+
+  $has_rating = $rating !== NULL;
+
+  $params = myapi_service_request_closed_admin_mail_params($request_nid, [
+    'subject'       => $context['request_title'],
+    'condominium'   => myapi_service_request_node_title($context['condominium_id']),
+    'unit'          => myapi_service_request_node_title($context['unit_id']),
+    'has_rating'    => $has_rating,
+    'provider_name' => $has_rating ? $rating['provider_name'] : NULL,
+    'stars'         => $has_rating ? $rating['stars'] : NULL,
+    'comment'       => $has_rating ? $rating['comment'] : NULL,
+    'reason'        => $has_rating ? NULL : $context['close_reason'],
+  ]);
+
+  foreach (user_load_multiple($uids) as $account) {
+    myapi_mail_queue_enqueue(MYAPI_SERVICE_REQUEST_CLOSED_ADMIN_MAIL_KEY, (string) $account->mail, $params);
   }
 }

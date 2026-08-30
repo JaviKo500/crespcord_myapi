@@ -1774,4 +1774,345 @@ class ServiceRequestNotificationTest extends TestCase {
     $this->assertNotSame([], $GLOBALS['myapi_test_watchdog']);
   }
 
+  /* -------------------------------------------------------------------------
+   * SPEC 114 — the request-closed / rated notice to the rated provider and
+   * to 'backend'.
+   * ---------------------------------------------------------------------- */
+
+  /* -- The push title and body ---------------------------------------------- */
+
+  public function testTheRatedPushTitleIsFixed() {
+    $this->assertSame('¡Te calificaron!', myapi_service_request_rated_push_title());
+  }
+
+  public function testTheRatedPushBodyCarriesTheSubjectAndTheStarsWithTheComment() {
+    $body = myapi_service_request_rated_push_body('Fuga en el calentador', 5, 'Excelente trabajo');
+
+    $this->assertSame("Fuga en el calentador\n5 estrellas — Excelente trabajo", $body);
+  }
+
+  /**
+   * No comment must not leave a dangling " — " with nothing after it.
+   */
+  public function testTheRatedPushBodyOmitsTheDashWhenThereIsNoComment() {
+    $this->assertSame("Fuga en el calentador\n5 estrellas", myapi_service_request_rated_push_body('Fuga en el calentador', 5, NULL));
+    $this->assertSame("Fuga en el calentador\n5 estrellas", myapi_service_request_rated_push_body('Fuga en el calentador', 5, ''));
+  }
+
+  public function testTheRatedPushBodyDrawsUnresolvableSubjectAsADash() {
+    $this->assertSame("—\n3 estrellas", myapi_service_request_rated_push_body(NULL, 3, NULL));
+  }
+
+  /* -- The rated provider mail params ---------------------------------------- */
+
+  private function ratedProviderMailParams($extra = []) {
+    return myapi_service_request_rated_provider_mail_params(self::NID, $extra + [
+      'subject' => 'Fuga en el calentador',
+      'stars'   => 5,
+      'comment' => 'Excelente trabajo',
+    ]);
+  }
+
+  public function testTheRatedProviderMailParamsCarryTheValuesEscaped() {
+    $params = $this->ratedProviderMailParams(['subject' => 'Fuga en el baño A&B']);
+
+    $this->assertSame(self::NID, $params['nid']);
+    $this->assertSame('Fuga en el baño A&amp;B', $params['subject']);
+    $this->assertSame('5', $params['stars']);
+    $this->assertSame('Excelente trabajo', $params['comment']);
+  }
+
+  public function testTheRatedProviderMailParamsFallBackToTheDashWhenThereIsNoComment() {
+    $params = $this->ratedProviderMailParams(['comment' => NULL]);
+
+    $this->assertSame('—', $params['comment']);
+  }
+
+  /* -- The closed 'backend' mail params ---------------------------------------- */
+
+  private function closedAdminMailParams($extra = []) {
+    return myapi_service_request_closed_admin_mail_params(self::NID, $extra + [
+      'subject'       => 'Fuga en el calentador',
+      'condominium'   => 'Los Robles',
+      'unit'          => 'Casa 12',
+      'has_rating'    => TRUE,
+      'provider_name' => 'Plomería Sur',
+      'stars'         => 5,
+      'comment'       => 'Excelente trabajo',
+      'reason'        => NULL,
+    ]);
+  }
+
+  public function testTheClosedAdminMailParamsCarryTheRatingValuesEscaped() {
+    $params = $this->closedAdminMailParams(['provider_name' => 'Plomería A&B']);
+
+    $this->assertSame(self::NID, $params['nid']);
+    $this->assertTrue($params['has_rating']);
+    $this->assertSame('Plomería A&amp;B', $params['provider_name']);
+    $this->assertSame('5', $params['stars']);
+    $this->assertSame('Excelente trabajo', $params['comment']);
+  }
+
+  public function testTheClosedAdminMailParamsCarryTheReasonOnFormB() {
+    $params = $this->closedAdminMailParams([
+      'has_rating'    => FALSE,
+      'provider_name' => NULL,
+      'stars'         => NULL,
+      'comment'       => NULL,
+      'reason'        => 'El proveedor no respondió',
+    ]);
+
+    $this->assertFalse($params['has_rating']);
+    $this->assertSame('El proveedor no respondió', $params['reason']);
+    $this->assertSame('—', $params['provider_name']);
+  }
+
+  public function testTheClosedAdminMailParamsFallBackToTheDash() {
+    $params = $this->closedAdminMailParams(['unit' => NULL, 'condominium' => '']);
+
+    $this->assertSame('—', $params['unit']);
+    $this->assertSame('—', $params['condominium']);
+  }
+
+  public function testTheClosedAdminMailParamsCarryTheNodeUrl() {
+    $params = $this->closedAdminMailParams();
+
+    $this->assertSame('https://crespcord.example.com/node/' . self::NID, $params['node_url']);
+  }
+
+  /* -- The provider mail ------------------------------------------------------ */
+
+  public function testTheSubjectOfTheRatedProviderMail() {
+    $message = ['body' => [], 'headers' => []];
+
+    myapi_mail_format_service_request_rated_provider($message, $this->ratedProviderMailParams());
+
+    $this->assertSame('Te calificaron — Fuga en el calentador', $message['subject']);
+  }
+
+  public function testTheRatedProviderSubjectDecodesTheEscapedTitle() {
+    $message = ['body' => [], 'headers' => []];
+
+    myapi_mail_format_service_request_rated_provider($message, $this->ratedProviderMailParams(['subject' => 'Fuga A&B']));
+
+    $this->assertSame('Te calificaron — Fuga A&B', $message['subject']);
+  }
+
+  public function testTheRatedProviderMailDrawsTheThreeLinesInOrder() {
+    $html = myapi_mail_service_request_rated_provider_html($this->ratedProviderMailParams());
+
+    $this->assertSame(
+      [
+        'Asunto'     => 'Fuga en el calentador',
+        'Estrellas'  => '5',
+        'Comentario' => 'Excelente trabajo',
+      ],
+      $this->lines($html)
+    );
+  }
+
+  public function testTheRatedProviderMailHasNoButton() {
+    $html = myapi_mail_service_request_rated_provider_html($this->ratedProviderMailParams());
+
+    $this->assertStringNotContainsString('border-radius:10px;background-color:#4A3326', $html);
+    $this->assertStringContainsString('Revisa la solicitud en la app.', $html);
+  }
+
+  /* -- The 'backend' mail -------------------------------------------------------- */
+
+  public function testTheSubjectOfTheClosedAdminMailIsAlwaysTheSame() {
+    $message = ['body' => [], 'headers' => []];
+    myapi_mail_format_service_request_closed_admin($message, $this->closedAdminMailParams());
+
+    $this->assertSame('Solicitud cerrada #' . self::NID . ' — Los Robles', $message['subject']);
+
+    $message = ['body' => [], 'headers' => []];
+    myapi_mail_format_service_request_closed_admin($message, $this->closedAdminMailParams([
+      'has_rating'    => FALSE,
+      'provider_name' => NULL,
+      'stars'         => NULL,
+      'comment'       => NULL,
+      'reason'        => 'Motivo',
+    ]));
+
+    $this->assertSame('Solicitud cerrada #' . self::NID . ' — Los Robles', $message['subject']);
+  }
+
+  public function testTheClosedAdminMailDrawsTheRatingLinesWhenThereWasOne() {
+    $html = myapi_mail_service_request_closed_admin_html($this->closedAdminMailParams());
+
+    $this->assertSame(
+      [
+        'Asunto'               => 'Fuga en el calentador',
+        'Proveedor calificado' => 'Plomería Sur',
+        'Estrellas'            => '5',
+        'Comentario'           => 'Excelente trabajo',
+        'Condominio'           => 'Los Robles',
+        'Vivienda'             => 'Casa 12',
+      ],
+      $this->lines($html)
+    );
+  }
+
+  public function testTheClosedAdminMailDrawsTheReasonLineWhenThereWasNoRating() {
+    $html = myapi_mail_service_request_closed_admin_html($this->closedAdminMailParams([
+      'has_rating'    => FALSE,
+      'provider_name' => NULL,
+      'stars'         => NULL,
+      'comment'       => NULL,
+      'reason'        => 'El proveedor no respondió',
+    ]));
+
+    $this->assertSame(
+      [
+        'Asunto'     => 'Fuga en el calentador',
+        'Motivo'     => 'El proveedor no respondió',
+        'Condominio' => 'Los Robles',
+        'Vivienda'   => 'Casa 12',
+      ],
+      $this->lines($html)
+    );
+  }
+
+  /**
+   * The two branches never mix: a rating never shows 'Motivo' and a
+   * reason-only close never shows the rating lines.
+   */
+  public function testTheClosedAdminMailNeverMixesTheTwoBranches() {
+    $ratedHtml = myapi_mail_service_request_closed_admin_html($this->closedAdminMailParams());
+    $this->assertStringNotContainsString('Motivo', $ratedHtml);
+
+    $reasonHtml = myapi_mail_service_request_closed_admin_html($this->closedAdminMailParams([
+      'has_rating'    => FALSE,
+      'provider_name' => NULL,
+      'stars'         => NULL,
+      'comment'       => NULL,
+      'reason'        => 'El proveedor no respondió',
+    ]));
+    $this->assertStringNotContainsString('Proveedor calificado', $reasonHtml);
+    $this->assertStringNotContainsString('Estrellas', $reasonHtml);
+    $this->assertStringNotContainsString('Comentario', $reasonHtml);
+  }
+
+  public function testTheClosedAdminButtonOpensTheNode() {
+    $html = myapi_mail_service_request_closed_admin_html($this->closedAdminMailParams());
+
+    $this->assertStringContainsString('>Ver solicitud</a>', $html);
+    $this->assertStringContainsString('href="https://crespcord.example.com/node/' . self::NID . '"', $html);
+  }
+
+  /* -------------------------------------------------------------------------
+   * The orchestrator (step 5).
+   * ---------------------------------------------------------------------- */
+
+  private function closedNode() {
+    return (object) ['nid' => self::NID, 'title' => 'Fuga en el calentador'];
+  }
+
+  private function closedContext($extra = []) {
+    return $extra + [
+      'request_nid'    => self::NID,
+      'request_title'  => 'Fuga en el calentador',
+      'condominium_id' => self::CONDO,
+      'unit_id'        => self::UNIT,
+      'close_reason'   => NULL,
+    ];
+  }
+
+  private function ratingFixture($extra = []) {
+    return $extra + [
+      'rating_id'     => 7701,
+      'provider_id'   => self::PROVIDER,
+      'provider_name' => 'Plomería Sur',
+      'stars'         => 5,
+      'comment'       => 'Excelente trabajo',
+    ];
+  }
+
+  /**
+   * No rating and no 'backend' role member costs nothing: no exception, no
+   * watchdog entry — the normal answer when nobody is left to tell.
+   */
+  public function testNoRatingAndNoBackendRoleNotifiesNobody() {
+    myapi_service_request_notify_closed($this->closedNode(), NULL, $this->closedContext(['close_reason' => 'El proveedor no respondió']));
+
+    $this->assertSame([], $GLOBALS['myapi_test_watchdog']);
+  }
+
+  /**
+   * A NULL $rating must not touch the provider recipient table at all: no
+   * query, no notification, no email — a silent no-op for that one channel,
+   * same criterion as an empty audience anywhere else in this file.
+   */
+  public function testANullRatingNeverQueriesForTheProvider() {
+    myapi_test_db_seed(['field_data_' . MYAPI_PROVIDER_USERS_FIELD => [$this->accountRow()]]);
+
+    myapi_service_request_notify_closed($this->closedNode(), NULL, $this->closedContext(['close_reason' => 'El proveedor no respondió']));
+
+    $queries = array_filter(myapi_test_db_queries(), function ($query) {
+      return $query['table'] === 'field_data_' . MYAPI_PROVIDER_USERS_FIELD;
+    });
+
+    $this->assertSame([], $queries);
+    $this->assertSame([], $GLOBALS['myapi_test_watchdog']);
+  }
+
+  /**
+   * THE 'BACKEND' EMAIL DOES NOT DEPEND ON $rating (the spec's decision): the
+   * role lookup fires in both forms of closing.
+   */
+  public function testTheBackendRoleIsAskedForInBothForms() {
+    myapi_service_request_notify_closed($this->closedNode(), NULL, $this->closedContext(['close_reason' => 'El proveedor no respondió']));
+
+    $roleQueries = array_filter(myapi_test_db_queries(), function ($query) {
+      foreach ($query['conditions'] as $condition) {
+        if ($condition['field'] === 'r.name' && $condition['value'] === MYAPI_SERVICE_REQUEST_NOTIFY_ROLE) {
+          return TRUE;
+        }
+      }
+      return FALSE;
+    });
+
+    $this->assertNotEmpty($roleQueries);
+    $this->assertSame([], $GLOBALS['myapi_test_watchdog']);
+  }
+
+  /**
+   * THE PROMISE THE ENDPOINT RELIES ON, same as the SPEC 109-113 fan-out
+   * tests above: the notification insert fails on purpose in tests/unit, and
+   * the trigger still returns normally, with the failure in watchdog — never
+   * the 200 of PUT /api/v1/service-requests/{id}/close.
+   */
+  public function testAFailingRatedProviderInsertIsLoggedAndNeverPropagates() {
+    myapi_test_db_seed(['field_data_' . MYAPI_PROVIDER_USERS_FIELD => [$this->accountRow()]]);
+
+    myapi_service_request_notify_closed($this->closedNode(), $this->ratingFixture(), $this->closedContext());
+
+    $this->assertNotSame([], $GLOBALS['myapi_test_watchdog']);
+    $this->assertStringContainsString('myapi_notifications', $GLOBALS['myapi_test_watchdog'][0]['text']);
+  }
+
+  /**
+   * The rated provider is looked up by ITS OWN provider_id from $rating —
+   * the one thing this fixture layer can prove about a fan-out whose insert
+   * it cannot observe (SPEC 74's stub throws on db_insert() by design).
+   */
+  public function testTheRatedProviderIsLookedUpByItsOwnProviderId() {
+    myapi_test_db_seed(['field_data_' . MYAPI_PROVIDER_USERS_FIELD => [
+      $this->accountRow(['entity_id' => self::PROVIDER]),
+    ]]);
+
+    myapi_service_request_notify_closed($this->closedNode(), $this->ratingFixture(), $this->closedContext());
+
+    $queries = array_values(array_filter(
+      myapi_test_db_queries(),
+      function ($query) {
+        return $query['table'] === 'field_data_' . MYAPI_PROVIDER_USERS_FIELD;
+      }
+    ));
+
+    $this->assertCount(1, $queries);
+    $this->assertSame(self::PROVIDER, $this->conditionValue($queries[0], 'entity_id'));
+  }
+
 }

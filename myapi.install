@@ -543,6 +543,11 @@ function myapi_html_mail_keys() {
     // the 'backend' role.
     'myapi_service_request_cancelled_provider',
     'myapi_service_request_cancelled_admin',
+    // SPEC 114. The two mails a close fires: the rating notice to the rated
+    // provider (only when the close carried one), and the detail sent to the
+    // 'backend' role (always, in either form of closing).
+    'myapi_service_request_rated_provider',
+    'myapi_service_request_closed_admin',
   ];
 }
 
@@ -4545,6 +4550,21 @@ function myapi_update_7040() {
   myapi_mail_system_register();
 
   return t('SPEC 113: registradas las claves de correo HTML de la cancelación de solicitud (@count claves en total, sin cambio de esquema).', [
+    '@count' => count(myapi_html_mail_keys()),
+  ]);
+}
+
+/**
+ * SPEC 114: registers the two request-closed/rated HTML mail keys.
+ *
+ * Same idempotent pattern as myapi_update_7040(): myapi_mail_system_register()
+ * re-registers the whole catalogue from myapi_html_mail_keys(), so a second
+ * run finds nothing pending. No hook_schema() change — no new table or column.
+ */
+function myapi_update_7041() {
+  myapi_mail_system_register();
+
+  return t('SPEC 114: registradas las claves de correo HTML del cierre y la calificación de solicitud (@count claves en total, sin cambio de esquema).', [
     '@count' => count(myapi_html_mail_keys()),
   ]);
 }
