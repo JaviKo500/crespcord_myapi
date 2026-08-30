@@ -1003,6 +1003,51 @@ function myapi_service_request_cancelled_admin_mail_params($nid, array $values) 
 }
 
 /* ---------------------------------------------------------------------------
+ * SPEC 114 — pure text builders for the request-closed / rated notice.
+ *
+ * Same two rules as the blocks above: an unresolvable value degrades to
+ * MYAPI_SERVICE_REQUEST_MAIL_EMPTY rather than an empty line or a thrown
+ * error, and the push/inbox text is plain while the mail params (added
+ * alongside the orchestrator, further below) are escaped.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Title of the push and of the inbox row sent to the rated provider.
+ *
+ * @return string  Fixed Spanish text.
+ */
+function myapi_service_request_rated_push_title() {
+  return '¡Te calificaron!';
+}
+
+/**
+ * Body of the push and of the inbox row sent to the rated provider.
+ *
+ * Two lines: the request's own subject, and the stars with the comment
+ * appended to that SAME second line — never a third — and only when there
+ * was one (the spec's decision): a rating without a comment must not leave a
+ * dangling " — " with nothing after it.
+ *
+ * @param string|null $subject  node.title of the request.
+ * @param int         $stars    1-5, already validated by the endpoint.
+ * @param string|null $comment  The resident's comment, or NULL/'' when there
+ *   was none.
+ *
+ * @return string  Two lines separated by "\n".
+ */
+function myapi_service_request_rated_push_body($subject, $stars, $comment) {
+  $stars_line = ((int) $stars) . ' estrellas';
+  if ($comment !== NULL && $comment !== '') {
+    $stars_line .= ' — ' . $comment;
+  }
+
+  return implode("\n", [
+    myapi_service_request_notification_label($subject),
+    $stars_line,
+  ]);
+}
+
+/* ---------------------------------------------------------------------------
  * Resolution of the values the three channels share.
  *
  * Each of these runs ONCE per request, no matter how many providers are being
