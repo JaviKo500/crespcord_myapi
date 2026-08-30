@@ -828,4 +828,185 @@ class ServiceRequestNotificationTest extends TestCase {
     $this->assertStringContainsString('myapi_notifications', $GLOBALS['myapi_test_watchdog'][0]['text']);
   }
 
+  /* -------------------------------------------------------------------------
+   * SPEC 111 — the offer-withdrawn notice to the resident.
+   * ---------------------------------------------------------------------- */
+
+  /* -- The push title and body ---------------------------------------------- */
+
+  public function testTheWithdrawnPushTitleIsFixed() {
+    $this->assertSame('Oferta retirada', myapi_service_offer_withdrawn_push_title());
+  }
+
+  public function testTheWithdrawnPushBodyCarriesTheTwoLabelledLines() {
+    $body = myapi_service_offer_withdrawn_push_body('Fuga en el calentador', 'Plomería Sur');
+
+    $this->assertSame("Fuga en el calentador\nProveedor: Plomería Sur", $body);
+  }
+
+  public function testTheWithdrawnPushBodyDrawsUnresolvableValuesAsADash() {
+    $body = myapi_service_offer_withdrawn_push_body(NULL, NULL);
+
+    $this->assertSame("—\nProveedor: —", $body);
+  }
+
+  /**
+   * No amount anywhere in the withdrawn notice: it is no longer actionable
+   * information once the offer is gone.
+   */
+  public function testTheWithdrawnPushBodyNeverMentionsAnAmount() {
+    $body = myapi_service_offer_withdrawn_push_body('Fuga en el calentador', 'Plomería Sur');
+
+    $this->assertStringNotContainsString('Monto', $body);
+  }
+
+  /* -- The resident mail params ---------------------------------------------- */
+
+  private function withdrawnResidentMailParams($extra = []) {
+    return myapi_service_offer_withdrawn_resident_mail_params(self::NID, $extra + [
+      'name'          => 'Ana Pérez',
+      'subject'       => 'Fuga en el calentador',
+      'provider_name' => 'Plomería Sur',
+    ]);
+  }
+
+  public function testTheWithdrawnResidentMailParamsCarryTheValuesEscaped() {
+    $params = $this->withdrawnResidentMailParams(['subject' => 'Fuga en el baño A&B']);
+
+    $this->assertSame(self::NID, $params['nid']);
+    $this->assertSame('Fuga en el baño A&amp;B', $params['subject']);
+    $this->assertSame('Plomería Sur', $params['provider_name']);
+    $this->assertSame('Ana Pérez', $params['name']);
+  }
+
+  public function testTheWithdrawnResidentMailParamsFallBackToTheDash() {
+    $params = $this->withdrawnResidentMailParams(['provider_name' => NULL]);
+
+    $this->assertSame('—', $params['provider_name']);
+  }
+
+  public function testTheWithdrawnResidentMailParamsNameIsNullWhenUnresolved() {
+    $params = $this->withdrawnResidentMailParams(['name' => NULL]);
+
+    $this->assertNull($params['name']);
+  }
+
+  public function testTheWithdrawnResidentMailParamsCarryTheDeepLinkUrl() {
+    $params = $this->withdrawnResidentMailParams();
+
+    $this->assertSame('myapp://service-requests/' . self::NID, $params['deep_link_url']);
+  }
+
+  /* -- The resident mail ------------------------------------------------------ */
+
+  public function testTheSubjectOfTheOfferWithdrawnResidentMail() {
+    $message = ['body' => [], 'headers' => []];
+
+    myapi_mail_format_service_request_offer_withdrawn_resident($message, $this->withdrawnResidentMailParams());
+
+    $this->assertSame('Oferta retirada — Fuga en el calentador', $message['subject']);
+  }
+
+  public function testTheOfferWithdrawnResidentSubjectDecodesTheEscapedTitle() {
+    $message = ['body' => [], 'headers' => []];
+
+    myapi_mail_format_service_request_offer_withdrawn_resident(
+      $message,
+      $this->withdrawnResidentMailParams(['subject' => 'Fuga A&B'])
+    );
+
+    $this->assertSame('Oferta retirada — Fuga A&B', $message['subject']);
+  }
+
+  public function testTheOfferWithdrawnResidentMailDrawsExactlyTwoLines() {
+    $html = myapi_mail_service_request_offer_withdrawn_resident_html($this->withdrawnResidentMailParams());
+
+    $this->assertSame(
+      [
+        'Asunto'    => 'Fuga en el calentador',
+        'Proveedor' => 'Plomería Sur',
+      ],
+      $this->lines($html)
+    );
+  }
+
+  public function testTheOfferWithdrawnResidentMailGreetsByName() {
+    $html = myapi_mail_service_request_offer_withdrawn_resident_html($this->withdrawnResidentMailParams());
+
+    $this->assertStringContainsString('Hola Ana Pérez', $html);
+  }
+
+  public function testTheOfferWithdrawnResidentMailGreetsBareWhenTheNameIsUnresolved() {
+    $html = myapi_mail_service_request_offer_withdrawn_resident_html(
+      $this->withdrawnResidentMailParams(['name' => NULL])
+    );
+
+    $this->assertStringContainsString('>Hola<', $html);
+  }
+
+  public function testTheOfferWithdrawnResidentButtonOpensTheDeepLink() {
+    $html = myapi_mail_service_request_offer_withdrawn_resident_html($this->withdrawnResidentMailParams());
+
+    $this->assertStringContainsString('>Ver solicitud</a>', $html);
+    $this->assertStringContainsString('href="myapp://service-requests/' . self::NID . '"', $html);
+  }
+
+  /* -------------------------------------------------------------------------
+   * The orchestrator (step 5).
+   *
+   * Same boundary as the SPEC 110 orchestrator tests above: the notification
+   * insert cannot run in tests/unit (db_insert() throws by design), so what is
+   * asserted here is the promise the endpoint relies on — the failure is
+   * swallowed and logged — plus the one branch that never reaches the insert
+   * at all: a requester account that no longer exists.
+   * ---------------------------------------------------------------------- */
+
+  private function withdrawnOfferNode() {
+    return (object) ['nid' => 9002, 'title' => 'Oferta de Plomería Sur'];
+  }
+
+  private function withdrawnOfferContext($extra = []) {
+    return $extra + [
+      'request_nid'    => self::NID,
+      'request_title'  => 'Fuga en el calentador',
+      'requester_uid'  => self::REQUESTER,
+      'condominium_id' => self::CONDO,
+      'unit_id'        => self::UNIT,
+      'provider_id'    => self::PROVIDER,
+      'provider_name'  => 'Plomería Sur',
+    ];
+  }
+
+  /**
+   * A requester whose account was deleted between the request and the
+   * withdrawal costs nothing: no notification query, no mail, no watchdog
+   * entry — there is nobody left to tell.
+   */
+  public function testAMissingRequesterAccountNotifiesNobodyWithoutQueryingOnWithdrawal() {
+    myapi_service_request_notify_offer_withdrawn($this->withdrawnOfferNode(), $this->withdrawnOfferContext());
+
+    $this->assertSame([], myapi_test_db_queries());
+    $this->assertSame([], $GLOBALS['myapi_test_watchdog']);
+  }
+
+  /**
+   * THE PROMISE THE ENDPOINT RELIES ON, same as the SPEC 110 fan-out test
+   * above: the notification insert fails on purpose in tests/unit, and the
+   * trigger still returns normally, with the failure in watchdog — never the
+   * 200 of PUT /api/v1/service-offers/{id}/withdraw.
+   */
+  public function testAFailingWithdrawnInsertIsLoggedAndNeverPropagates() {
+    $GLOBALS['myapi_test_users'][self::REQUESTER] = [
+      'uid'    => self::REQUESTER,
+      'name'   => 'residente42',
+      'mail'   => 'ana@example.com',
+      'status' => 1,
+    ];
+
+    myapi_service_request_notify_offer_withdrawn($this->withdrawnOfferNode(), $this->withdrawnOfferContext());
+
+    $this->assertNotSame([], $GLOBALS['myapi_test_watchdog']);
+    $this->assertStringContainsString('myapi_notifications', $GLOBALS['myapi_test_watchdog'][0]['text']);
+  }
+
 }

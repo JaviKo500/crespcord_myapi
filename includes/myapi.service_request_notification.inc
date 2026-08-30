@@ -1006,3 +1006,95 @@ function myapi_service_request_notify_offer_received($offer_node, array $context
     watchdog_exception('myapi', $e);
   }
 }
+
+/**
+ * Notifies the resident that their offer was withdrawn. SPEC 111'S ENTRY
+ * POINT.
+ *
+ * Called from myapi_service_offer_withdraw() right after node_save() and
+ * before the 200 is assembled, so nothing here can undo it, and never from a
+ * node hook: a withdrawal made from the back office notifies nobody, same
+ * criterion as myapi_service_request_notify_offer_received() above.
+ *
+ * EVERY VALUE IN $context ARRIVES ALREADY RESOLVED — nothing here re-queries
+ * the offer or the request: myapi_service_offer_withdraw() already loaded
+ * both rows to run its own checks, and re-reading them would be the same
+ * waste myapi_service_request_notify_offer_received() avoids for its own
+ * caller.
+ *
+ * Fires once per withdrawal: a second withdraw attempt on the same offer is
+ * rejected by SPEC 105 before this function is ever called, so it can never
+ * produce a duplicate row.
+ *
+ * Best-effort from end to end, same discipline as the rest of this file: the
+ * whole body is wrapped, a failure lands in watchdog, and none of it undoes
+ * the withdrawal that was just saved.
+ *
+ * @param object $offer_node  The just-saved (withdrawn) 'service_offer' node.
+ * @param array   $context    Values already resolved by
+ *   myapi_service_offer_withdraw(): 'request_nid', 'request_title',
+ *   'requester_uid', 'condominium_id', 'unit_id', 'provider_id' and
+ *   'provider_name'.
+ *
+ * @return void
+ */
+function myapi_service_request_notify_offer_withdrawn($offer_node, array $context = []) {
+  try {
+    module_load_include('inc', 'myapi', 'includes/myapi.notification');
+    module_load_include('inc', 'myapi', 'includes/myapi.mail_queue');
+    module_load_include('inc', 'myapi', 'includes/myapi.user');
+
+    $context += [
+      'request_nid'    => NULL,
+      'request_title'  => NULL,
+      'requester_uid'  => NULL,
+      'condominium_id' => NULL,
+      'unit_id'        => NULL,
+      'provider_id'    => NULL,
+      'provider_name'  => NULL,
+    ];
+
+    // Same defensive floor as myapi_service_request_notify_offer_received():
+    // a request always has a requester, but the account behind it may have
+    // since been deleted.
+    $requester_uid = (int) $context['requester_uid'];
+    $account = $requester_uid > 0 ? user_load($requester_uid) : FALSE;
+    if (!$account) {
+      return;
+    }
+
+    myapi_notification_create([
+      'source_type'      => MYAPI_NOTIFICATION_SOURCE_SERVICE_OFFER,
+      'source_nid'       => (int) $offer_node->nid,
+      'type'             => MYAPI_NOTIFICATION_TYPE_SERVICE_OFFER_WITHDRAWN,
+      'title'            => myapi_service_offer_withdrawn_push_title(),
+      'body'             => myapi_service_offer_withdrawn_push_body($context['request_title'], $context['provider_name']),
+      'deep_link_target' => MYAPI_NOTIFICATION_DEEP_LINK_SERVICE_REQUEST,
+      'deep_link_id'     => (int) $context['request_nid'],
+      // Same reasoning as the offer-received notice: this is the resident's
+      // OWN request, so no privacy reason to withhold either id.
+      'condominium_id'   => $context['condominium_id'],
+      'unit_id'          => $context['unit_id'],
+      'provider_id'      => $context['provider_id'],
+      'audience'         => MYAPI_NOTIFICATION_AUDIENCE_RESIDENT,
+      'uids'             => [$requester_uid],
+    ]);
+
+    // Same resolution as myapi_service_request_notify_offer_received():
+    // SPEC 54 profile fields first, the account's own name as the fallback.
+    $profile = myapi_user_fetch_profile_fields($requester_uid);
+    $full_name = trim((string) $profile['first_name'] . ' ' . (string) $profile['last_name']);
+    $name = $full_name !== '' ? $full_name : $account->name;
+
+    $params = myapi_service_offer_withdrawn_resident_mail_params($context['request_nid'], [
+      'name'          => $name,
+      'subject'       => $context['request_title'],
+      'provider_name' => $context['provider_name'],
+    ]);
+
+    myapi_mail_queue_enqueue(MYAPI_SERVICE_OFFER_WITHDRAWN_MAIL_KEY, (string) $account->mail, $params);
+  }
+  catch (Exception $e) {
+    watchdog_exception('myapi', $e);
+  }
+}

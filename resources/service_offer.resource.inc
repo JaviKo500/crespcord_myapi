@@ -1254,6 +1254,22 @@ function myapi_service_offer_withdraw($nid) {
   $offer->field_offer_status[LANGUAGE_NONE][0]['value'] = 'withdrawn';
   node_save($offer);
 
+  // 6b. The resident notice (SPEC 111), right after the write above so
+  // nothing here can leave it half-done, and built from values this function
+  // already has in hand — $row and $request_row answered the gate three
+  // steps ago. Best-effort: myapi_service_request_notify_offer_withdrawn()
+  // never throws, so a broken queue costs a watchdog entry and never this
+  // 200.
+  myapi_service_request_notify_offer_withdrawn($offer, [
+    'request_nid'    => $row->request_id,
+    'request_title'  => $request_row->title,
+    'requester_uid'  => $request_row->requester_uid,
+    'condominium_id' => $request_row->condominium_id,
+    'unit_id'        => $request_row->unit_id,
+    'provider_id'    => $row->provider_id,
+    'provider_name'  => $row->provider_name,
+  ]);
+
   // 7. The answer. THE OBJECT UNDER 'service_offer' IS BYTE FOR BYTE what the
   // offer's own detail answers for this nid a second later, because it comes
   // out of the SAME serialiser over the SAME row. The only column touched is

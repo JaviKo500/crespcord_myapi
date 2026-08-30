@@ -530,6 +530,9 @@ function myapi_html_mail_keys() {
     // SPEC 110. The offer-received notice sent to the resident who requested
     // the service, once per offer.
     'myapi_service_request_offer_resident',
+    // SPEC 111. The offer-withdrawn notice sent to the resident who
+    // requested the service, once per withdrawal.
+    'myapi_service_request_offer_withdrawn_resident',
   ];
 }
 
@@ -4481,6 +4484,27 @@ function myapi_update_7037() {
   myapi_mail_system_register();
 
   return t('SPEC 110: registrada la clave de correo HTML de la oferta recibida (@count claves en total, sin cambio de esquema).', [
+    '@count' => count(myapi_html_mail_keys()),
+  ]);
+}
+
+/**
+ * Registers the SPEC 111 mail key on an already-installed site.
+ *
+ * No schema change: the offer-withdrawn notice reuses myapi_notifications
+ * exactly as it stood after SPEC 109/110 (source_type/source_nid,
+ * deep_link_*, condominium_id/unit_id, provider_id, audience). The only
+ * thing a site running before this spec is missing is the new HTML mail key
+ * mapping, and myapi_mail_system_register() is idempotent for the keys it
+ * already knew, the same shape as myapi_update_7037().
+ *
+ * @return string
+ *   A summary line, shown by drush and by update.php.
+ */
+function myapi_update_7038() {
+  myapi_mail_system_register();
+
+  return t('SPEC 111: registrada la clave de correo HTML de la oferta retirada (@count claves en total, sin cambio de esquema).', [
     '@count' => count(myapi_html_mail_keys()),
   ]);
 }
