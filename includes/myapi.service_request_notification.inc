@@ -818,3 +818,102 @@ function myapi_service_request_enqueue_admin_mail($node, array $context, array $
     myapi_mail_queue_enqueue(MYAPI_SERVICE_REQUEST_ADMIN_MAIL_KEY, (string) $account->mail, $params);
   }
 }
+
+/**
+ * Notifies the resident that their request received an offer. SPEC 110'S
+ * ENTRY POINT.
+ *
+ * Called from myapi_service_offer_create() after the offer/transition/
+ * transaction writes, so nothing here can undo any of them, and never from a
+ * node hook: an offer typed into the back office notifies nobody, same
+ * criterion as myapi_service_request_notify_created() above.
+ *
+ * EVERY VALUE IN $context ARRIVES ALREADY RESOLVED — nothing here re-queries
+ * the request or the provider: the endpoint already loaded both rows to run
+ * its eligibility gate, and re-reading them would be the same waste
+ * myapi_service_request_notify_created() avoids for its own caller.
+ *
+ * Fires once per POST, no matter how many offers the request already has:
+ * each offer is its own event to the resident (the spec's accepted
+ * consequence), unlike myapi_service_request_notify_created(), which can
+ * notify many providers from one call.
+ *
+ * Best-effort from end to end, same discipline as the rest of this file: the
+ * whole body is wrapped, a failure lands in watchdog, and none of it undoes
+ * the offer, the transition or the transaction that were just saved.
+ *
+ * @param object $offer_node  The just-saved 'service_offer' node.
+ * @param array   $context    Values already resolved by
+ *   myapi_service_offer_create(): 'request_nid', 'request_title',
+ *   'requester_uid', 'condominium_id', 'unit_id', 'provider_id',
+ *   'provider_name', 'amount' (NULL on an 'on_site_quote') and 'amount_type'.
+ *
+ * @return void
+ */
+function myapi_service_request_notify_offer_received($offer_node, array $context = []) {
+  try {
+    module_load_include('inc', 'myapi', 'includes/myapi.notification');
+    module_load_include('inc', 'myapi', 'includes/myapi.mail_queue');
+    module_load_include('inc', 'myapi', 'includes/myapi.user');
+
+    $context += [
+      'request_nid'    => NULL,
+      'request_title'  => NULL,
+      'requester_uid'  => NULL,
+      'condominium_id' => NULL,
+      'unit_id'        => NULL,
+      'provider_id'    => NULL,
+      'provider_name'  => NULL,
+      'amount'         => NULL,
+      'amount_type'    => NULL,
+    ];
+
+    // A request always has a requester (a mandatory field since the request
+    // was created), but the account behind it may have since been deleted —
+    // the same defensive floor myapi_service_request_provider_uids() and
+    // myapi_service_request_user_mail() apply elsewhere in this file.
+    $requester_uid = (int) $context['requester_uid'];
+    $account = $requester_uid > 0 ? user_load($requester_uid) : FALSE;
+    if (!$account) {
+      return;
+    }
+
+    $amount_text = myapi_service_offer_amount_text($context['amount'], $context['amount_type']);
+
+    myapi_notification_create([
+      'source_type'      => MYAPI_NOTIFICATION_SOURCE_SERVICE_OFFER,
+      'source_nid'       => (int) $offer_node->nid,
+      'type'             => MYAPI_NOTIFICATION_TYPE_SERVICE_OFFER_RECEIVED,
+      'title'            => myapi_service_offer_push_title(),
+      'body'             => myapi_service_offer_push_body($context['request_title'], $context['provider_name'], $amount_text),
+      'deep_link_target' => MYAPI_NOTIFICATION_DEEP_LINK_SERVICE_REQUEST,
+      'deep_link_id'     => (int) $context['request_nid'],
+      // Unlike the provider notice above, this is the resident's OWN request:
+      // no privacy reason to withhold either id (see the spec's decisions).
+      'condominium_id'   => $context['condominium_id'],
+      'unit_id'          => $context['unit_id'],
+      'provider_id'      => $context['provider_id'],
+      'audience'         => MYAPI_NOTIFICATION_AUDIENCE_RESIDENT,
+      'uids'             => [$requester_uid],
+    ]);
+
+    // Same resolution as myapi_claim_notification_row()'s requester: SPEC 54
+    // profile fields first, the account's own name as the fallback, so
+    // "Hola {name}" never needs the account to have filled in a profile.
+    $profile = myapi_user_fetch_profile_fields($requester_uid);
+    $full_name = trim((string) $profile['first_name'] . ' ' . (string) $profile['last_name']);
+    $name = $full_name !== '' ? $full_name : $account->name;
+
+    $params = myapi_service_offer_resident_mail_params($context['request_nid'], [
+      'name'          => $name,
+      'subject'       => $context['request_title'],
+      'provider_name' => $context['provider_name'],
+      'amount_text'   => $amount_text,
+    ]);
+
+    myapi_mail_queue_enqueue(MYAPI_SERVICE_OFFER_RECEIVED_MAIL_KEY, (string) $account->mail, $params);
+  }
+  catch (Exception $e) {
+    watchdog_exception('myapi', $e);
+  }
+}

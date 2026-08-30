@@ -527,6 +527,9 @@ function myapi_html_mail_keys() {
     // the 'backend' role.
     'myapi_service_request_provider',
     'myapi_service_request_admin',
+    // SPEC 110. The offer-received notice sent to the resident who requested
+    // the service, once per offer.
+    'myapi_service_request_offer_resident',
   ];
 }
 
@@ -4457,6 +4460,27 @@ function myapi_update_7036() {
   myapi_mail_system_register();
 
   return t('SPEC 109: añadida la columna provider_id a myapi_notifications (sin backfill: las filas anteriores quedan en NULL) y registradas las claves de correo HTML (@count en total).', [
+    '@count' => count(myapi_html_mail_keys()),
+  ]);
+}
+
+/**
+ * Registers the SPEC 110 mail key on an already-installed site.
+ *
+ * No schema change: the offer-received notice reuses myapi_notifications
+ * exactly as it stood after SPEC 109 (source_type/source_nid, deep_link_*,
+ * condominium_id/unit_id, provider_id, audience). The only thing a site
+ * running before this spec is missing is the new HTML mail key mapping, and
+ * myapi_mail_system_register() is idempotent for the keys it already knew, the
+ * same shape as myapi_update_7036().
+ *
+ * @return string
+ *   A summary line, shown by drush and by update.php.
+ */
+function myapi_update_7037() {
+  myapi_mail_system_register();
+
+  return t('SPEC 110: registrada la clave de correo HTML de la oferta recibida (@count claves en total, sin cambio de esquema).', [
     '@count' => count(myapi_html_mail_keys()),
   ]);
 }
