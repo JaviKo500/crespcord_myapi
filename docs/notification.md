@@ -381,6 +381,38 @@ offer never reaches this trigger: SPEC 106's gate answers `409` first.
 The full contract — the texts, the three emails and the admin-only channel —
 is in `docs/service-request-notifications.md`.
 
+## Request-cancelled trigger (SPEC 113)
+
+When a resident cancels a request via
+`PUT /api/v1/service-requests/{id}/cancel`, every provider whose offer was
+still `sent` or `selected` at that instant is notified — one call per
+affected offer, no distinction between the two statuses — plus the
+`backend` role (email only, no push or inbox row; see
+`docs/service-request-notifications.md`).
+
+| `source_type` | `type` | `title` |
+|---|---|---|
+| `service_offer` | `service_request_cancelled` | `Solicitud cancelada` |
+
+**Deep link:** same shape as the SPEC 109/112 provider notices —
+`deep_link.target` = `service_request_provider`, `deep_link.id` = the
+request's nid, `deep_link.unit` **always `NULL`** (a provider never learns
+which home asked), `deep_link.condominium` carries `field_condominium`, and
+`deep_link.provider` carries the nid of **that** notice's own provider.
+
+The push `data` is `audience: "provider"`, same as the SPEC 109/112 provider
+notices. `body` carries only the request's subject — no reason, and no
+distinction between an offer that was `sent` (never chosen) and one that was
+`selected` (work already assigned): both read the identical text.
+
+A request with no live offer produces no provider row: an empty affected set
+is a silent no-op, not an error — the `backend` email still goes out. A
+second cancel attempt on the same request never reaches this trigger: SPEC
+95's gate answers `409` first.
+
+The full contract — the texts, the two emails and the admin-only `Motivo`
+line — is in `docs/service-request-notifications.md`.
+
 ## OneSignal configuration
 
 Set as Drupal variables (in `settings.php` via `$conf[...]` or with

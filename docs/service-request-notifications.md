@@ -18,6 +18,11 @@ POST of the service marketplace:
   when a resident awards an offer, the winning provider, every losing
   provider and the `backend` role are told. See the
   [dedicated section](#offer-awarded-spec-112) further down.
+- **Request cancelled** (SPEC 113), off
+  `PUT /api/v1/service-requests/{id}/cancel`: when a resident cancels a
+  request, every provider whose offer was still `sent` or `selected` and the
+  `backend` role are told. See the
+  [dedicated section](#request-cancelled-spec-113) further down.
 
 ## Request created (SPEC 109)
 
@@ -58,17 +63,17 @@ requests it created itself.
 
 | File | Role |
 |------|------|
-| `includes/myapi.service_request_notification.inc` | All four behaviors: constants, the recipient resolvers, the pure text builders and the four orchestrators (`myapi_service_request_notify_created()`, `myapi_service_request_notify_offer_received()` (SPEC 110), `myapi_service_request_notify_offer_withdrawn()` (SPEC 111) and, since SPEC 112, `myapi_service_request_notify_offer_accepted()`). |
-| `includes/myapi.service_offer.inc` | `myapi_service_offer_sent_offers_for_request()` (SPEC 112) — the read-only query that lists the losing offers, next to `myapi_service_offer_reject_live()`. |
+| `includes/myapi.service_request_notification.inc` | All five behaviors: constants, the recipient resolvers, the pure text builders and the five orchestrators (`myapi_service_request_notify_created()`, `myapi_service_request_notify_offer_received()` (SPEC 110), `myapi_service_request_notify_offer_withdrawn()` (SPEC 111), `myapi_service_request_notify_offer_accepted()` (SPEC 112) and, since SPEC 113, `myapi_service_request_notify_cancelled()`). |
+| `includes/myapi.service_offer.inc` | `myapi_service_offer_sent_offers_for_request()` (SPEC 112) and `myapi_service_offer_live_offers_for_request()` (SPEC 113) — the two read-only queries that list a cancellation's or an award's affected offers, next to `myapi_service_offer_reject_live()`. |
 | `includes/myapi.notification.inc` | `myapi_notification_create()` (inbox rows + push enqueue), which SPEC 109 taught the `provider_id` and `audience` params, and `myapi_notification_role_uids()` for the `backend` audience. |
 | `includes/myapi.provider_query.inc` | `myapi_provider_apply_active_conditions()` — the SQL half of "an active provider" (SPEC 83), reused as-is by the category lookup. |
 | `includes/myapi.mail_queue.inc` | Generic deferred mail queue (`myapi_mail_send`), shared with every other email of the module. |
-| `includes/myapi.mail.inc` | The seven mail formatters (two of SPEC 109, one of SPEC 110, one of SPEC 111, three of SPEC 112) and their HTML builders, on the shared CrespCord shell. |
-| `myapi.module` | Glue only: the seven `hook_mail()` branches. |
-| `resources/service_request.resource.inc` | **One call**, in `myapi_service_request_create()`, after the `file_usage_add()` calls and before the `201`. |
+| `includes/myapi.mail.inc` | The nine mail formatters (two of SPEC 109, one of SPEC 110, one of SPEC 111, three of SPEC 112, two of SPEC 113) and their HTML builders, on the shared CrespCord shell. |
+| `myapi.module` | Glue only: the nine `hook_mail()` branches. |
+| `resources/service_request.resource.inc` | **Two calls**: `myapi_service_request_create()`, after the `file_usage_add()` calls and before the `201`; `myapi_service_request_cancel()` (SPEC 113), after the offer sweep and before the `200`. |
 | `resources/service_offer.resource.inc` | **Three calls**: `myapi_service_offer_create()` (SPEC 110), after the offer/transition/transaction writes and before the `201`; `myapi_service_offer_withdraw()` (SPEC 111), after the `node_save()` and before the `200`; `myapi_service_offer_accept()` (SPEC 112), after the losers are swept and before the `200`. |
 | `resources/notification.resource.inc` | Selects `provider_id` and exposes it as `deep_link.provider`. |
-| `myapi.install` | The `provider_id` column (`myapi_update_7036()`, SPEC 109) and the seven mail keys in `myapi_html_mail_keys()`, registered by `myapi_update_7037()` (SPEC 110), `myapi_update_7038()` (SPEC 111) and `myapi_update_7039()` (SPEC 112, no schema change either). |
+| `myapi.install` | The `provider_id` column (`myapi_update_7036()`, SPEC 109) and the nine mail keys in `myapi_html_mail_keys()`, registered by `myapi_update_7037()` (SPEC 110), `myapi_update_7038()` (SPEC 111), `myapi_update_7039()` (SPEC 112) and `myapi_update_7040()` (SPEC 113, no schema change either). |
 
 After deploying, run:
 
@@ -296,7 +301,7 @@ Solicitud #1420
 |------|-----|
 | A request created from the back office, drush or an import | The trigger lives in the endpoint. Same criterion as payments and reservations. |
 | The resident who created it | They just created it and got the `201` with the full detail. |
-| Any other event of the marketplace | An offer created notifies the resident (SPEC 110), withdrawn notifies the resident (SPEC 111), and awarded notifies the winner, the losers and `backend` (SPEC 112) — see their dedicated sections below. Updated (105), a cancellation (95), an edit (96), a closure or a rating (108): none of them notifies today, and none starts here. |
+| Any other event of the marketplace | An offer created notifies the resident (SPEC 110), withdrawn notifies the resident (SPEC 111), awarded notifies the winner, the losers and `backend` (SPEC 112), and a cancellation notifies every affected provider and `backend` (SPEC 113) — see their dedicated sections below. Updated (105), an edit (96), a closure or a rating (108): none of them notifies today, and none starts here. |
 | Providers of the category, when the request is **direct** | Its audience is the awarded provider and nobody else. |
 | Building admins | Out of this spec's audience by decision. |
 
@@ -821,3 +826,194 @@ after the losers are swept and before the `200` is assembled, wrapped end to
 end. A failure — a broken queue, a deleted provider account, an invalid
 address — lands in `watchdog` and never undoes the award, the sweep, or the
 `200` of `PUT /api/v1/service-offers/{id}/accept`.
+
+---
+
+## Request cancelled (SPEC 113)
+
+One behavior hanging off `PUT /api/v1/service-requests/{id}/cancel`: when a
+resident cancels a request, two audiences are told — through push, inbox and
+email for one of them, and email only for the other:
+
+- **Every provider whose offer was `sent` or `selected`** at the instant of
+  cancellation — the same set `offers_rejected` (SPEC 95) counts — once each,
+  with no distinction between the two statuses and no mention of the
+  resident's reason.
+- The **`backend` role**, once per active user, email only, always — with
+  or without an affected provider — carrying the resident's reason when
+  they gave one.
+
+`PUT /api/v1/service-requests/{id}/cancel` did not change its contract: it
+still answers `200` with the same `service_request` + `offers_rejected` body
+of SPEC 95. See `docs/service-request.md` for the endpoint itself.
+
+**Same include, one more orchestrator.** `myapi_service_request_notify_cancelled()`
+lives next to the other four of this file, reusing
+`MYAPI_NOTIFICATION_SOURCE_SERVICE_OFFER` and
+`MYAPI_NOTIFICATION_DEEP_LINK_SERVICE_REQUEST_PROVIDER` unchanged — the same
+deep link the request-created and offer-awarded provider notices already use,
+because there is no per-offer screen for a provider to land on.
+
+**The affected providers are captured BEFORE the sweep, not after.** The
+endpoint reads `myapi_service_offer_live_offers_for_request($request_nid)` —
+every offer of the request still `sent` or `selected` — right before calling
+`myapi_service_offer_reject_live()`. After the sweep runs, an offer that just
+turned `rejected` and one that already was `rejected`/`withdrawn` look
+identical; only the `sent`/`selected` status, read at that exact moment,
+tells them apart.
+
+**No exception by nid, unlike the award's reader.** A cancellation has no
+winner to spare: `myapi_service_offer_live_offers_for_request()` returns
+every live offer, `sent` or `selected` alike, with nobody excluded. That is
+also why it is a function of its own and not a widened
+`myapi_service_offer_sent_offers_for_request()` (SPEC 112), which only ever
+needs `sent` and always excludes the winner by nid — two contracts that stay
+apart on purpose.
+
+**The resident's reason never reaches a provider.** Every channel addressed
+to an affected provider — push, inbox row and email — carries only the
+request's own subject, the same criterion as the loser notice of SPEC 112.
+It reaches `backend` only.
+
+**One text for both `sent` and `selected`.** The provider who was never
+chosen and the provider whose job just fell through read the identical
+title and body — the spec's decision to keep this include's one new
+constructor simple rather than branch on a distinction the provider
+understands equally well either way.
+
+### Who is notified
+
+| Recipient | Resolved by |
+|-----------|-------------|
+| Every provider with a `sent` or `selected` offer on the request | `myapi_service_offer_live_offers_for_request()`, read before the sweep. |
+| Every active user holding `backend` | `myapi_notification_role_uids('backend')`. |
+
+A provider with no account attached — `field_provider_users` empty — is
+skipped; the others are still notified. Nobody holding `backend` means no
+admin email; everything else is unchanged. A request with no live offer
+(`open` and never offered, or every offer already terminal) skips the
+provider block entirely; the `backend` email still goes out.
+
+### Push + inbox
+
+One call to `myapi_notification_create()` **per affected provider**:
+
+| Column | Value |
+|--------|-------|
+| `source_type` | `service_offer` |
+| `source_nid` | nid of **that** offer |
+| `type` | `service_request_cancelled` |
+| `deep_link_target` | `service_request_provider` |
+| `deep_link_id` | nid of the request |
+| `condominium_id` | `field_condominium` of the request |
+| `unit_id` | always `NULL` |
+| `provider_id` | nid of **that** provider |
+
+`unit_id` is `NULL` for the same reason as the other two provider-facing
+notices of this file: a provider never learns which home asked.
+
+#### The text
+
+```
+Título:  Solicitud cancelada
+Cuerpo:  Fuga en el calentador
+```
+
+- The body is **one line**: the request's own subject, nothing else — no
+  reason, no distinction between a `sent` and a `selected` offer.
+- Any value that does not resolve prints as `—`, never as an empty line. The
+  text is fixed in Spanish, same criterion as every other push and email of
+  the module.
+
+#### The push payload
+
+```json
+{
+  "target": "service_request_provider",
+  "id": 1420,
+  "unit": null,
+  "condominium": 87,
+  "notification_type": "service_request_cancelled",
+  "audience": "provider",
+  "provider": 553
+}
+```
+
+### Emails
+
+Both are HTML (same CrespCord shell), enqueued already resolved and
+escaped, delivered on the next cron.
+
+| Mail key | Recipient | Subject |
+|----------|-----------|---------|
+| `service_request_cancelled_provider` | One per account of each affected provider | `Solicitud cancelada — {asunto}` |
+| `service_request_cancelled_admin` | One per active user holding `backend` | `Solicitud cancelada #{nid} — {condominio}` |
+
+#### To each affected provider (`service_request_cancelled_provider`)
+
+```
+Solicitud cancelada
+
+El residente canceló esta solicitud de servicio.
+
+  Asunto   Fuga en el calentador
+
+Revisa la solicitud en la app.
+```
+
+**No button**, same criterion as every other provider-facing email of this
+module: a provider has no back office to land on. **No reason**, same
+criterion as the loser notice of SPEC 112.
+
+#### To the back office (`service_request_cancelled_admin`)
+
+```
+Solicitud cancelada
+
+Se canceló una solicitud de servicio.
+
+  Asunto                  Fuga en el calentador
+  Motivo                  Ya no lo necesito
+  Proveedores afectados   2
+  Condominio              Los Robles
+  Vivienda                Casa 12
+
+  [ Ver solicitud ]   →  node/1420 (absolute)
+
+Solicitud #1420
+```
+
+- `Motivo` shows the resident's own text, or `—` when they cancelled with
+  none — the one field this event's provider email never carries.
+- `Proveedores afectados` is `count($providers)`, including `0`.
+- The button opens the **node view**, same reason as `service_request_admin`
+  (SPEC 109) and `service_request_awarded_admin` (SPEC 112): the operator
+  reads the cancellation before touching it.
+
+### Degraded values
+
+| Case | Behavior |
+|------|----------|
+| An affected provider deleted or unpublished between the cancellation and cron | The line prints `—`; the notice still goes out. |
+| Deleted condominium or unit | The line prints `—`. |
+| The request's category term deleted (SPEC 95's degraded `200`) | The trigger still fires: its `$context` is built from `$node`, not from the detail row that branch is missing. |
+
+### What does NOT notify anybody (request cancelled)
+
+| Case | Why |
+|------|-----|
+| The resident who cancelled | They already got the `200` with the full detail (SPEC 95). |
+| A provider revealing the resident's reason | By decision — the reason reaches `backend` only. |
+| A provider whose offer was already `rejected` or `withdrawn` before this call | Read before the sweep by `field_offer_status IN ('sent', 'selected')`; already-terminal offers are not in the set. |
+| A second cancel attempt on the same request | Rejected `409 service_request_not_cancellable` by SPEC 95 before this trigger is ever reached. |
+| A cancellation made from the back office or drush | The trigger lives in the endpoint. |
+| Push or inbox for `backend` | Email only, same criterion as the other two admin emails of this file. |
+
+### Robustness (request cancelled)
+
+Same discipline as the other four triggers: **best-effort**, run right
+after the offer sweep and before the `200` is assembled — including the
+degraded `200` SPEC 95 already documents — wrapped end to end. A failure — a
+broken queue, a deleted provider account, an invalid address — lands in
+`watchdog` and never undoes the cancellation, the sweep, or the `200` of
+`PUT /api/v1/service-requests/{id}/cancel`.

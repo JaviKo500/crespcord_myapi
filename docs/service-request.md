@@ -1697,12 +1697,17 @@ is the truth, and it is what stops a duplicate entry from landing on the
 timeline.
 
 Out of scope of this endpoint: **awarding** an offer, **creating** offers,
-**reopening** a cancelled request, notifying the providers whose offers were
-rejected, and cancellation by the provider. Each of these, if it arrives, is its
-own spec. **Closing** is out of scope here too, but it is no longer missing: it
-is the sibling verb, with its own route
+**reopening** a cancelled request, and cancellation by the provider. Each of
+these, if it arrives, is its own spec. **Closing** is out of scope here too,
+but it is no longer missing: it is the sibling verb, with its own route
 ([`PUT /api/v1/service-requests/{id}/close`](#put-apiv1service-requestsidclose))
 and a different meaning — cancelling walks away from a job, closing finishes it.
+
+**This call also notifies.** Every provider whose offer was still `sent` or
+`selected` at the instant of cancellation, plus the `backend` role, are told —
+push, inbox and email for the providers, email only for `backend` (SPEC 113).
+Best-effort, after the three writes below and never blocking the `200`. Full
+contract in `docs/service-request-notifications.md`.
 
 **Authentication:** required (Bearer access token)
 
@@ -2265,9 +2270,11 @@ Written down so it is not looked for in this document:
   checks it on **its own route** and nowhere else: the back office still writes
   any status onto any request without asking the graph, and so will any future
   endpoint until the spec that closes that door arrives.
-- **Notifications on cancellation.** Neither the providers whose offers were
-  rejected nor the assigned provider are told anything: the marketplace has no
-  notifier at all yet.
+- **Notifications on cancellation** — no longer a gap. Every provider whose
+  offer was `sent` or `selected` (the assigned one included) is told, plus
+  the `backend` role, since SPEC 113 —
+  [see the note on `PUT .../cancel`](#put-apiv1service-requestsidcancel) and
+  `docs/service-request-notifications.md`.
 - **`?include=`, `ETag`, conditional caching.** The detail always answers whole.
 - **Rate limiting or deduplication on creation.** A double tap or a retried
   request creates two requests; no endpoint of this module is idempotent except
