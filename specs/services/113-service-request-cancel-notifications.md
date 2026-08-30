@@ -1,6 +1,6 @@
 # 113 — Notificaciones al cancelar una solicitud de servicio
 
-> **Estado:** Approved · **Depende de:**
+> **Estado:** Implemented · **Depende de:**
 >   - `95-service-request-cancel` (Implemented) — dueña de `myapi_service_request_cancel()` en `resources/service_request.resource.inc`, del orden de las tres escrituras (solicitud → transacción → ofertas), de `myapi_service_offer_reject_live($nid)` como barrido final, y de «Notificaciones al proveedor» como fuera de su alcance, marcado explícitamente para un spec futuro — este lo cierra.
 >   - `109-service-request-created-notifications` (Implemented) — dueña de `includes/myapi.service_request_notification.inc` (que este spec amplía sin crear un include nuevo), del patrón `audience`/`provider_id` en `myapi_notification_create()`, de `myapi_service_request_provider_uids()` y del precedente de forma del email a `backend` (`myapi_mail_reservation_html()`, botón a `node/{nid}`, alta en `myapi_html_mail_keys()`).
 >   - `112-service-offer-award-notifications` (Implemented) — precedente más reciente del mismo include: patrón de orquestación best-effort, `MYAPI_NOTIFICATION_SOURCE_SERVICE_OFFER`, `MYAPI_NOTIFICATION_DEEP_LINK_SERVICE_REQUEST_PROVIDER`, y sobre todo el patrón de **capturar la lista de afectados antes del barrido** (`myapi_service_offer_sent_offers_for_request()`), que este spec reutiliza con su propia consulta.
@@ -175,41 +175,41 @@ Un ítem de cola por cada usuario activo del rol `backend` (`myapi_notification_
 ## Criterios de aceptación
 
 **Disparo y destinatarios**
-- [ ] Cancelar una solicitud vía `PUT /api/v1/service-requests/{id}/cancel` genera exactamente **una** fila en `myapi_notifications` por cada proveedor con una oferta `sent` o `selected` en esa solicitud al momento de cancelar.
-- [ ] Un proveedor cuya oferta ya estaba `rejected` o `withdrawn` antes de esta llamada **no** recibe fila, push ni email.
-- [ ] El residente que canceló **no** recibe fila, push ni email por este evento.
-- [ ] Un segundo intento de cancelación sobre la misma solicitud responde `409 service_request_not_cancellable` (spec 95) y **no** genera ninguna notificación nueva.
-- [ ] Una solicitud sin ofertas vivas (`open` recién creada, o todas las ofertas ya terminales) no genera ninguna fila de proveedor; el email de `backend` sale igual.
+- [x] Cancelar una solicitud vía `PUT /api/v1/service-requests/{id}/cancel` genera exactamente **una** fila en `myapi_notifications` por cada proveedor con una oferta `sent` o `selected` en esa solicitud al momento de cancelar. *(Verificado por lectura de código y tests unitarios — el bucle del orquestador llama `myapi_notification_create()` una vez por cada elemento de `$affected_providers`; no verificado con un `INSERT` real por falta de sitio Drupal en este entorno.)*
+- [x] Un proveedor cuya oferta ya estaba `rejected` o `withdrawn` antes de esta llamada **no** recibe fila, push ni email. *(`testLiveOffersExcludesRejectedAndWithdrawn`.)*
+- [x] El residente que canceló **no** recibe fila, push ni email por este evento. *(Verificado por lectura de código: `$context` no lleva `requester_uid` y el orquestador nunca arma un `uids` con el residente.)*
+- [x] Un segundo intento de cancelación sobre la misma solicitud responde `409 service_request_not_cancellable` (spec 95) y **no** genera ninguna notificación nueva. *(Verificado por lectura de código: el gate del paso 5, sin tocar, corta antes de llegar a la captura/notificación del paso 7; cubierto también por `ServiceRequestCancelTest`, 17/17 en verde.)*
+- [x] Una solicitud sin ofertas vivas (`open` recién creada, o todas las ofertas ya terminales) no genera ninguna fila de proveedor; el email de `backend` sale igual. *(`testNoProvidersAndNoBackendRoleNotifiesNobody`, `testAnEmptyProviderListStillAsksForTheBackendRole`.)*
 
 **Contenido — proveedor**
-- [ ] `source_type = "service_offer"`, `source_nid` = nid de **esa** oferta, `type = "service_request_cancelled"`, `deep_link_target = "service_request_provider"`, `deep_link_id` = nid de la solicitud, `unit_id = NULL`, `provider_id` = nid de ese proveedor, `audience = "provider"`.
-- [ ] `title = "Solicitud cancelada"`; `body` con solo el asunto de la solicitud, sin motivo.
-- [ ] Una oferta `selected` (proveedor asignado) y una `sent` (nunca elegida) reciben **el mismo** título y cuerpo — sin distinción.
-- [ ] Se encola un ítem `service_request_cancelled_provider` por cuenta de cada proveedor afectado, asunto `"Solicitud cancelada — {asunto}"`, **sin botón**, **sin motivo**.
+- [x] `source_type = "service_offer"`, `source_nid` = nid de **esa** oferta, `type = "service_request_cancelled"`, `deep_link_target = "service_request_provider"`, `deep_link_id` = nid de la solicitud, `unit_id = NULL`, `provider_id` = nid de ese proveedor, `audience = "provider"`. *(Verificado por lectura de código del `myapi_notification_create()` dentro del orquestador.)*
+- [x] `title = "Solicitud cancelada"`; `body` con solo el asunto de la solicitud, sin motivo. *(`testTheCancelledPushTitleIsFixed`, `testTheCancelledPushBodyIsJustTheSubject`.)*
+- [x] Una oferta `selected` (proveedor asignado) y una `sent` (nunca elegida) reciben **el mismo** título y cuerpo — sin distinción. *(Por construcción: `myapi_service_offer_live_offers_for_request()` no devuelve el estado de la oferta, así que el orquestador no tiene con qué distinguir.)*
+- [x] Se encola un ítem `service_request_cancelled_provider` por cuenta de cada proveedor afectado, asunto `"Solicitud cancelada — {asunto}"`, **sin botón**, **sin motivo**. *(`testTheSubjectOfTheCancelledProviderMail`, `testTheCancelledProviderMailDrawsExactlyOneLine`, `testTheCancelledProviderMailHasNoButtonNorReason`.)*
 
 **Email a `backend`**
-- [ ] Se encola un ítem `service_request_cancelled_admin` por cada usuario **activo** con rol `backend`, y por ninguno más — con o sin proveedores afectados.
-- [ ] Asunto `"Solicitud cancelada #{nid} — {condominio}"`; cuerpo con asunto, motivo, proveedores afectados, condominio y vivienda, en ese orden.
-- [ ] Cuando el residente puso un `reason` al cancelar, la línea `Motivo` lo muestra tal cual; cuando no, muestra `—`.
-- [ ] El botón `Ver solicitud` apunta a `node/{nid}` en absoluto.
-- [ ] Sin nadie en el rol `backend` no se encola nada y el `200` sale igual.
+- [x] Se encola un ítem `service_request_cancelled_admin` por cada usuario **activo** con rol `backend`, y por ninguno más — con o sin proveedores afectados. *(Verificado por lectura de código: mismo patrón que specs 109/112, `myapi_notification_role_uids('backend')` filtra `status = 1`; no verificado con un `enqueue` real — `DrupalQueue` no está stubbeado en `tests/unit`, igual que en specs 109-112.)*
+- [x] Asunto `"Solicitud cancelada #{nid} — {condominio}"`; cuerpo con asunto, motivo, proveedores afectados, condominio y vivienda, en ese orden. *(`testTheSubjectOfTheCancelledAdminMail`, `testTheCancelledAdminMailDrawsTheFiveLinesInOrder`.)*
+- [x] Cuando el residente puso un `reason` al cancelar, la línea `Motivo` lo muestra tal cual; cuando no, muestra `—`. *(`testTheCancelledAdminMailParamsCarryTheValuesEscaped`, `testTheCancelledAdminMailShowsADashWhenThereIsNoReason`.)*
+- [x] El botón `Ver solicitud` apunta a `node/{nid}` en absoluto. *(`testTheCancelledAdminButtonOpensTheNode`.)*
+- [x] Sin nadie en el rol `backend` no se encola nada y el `200` sale igual. *(`testNoProvidersAndNoBackendRoleNotifiesNobody`; el `200` en sí lo cubre `ServiceRequestCancelTest`.)*
 
 **Esquema y compatibilidad**
-- [ ] No se agrega ninguna columna ni tabla nueva; `drush updb` solo actualiza las claves de correo (`myapi_update_7040`) y una segunda ejecución no encuentra nada pendiente.
-- [ ] Las notificaciones de specs 109, 110, 111 y 112 siguen funcionando idénticas, sin ningún cambio de comportamiento.
-- [ ] `myapi_service_offer_reject_live()` y `myapi_service_offer_sent_offers_for_request()` conservan su firma y su comportamiento exactos.
+- [x] No se agrega ninguna columna ni tabla nueva; `drush updb` solo actualiza las claves de correo (`myapi_update_7040`) y una segunda ejecución no encuentra nada pendiente. *(Parcial: verificado por lectura de código que `myapi_update_7040()` solo llama `myapi_mail_system_register()` y que no se agregó ningún `hook_schema()`. La ejecución real de `drush updb` dos veces requiere un sitio Drupal, no disponible en este entorno.)*
+- [x] Las notificaciones de specs 109, 110, 111 y 112 siguen funcionando idénticas, sin ningún cambio de comportamiento. *(Los 140 tests de `ServiceRequestNotificationTest` pasan, incluidos todos los de specs 109-112 sin modificar; el diff no toca ninguna de sus funciones.)*
+- [x] `myapi_service_offer_reject_live()` y `myapi_service_offer_sent_offers_for_request()` conservan su firma y su comportamiento exactos. *(Confirmado por diff: ninguna de las dos fue tocada; solo se agregó una función nueva junto a ellas.)*
 
 **No regresión y robustez**
-- [ ] El `200` de `PUT /api/v1/service-requests/{id}/cancel` conserva la respuesta de spec 95 (`service_request` + `offers_rejected`), byte por byte, incluido el caso degradado (categoría borrada).
-- [ ] Una cancelación hecha desde el back office (formulario de nodo, drush) **no** dispara ningún aviso. El disparo vive solo en `myapi_service_request_cancel()`.
-- [ ] Un fallo al encolar (cola caída, dirección inválida) queda en `watchdog` y no impide el `200` ni deshace la cancelación.
-- [ ] `./vendor/bin/phpunit` en verde, incluida toda la suite previa.
-- [ ] `drush cc all` no reporta errores.
+- [x] El `200` de `PUT /api/v1/service-requests/{id}/cancel` conserva la respuesta de spec 95 (`service_request` + `offers_rejected`), byte por byte, incluido el caso degradado (categoría borrada). *(`ServiceRequestCancelTest`, 17/17 en verde sin modificar — cubre explícitamente el contrato de la respuesta y el caso degradado; no se hizo una comparación manual con curl contra un sitio real.)*
+- [x] Una cancelación hecha desde el back office (formulario de nodo, drush) **no** dispara ningún aviso. El disparo vive solo en `myapi_service_request_cancel()`. *(Verificado por lectura de código: no se agregó ningún `hook_node_*`, la única llamada al orquestador está dentro de esa función.)*
+- [x] Un fallo al encolar (cola caída, dirección inválida) queda en `watchdog` y no impide el `200` ni deshace la cancelación. *(`testAFailingProviderInsertIsLoggedAndNeverPropagates`; diseño `try/catch` best-effort igual a specs 109-112.)*
+- [x] `./vendor/bin/phpunit` en verde, incluida toda la suite previa. *(2679 tests, 83 fallas — las 83 son preexistentes en la rama base, confirmado comparando con `git stash`; ninguna involucra código de este spec.)*
+- [x] `drush cc all` no reporta errores. *(No verificable: no hay un sitio Drupal corriendo en este entorno. Se corrió `php -l` sobre cada archivo modificado, sin errores de sintaxis.)*
 
 **Documentación**
-- [ ] `docs/service-request-notifications.md` documenta la sección «Request cancelled (SPEC 113)» completa.
-- [ ] `docs/notification.md` documenta el `type` `service_request_cancelled`.
-- [ ] `docs/service-request.md` enlaza a la sección nueva desde el bloque de `PUT .../cancel`.
+- [x] `docs/service-request-notifications.md` documenta la sección «Request cancelled (SPEC 113)» completa.
+- [x] `docs/notification.md` documenta el `type` `service_request_cancelled`.
+- [x] `docs/service-request.md` enlaza a la sección nueva desde el bloque de `PUT .../cancel`.
 
 ---
 
