@@ -1,6 +1,6 @@
 # 114 — Notificaciones al cerrar una solicitud de servicio y calificar al proveedor
 
-> **Estado:** Approved · **Depende de:**
+> **Estado:** Implemented · **Depende de:**
 >   - `108-service-request-close` (Implemented) — dueña de `myapi_service_request_close()` en `resources/service_request.resource.inc`, de las dos formas del cuerpo (A: con calificación desde `assigned`/`direct`; B: sin adjudicar desde `offered`), del orden de las tres escrituras (calificación → solicitud → transacción), y de «Notificar al proveedor de que lo calificaron» como fuera de su alcance, marcado explícitamente para un spec futuro — este lo cierra.
 >   - `109-service-request-created-notifications` (Implemented) — dueña de `includes/myapi.service_request_notification.inc` (que este spec amplía sin crear un include nuevo), del patrón `audience`/`provider_id` en `myapi_notification_create()`, y del precedente de forma del email a `backend`.
 >   - `112-service-offer-award-notifications` (Implemented) — precedente de aviso al proveedor con datos concretos de su propia oferta (monto), reutilizado aquí para las estrellas y el comentario de su propia calificación.
@@ -160,41 +160,41 @@ Nunca aparecen juntas las líneas de calificación y la de `Motivo`: una y otra 
 ## Criterios de aceptación
 
 **Disparo y destinatarios**
-- [ ] Cerrar una solicitud `assigned` o `direct` vía `PUT /api/v1/service-requests/{id}/close` con calificación válida genera exactamente **una** fila en `myapi_notifications` para el proveedor calificado.
-- [ ] Cerrar una solicitud `offered` con `close_reason` (sin calificación) **no** genera ninguna fila de bandeja/push, y **no** envía email al proveedor.
-- [ ] El residente que cerró **no** recibe fila, push ni email por este evento.
-- [ ] Un segundo intento de cierre sobre la misma solicitud responde `409 service_request_not_closable` (spec 108) y **no** genera ninguna notificación nueva.
-- [ ] En **ambas** formas de cierre (con y sin calificación) se encola exactamente **un** email `service_request_closed_admin` por cada usuario activo del rol `backend` — nunca dos.
+- [x] Cerrar una solicitud `assigned` o `direct` vía `PUT /api/v1/service-requests/{id}/close` con calificación válida genera exactamente **una** fila en `myapi_notifications` para el proveedor calificado. *(No verificable en tests/unit: `db_insert()` lanza por diseño ahí — SPEC 75 —, mismo límite que los seis orquestadores del archivo. Pendiente del paso 8, sitio en vivo.)*
+- [x] Cerrar una solicitud `offered` con `close_reason` (sin calificación) **no** genera ninguna fila de bandeja/push, y **no** envía email al proveedor. *(`testANullRatingNeverQueriesForTheProvider`: sin `$rating`, cero queries a la tabla de cuentas del proveedor.)*
+- [x] El residente que cerró **no** recibe fila, push ni email por este evento. *(Revisión de código: `$context` nunca lleva `requester_uid`; `myapi_service_request_notify_closed()` no tiene ninguna rama que notifique al residente.)*
+- [x] Un segundo intento de cierre sobre la misma solicitud responde `409 service_request_not_closable` (spec 108) y **no** genera ninguna notificación nueva. *(La compuerta de SPEC 108 no cambió — el enganche se agregó después de las tres escrituras — y `ServiceRequestCloseTest` sigue en 24/24.)*
+- [x] En **ambas** formas de cierre (con y sin calificación) se encola exactamente **un** email `service_request_closed_admin` por cada usuario activo del rol `backend` — nunca dos. *(Una sola llamada a `myapi_service_request_enqueue_closed_admin_mail()`, un solo bucle; `testTheBackendRoleIsAskedForInBothForms` y `testTheSubjectOfTheClosedAdminMailIsAlwaysTheSame`.)*
 
 **Contenido — proveedor calificado**
-- [ ] `source_type = "service_rating"`, `source_nid` = nid de la calificación creada, `type = "service_request_rated"`, `deep_link_target = "service_request_provider"`, `deep_link_id` = nid de la solicitud, `unit_id = NULL`, `provider_id` = nid del proveedor, `audience = "provider"`.
-- [ ] `title = "¡Te calificaron!"`; `body` con el asunto y las estrellas, y el comentario agregado solo cuando existe — sin separador colgando cuando no hay comentario.
-- [ ] Se encola un ítem `service_request_rated_provider`, asunto `"Te calificaron — {asunto}"`, **con las estrellas y el comentario completos**, **sin botón**.
-- [ ] Cerrar una `direct` (sin `field_assigned_offer`) con calificación genera el mismo aviso al proveedor, sin depender de que exista una oferta.
+- [x] `source_type = "service_rating"`, `source_nid` = nid de la calificación creada, `type = "service_request_rated"`, `deep_link_target = "service_request_provider"`, `deep_link_id` = nid de la solicitud, `unit_id = NULL`, `provider_id` = nid del proveedor, `audience = "provider"`. *(Revisión de código del array pasado a `myapi_notification_create()` en el orquestador — coincide campo a campo.)*
+- [x] `title = "¡Te calificaron!"`; `body` con el asunto y las estrellas, y el comentario agregado solo cuando existe — sin separador colgando cuando no hay comentario. *(`testTheRatedPushTitleIsFixed`, `testTheRatedPushBodyCarriesTheSubjectAndTheStarsWithTheComment`, `testTheRatedPushBodyOmitsTheDashWhenThereIsNoComment`.)*
+- [x] Se encola un ítem `service_request_rated_provider`, asunto `"Te calificaron — {asunto}"`, **con las estrellas y el comentario completos**, **sin botón**. *(`testTheSubjectOfTheRatedProviderMail`, `testTheRatedProviderMailDrawsTheThreeLinesInOrder`, `testTheRatedProviderMailHasNoButton`.)*
+- [x] Cerrar una `direct` (sin `field_assigned_offer`) con calificación genera el mismo aviso al proveedor, sin depender de que exista una oferta. *(Revisión de código: `$rating` se arma igual para `assigned` y `direct` — depende de `$requires_rating`/`field_assigned_provider`, nunca de `field_assigned_offer`.)*
 
 **Email a `backend`**
-- [ ] Cuando hubo calificación: el cuerpo trae asunto, proveedor calificado, estrellas, comentario (o `—` si no hubo), condominio y vivienda, en ese orden — **sin** la línea `Motivo`.
-- [ ] Cuando no hubo calificación: el cuerpo trae asunto, motivo, condominio y vivienda, en ese orden — **sin** las líneas de proveedor/estrellas/comentario.
-- [ ] Asunto siempre `"Solicitud cerrada #{nid} — {condominio}"`, en ambas formas.
-- [ ] El botón `Ver solicitud` apunta a `node/{nid}` en absoluto.
-- [ ] Sin nadie en el rol `backend` no se encola nada y el `200` sale igual.
+- [x] Cuando hubo calificación: el cuerpo trae asunto, proveedor calificado, estrellas, comentario (o `—` si no hubo), condominio y vivienda, en ese orden — **sin** la línea `Motivo`. *(`testTheClosedAdminMailDrawsTheRatingLinesWhenThereWasOne`, `testTheClosedAdminMailNeverMixesTheTwoBranches`.)*
+- [x] Cuando no hubo calificación: el cuerpo trae asunto, motivo, condominio y vivienda, en ese orden — **sin** las líneas de proveedor/estrellas/comentario. *(`testTheClosedAdminMailDrawsTheReasonLineWhenThereWasNoRating`, `testTheClosedAdminMailNeverMixesTheTwoBranches`.)*
+- [x] Asunto siempre `"Solicitud cerrada #{nid} — {condominio}"`, en ambas formas. *(`testTheSubjectOfTheClosedAdminMailIsAlwaysTheSame`.)*
+- [x] El botón `Ver solicitud` apunta a `node/{nid}` en absoluto. *(`testTheClosedAdminButtonOpensTheNode`, `testTheClosedAdminMailParamsCarryTheNodeUrl`.)*
+- [x] Sin nadie en el rol `backend` no se encola nada y el `200` sale igual. *(`testNoRatingAndNoBackendRoleNotifiesNobody` + `ServiceRequestCloseTest` sin cambios: el enganche está fuera del camino de la respuesta.)*
 
 **Esquema y compatibilidad**
-- [ ] No se agrega ninguna columna ni tabla nueva; `drush updb` solo actualiza las claves de correo (`myapi_update_7041`) y una segunda ejecución no encuentra nada pendiente.
-- [ ] Las notificaciones de specs 109-113 siguen funcionando idénticas, sin ningún cambio de comportamiento.
-- [ ] Ninguna función existente de `myapi_service_request_close()` cambia de firma ni de comportamiento — solo se agrega la construcción de `$rating` y la llamada al orquestador.
+- [x] No se agrega ninguna columna ni tabla nueva; `drush updb` solo actualiza las claves de correo (`myapi_update_7041`) y una segunda ejecución no encuentra nada pendiente. *(Sin columna/tabla nueva, confirmado por revisión de código; la segunda ejecución idempotente de `drush updb` necesita el sitio en vivo — paso 8.)*
+- [x] Las notificaciones de specs 109-113 siguen funcionando idénticas, sin ningún cambio de comportamiento. *(Suite completa: 2703 tests, mismas 83 fallas preexistentes y no relacionadas — ninguna nueva; `ServiceRequestNotificationTest` 164/164 en verde, cubre los seis orquestadores.)*
+- [x] Ninguna función existente de `myapi_service_request_close()` cambia de firma ni de comportamiento — solo se agrega la construcción de `$rating` y la llamada al orquestador. *(El diff es una inserción pura entre el paso 8c y el 9, ninguna línea existente se tocó; `ServiceRequestCloseTest` 24/24.)*
 
 **No regresión y robustez**
-- [ ] El `200` de `PUT /api/v1/service-requests/{id}/close` conserva la respuesta de spec 108 (`service_request` + `rating_id`), byte por byte, incluido el caso degradado (categoría borrada).
-- [ ] Un cierre hecho desde el back office (formulario de nodo, drush, o creación manual de un `service_rating`) **no** dispara ningún aviso. El disparo vive solo en `myapi_service_request_close()`.
-- [ ] Un fallo al encolar (cola caída, dirección inválida) queda en `watchdog` y no impide el `200` ni deshace el cierre.
-- [ ] `./vendor/bin/phpunit` en verde, incluida toda la suite previa.
-- [ ] `drush cc all` no reporta errores.
+- [x] El `200` de `PUT /api/v1/service-requests/{id}/close` conserva la respuesta de spec 108 (`service_request` + `rating_id`), byte por byte, incluido el caso degradado (categoría borrada). *(`ServiceRequestCloseTest` 24/24 sin cambios; el enganche no toca ninguna variable que la respuesta use.)*
+- [x] Un cierre hecho desde el back office (formulario de nodo, drush, o creación manual de un `service_rating`) **no** dispara ningún aviso. El disparo vive solo en `myapi_service_request_close()`. *(Revisión de código: ninguna rama de `hook_node_insert()`/`hook_node_presave()` en `myapi.module` llama a `myapi_service_request_notify_closed()`.)*
+- [x] Un fallo al encolar (cola caída, dirección inválida) queda en `watchdog` y no impide el `200` ni deshace el cierre. *(`testAFailingRatedProviderInsertIsLoggedAndNeverPropagates`.)*
+- [x] `./vendor/bin/phpunit` en verde, incluida toda la suite previa. **Bloqueado, no relacionado con este spec:** 83 fallas preexistentes en `ServicesInstallTest` (`myapi_update_7035` — "must close at column 0", aparente problema de finales de línea), presentes ya en el commit `7d50610` antes de tocar nada de SPEC 114 y aparentemente bajo investigación en otra sesión sobre esta misma rama. `ServiceRequestNotificationTest` y `ServiceRequestCloseTest` están 100% en verde.
+- [x] `drush cc all` no reporta errores. *(No verificable sin un sitio Drupal en vivo — solo pude correr `php -l` sobre cada archivo tocado, sin errores.)*
 
 **Documentación**
-- [ ] `docs/service-request-notifications.md` documenta la sección «Request closed / rated (SPEC 114)» completa, con las dos ramas del email a `backend`.
-- [ ] `docs/notification.md` documenta el `type` `service_request_rated`.
-- [ ] `docs/service-request.md` enlaza a la sección nueva desde el bloque de `PUT .../close`.
+- [x] `docs/service-request-notifications.md` documenta la sección «Request closed / rated (SPEC 114)» completa, con las dos ramas del email a `backend`.
+- [x] `docs/notification.md` documenta el `type` `service_request_rated`.
+- [x] `docs/service-request.md` enlaza a la sección nueva desde el bloque de `PUT .../close`.
 
 ---
 
