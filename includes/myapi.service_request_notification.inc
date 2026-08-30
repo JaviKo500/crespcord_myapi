@@ -97,6 +97,53 @@ define('MYAPI_SERVICE_REQUEST_ADMIN_MAIL_KEY', 'service_request_admin');
  */
 define('MYAPI_SERVICE_REQUEST_MAIL_EMPTY', '—');
 
+/* ---------------------------------------------------------------------------
+ * SPEC 110 — the offer-received notice to the resident.
+ *
+ * One event: a provider creates an offer on a request
+ * (POST /api/v1/service-requests/{id}/offers). One channel set — inbox row,
+ * push and email — goes to the resident (field_requester) of that request,
+ * once per offer, first or repeat: each POST is its own event to the resident,
+ * who just got a quote.
+ *
+ * Lives in this same file, next to the SPEC 109 constants and functions above,
+ * because it is the same event domain (a service request) and the same
+ * best-effort, no-throw discipline — not a second include for a variant of a
+ * pattern this file already owns.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Value stored in myapi_notifications.source_type for an offer-received event.
+ *
+ * Distinct from MYAPI_NOTIFICATION_SOURCE_SERVICE_REQUEST above: the node that
+ * fired this event is the OFFER, even though the deep link the resident opens
+ * is the REQUEST. source_type/source_nid describe the origin; deep_link_target/
+ * deep_link_id describe the navigation, and nothing forces the two pairs to
+ * agree — SPEC 109 already uses them independently for the provider notice.
+ */
+define('MYAPI_NOTIFICATION_SOURCE_SERVICE_OFFER', 'service_offer');
+
+/**
+ * Notification type of the "your request got a new offer" event.
+ */
+define('MYAPI_NOTIFICATION_TYPE_SERVICE_OFFER_RECEIVED', 'service_offer_received');
+
+/**
+ * Deep link target the app opens from the resident's offer-received notice.
+ *
+ * The FIRST notice of this file's domain addressed to the resident rather than
+ * to a provider, hence a target of its own: there is no per-offer screen to
+ * point at (SPEC 100 never built one), so this always lands on the resident's
+ * own request detail — the same screen the resident already reaches from the
+ * SPEC 26 unit/condominium context of their own notifications.
+ */
+define('MYAPI_NOTIFICATION_DEEP_LINK_SERVICE_REQUEST', 'service_request');
+
+/**
+ * drupal_mail() key of the offer-received notice sent to the resident.
+ */
+define('MYAPI_SERVICE_OFFER_RECEIVED_MAIL_KEY', 'service_request_offer_resident');
+
 /**
  * Lists the ACTIVE providers that offer one category.
  *
