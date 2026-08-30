@@ -144,6 +144,26 @@ define('MYAPI_NOTIFICATION_DEEP_LINK_SERVICE_REQUEST', 'service_request');
  */
 define('MYAPI_SERVICE_OFFER_RECEIVED_MAIL_KEY', 'service_request_offer_resident');
 
+/* ---------------------------------------------------------------------------
+ * SPEC 111 — the offer-withdrawn notice to the resident.
+ *
+ * One event: a provider withdraws their offer
+ * (PUT /api/v1/service-offers/{id}/withdraw). Same channel set — inbox row,
+ * push and email — to the resident (field_requester), reusing
+ * MYAPI_NOTIFICATION_SOURCE_SERVICE_OFFER and
+ * MYAPI_NOTIFICATION_DEEP_LINK_SERVICE_REQUEST from SPEC 110 unchanged.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Notification type of the "your offer was withdrawn" event.
+ */
+define('MYAPI_NOTIFICATION_TYPE_SERVICE_OFFER_WITHDRAWN', 'service_offer_withdrawn');
+
+/**
+ * drupal_mail() key of the offer-withdrawn notice sent to the resident.
+ */
+define('MYAPI_SERVICE_OFFER_WITHDRAWN_MAIL_KEY', 'service_request_offer_withdrawn_resident');
+
 /**
  * Lists the ACTIVE providers that offer one category.
  *
