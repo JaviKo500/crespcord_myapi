@@ -582,6 +582,75 @@ function myapi_service_offer_resident_mail_params($nid, array $values) {
 }
 
 /* ---------------------------------------------------------------------------
+ * SPEC 111 — pure text builders for the offer-withdrawn notice.
+ *
+ * Same two rules as the blocks above: an unresolvable value degrades to
+ * MYAPI_SERVICE_REQUEST_MAIL_EMPTY rather than an empty line or a thrown
+ * error, and the push/inbox text is plain while the mail params are escaped.
+ * myapi_service_offer_amount_text() does NOT apply here: a withdrawn offer's
+ * amount is no longer actionable information for the resident (see the
+ * spec's decisions).
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Title of the push and of the inbox row sent to the resident (SPEC 111).
+ *
+ * @return string  Fixed Spanish text.
+ */
+function myapi_service_offer_withdrawn_push_title() {
+  return 'Oferta retirada';
+}
+
+/**
+ * Body of the push and of the inbox row sent to the resident (SPEC 111).
+ *
+ * Two lines: the request's own subject and who withdrew — no amount, on
+ * purpose (see the spec's decisions).
+ *
+ * @param string|null $subject        node.title of the request.
+ * @param string|null $provider_name  node.title of the provider that
+ *   withdrew.
+ *
+ * @return string  Two lines separated by "\n".
+ */
+function myapi_service_offer_withdrawn_push_body($subject, $provider_name) {
+  return implode("\n", [
+    myapi_service_request_notification_label($subject),
+    'Proveedor: ' . myapi_service_request_notification_label($provider_name),
+  ]);
+}
+
+/**
+ * Params of the offer-withdrawn email sent to the resident (SPEC 111).
+ *
+ * Same shape as myapi_service_offer_resident_mail_params() (SPEC 110), minus
+ * 'amount_text': myapi_mail_service_request_offer_withdrawn_resident_html()
+ * points its button at the URL built here.
+ *
+ * @param int   $nid     nid of the request (not the offer).
+ * @param array $values  Already-resolved 'name' (resident's, NULL when
+ *   unresolved), 'subject' and 'provider_name'.
+ *
+ * @return array  Escaped params for
+ *   myapi_mail_format_service_request_offer_withdrawn_resident().
+ */
+function myapi_service_offer_withdrawn_resident_mail_params($nid, array $values) {
+  $values += [
+    'name'          => NULL,
+    'subject'       => NULL,
+    'provider_name' => NULL,
+  ];
+
+  return [
+    'nid'           => (int) $nid,
+    'name'          => $values['name'] !== NULL ? check_plain($values['name']) : NULL,
+    'subject'       => myapi_service_request_mail_label($values['subject']),
+    'provider_name' => myapi_service_request_mail_label($values['provider_name']),
+    'deep_link_url' => myapi_service_request_app_deep_link_url($nid),
+  ];
+}
+
+/* ---------------------------------------------------------------------------
  * Resolution of the values the three channels share.
  *
  * Each of these runs ONCE per request, no matter how many providers are being
