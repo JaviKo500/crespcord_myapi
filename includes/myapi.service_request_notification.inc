@@ -449,6 +449,88 @@ function myapi_service_request_admin_mail_params($nid, array $values) {
 }
 
 /* ---------------------------------------------------------------------------
+ * SPEC 110 — pure text builders for the offer-received notice.
+ *
+ * Same two rules as the block above: an unresolvable value degrades to
+ * MYAPI_SERVICE_REQUEST_MAIL_EMPTY rather than an empty line or a thrown
+ * error, and the push/inbox text is plain while the mail params are escaped.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Human text of an offer's amount, or the "quote on site" text.
+ *
+ * Reuses myapi_services_offer_amount_types() (SPEC 100) rather than
+ * retyping its labels — rule 3 of CLAUDE.md. An 'amount_type' outside that
+ * catalogue is corrupt data, not a reason to fail: it falls back to the same
+ * text as 'on_site_quote'.
+ *
+ * @param float|string|null $amount       The offer's amount, or NULL.
+ * @param string|null       $amount_type  One of myapi_services_offer_amount_types()'s
+ *   keys, or NULL/anything else.
+ *
+ * @return string  'A presupuestar en sitio', or '{amount} ({label})'.
+ */
+function myapi_service_offer_amount_text($amount, $amount_type) {
+  $labels = myapi_services_offer_amount_types();
+
+  if ($amount_type === 'on_site_quote' || !isset($labels[$amount_type])) {
+    return $labels['on_site_quote'];
+  }
+
+  return number_format((float) $amount, 2) . ' (' . $labels[$amount_type] . ')';
+}
+
+/**
+ * Title of the push and of the inbox row sent to the resident (SPEC 110).
+ *
+ * @return string  Fixed Spanish text.
+ */
+function myapi_service_offer_push_title() {
+  return 'Nueva oferta recibida';
+}
+
+/**
+ * Body of the push and of the inbox row sent to the resident (SPEC 110).
+ *
+ * Three lines: the request's own subject, who quoted it and what they quoted
+ * — the minimum for the resident to decide whether the detail is worth
+ * opening. Deliberately without the provider's free-text message, which can
+ * run long and would crowd the push banner.
+ *
+ * @param string|null $subject        node.title of the request.
+ * @param string|null $provider_name  node.title of the provider that offered.
+ * @param string      $amount_text    Already built by
+ *   myapi_service_offer_amount_text().
+ *
+ * @return string  Three lines separated by "\n".
+ */
+function myapi_service_offer_push_body($subject, $provider_name, $amount_text) {
+  return implode("\n", [
+    myapi_service_request_notification_label($subject),
+    'Proveedor: ' . myapi_service_request_notification_label($provider_name),
+    'Monto: ' . myapi_service_request_notification_label($amount_text),
+  ]);
+}
+
+/**
+ * URL of the app deep link a service request's detail opens from (SPEC 110).
+ *
+ * Same pattern as myapi_password_reset_deep_link_base() (SPEC 07,
+ * resources/auth.resource.inc): a custom 'myapp://' scheme already adopted by
+ * the app, kept in a Drupal variable so it can be adjusted without a deploy.
+ * A DIFFERENT variable, on purpose — see the risk note in the spec — so
+ * changing the password-reset link can never change this one by accident.
+ *
+ * @param int $request_nid  nid of the service request.
+ *
+ * @return string  check_plain()'d URL, e.g. 'myapp://service-requests/128'.
+ */
+function myapi_service_request_app_deep_link_url($request_nid) {
+  $base = variable_get('myapi_service_request_deep_link_base', 'myapp://service-requests');
+  return check_plain($base . '/' . (int) $request_nid);
+}
+
+/* ---------------------------------------------------------------------------
  * Resolution of the values the three channels share.
  *
  * Each of these runs ONCE per request, no matter how many providers are being
