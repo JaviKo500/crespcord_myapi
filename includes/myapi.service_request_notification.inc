@@ -323,6 +323,52 @@ define('MYAPI_SERVICE_REQUEST_CANCELLED_PROVIDER_MAIL_KEY', 'service_request_can
 define('MYAPI_SERVICE_REQUEST_CANCELLED_ADMIN_MAIL_KEY', 'service_request_cancelled_admin');
 
 /* ---------------------------------------------------------------------------
+ * SPEC 114 — the request-closed notice to the rated provider and to
+ * 'backend'.
+ *
+ * One event: the resident closes their request
+ * (PUT /api/v1/service-requests/{id}/close), rating the provider (forms A —
+ * 'assigned'/'direct') or not (form B — 'offered', with a close reason
+ * instead). When there is a rating, three channels — inbox row, push and
+ * email — go to the rated provider, with the full stars and comment they
+ * received, plus a fourth, email-only channel to the 'backend' role, always,
+ * in either form, with the rating section or the reason section but never
+ * both. Reuses MYAPI_NOTIFICATION_DEEP_LINK_SERVICE_REQUEST_PROVIDER,
+ * MYAPI_NOTIFICATION_AUDIENCE_PROVIDER and MYAPI_SERVICE_REQUEST_NOTIFY_ROLE
+ * unchanged.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Value stored in myapi_notifications.source_type for a rating event.
+ *
+ * A constant of its own and not MYAPI_NOTIFICATION_SOURCE_SERVICE_OFFER
+ * (SPEC 110-113's choice): a 'direct' close has no offer to point at
+ * (field_assigned_offer is empty), but a rating node always exists when this
+ * notice fires, in either form. Pointing source_nid at the rating covers
+ * both origins ('assigned' and 'direct') without a special case.
+ */
+define('MYAPI_NOTIFICATION_SOURCE_SERVICE_RATING', 'service_rating');
+
+/**
+ * Notification type of the "you were rated" event sent to the provider.
+ */
+define('MYAPI_NOTIFICATION_TYPE_SERVICE_REQUEST_RATED', 'service_request_rated');
+
+/**
+ * drupal_mail() key of the rating notice sent to the rated provider.
+ */
+define('MYAPI_SERVICE_REQUEST_RATED_PROVIDER_MAIL_KEY', 'service_request_rated_provider');
+
+/**
+ * drupal_mail() key of the close detail sent to the 'backend' role.
+ *
+ * One key for both forms of closing, not two: closing and rating are a
+ * single atomic act (SPEC 108), and one mail with a conditional body reflects
+ * that act without duplicating the subject.
+ */
+define('MYAPI_SERVICE_REQUEST_CLOSED_ADMIN_MAIL_KEY', 'service_request_closed_admin');
+
+/* ---------------------------------------------------------------------------
  * Pure text builders.
  *
  * No database and no node loading: they receive values already resolved by the
