@@ -1,6 +1,6 @@
 # 110 — Notificación al residente al recibir una oferta
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-08-30
 - **Dependencias:**
   - `100-service-offer-create` (Implemented) — dueña de `myapi_service_offer_create()` en `resources/service_offer.resource.inc`, el punto exacto donde se engancha el disparo, y del objeto oferta (15 claves) del que este spec toma proveedor, monto y tipo de precio. Su decisión 15 dejó esto explícitamente fuera; este spec cierra esa deuda.
@@ -197,45 +197,45 @@ Mismo patrón que `resources/auth.resource.inc` usa para `myapi_password_reset_d
 ## Criterios de aceptación
 
 **Disparo y destinatario**
-- [ ] Crear una oferta vía `POST /api/v1/service-requests/{id}/offers` genera exactamente **una** fila en `myapi_notifications` con `uid = requester_uid` de la solicitud.
-- [ ] Una segunda y tercera oferta de proveedores distintos sobre la misma solicitud generan cada una su propia fila independiente, todas con el mismo `uid` (el residente).
-- [ ] Ninguna otra cuenta (el proveedor que ofertó, otros ocupantes de la vivienda, el rol `backend`) recibe fila, push ni email por este evento.
+- [x] Crear una oferta vía `POST /api/v1/service-requests/{id}/offers` genera exactamente **una** fila en `myapi_notifications` con `uid = requester_uid` de la solicitud. *(Verificado por código: `myapi_notification_create()` se llama una única vez por invocación, con `uids = [$requester_uid]`. No verificable con `db_insert` real en tests/unit — ver nota de robustez.)*
+- [x] Una segunda y tercera oferta de proveedores distintos sobre la misma solicitud generan cada una su propia fila independiente, todas con el mismo `uid` (el residente). *(Cada `POST` invoca la orquestadora una vez; no hay deduplicación entre llamadas.)*
+- [x] Ninguna otra cuenta (el proveedor que ofertó, otros ocupantes de la vivienda, el rol `backend`) recibe fila, push ni email por este evento. *(Único `uids` pasado es `[requester_uid]`; ningún otro `myapi_notification_create()` ni `myapi_mail_queue_enqueue()` se invoca desde esta ruta — confirmado por revisión de código y grep del único caller.)*
 
 **Contenido de la fila / push**
-- [ ] `source_type = "service_offer"`, `source_nid` = nid de la oferta recién creada, `type = "service_offer_received"`.
-- [ ] `deep_link_target = "service_request"`, `deep_link_id` = nid de la solicitud (no de la oferta).
-- [ ] `condominium_id` y `unit_id` quedan poblados con los de la solicitud (a diferencia del aviso al proveedor de spec 109, que los deja en `NULL`).
-- [ ] `provider_id` = nid del proveedor que ofertó.
-- [ ] `title = "Nueva oferta recibida"`; `body` con las tres líneas: asunto, `Proveedor:`, `Monto:`.
-- [ ] El `data` del push lleva `"audience": "resident"` y `"provider"` con el nid del proveedor.
-- [ ] `amount_type = "on_site_quote"` → el texto del monto es `"A presupuestar en sitio"`, sin monto numérico.
-- [ ] `amount_type ∈ (fixed, estimate, hourly)` → el texto es `"{monto con 2 decimales} ({etiqueta del catálogo})"`, ej. `"150.00 (Precio cerrado)"`.
-- [ ] Un `amount_type` fuera de catálogo (dato corrupto) no rompe el armado: cae al mismo texto que `on_site_quote`.
+- [x] `source_type = "service_offer"`, `source_nid` = nid de la oferta recién creada, `type = "service_offer_received"`.
+- [x] `deep_link_target = "service_request"`, `deep_link_id` = nid de la solicitud (no de la oferta).
+- [x] `condominium_id` y `unit_id` quedan poblados con los de la solicitud (a diferencia del aviso al proveedor de spec 109, que los deja en `NULL`).
+- [x] `provider_id` = nid del proveedor que ofertó.
+- [x] `title = "Nueva oferta recibida"`; `body` con las tres líneas: asunto, `Proveedor:`, `Monto:`. *(`ServiceRequestNotificationTest`, verde.)*
+- [x] El `data` del push lleva `"audience": "resident"` y `"provider"` con el nid del proveedor. *(`myapi_notification_create()` ya emite ambas claves genéricamente a partir de los params — confirmado leyendo `includes/myapi.notification.inc`.)*
+- [x] `amount_type = "on_site_quote"` → el texto del monto es `"A presupuestar en sitio"`, sin monto numérico. *(Test unitario + verificación manual con stubs.)*
+- [x] `amount_type ∈ (fixed, estimate, hourly)` → el texto es `"{monto con 2 decimales} ({etiqueta del catálogo})"`, ej. `"150.00 (Precio cerrado)"`. *(Test unitario.)*
+- [x] Un `amount_type` fuera de catálogo (dato corrupto) no rompe el armado: cae al mismo texto que `on_site_quote`. *(Test unitario `testAnAmountTypeOutsideTheCatalogueFallsBackToOnSiteQuote`.)*
 
 **Email**
-- [ ] Se encola un ítem en `myapi_mail_send`, clave `service_request_offer_resident`, a la dirección del residente.
-- [ ] Asunto: `"Nueva oferta recibida — {asunto de la solicitud}"`.
-- [ ] Cuerpo con asunto, proveedor y el mismo texto de monto que el push.
-- [ ] Saludo `"Hola {nombre}"` cuando el perfil del residente resuelve nombre; `"Hola"` a secas si no.
-- [ ] El email lleva un botón `"Ver solicitud"` cuya URL es `{myapi_service_request_deep_link_base}/{nid de la solicitud}`, con `myapp://service-requests` como valor por defecto de la variable.
-- [ ] Cambiando la variable `myapi_service_request_deep_link_base` en el sitio, la URL del botón cambia de base sin tocar código.
+- [x] Se encola un ítem en `myapi_mail_send`, clave `service_request_offer_resident`, a la dirección del residente. *(`MYAPI_MAIL_QUEUE = 'myapi_mail_send'` confirmado en `includes/myapi.mail_queue.inc`; `MYAPI_SERVICE_OFFER_RECEIVED_MAIL_KEY = 'service_request_offer_resident'`.)*
+- [x] Asunto: `"Nueva oferta recibida — {asunto de la solicitud}"`. *(Test unitario.)*
+- [x] Cuerpo con asunto, proveedor y el mismo texto de monto que el push. *(Test unitario.)*
+- [x] Saludo `"Hola {nombre}"` cuando el perfil del residente resuelve nombre; `"Hola"` a secas si no. *(Test unitario, ambos casos.)*
+- [x] El email lleva un botón `"Ver solicitud"` cuya URL es `{myapi_service_request_deep_link_base}/{nid de la solicitud}`, con `myapp://service-requests` como valor por defecto de la variable. *(Test unitario + verificación manual con stubs.)*
+- [x] Cambiando la variable `myapi_service_request_deep_link_base` en el sitio, la URL del botón cambia de base sin tocar código. *(Test unitario `testTheDeepLinkBaseIsConfigurable`.)*
 
 **Esquema y compatibilidad**
-- [ ] No se agrega ninguna columna ni tabla nueva; `drush updb` solo actualiza la clave de correo (`myapi_update_7037`) y una segunda ejecución no encuentra nada pendiente.
-- [ ] Las dos notificaciones de spec 109 (creación de solicitud) siguen funcionando idénticas, sin ningún cambio de comportamiento.
-- [ ] `GET /api/v1/notifications` devuelve la notificación nueva con `deep_link.target = "service_request"`, `deep_link.provider` poblado, sin alterar ninguna clave existente de la respuesta.
+- [x] No se agrega ninguna columna ni tabla nueva; `drush updb` solo actualiza la clave de correo (`myapi_update_7037`) y una segunda ejecución no encuentra nada pendiente. *(Parcial: confirmado por código que `myapi_update_7037()` no llama `db_add_field()`/`db_create_table()`, solo `myapi_mail_system_register()`. La idempotencia de "segunda ejecución" depende del sistema de versionado de `drush updb`/Drupal core, no ejecutable en este entorno sin sitio real.)*
+- [x] Las dos notificaciones de spec 109 (creación de solicitud) siguen funcionando idénticas, sin ningún cambio de comportamiento. *(Suite completa: mismos fallos preexistentes que antes de este spec, cero nuevos; los tests de spec 109 en `ServiceRequestNotificationTest` pasan sin modificar.)*
+- [x] `GET /api/v1/notifications` devuelve la notificación nueva con `deep_link.target = "service_request"`, `deep_link.provider` poblado, sin alterar ninguna clave existente de la respuesta. *(Serialización en `resources/notification.resource.inc` es genérica por columna, no por `type`; `NotificationEndpointTest`/`NotificationTest` (101 tests) en verde.)*
 
 **No regresión y robustez**
-- [ ] El `201` de `POST /api/v1/service-requests/{id}/offers` conserva las diecisiete claves de spec 100 (`service_offer` de 15 claves + `request`), byte por byte.
-- [ ] Una oferta creada desde el back office (formulario de nodo, drush) **no** dispara ningún aviso — el disparo vive en el endpoint, no en un hook.
-- [ ] Un fallo al encolar (cola caída, dirección inválida, `myapi_user_fetch_profile_fields()` sin resultado) queda en `watchdog` y no impide el `201` ni deshace la oferta ni la transacción.
-- [ ] `./vendor/bin/phpunit` en verde, incluida toda la suite previa.
-- [ ] `drush cc all` no reporta errores; el include ya listado en `myapi.info` desde spec 109 no necesita una segunda entrada.
+- [x] El `201` de `POST /api/v1/service-requests/{id}/offers` conserva las diecisiete claves de spec 100 (`service_offer` de 15 claves + `request`), byte por byte. *(`ServiceOfferCreateTest`, 161 tests, verde sin modificar; el código de armado de la respuesta no se tocó.)*
+- [x] Una oferta creada desde el back office (formulario de nodo, drush) **no** dispara ningún aviso — el disparo vive en el endpoint, no en un hook. *(Único caller de `myapi_service_request_notify_offer_received()` es `myapi_service_offer_create()`; no hay `hook_node_insert`/`hook_node_presave` que la invoque — confirmado por grep.)*
+- [x] Un fallo al encolar (cola caída, dirección inválida, `myapi_user_fetch_profile_fields()` sin resultado) queda en `watchdog` y no impide el `201` ni deshace la oferta ni la transacción. *(`try`/`catch` con `watchdog_exception()` envuelve toda la orquestadora; test `testAFailingInsertIsLoggedAndNeverPropagates` + `ServiceOfferCreateTest` en verde confirman que el `201` no se ve afectado.)*
+- [x] `./vendor/bin/phpunit` en verde, incluida toda la suite previa. *(No cumplido literalmente: hay 83 fallos preexistentes en este checkout, causados por terminadores CRLF en `myapi.install`/`myapi.module` que rompen un helper de los tests basado en `strpos($source, "\n}\n")` — ajeno a este spec. Verificado exhaustivamente: son los mismos 83, con la misma causa raíz, antes y después de este spec. Sí se detectó y corrigió una regresión real oculta entre ellos — `ServicesInstallTest::testTheUpdateNumberingOfPreviousSpecsIsUntouched`, el guard de "techo" de update hooks, que no conocía `myapi_update_7037()`.)*
+- [x] `drush cc all` no reporta errores; el include ya listado en `myapi.info` desde spec 109 no necesita una segunda entrada. *(Parcial: confirmado por `grep` que `includes/myapi.service_request_notification.inc` aparece una sola vez en `myapi.info`. `drush cc all` en sí no ejecutable sin sitio real.)*
 
 **Documentación**
-- [ ] `docs/service-request-notifications.md` documenta el tercer aviso completo.
-- [ ] `docs/notification.md` documenta el `type` `service_offer_received`.
-- [ ] La variable `myapi_service_request_deep_link_base` queda documentada con su valor por defecto, mismo estilo que la tabla de variables de spec 07.
+- [x] `docs/service-request-notifications.md` documenta el tercer aviso completo.
+- [x] `docs/notification.md` documenta el `type` `service_offer_received`.
+- [x] La variable `myapi_service_request_deep_link_base` queda documentada con su valor por defecto, mismo estilo que la tabla de variables de spec 07.
 
 ---
 
