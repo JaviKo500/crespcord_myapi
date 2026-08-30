@@ -1135,6 +1135,14 @@ function myapi_mail($key, &$message, $params) {
     case 'service_request_offer_resident':
       myapi_mail_format_service_request_offer_resident($message, $params);
       break;
+
+    // SPEC 111. Fires for PUT /api/v1/service-offers/{id}/withdraw only: a
+    // withdrawal made from the back office notifies nobody, same criterion
+    // as the three cases above. Once per withdrawal, to the resident who
+    // requested the service.
+    case 'service_request_offer_withdrawn_resident':
+      myapi_mail_format_service_request_offer_withdrawn_resident($message, $params);
+      break;
   }
 }
 

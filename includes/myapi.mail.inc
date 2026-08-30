@@ -901,6 +901,71 @@ function myapi_mail_service_request_offer_resident_html($params) {
   );
 }
 
+/* ---------------------------------------------------------------------------
+ * Offer-withdrawn email (SPEC 111).
+ *
+ * One key, fired by myapi_service_request_notify_offer_withdrawn() from
+ * PUT /api/v1/service-offers/{id}/withdraw, to the resident who created the
+ * request. Same shape as the offer-received email above, minus the amount
+ * line: a withdrawn offer's amount is no longer actionable (see the spec's
+ * decisions).
+ *
+ * $params arrives ALREADY RESOLVED AND ESCAPED from
+ * myapi_service_offer_withdrawn_resident_mail_params() — nothing here
+ * escapes anything.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Formats the offer-withdrawn email sent to the resident.
+ *
+ * Called from myapi_mail() (in myapi.module) for the
+ * 'service_request_offer_withdrawn_resident' key.
+ *
+ * @param array $message  Mail message array, altered by reference.
+ * @param array $params   'nid', 'name', 'subject', 'provider_name' and
+ *                        'deep_link_url', already escaped.
+ */
+function myapi_mail_format_service_request_offer_withdrawn_resident(&$message, $params) {
+  // A subject is plain text, so the escaped title is decoded back — same
+  // reason myapi_mail_format_service_request_offer_resident() does it.
+  $message['subject'] = 'Oferta retirada — ' . decode_entities($params['subject']);
+  $message['body'][] = myapi_mail_service_request_offer_withdrawn_resident_html($params);
+
+  $message['headers']['Content-Type'] = 'text/html; charset=UTF-8';
+}
+
+/**
+ * Builds the HTML body of that email.
+ *
+ * Two lines — the same two the push carries, no amount — and a button to the
+ * app.
+ *
+ * @param array $params  Already-escaped values (see the formatter).
+ *
+ * @return string  Full HTML document.
+ */
+function myapi_mail_service_request_offer_withdrawn_resident_html($params) {
+  // Same greeting rule as the offer-received email: 'Hola {name}' when it
+  // resolved, 'Hola' alone otherwise.
+  $heading = (isset($params['name']) && $params['name'] !== '')
+    ? 'Hola ' . $params['name']
+    : 'Hola';
+
+  $lines = array(
+    'Asunto'    => $params['subject'],
+    'Proveedor' => $params['provider_name'],
+  );
+
+  return myapi_mail_reservation_html(
+    'Solicitud #' . $params['nid'],
+    $heading,
+    'El proveedor retiró la oferta que había enviado para tu solicitud de servicio.',
+    $lines,
+    'Puedes ver el detalle completo desde el botón de abajo.',
+    array('label' => 'Ver solicitud', 'url' => $params['deep_link_url'])
+  );
+}
+
 /**
  * Shared HTML shell of the reservation emails — and, since SPEC 68, of the five
  * claim ones.
