@@ -2435,9 +2435,36 @@ function myapi_service_request_cancel($nid) {
     myapi_service_request_cancel_comment($reason['value'])
   );
 
+  // The offers about to lose their 'sent'/'selected' status, read BEFORE 7c
+  // sweeps them: this is the only moment they are still distinguishable from
+  // one that was already terminal (SPEC 113). Between the two writes above and
+  // this read, on purpose — the same window SPEC 95 already documents and
+  // accepts for its own three writes.
+  $affected_providers = myapi_service_offer_live_offers_for_request($node->nid);
+
   // 7c. The offers. Last, and the only step that can leave the data half
   // written — see the function's own docblock for why that is accepted.
+  //
+  // $affected_providers was captured just above, BEFORE this sweep: after it,
+  // an offer that was already 'rejected'/'withdrawn' and one that just became
+  // 'rejected' are indistinguishable by status alone (SPEC 113).
   $offers_rejected = myapi_service_offer_reject_live($node->nid);
+
+  // Notify (SPEC 113). After the three writes, so a failure in here can never
+  // undo any of them, and before the 8th step builds the response — including
+  // the degraded branch below, which still fires this trigger even though its
+  // own detail could not be built: the context comes from $node, not from the
+  // $row that branch is missing. Best-effort end to end — the function
+  // swallows its own failures into watchdog, so nothing below is conditional
+  // on it.
+  module_load_include('inc', 'myapi', 'includes/myapi.service_request_notification');
+  myapi_service_request_notify_cancelled($node, $affected_providers, [
+    'request_nid'    => $node->nid,
+    'request_title'  => $node->title,
+    'condominium_id' => myapi_building_admin_field_target_id($node, 'field_condominium'),
+    'unit_id'        => myapi_building_admin_field_target_id($node, 'field_unit'),
+    'reason'         => $reason['value'],
+  ]);
 
   // 8. The answer: THE SAME NINETEEN-KEY OBJECT the detail serves, rebuilt from
   // the database AFTER the three writes, reusing SPEC 89's own loaders and

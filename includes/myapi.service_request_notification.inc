@@ -869,9 +869,7 @@ function myapi_service_request_awarded_admin_mail_params($nid, array $values) {
  *
  * Same two rules as the blocks above: an unresolvable value degrades to
  * MYAPI_SERVICE_REQUEST_MAIL_EMPTY rather than an empty line or a thrown
- * error, and the push/inbox text is plain while the mail params (added in
- * Step 6, alongside the orchestrator that resolves the values they need) are
- * escaped.
+ * error, and the push/inbox text is plain while the mail params are escaped.
  * ------------------------------------------------------------------------ */
 
 /**
@@ -897,6 +895,65 @@ function myapi_service_request_cancelled_push_title() {
  */
 function myapi_service_request_cancelled_push_body($subject) {
   return myapi_service_request_notification_label($subject);
+}
+
+/**
+ * Params of the cancellation email sent to an affected provider.
+ *
+ * No 'name' field, unlike the resident-facing emails of this file: the
+ * provider emails never greet by name, only the resident ones do — same
+ * criterion as myapi_service_offer_accepted_provider_mail_params() (SPEC
+ * 112). No 'reason' either, on purpose (see the spec's decisions).
+ *
+ * @param int   $nid     nid of the request (not the offer).
+ * @param array $values  Already-resolved 'subject'.
+ *
+ * @return array  Escaped params for
+ *   myapi_mail_format_service_request_cancelled_provider().
+ */
+function myapi_service_request_cancelled_provider_mail_params($nid, array $values) {
+  $values += [
+    'subject' => NULL,
+  ];
+
+  return [
+    'nid'     => (int) $nid,
+    'subject' => myapi_service_request_mail_label($values['subject']),
+  ];
+}
+
+/**
+ * Params of the cancellation detail email sent to the 'backend' role.
+ *
+ * The one email of this event that carries the resident's reason: 'backend'
+ * is internal staff, not a competitor (the spec's decision), unlike the
+ * provider email above which never carries it.
+ *
+ * @param int   $nid     nid of the request.
+ * @param array $values  Already-resolved 'subject', 'reason' (NULL when the
+ *   resident gave none), 'affected_count', 'condominium' and 'unit'.
+ *
+ * @return array  Escaped params for
+ *   myapi_mail_format_service_request_cancelled_admin().
+ */
+function myapi_service_request_cancelled_admin_mail_params($nid, array $values) {
+  $values += [
+    'subject'        => NULL,
+    'reason'         => NULL,
+    'affected_count' => 0,
+    'condominium'    => NULL,
+    'unit'           => NULL,
+  ];
+
+  return [
+    'nid'            => (int) $nid,
+    'subject'        => myapi_service_request_mail_label($values['subject']),
+    'reason'         => myapi_service_request_mail_label($values['reason']),
+    'affected_count' => myapi_service_request_mail_label((string) (int) $values['affected_count']),
+    'condominium'    => myapi_service_request_mail_label($values['condominium']),
+    'unit'           => myapi_service_request_mail_label($values['unit']),
+    'node_url'       => check_plain(url('node/' . (int) $nid, ['absolute' => TRUE])),
+  ];
 }
 
 /* ---------------------------------------------------------------------------
@@ -1516,5 +1573,152 @@ function myapi_service_request_enqueue_awarded_admin_mail($request_nid, array $c
 
   foreach (user_load_multiple($uids) as $account) {
     myapi_mail_queue_enqueue(MYAPI_SERVICE_REQUEST_AWARDED_ADMIN_MAIL_KEY, (string) $account->mail, $params);
+  }
+}
+
+/**
+ * Notifies the cancellation of a service request. SPEC 113'S ENTRY POINT.
+ *
+ * Called from myapi_service_request_cancel() right after the sweep
+ * (myapi_service_offer_reject_live()) and before the 200 is assembled, so
+ * nothing here can undo any of the three writes, and never from a node hook:
+ * a cancellation made from the back office notifies nobody, same criterion as
+ * the four orchestrators above.
+ *
+ * EVERY VALUE IN $context ARRIVES ALREADY RESOLVED, built from $node and not
+ * from $row (the endpoint's post-write detail): $row can be FALSE in the
+ * degraded case SPEC 95 already contemplates (a deleted category), and this
+ * notice must not depend on the HTTP response having been assembled.
+ * $providers is the ONE exception: it was captured by the endpoint with
+ * myapi_service_offer_live_offers_for_request() BEFORE the sweep, because
+ * after it a provider whose offer just turned 'rejected' and one that
+ * already was are indistinguishable.
+ *
+ * No 'requester_uid' in $context, on purpose: the resident who cancelled is
+ * out of this spec's audience (already has the 200's own detail).
+ *
+ * Order of the work, and why:
+ * 1. Every provider in $providers — one notification and one email set per
+ *    affected offer, the same text whether the offer was 'sent' or
+ *    'selected' (the spec's decision).
+ * 2. The 'backend' role last, so a failure there cannot cost the providers
+ *    their notice — same ordering rule as the four orchestrators above.
+ *    Fires even when $providers is empty: unlike the provider loop, this
+ *    channel does not depend on there being anybody to notify (the spec's
+ *    decision).
+ *
+ * Best-effort from end to end, same discipline as the rest of this file: the
+ * whole body is wrapped, a failure lands in watchdog, and none of it undoes
+ * the cancellation that was just saved.
+ *
+ * @param object $node       The just-saved (cancelled) 'service_request'
+ *   node.
+ * @param array  $providers  Rows from
+ *   myapi_service_offer_live_offers_for_request(), each with 'nid',
+ *   'provider_raw' and 'provider_name'. Possibly empty.
+ * @param array  $context    Values already resolved by
+ *   myapi_service_request_cancel(): 'request_nid', 'request_title',
+ *   'condominium_id', 'unit_id' and 'reason' (NULL when the resident gave
+ *   none).
+ *
+ * @return void
+ */
+function myapi_service_request_notify_cancelled($node, array $providers, array $context = []) {
+  try {
+    module_load_include('inc', 'myapi', 'includes/myapi.notification');
+    module_load_include('inc', 'myapi', 'includes/myapi.mail_queue');
+
+    $context += [
+      'request_nid'    => NULL,
+      'request_title'  => NULL,
+      'condominium_id' => NULL,
+      'unit_id'        => NULL,
+      'reason'         => NULL,
+    ];
+
+    $request_nid = (int) $context['request_nid'];
+
+    $push_title = myapi_service_request_cancelled_push_title();
+    $push_body = myapi_service_request_cancelled_push_body($context['request_title']);
+
+    $provider_params = myapi_service_request_cancelled_provider_mail_params($request_nid, [
+      'subject' => $context['request_title'],
+    ]);
+
+    // Every affected provider, one notification and one email set each. An
+    // empty $providers (a request with no live offer) is a silent no-op for
+    // THIS block — same criterion as an empty audience anywhere else in this
+    // file. The 'backend' email below fires regardless.
+    foreach ($providers as $provider) {
+      $provider_id = (int) $provider->provider_raw;
+      $uids = myapi_service_request_provider_uids($provider_id);
+      if (empty($uids)) {
+        continue;
+      }
+
+      myapi_notification_create([
+        'source_type'      => MYAPI_NOTIFICATION_SOURCE_SERVICE_OFFER,
+        'source_nid'       => (int) $provider->nid,
+        'type'             => MYAPI_NOTIFICATION_TYPE_SERVICE_REQUEST_CANCELLED,
+        'title'            => $push_title,
+        'body'             => $push_body,
+        'deep_link_target' => MYAPI_NOTIFICATION_DEEP_LINK_SERVICE_REQUEST_PROVIDER,
+        'deep_link_id'     => $request_nid,
+        'condominium_id'   => $context['condominium_id'],
+        // Never the unit: same rule as every other provider notice in this
+        // file.
+        'unit_id'          => NULL,
+        'provider_id'      => $provider_id,
+        'audience'         => MYAPI_NOTIFICATION_AUDIENCE_PROVIDER,
+        'uids'             => $uids,
+      ]);
+
+      foreach (user_load_multiple($uids) as $account) {
+        myapi_mail_queue_enqueue(MYAPI_SERVICE_REQUEST_CANCELLED_PROVIDER_MAIL_KEY, (string) $account->mail, $provider_params);
+      }
+    }
+
+    myapi_service_request_enqueue_cancelled_admin_mail($request_nid, $context, count($providers));
+  }
+  catch (Exception $e) {
+    watchdog_exception('myapi', $e);
+  }
+}
+
+/**
+ * Enqueues the cancellation detail email of a cancelled request to the
+ * 'backend' role.
+ *
+ * Split out of the orchestrator for the same reason as
+ * myapi_service_request_enqueue_awarded_admin_mail() (SPEC 112): it resolves
+ * values NO other channel of this event uses — the condominium's and the
+ * unit's own titles — and paying those two queries for a role that may be
+ * empty would be waste. Push/inbox are deliberately out of scope for this
+ * audience, same criterion as the other two admin emails of this file.
+ *
+ * @param int   $request_nid     nid of the cancelled request.
+ * @param array $context         The values handed to
+ *   myapi_service_request_notify_cancelled(): 'request_title',
+ *   'condominium_id', 'unit_id' and 'reason'.
+ * @param int   $affected_count  count($providers) from the orchestrator.
+ *
+ * @return void
+ */
+function myapi_service_request_enqueue_cancelled_admin_mail($request_nid, array $context, $affected_count) {
+  $uids = myapi_notification_role_uids(MYAPI_SERVICE_REQUEST_NOTIFY_ROLE);
+  if (empty($uids)) {
+    return;
+  }
+
+  $params = myapi_service_request_cancelled_admin_mail_params($request_nid, [
+    'subject'        => $context['request_title'],
+    'reason'         => $context['reason'],
+    'affected_count' => $affected_count,
+    'condominium'    => myapi_service_request_node_title($context['condominium_id']),
+    'unit'           => myapi_service_request_node_title($context['unit_id']),
+  ]);
+
+  foreach (user_load_multiple($uids) as $account) {
+    myapi_mail_queue_enqueue(MYAPI_SERVICE_REQUEST_CANCELLED_ADMIN_MAIL_KEY, (string) $account->mail, $params);
   }
 }

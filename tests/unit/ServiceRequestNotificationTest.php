@@ -1439,4 +1439,339 @@ class ServiceRequestNotificationTest extends TestCase {
     $this->assertNotSame([], $GLOBALS['myapi_test_watchdog']);
   }
 
+  /* -------------------------------------------------------------------------
+   * SPEC 113 — the request-cancelled notice to each affected provider and to
+   * 'backend'.
+   * ---------------------------------------------------------------------- */
+
+  /* -- The push title and body ---------------------------------------------- */
+
+  public function testTheCancelledPushTitleIsFixed() {
+    $this->assertSame('Solicitud cancelada', myapi_service_request_cancelled_push_title());
+  }
+
+  public function testTheCancelledPushBodyIsJustTheSubject() {
+    $this->assertSame('Fuga en el calentador', myapi_service_request_cancelled_push_body('Fuga en el calentador'));
+  }
+
+  public function testTheCancelledPushBodyDrawsUnresolvableValueAsADash() {
+    $this->assertSame('—', myapi_service_request_cancelled_push_body(NULL));
+  }
+
+  /* -- The provider mail params ---------------------------------------------- */
+
+  private function cancelledProviderMailParams($extra = []) {
+    return myapi_service_request_cancelled_provider_mail_params(self::NID, $extra + [
+      'subject' => 'Fuga en el calentador',
+    ]);
+  }
+
+  public function testTheCancelledProviderMailParamsCarryTheValueEscaped() {
+    $params = $this->cancelledProviderMailParams(['subject' => 'Fuga en el baño A&B']);
+
+    $this->assertSame(self::NID, $params['nid']);
+    $this->assertSame('Fuga en el baño A&amp;B', $params['subject']);
+  }
+
+  public function testTheCancelledProviderMailParamsFallBackToTheDash() {
+    $params = $this->cancelledProviderMailParams(['subject' => NULL]);
+
+    $this->assertSame('—', $params['subject']);
+  }
+
+  /**
+   * No field of this array can ever carry the resident's reason.
+   */
+  public function testTheCancelledProviderMailParamsHaveNoReasonField() {
+    $params = $this->cancelledProviderMailParams();
+
+    $this->assertArrayNotHasKey('reason', $params);
+  }
+
+  /* -- The 'backend' mail params ---------------------------------------------- */
+
+  private function cancelledAdminMailParams($extra = []) {
+    return myapi_service_request_cancelled_admin_mail_params(self::NID, $extra + [
+      'subject'        => 'Fuga en el calentador',
+      'reason'         => 'Ya no lo necesito',
+      'affected_count' => 2,
+      'condominium'    => 'Los Robles',
+      'unit'           => 'Casa 12',
+    ]);
+  }
+
+  public function testTheCancelledAdminMailParamsCarryTheValuesEscaped() {
+    $params = $this->cancelledAdminMailParams(['subject' => 'Fuga en el baño A&B']);
+
+    $this->assertSame(self::NID, $params['nid']);
+    $this->assertSame('Fuga en el baño A&amp;B', $params['subject']);
+    $this->assertSame('Ya no lo necesito', $params['reason']);
+    $this->assertSame('2', $params['affected_count']);
+    $this->assertSame('Los Robles', $params['condominium']);
+    $this->assertSame('Casa 12', $params['unit']);
+  }
+
+  public function testTheCancelledAdminMailParamsReasonFallsBackToTheDashWhenAbsent() {
+    $params = $this->cancelledAdminMailParams(['reason' => NULL]);
+
+    $this->assertSame('—', $params['reason']);
+  }
+
+  public function testTheCancelledAdminMailParamsFallBackToTheDash() {
+    $params = $this->cancelledAdminMailParams(['unit' => NULL, 'condominium' => '']);
+
+    $this->assertSame('—', $params['unit']);
+    $this->assertSame('—', $params['condominium']);
+  }
+
+  public function testTheCancelledAdminMailParamsCarryTheNodeUrl() {
+    $params = $this->cancelledAdminMailParams();
+
+    $this->assertSame('https://crespcord.example.com/node/' . self::NID, $params['node_url']);
+  }
+
+  /* -- The provider mail ------------------------------------------------------ */
+
+  public function testTheSubjectOfTheCancelledProviderMail() {
+    $message = ['body' => [], 'headers' => []];
+
+    myapi_mail_format_service_request_cancelled_provider($message, $this->cancelledProviderMailParams());
+
+    $this->assertSame('Solicitud cancelada — Fuga en el calentador', $message['subject']);
+  }
+
+  public function testTheCancelledProviderSubjectDecodesTheEscapedTitle() {
+    $message = ['body' => [], 'headers' => []];
+
+    myapi_mail_format_service_request_cancelled_provider($message, $this->cancelledProviderMailParams(['subject' => 'Fuga A&B']));
+
+    $this->assertSame('Solicitud cancelada — Fuga A&B', $message['subject']);
+  }
+
+  public function testTheCancelledProviderMailDrawsExactlyOneLine() {
+    $html = myapi_mail_service_request_cancelled_provider_html($this->cancelledProviderMailParams());
+
+    $this->assertSame(['Asunto' => 'Fuga en el calentador'], $this->lines($html));
+  }
+
+  /**
+   * No button, same criterion as every provider-facing email of this module,
+   * and no mention of the resident's reason — the spec's decision.
+   */
+  public function testTheCancelledProviderMailHasNoButtonNorReason() {
+    $html = myapi_mail_service_request_cancelled_provider_html($this->cancelledProviderMailParams());
+
+    $this->assertStringNotContainsString('border-radius:10px;background-color:#4A3326', $html);
+    $this->assertStringContainsString('Revisa la solicitud en la app.', $html);
+    $this->assertStringNotContainsString('Motivo', $html);
+  }
+
+  /* -- The 'backend' mail -------------------------------------------------------- */
+
+  public function testTheSubjectOfTheCancelledAdminMail() {
+    $message = ['body' => [], 'headers' => []];
+
+    myapi_mail_format_service_request_cancelled_admin($message, $this->cancelledAdminMailParams());
+
+    $this->assertSame('Solicitud cancelada #' . self::NID . ' — Los Robles', $message['subject']);
+  }
+
+  public function testTheCancelledAdminMailDrawsTheFiveLinesInOrder() {
+    $html = myapi_mail_service_request_cancelled_admin_html($this->cancelledAdminMailParams());
+
+    $this->assertSame(
+      [
+        'Asunto'                => 'Fuga en el calentador',
+        'Motivo'                => 'Ya no lo necesito',
+        'Proveedores afectados' => '2',
+        'Condominio'            => 'Los Robles',
+        'Vivienda'              => 'Casa 12',
+      ],
+      $this->lines($html)
+    );
+  }
+
+  public function testTheCancelledAdminMailShowsADashWhenThereIsNoReason() {
+    $html = myapi_mail_service_request_cancelled_admin_html($this->cancelledAdminMailParams(['reason' => NULL]));
+
+    $this->assertSame('—', $this->lines($html)['Motivo']);
+  }
+
+  public function testTheCancelledAdminButtonOpensTheNode() {
+    $html = myapi_mail_service_request_cancelled_admin_html($this->cancelledAdminMailParams());
+
+    $this->assertStringContainsString('>Ver solicitud</a>', $html);
+    $this->assertStringContainsString('href="https://crespcord.example.com/node/' . self::NID . '"', $html);
+  }
+
+  /* -------------------------------------------------------------------------
+   * myapi_service_offer_live_offers_for_request() (step 2).
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * The two live statuses come back, with no exception by nid — unlike
+   * myapi_service_offer_sent_offers_for_request() (SPEC 112), a cancellation
+   * has no winner to spare.
+   */
+  public function testLiveOffersIncludesSentAndSelectedWithNoExclusion() {
+    myapi_test_db_seed(['field_data_field_request' => [
+      $this->sentOfferRow(9801, 601, MYAPI_SERVICES_OFFER_STATUS_SENT),
+      $this->sentOfferRow(9802, 602, MYAPI_SERVICES_OFFER_STATUS_SELECTED),
+    ]]);
+
+    $rows = myapi_service_offer_live_offers_for_request(self::NID);
+
+    $this->assertSame([9801, 9802], array_map(function ($row) {
+      return (int) $row->nid;
+    }, $rows));
+  }
+
+  public function testLiveOffersExcludesRejectedAndWithdrawn() {
+    myapi_test_db_seed(['field_data_field_request' => [
+      $this->sentOfferRow(9901, 601, MYAPI_SERVICES_OFFER_STATUS_SENT),
+      $this->sentOfferRow(9902, 602, 'rejected'),
+      $this->sentOfferRow(9903, 603, 'withdrawn'),
+    ]]);
+
+    $rows = myapi_service_offer_live_offers_for_request(self::NID);
+
+    $this->assertCount(1, $rows);
+    $this->assertSame(9901, (int) $rows[0]->nid);
+  }
+
+  /**
+   * A deleted or unpublished provider must not make the affected offer's own
+   * row disappear, only its name.
+   */
+  public function testLiveOffersProviderNameFallsBackToNullWhenUnresolved() {
+    myapi_test_db_seed(['field_data_field_request' => [
+      $this->sentOfferRow(9910, 701),
+    ]]);
+
+    $rows = myapi_service_offer_live_offers_for_request(self::NID);
+
+    $this->assertCount(1, $rows);
+    $this->assertNull($rows[0]->provider_name);
+    $this->assertSame(701, (int) $rows[0]->provider_raw);
+  }
+
+  public function testAnInvalidRequestNidResolvesToEmptyLiveOffersWithoutQuerying() {
+    myapi_test_db_seed(['field_data_field_request' => [$this->sentOfferRow(9920, 601)]]);
+
+    $this->assertSame([], myapi_service_offer_live_offers_for_request(0));
+    $this->assertSame([], myapi_service_offer_live_offers_for_request(NULL));
+    $this->assertSame([], myapi_test_db_queries());
+  }
+
+  /* -------------------------------------------------------------------------
+   * The orchestrator (step 6).
+   *
+   * Same boundary as the SPEC 109-112 orchestrator tests above: the
+   * notification insert cannot run in tests/unit (db_insert() throws by
+   * design), so what is asserted here is the promise the endpoint relies on
+   * — the failure is swallowed and logged — plus the one thing a fixture CAN
+   * prove about the fan-out: which provider each recipient lookup was made
+   * for, and that the 'backend' role is looked up regardless of $providers.
+   * ---------------------------------------------------------------------- */
+
+  private function cancelledNode() {
+    return (object) ['nid' => self::NID, 'title' => 'Fuga en el calentador'];
+  }
+
+  private function cancelledContext($extra = []) {
+    return $extra + [
+      'request_nid'    => self::NID,
+      'request_title'  => 'Fuga en el calentador',
+      'condominium_id' => self::CONDO,
+      'unit_id'        => self::UNIT,
+      'reason'         => 'Ya no lo necesito',
+    ];
+  }
+
+  /**
+   * No affected providers and no 'backend' role member costs nothing: no
+   * exception, no watchdog entry — the normal answer when nobody is left to
+   * tell.
+   */
+  public function testNoProvidersAndNoBackendRoleNotifiesNobody() {
+    myapi_service_request_notify_cancelled($this->cancelledNode(), [], $this->cancelledContext());
+
+    $this->assertSame([], $GLOBALS['myapi_test_watchdog']);
+  }
+
+  /**
+   * THE 'BACKEND' EMAIL DOES NOT DEPEND ON $providers (the spec's decision):
+   * the role lookup fires even when no provider was affected. What can be
+   * proved here is that the lookup runs, since the enqueue itself is out of
+   * reach of tests/unit (DrupalQueue is never stubbed, the same reason every
+   * other admin-mail test in this file stops at the mail_params/formatter
+   * layer instead of driving the orchestrator all the way to a real send).
+   */
+  public function testAnEmptyProviderListStillAsksForTheBackendRole() {
+    myapi_service_request_notify_cancelled($this->cancelledNode(), [], $this->cancelledContext());
+
+    $roleQueries = array_filter(myapi_test_db_queries(), function ($query) {
+      foreach ($query['conditions'] as $condition) {
+        if ($condition['field'] === 'r.name' && $condition['value'] === MYAPI_SERVICE_REQUEST_NOTIFY_ROLE) {
+          return TRUE;
+        }
+      }
+      return FALSE;
+    });
+
+    $this->assertNotEmpty($roleQueries);
+    $this->assertSame([], $GLOBALS['myapi_test_watchdog']);
+  }
+
+  /**
+   * THE PROMISE THE ENDPOINT RELIES ON, same as the SPEC 109-112 fan-out
+   * tests above: the notification insert fails on purpose in tests/unit, and
+   * the trigger still returns normally, with the failure in watchdog — never
+   * the 200 of PUT /api/v1/service-requests/{id}/cancel.
+   */
+  public function testAFailingProviderInsertIsLoggedAndNeverPropagates() {
+    myapi_test_db_seed(['field_data_' . MYAPI_PROVIDER_USERS_FIELD => [$this->accountRow()]]);
+
+    $providers = [
+      (object) ['nid' => 9201, 'provider_raw' => self::PROVIDER, 'provider_name' => 'Plomería Sur'],
+    ];
+
+    myapi_service_request_notify_cancelled($this->cancelledNode(), $providers, $this->cancelledContext());
+
+    $this->assertNotSame([], $GLOBALS['myapi_test_watchdog']);
+    $this->assertStringContainsString('myapi_notifications', $GLOBALS['myapi_test_watchdog'][0]['text']);
+  }
+
+  /**
+   * Each affected provider is looked up by ITS OWN provider_raw, never
+   * another's — the one thing this fixture layer can prove about a fan-out
+   * whose insert it cannot observe (SPEC 74's stub throws on db_insert() by
+   * design).
+   */
+  public function testEachAffectedProviderIsLookedUpByItsOwnProviderId() {
+    myapi_test_db_seed(['field_data_' . MYAPI_PROVIDER_USERS_FIELD => [
+      $this->accountRow(['entity_id' => 602]),
+    ]]);
+
+    $providers = [
+      (object) ['nid' => 9301, 'provider_raw' => 601, 'provider_name' => 'Proveedor A'],
+      (object) ['nid' => 9302, 'provider_raw' => 602, 'provider_name' => 'Proveedor B'],
+    ];
+
+    myapi_service_request_notify_cancelled($this->cancelledNode(), $providers, $this->cancelledContext());
+
+    $queries = array_values(array_filter(
+      myapi_test_db_queries(),
+      function ($query) {
+        return $query['table'] === 'field_data_' . MYAPI_PROVIDER_USERS_FIELD;
+      }
+    ));
+
+    $this->assertCount(2, $queries);
+    $this->assertSame(601, $this->conditionValue($queries[0], 'entity_id'));
+    $this->assertSame(602, $this->conditionValue($queries[1], 'entity_id'));
+
+    $this->assertNotSame([], $GLOBALS['myapi_test_watchdog']);
+  }
+
 }
