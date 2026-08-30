@@ -1283,3 +1283,174 @@ function myapi_service_request_notify_offer_withdrawn($offer_node, array $contex
     watchdog_exception('myapi', $e);
   }
 }
+
+/**
+ * Notifies the award of an offer. SPEC 112'S ENTRY POINT.
+ *
+ * Called from myapi_service_offer_accept() right after the sweep
+ * (myapi_service_offer_reject_live()) and before the 200 is assembled, so
+ * nothing here can undo any of the four writes, and never from a node hook: an
+ * award made from the back office notifies nobody, same criterion as the three
+ * orchestrators above.
+ *
+ * EVERY VALUE IN $context ARRIVES ALREADY RESOLVED — nothing here re-queries
+ * the request or the winning provider: myapi_service_offer_accept() already
+ * loaded both rows to run its own checks. $losers is the ONE exception: it was
+ * captured by the endpoint with myapi_service_offer_sent_offers_for_request()
+ * BEFORE the sweep, because after it a loser that just turned 'rejected' and
+ * one that already was are indistinguishable.
+ *
+ * No 'requester_uid' in $context, on purpose: the resident who awarded is out
+ * of this spec's audience (already has the 200's own detail).
+ *
+ * Order of the work, and why:
+ * 1. The winner — one notification, one email per account, with the amount of
+ *    their own offer.
+ * 2. Every loser in $losers — one notification and one email set per losing
+ *    offer, never naming the winner or their amount.
+ * 3. The 'backend' role last, so a failure there cannot cost the providers
+ *    their notice — same ordering rule as
+ *    myapi_service_request_notify_created().
+ *
+ * Best-effort from end to end, same discipline as the rest of this file: the
+ * whole body is wrapped, a failure lands in watchdog, and none of it undoes
+ * the award that was just saved.
+ *
+ * @param object $offer_node  The just-saved (awarded) 'service_offer' node.
+ * @param array  $losers      Rows from myapi_service_offer_sent_offers_for_request(),
+ *   each with 'nid', 'provider_raw' and 'provider_name'. Possibly empty.
+ * @param array  $context     Values already resolved by
+ *   myapi_service_offer_accept(): 'request_nid', 'request_title',
+ *   'condominium_id', 'unit_id', 'provider_id' (the winner's),
+ *   'provider_name' (the winner's), 'amount' and 'amount_type' (the winner's
+ *   offer).
+ *
+ * @return void
+ */
+function myapi_service_request_notify_offer_accepted($offer_node, array $losers, array $context = []) {
+  try {
+    module_load_include('inc', 'myapi', 'includes/myapi.notification');
+    module_load_include('inc', 'myapi', 'includes/myapi.mail_queue');
+    module_load_include('inc', 'myapi', 'includes/myapi.user');
+
+    $context += [
+      'request_nid'    => NULL,
+      'request_title'  => NULL,
+      'condominium_id' => NULL,
+      'unit_id'        => NULL,
+      'provider_id'    => NULL,
+      'provider_name'  => NULL,
+      'amount'         => NULL,
+      'amount_type'    => NULL,
+    ];
+
+    $request_nid = (int) $context['request_nid'];
+    $amount_text = myapi_service_offer_amount_text($context['amount'], $context['amount_type']);
+
+    // The winner.
+    $winner_uids = myapi_service_request_provider_uids($context['provider_id']);
+    if (!empty($winner_uids)) {
+      myapi_notification_create([
+        'source_type'      => MYAPI_NOTIFICATION_SOURCE_SERVICE_OFFER,
+        'source_nid'       => (int) $offer_node->nid,
+        'type'             => MYAPI_NOTIFICATION_TYPE_SERVICE_OFFER_ACCEPTED,
+        'title'            => myapi_service_offer_accepted_push_title(),
+        'body'             => myapi_service_offer_accepted_push_body($context['request_title'], $amount_text),
+        'deep_link_target' => MYAPI_NOTIFICATION_DEEP_LINK_SERVICE_REQUEST_PROVIDER,
+        'deep_link_id'     => $request_nid,
+        'condominium_id'   => $context['condominium_id'],
+        // Never the unit: a provider does not learn which home asked, same
+        // rule as myapi_service_request_notify_created().
+        'unit_id'          => NULL,
+        'provider_id'      => (int) $context['provider_id'],
+        'audience'         => MYAPI_NOTIFICATION_AUDIENCE_PROVIDER,
+        'uids'             => $winner_uids,
+      ]);
+
+      $winner_params = myapi_service_offer_accepted_provider_mail_params($request_nid, [
+        'subject'     => $context['request_title'],
+        'amount_text' => $amount_text,
+      ]);
+
+      foreach (user_load_multiple($winner_uids) as $account) {
+        myapi_mail_queue_enqueue(MYAPI_SERVICE_OFFER_ACCEPTED_MAIL_KEY, (string) $account->mail, $winner_params);
+      }
+    }
+
+    // Every loser, one notification and one email set each. An empty $losers
+    // (a request with a single offer) is a silent no-op — same criterion as
+    // an empty audience anywhere else in this file.
+    $loser_params = myapi_service_offer_rejected_provider_mail_params($request_nid, [
+      'subject' => $context['request_title'],
+    ]);
+
+    foreach ($losers as $loser) {
+      $loser_provider_id = (int) $loser->provider_raw;
+      $loser_uids = myapi_service_request_provider_uids($loser_provider_id);
+      if (empty($loser_uids)) {
+        continue;
+      }
+
+      myapi_notification_create([
+        'source_type'      => MYAPI_NOTIFICATION_SOURCE_SERVICE_OFFER,
+        'source_nid'       => (int) $loser->nid,
+        'type'             => MYAPI_NOTIFICATION_TYPE_SERVICE_OFFER_REJECTED,
+        'title'            => myapi_service_offer_rejected_push_title(),
+        'body'             => myapi_service_offer_rejected_push_body($context['request_title']),
+        'deep_link_target' => MYAPI_NOTIFICATION_DEEP_LINK_SERVICE_REQUEST_PROVIDER,
+        'deep_link_id'     => $request_nid,
+        'condominium_id'   => $context['condominium_id'],
+        'unit_id'          => NULL,
+        'provider_id'      => $loser_provider_id,
+        'audience'         => MYAPI_NOTIFICATION_AUDIENCE_PROVIDER,
+        'uids'             => $loser_uids,
+      ]);
+
+      foreach (user_load_multiple($loser_uids) as $account) {
+        myapi_mail_queue_enqueue(MYAPI_SERVICE_OFFER_REJECTED_MAIL_KEY, (string) $account->mail, $loser_params);
+      }
+    }
+
+    myapi_service_request_enqueue_awarded_admin_mail($request_nid, $context, $amount_text);
+  }
+  catch (Exception $e) {
+    watchdog_exception('myapi', $e);
+  }
+}
+
+/**
+ * Enqueues the award detail email of an accepted offer to the 'backend' role.
+ *
+ * Split out of the orchestrator for the same reason as
+ * myapi_service_request_enqueue_admin_mail() (SPEC 109): it resolves values NO
+ * other channel of this event uses — the condominium's and the unit's own
+ * titles — and paying those two queries for a role that may be empty would be
+ * waste. Push/inbox are deliberately out of scope for this audience, same
+ * criterion as the SPEC 109 admin email.
+ *
+ * @param int    $request_nid  nid of the awarded request.
+ * @param array  $context      The values handed to
+ *   myapi_service_request_notify_offer_accepted(): 'request_title',
+ *   'condominium_id', 'unit_id' and 'provider_name' (the winner's).
+ * @param string $amount_text  Already built by myapi_service_offer_amount_text().
+ *
+ * @return void
+ */
+function myapi_service_request_enqueue_awarded_admin_mail($request_nid, array $context, $amount_text) {
+  $uids = myapi_notification_role_uids(MYAPI_SERVICE_REQUEST_NOTIFY_ROLE);
+  if (empty($uids)) {
+    return;
+  }
+
+  $params = myapi_service_request_awarded_admin_mail_params($request_nid, [
+    'subject'       => $context['request_title'],
+    'provider_name' => $context['provider_name'],
+    'amount_text'   => $amount_text,
+    'condominium'   => myapi_service_request_node_title($context['condominium_id']),
+    'unit'          => myapi_service_request_node_title($context['unit_id']),
+  ]);
+
+  foreach (user_load_multiple($uids) as $account) {
+    myapi_mail_queue_enqueue(MYAPI_SERVICE_REQUEST_AWARDED_ADMIN_MAIL_KEY, (string) $account->mail, $params);
+  }
+}

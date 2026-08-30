@@ -533,6 +533,11 @@ function myapi_html_mail_keys() {
     // SPEC 111. The offer-withdrawn notice sent to the resident who
     // requested the service, once per withdrawal.
     'myapi_service_request_offer_withdrawn_resident',
+    // SPEC 112. The three award notices: the winning provider, each losing
+    // provider, and the detail sent to the 'backend' role.
+    'myapi_service_request_offer_accepted_provider',
+    'myapi_service_request_offer_rejected_provider',
+    'myapi_service_request_awarded_admin',
   ];
 }
 
@@ -4505,6 +4510,21 @@ function myapi_update_7038() {
   myapi_mail_system_register();
 
   return t('SPEC 111: registrada la clave de correo HTML de la oferta retirada (@count claves en total, sin cambio de esquema).', [
+    '@count' => count(myapi_html_mail_keys()),
+  ]);
+}
+
+/**
+ * SPEC 112: registers the three offer-award HTML mail keys.
+ *
+ * Same idempotent pattern as myapi_update_7038(): myapi_mail_system_register()
+ * re-registers the whole catalogue from myapi_html_mail_keys(), so a second
+ * run finds nothing pending. No hook_schema() change — no new table or column.
+ */
+function myapi_update_7039() {
+  myapi_mail_system_register();
+
+  return t('SPEC 112: registradas las claves de correo HTML de la adjudicación de oferta (@count claves en total, sin cambio de esquema).', [
     '@count' => count(myapi_html_mail_keys()),
   ]);
 }

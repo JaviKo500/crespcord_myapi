@@ -9,6 +9,7 @@ require_once __DIR__ . '/../../includes/myapi.notification.inc';
 require_once __DIR__ . '/../../includes/myapi.mail_queue.inc';
 require_once __DIR__ . '/../../includes/myapi.user.inc';
 require_once __DIR__ . '/../../includes/myapi.mail.inc';
+require_once __DIR__ . '/../../includes/myapi.service_offer.inc';
 require_once __DIR__ . '/../../includes/myapi.service_request_notification.inc';
 
 /**
@@ -1007,6 +1008,435 @@ class ServiceRequestNotificationTest extends TestCase {
 
     $this->assertNotSame([], $GLOBALS['myapi_test_watchdog']);
     $this->assertStringContainsString('myapi_notifications', $GLOBALS['myapi_test_watchdog'][0]['text']);
+  }
+
+  /* -------------------------------------------------------------------------
+   * SPEC 112 — the offer-award notices (winner, losers, 'backend').
+   * ---------------------------------------------------------------------- */
+
+  /* -- The push title and body ---------------------------------------------- */
+
+  public function testTheAcceptedPushTitleIsFixed() {
+    $this->assertSame('¡Fuiste seleccionado!', myapi_service_offer_accepted_push_title());
+  }
+
+  public function testTheAcceptedPushBodyCarriesSubjectAndAmount() {
+    $body = myapi_service_offer_accepted_push_body('Fuga en el calentador', '150.00 (Precio cerrado)');
+
+    $this->assertSame("Fuga en el calentador\nMonto: 150.00 (Precio cerrado)", $body);
+  }
+
+  public function testTheAcceptedPushBodyDrawsUnresolvableValuesAsADash() {
+    $body = myapi_service_offer_accepted_push_body(NULL, '');
+
+    $this->assertSame("—\nMonto: —", $body);
+  }
+
+  public function testTheRejectedPushTitleIsFixed() {
+    $this->assertSame('Ya se seleccionó un proveedor', myapi_service_offer_rejected_push_title());
+  }
+
+  public function testTheRejectedPushBodyIsJustTheSubject() {
+    $this->assertSame('Fuga en el calentador', myapi_service_offer_rejected_push_body('Fuga en el calentador'));
+  }
+
+  public function testTheRejectedPushBodyDrawsUnresolvableValueAsADash() {
+    $this->assertSame('—', myapi_service_offer_rejected_push_body(NULL));
+  }
+
+  /**
+   * A competitor never learns who won or for how much.
+   */
+  public function testTheRejectedPushBodyNeverMentionsAnAmount() {
+    $this->assertStringNotContainsString('Monto', myapi_service_offer_rejected_push_body('Fuga en el calentador'));
+  }
+
+  /* -- The winner's mail params ---------------------------------------------- */
+
+  private function acceptedProviderMailParams($extra = []) {
+    return myapi_service_offer_accepted_provider_mail_params(self::NID, $extra + [
+      'subject'     => 'Fuga en el calentador',
+      'amount_text' => '150.00 (Precio cerrado)',
+    ]);
+  }
+
+  public function testTheAcceptedProviderMailParamsCarryTheValuesEscaped() {
+    $params = $this->acceptedProviderMailParams(['subject' => 'Fuga en el baño A&B']);
+
+    $this->assertSame(self::NID, $params['nid']);
+    $this->assertSame('Fuga en el baño A&amp;B', $params['subject']);
+    $this->assertSame('150.00 (Precio cerrado)', $params['amount_text']);
+  }
+
+  public function testTheAcceptedProviderMailParamsFallBackToTheDash() {
+    $params = $this->acceptedProviderMailParams(['amount_text' => NULL]);
+
+    $this->assertSame('—', $params['amount_text']);
+  }
+
+  /* -- The loser's mail params ------------------------------------------------ */
+
+  private function rejectedProviderMailParams($extra = []) {
+    return myapi_service_offer_rejected_provider_mail_params(self::NID, $extra + [
+      'subject' => 'Fuga en el calentador',
+    ]);
+  }
+
+  public function testTheRejectedProviderMailParamsCarryTheValueEscaped() {
+    $params = $this->rejectedProviderMailParams(['subject' => 'Fuga en el baño A&B']);
+
+    $this->assertSame(self::NID, $params['nid']);
+    $this->assertSame('Fuga en el baño A&amp;B', $params['subject']);
+  }
+
+  public function testTheRejectedProviderMailParamsFallBackToTheDash() {
+    $params = $this->rejectedProviderMailParams(['subject' => NULL]);
+
+    $this->assertSame('—', $params['subject']);
+  }
+
+  /**
+   * No field of this array can ever name the winner or their amount.
+   */
+  public function testTheRejectedProviderMailParamsHaveNoAmountField() {
+    $params = $this->rejectedProviderMailParams();
+
+    $this->assertArrayNotHasKey('amount_text', $params);
+    $this->assertArrayNotHasKey('provider_name', $params);
+  }
+
+  /* -- The 'backend' mail params ----------------------------------------------- */
+
+  private function awardedAdminMailParams($extra = []) {
+    return myapi_service_request_awarded_admin_mail_params(self::NID, $extra + [
+      'subject'       => 'Fuga en el calentador',
+      'provider_name' => 'Plomería Sur',
+      'amount_text'   => '150.00 (Precio cerrado)',
+      'condominium'   => 'Los Robles',
+      'unit'          => 'Casa 12',
+    ]);
+  }
+
+  public function testTheAwardedAdminMailParamsCarryTheValuesEscaped() {
+    $params = $this->awardedAdminMailParams(['subject' => 'Fuga en el baño A&B']);
+
+    $this->assertSame(self::NID, $params['nid']);
+    $this->assertSame('Fuga en el baño A&amp;B', $params['subject']);
+    $this->assertSame('Plomería Sur', $params['provider_name']);
+    $this->assertSame('150.00 (Precio cerrado)', $params['amount_text']);
+    $this->assertSame('Los Robles', $params['condominium']);
+    $this->assertSame('Casa 12', $params['unit']);
+  }
+
+  public function testTheAwardedAdminMailParamsFallBackToTheDash() {
+    $params = $this->awardedAdminMailParams(['unit' => NULL, 'condominium' => '']);
+
+    $this->assertSame('—', $params['unit']);
+    $this->assertSame('—', $params['condominium']);
+  }
+
+  public function testTheAwardedAdminMailParamsCarryTheNodeUrl() {
+    $params = $this->awardedAdminMailParams();
+
+    $this->assertSame('https://crespcord.example.com/node/' . self::NID, $params['node_url']);
+  }
+
+  /* -- The winner's mail ------------------------------------------------------ */
+
+  public function testTheSubjectOfTheAcceptedProviderMail() {
+    $message = ['body' => [], 'headers' => []];
+
+    myapi_mail_format_service_offer_accepted_provider($message, $this->acceptedProviderMailParams());
+
+    $this->assertSame('Fuiste seleccionado — Fuga en el calentador', $message['subject']);
+  }
+
+  public function testTheAcceptedProviderSubjectDecodesTheEscapedTitle() {
+    $message = ['body' => [], 'headers' => []];
+
+    myapi_mail_format_service_offer_accepted_provider($message, $this->acceptedProviderMailParams(['subject' => 'Fuga A&B']));
+
+    $this->assertSame('Fuiste seleccionado — Fuga A&B', $message['subject']);
+  }
+
+  public function testTheAcceptedProviderMailDrawsExactlyTwoLines() {
+    $html = myapi_mail_service_offer_accepted_provider_html($this->acceptedProviderMailParams());
+
+    $this->assertSame(
+      [
+        'Asunto' => 'Fuga en el calentador',
+        'Monto'  => '150.00 (Precio cerrado)',
+      ],
+      $this->lines($html)
+    );
+  }
+
+  /**
+   * No button, same criterion as every provider-facing email of this module:
+   * the provider's next step is the app.
+   */
+  public function testTheAcceptedProviderMailHasNoButton() {
+    $html = myapi_mail_service_offer_accepted_provider_html($this->acceptedProviderMailParams());
+
+    $this->assertStringNotContainsString('border-radius:10px;background-color:#4A3326', $html);
+    $this->assertStringContainsString('Revisa la solicitud en la app.', $html);
+  }
+
+  /* -- The loser's mail --------------------------------------------------------- */
+
+  public function testTheSubjectOfTheRejectedProviderMail() {
+    $message = ['body' => [], 'headers' => []];
+
+    myapi_mail_format_service_offer_rejected_provider($message, $this->rejectedProviderMailParams());
+
+    $this->assertSame('Solicitud adjudicada — Fuga en el calentador', $message['subject']);
+  }
+
+  public function testTheOfferRejectedSubjectDecodesTheEscapedTitle() {
+    $message = ['body' => [], 'headers' => []];
+
+    myapi_mail_format_service_offer_rejected_provider($message, $this->rejectedProviderMailParams(['subject' => 'Fuga A&B']));
+
+    $this->assertSame('Solicitud adjudicada — Fuga A&B', $message['subject']);
+  }
+
+  public function testTheRejectedProviderMailDrawsExactlyOneLine() {
+    $html = myapi_mail_service_offer_rejected_provider_html($this->rejectedProviderMailParams());
+
+    $this->assertSame(['Asunto' => 'Fuga en el calentador'], $this->lines($html));
+  }
+
+  /**
+   * No button, no amount, no winner identity — the rule the spec's decisions
+   * table states applies to every channel a loser reads, this one included.
+   */
+  public function testTheRejectedProviderMailHasNoButtonNorAmountNorWinnerIdentity() {
+    $html = myapi_mail_service_offer_rejected_provider_html($this->rejectedProviderMailParams());
+
+    $this->assertStringNotContainsString('border-radius:10px;background-color:#4A3326', $html);
+    $this->assertStringNotContainsString('Monto', $html);
+    $this->assertStringNotContainsString('Plomería Sur', $html);
+  }
+
+  /* -- The 'backend' mail -------------------------------------------------------- */
+
+  public function testTheSubjectOfTheAwardedAdminMail() {
+    $message = ['body' => [], 'headers' => []];
+
+    myapi_mail_format_service_request_awarded_admin($message, $this->awardedAdminMailParams());
+
+    $this->assertSame('Solicitud adjudicada #' . self::NID . ' — Los Robles', $message['subject']);
+  }
+
+  public function testTheAwardedAdminMailDrawsTheFiveLinesInOrder() {
+    $html = myapi_mail_service_request_awarded_admin_html($this->awardedAdminMailParams());
+
+    $this->assertSame(
+      [
+        'Asunto'               => 'Fuga en el calentador',
+        'Proveedor adjudicado' => 'Plomería Sur',
+        'Monto'                => '150.00 (Precio cerrado)',
+        'Condominio'           => 'Los Robles',
+        'Vivienda'             => 'Casa 12',
+      ],
+      $this->lines($html)
+    );
+  }
+
+  public function testTheAwardedAdminButtonOpensTheNode() {
+    $html = myapi_mail_service_request_awarded_admin_html($this->awardedAdminMailParams());
+
+    $this->assertStringContainsString('>Ver solicitud</a>', $html);
+    $this->assertStringContainsString('href="https://crespcord.example.com/node/' . self::NID . '"', $html);
+  }
+
+  /* -------------------------------------------------------------------------
+   * myapi_service_offer_sent_offers_for_request() (step 2).
+   * ---------------------------------------------------------------------- */
+
+  private function sentOfferRow($offer_nid, $provider_id, $status = MYAPI_SERVICES_OFFER_STATUS_SENT, $request_nid = NULL) {
+    $row = [
+      'entity_type'              => 'node',
+      'deleted'                  => 0,
+      'field_request_target_id'  => $request_nid !== NULL ? $request_nid : self::NID,
+      'type'                     => MYAPI_SERVICES_OFFER_TYPE,
+      'status'                   => 1,
+      'field_offer_status_value' => $status,
+      'nid'                      => $offer_nid,
+      'provider_raw'             => $provider_id,
+    ];
+
+    return $row;
+  }
+
+  public function testSentOffersExcludesTheWinnerByNid() {
+    myapi_test_db_seed(['field_data_field_request' => [
+      $this->sentOfferRow(9301, 601) + ['provider_name' => 'Perdedor A'],
+      $this->sentOfferRow(9302, 602) + ['provider_name' => 'Ganador'],
+    ]]);
+
+    $rows = myapi_service_offer_sent_offers_for_request(self::NID, 9302);
+
+    $this->assertCount(1, $rows);
+    $this->assertSame(9301, (int) $rows[0]->nid);
+  }
+
+  /**
+   * Only 'sent' is live for this reading, unlike myapi_service_offer_reject_live()
+   * (which still considers 'selected' live, run as it is AFTER the winner is
+   * marked so).
+   */
+  public function testSentOffersExcludesWithdrawnAndRejected() {
+    myapi_test_db_seed(['field_data_field_request' => [
+      $this->sentOfferRow(9401, 601, MYAPI_SERVICES_OFFER_STATUS_SENT),
+      $this->sentOfferRow(9402, 602, 'withdrawn'),
+      $this->sentOfferRow(9403, 603, 'rejected'),
+    ]]);
+
+    $rows = myapi_service_offer_sent_offers_for_request(self::NID);
+
+    $this->assertCount(1, $rows);
+    $this->assertSame(9401, (int) $rows[0]->nid);
+  }
+
+  public function testSentOffersOnlyReturnsTheGivenRequests() {
+    myapi_test_db_seed(['field_data_field_request' => [
+      $this->sentOfferRow(9501, 601, MYAPI_SERVICES_OFFER_STATUS_SENT, self::NID),
+      $this->sentOfferRow(9502, 602, MYAPI_SERVICES_OFFER_STATUS_SENT, self::NID + 1),
+    ]]);
+
+    $rows = myapi_service_offer_sent_offers_for_request(self::NID);
+
+    $this->assertCount(1, $rows);
+    $this->assertSame(9501, (int) $rows[0]->nid);
+  }
+
+  /**
+   * A deleted or unpublished provider must not make the loser's own row
+   * disappear, only its name.
+   */
+  public function testSentOffersProviderNameFallsBackToNullWhenUnresolved() {
+    myapi_test_db_seed(['field_data_field_request' => [
+      $this->sentOfferRow(9601, 701),
+    ]]);
+
+    $rows = myapi_service_offer_sent_offers_for_request(self::NID);
+
+    $this->assertCount(1, $rows);
+    $this->assertNull($rows[0]->provider_name);
+    $this->assertSame(701, (int) $rows[0]->provider_raw);
+  }
+
+  public function testAnInvalidRequestNidResolvesToEmptySentOffersWithoutQuerying() {
+    myapi_test_db_seed(['field_data_field_request' => [$this->sentOfferRow(9701, 601)]]);
+
+    $this->assertSame([], myapi_service_offer_sent_offers_for_request(0));
+    $this->assertSame([], myapi_service_offer_sent_offers_for_request(NULL));
+    $this->assertSame([], myapi_test_db_queries());
+  }
+
+  /* -------------------------------------------------------------------------
+   * The orchestrator (step 6).
+   *
+   * Same boundary as the SPEC 109-111 orchestrator tests above: the
+   * notification insert cannot run in tests/unit (db_insert() throws by
+   * design), so what is asserted here is the promise the endpoint relies on
+   * — the failure is swallowed and logged — plus the one thing a fixture CAN
+   * prove about the fan-out: which provider each recipient lookup was made
+   * for.
+   * ---------------------------------------------------------------------- */
+
+  private function awardedOfferNode() {
+    return (object) ['nid' => 9003, 'title' => 'Oferta de Plomería Sur'];
+  }
+
+  private function awardedContext($extra = []) {
+    return $extra + [
+      'request_nid'    => self::NID,
+      'request_title'  => 'Fuga en el calentador',
+      'condominium_id' => self::CONDO,
+      'unit_id'        => self::UNIT,
+      'provider_id'    => self::PROVIDER,
+      'provider_name'  => 'Plomería Sur',
+      'amount'         => 150,
+      'amount_type'    => 'fixed',
+    ];
+  }
+
+  /**
+   * The condition value recorded for a query, by field suffix — 'entity_id'
+   * matches both 'fpu.entity_id' (SPEC 109's provider lookup) and any bare
+   * form a fixture query might use.
+   */
+  private function conditionValue(array $query, $field_suffix) {
+    foreach ($query['conditions'] as $condition) {
+      if ($condition['field'] !== NULL && substr($condition['field'], -strlen($field_suffix)) === $field_suffix) {
+        return $condition['value'];
+      }
+    }
+
+    return NULL;
+  }
+
+  /**
+   * No accounts anywhere — winner, losers or 'backend' — costs nothing: no
+   * exception, no watchdog entry. The normal answer when nobody is left to
+   * tell.
+   */
+  public function testANoRecipientsAwardNotifiesNobody() {
+    myapi_service_request_notify_offer_accepted($this->awardedOfferNode(), [], $this->awardedContext());
+
+    $this->assertSame([], $GLOBALS['myapi_test_watchdog']);
+  }
+
+  /**
+   * THE PROMISE THE ENDPOINT RELIES ON, same as the SPEC 109-111 fan-out
+   * tests above: the notification insert fails on purpose in tests/unit, and
+   * the trigger still returns normally, with the failure in watchdog — never
+   * the 200 of PUT /api/v1/service-offers/{id}/accept.
+   */
+  public function testAFailingWinnerInsertIsLoggedAndNeverPropagates() {
+    myapi_test_db_seed(['field_data_' . MYAPI_PROVIDER_USERS_FIELD => [$this->accountRow()]]);
+
+    myapi_service_request_notify_offer_accepted($this->awardedOfferNode(), [], $this->awardedContext());
+
+    $this->assertNotSame([], $GLOBALS['myapi_test_watchdog']);
+    $this->assertStringContainsString('myapi_notifications', $GLOBALS['myapi_test_watchdog'][0]['text']);
+  }
+
+  /**
+   * Each loser is looked up by ITS OWN provider_raw, never the winner's and
+   * never another loser's — the one thing this fixture layer can prove about
+   * a fan-out whose insert it cannot observe (SPEC 74's stub throws on
+   * db_insert() by design).
+   */
+  public function testEachLoserIsLookedUpByItsOwnProviderId() {
+    myapi_test_db_seed(['field_data_' . MYAPI_PROVIDER_USERS_FIELD => [
+      $this->accountRow(['entity_id' => 602]),
+    ]]);
+
+    $losers = [
+      (object) ['nid' => 9101, 'provider_raw' => 601, 'provider_name' => 'Perdedor A'],
+      (object) ['nid' => 9102, 'provider_raw' => 602, 'provider_name' => 'Perdedor B'],
+    ];
+
+    // The winner (self::PROVIDER) has no accounts seeded either, so its own
+    // lookup also runs and also comes up empty, cleanly.
+    myapi_service_request_notify_offer_accepted($this->awardedOfferNode(), $losers, $this->awardedContext());
+
+    $queries = array_values(array_filter(
+      myapi_test_db_queries(),
+      function ($query) {
+        return $query['table'] === 'field_data_' . MYAPI_PROVIDER_USERS_FIELD;
+      }
+    ));
+
+    $this->assertCount(3, $queries);
+    $this->assertSame(self::PROVIDER, $this->conditionValue($queries[0], 'entity_id'));
+    $this->assertSame(601, $this->conditionValue($queries[1], 'entity_id'));
+    $this->assertSame(602, $this->conditionValue($queries[2], 'entity_id'));
+
+    $this->assertNotSame([], $GLOBALS['myapi_test_watchdog']);
   }
 
 }

@@ -1793,11 +1793,33 @@ function myapi_service_offer_accept($nid) {
     node_save($offer);
   }
 
+  // THE LOSERS OF THE AWARD (SPEC 112), captured BEFORE the sweep below: after
+  // it, an offer that just turned 'rejected' and one that already was are
+  // indistinguishable by status alone. Read-only — nothing here is written by
+  // this query.
+  $losers = myapi_service_offer_sent_offers_for_request($request_nid, $nid);
+
   // D. THE LOSERS. Last, and the only step that can leave the data half
   // written — see the sweep's own docblock for why that is accepted. The winner
   // is spared BY NID and not by status: it already says 'selected', which that
   // function considers live.
   $offers_rejected = myapi_service_offer_reject_live($request_nid, $nid);
+
+  // THE AWARD NOTICES (SPEC 112): the winning provider, each provider just
+  // swept to 'rejected', and the 'backend' role. Best-effort, same criterion
+  // as every other trigger of this module — a failure here is logged and never
+  // touches the 200 below. No 'requester_uid': the resident who awarded is out
+  // of this notice's audience (SPEC 112's decision).
+  myapi_service_request_notify_offer_accepted($offer, $losers, [
+    'request_nid'    => $request_nid,
+    'request_title'  => $request_row->title,
+    'condominium_id' => $request_row->condominium_id,
+    'unit_id'        => $request_row->unit_id,
+    'provider_id'    => (int) $row->provider_raw,
+    'provider_name'  => isset($provider_row->title) ? $provider_row->title : NULL,
+    'amount'         => isset($row->amount) ? $row->amount : NULL,
+    'amount_type'    => isset($row->amount_type) ? $row->amount_type : NULL,
+  ]);
 
   // ---------------------------------------------------------------------
   // The answer: THE SAME NINETEEN-KEY OBJECT the detail serves, rebuilt from
