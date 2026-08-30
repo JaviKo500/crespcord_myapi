@@ -164,6 +164,44 @@ define('MYAPI_NOTIFICATION_TYPE_SERVICE_OFFER_WITHDRAWN', 'service_offer_withdra
  */
 define('MYAPI_SERVICE_OFFER_WITHDRAWN_MAIL_KEY', 'service_request_offer_withdrawn_resident');
 
+/* ---------------------------------------------------------------------------
+ * SPEC 112 — the offer-award notices (winner, losers, 'backend').
+ *
+ * One event: the resident awards an offer (PUT /api/v1/service-offers/{id}/
+ * accept). Three channels — inbox row, push and email — go to the winning
+ * provider (with their offer's amount) and to each losing provider whose
+ * offer moves from 'sent' to 'rejected' in that same call (without revealing
+ * who won or for how much), plus a fourth, email-only channel to the
+ * 'backend' role. Reuses MYAPI_NOTIFICATION_SOURCE_SERVICE_OFFER and
+ * MYAPI_NOTIFICATION_DEEP_LINK_SERVICE_REQUEST_PROVIDER unchanged.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Notification type of the "you were selected" event sent to the winner.
+ */
+define('MYAPI_NOTIFICATION_TYPE_SERVICE_OFFER_ACCEPTED', 'service_offer_accepted');
+
+/**
+ * Notification type of the "another provider was selected" event sent to
+ * each loser.
+ */
+define('MYAPI_NOTIFICATION_TYPE_SERVICE_OFFER_REJECTED', 'service_offer_rejected');
+
+/**
+ * drupal_mail() key of the award notice sent to the winning provider.
+ */
+define('MYAPI_SERVICE_OFFER_ACCEPTED_MAIL_KEY', 'service_request_offer_accepted_provider');
+
+/**
+ * drupal_mail() key of the award notice sent to each losing provider.
+ */
+define('MYAPI_SERVICE_OFFER_REJECTED_MAIL_KEY', 'service_request_offer_rejected_provider');
+
+/**
+ * drupal_mail() key of the award detail sent to the 'backend' role.
+ */
+define('MYAPI_SERVICE_REQUEST_AWARDED_ADMIN_MAIL_KEY', 'service_request_awarded_admin');
+
 /**
  * Lists the ACTIVE providers that offer one category.
  *
