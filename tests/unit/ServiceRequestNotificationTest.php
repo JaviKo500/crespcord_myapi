@@ -56,6 +56,8 @@ class ServiceRequestNotificationTest extends TestCase {
   protected function setUp(): void {
     myapi_test_db_seed();
     $GLOBALS['myapi_test_watchdog'] = [];
+    $GLOBALS['myapi_test_users'] = [];
+    $GLOBALS['myapi_test_variables'] = [];
   }
 
   /**
@@ -590,6 +592,237 @@ class ServiceRequestNotificationTest extends TestCase {
     ]);
 
     $this->notify();
+
+    $this->assertNotSame([], $GLOBALS['myapi_test_watchdog']);
+    $this->assertStringContainsString('myapi_notifications', $GLOBALS['myapi_test_watchdog'][0]['text']);
+  }
+
+  /* -------------------------------------------------------------------------
+   * SPEC 110 — the offer-received notice to the resident.
+   * ---------------------------------------------------------------------- */
+
+  /* -- The amount text ----------------------------------------------------- */
+
+  public function testTheAmountTextOfAFixedOfferShowsTheNumberAndTheLabel() {
+    $this->assertSame('150.00 (Precio cerrado)', myapi_service_offer_amount_text(150, 'fixed'));
+  }
+
+  public function testTheAmountTextOfAnEstimateShowsTheNumberAndTheLabel() {
+    $this->assertSame('80.50 (Estimado)', myapi_service_offer_amount_text(80.5, 'estimate'));
+  }
+
+  public function testTheAmountTextOfAnHourlyOfferShowsTheNumberAndTheLabel() {
+    $this->assertSame('25.00 (Por hora)', myapi_service_offer_amount_text(25, 'hourly'));
+  }
+
+  public function testTheAmountTextOfAnOnSiteQuoteHasNoNumber() {
+    $this->assertSame('A presupuestar en sitio', myapi_service_offer_amount_text(NULL, 'on_site_quote'));
+  }
+
+  /**
+   * A corrupt amount_type — outside the catalogue — degrades to the same text
+   * as 'on_site_quote' rather than breaking the notice.
+   */
+  public function testAnAmountTypeOutsideTheCatalogueFallsBackToOnSiteQuote() {
+    $this->assertSame('A presupuestar en sitio', myapi_service_offer_amount_text(99, 'bogus_type'));
+  }
+
+  /* -- The push title and body ---------------------------------------------- */
+
+  public function testTheOfferPushTitleIsFixed() {
+    $this->assertSame('Nueva oferta recibida', myapi_service_offer_push_title());
+  }
+
+  public function testTheOfferPushBodyCarriesTheThreeLabelledLines() {
+    $body = myapi_service_offer_push_body('Fuga en el calentador', 'Plomería Sur', '150.00 (Precio cerrado)');
+
+    $this->assertSame(
+      "Fuga en el calentador\nProveedor: Plomería Sur\nMonto: 150.00 (Precio cerrado)",
+      $body
+    );
+  }
+
+  public function testTheOfferPushBodyDrawsUnresolvableValuesAsADash() {
+    $body = myapi_service_offer_push_body(NULL, NULL, '');
+
+    $this->assertSame("—\nProveedor: —\nMonto: —", $body);
+  }
+
+  /* -- The app deep link ----------------------------------------------------- */
+
+  public function testTheDeepLinkUsesTheDefaultBaseWhenTheVariableIsNotSet() {
+    $this->assertSame('myapp://service-requests/128', myapi_service_request_app_deep_link_url(128));
+  }
+
+  /**
+   * Configurable without a deploy, and independent of
+   * myapi_password_reset_deep_link_base (SPEC 07): changing one must never
+   * change the other.
+   */
+  public function testTheDeepLinkBaseIsConfigurable() {
+    $GLOBALS['myapi_test_variables']['myapi_service_request_deep_link_base'] = 'crespcord://requests';
+
+    $this->assertSame('crespcord://requests/128', myapi_service_request_app_deep_link_url(128));
+  }
+
+  /* -- The resident mail params ---------------------------------------------- */
+
+  private function residentMailParams($extra = []) {
+    return myapi_service_offer_resident_mail_params(self::NID, $extra + [
+      'name'          => 'Ana Pérez',
+      'subject'       => 'Fuga en el calentador',
+      'provider_name' => 'Plomería Sur',
+      'amount_text'   => '150.00 (Precio cerrado)',
+    ]);
+  }
+
+  public function testTheResidentMailParamsCarryTheValuesEscaped() {
+    $params = $this->residentMailParams(['subject' => 'Fuga en el baño A&B']);
+
+    $this->assertSame(self::NID, $params['nid']);
+    $this->assertSame('Fuga en el baño A&amp;B', $params['subject']);
+    $this->assertSame('Plomería Sur', $params['provider_name']);
+    $this->assertSame('150.00 (Precio cerrado)', $params['amount_text']);
+    $this->assertSame('Ana Pérez', $params['name']);
+  }
+
+  public function testTheResidentMailParamsFallBackToTheDash() {
+    $params = $this->residentMailParams(['provider_name' => NULL, 'amount_text' => '']);
+
+    $this->assertSame('—', $params['provider_name']);
+    $this->assertSame('—', $params['amount_text']);
+  }
+
+  /**
+   * NULL and not a dash: the caller (the orchestrator) decides between
+   * 'Hola {name}' and bare 'Hola', and it can only do that if an unresolved
+   * name stays NULL rather than becoming the placeholder text.
+   */
+  public function testTheResidentMailParamsNameIsNullWhenUnresolved() {
+    $params = $this->residentMailParams(['name' => NULL]);
+
+    $this->assertNull($params['name']);
+  }
+
+  public function testTheResidentMailParamsCarryTheDeepLinkUrl() {
+    $params = $this->residentMailParams();
+
+    $this->assertSame('myapp://service-requests/' . self::NID, $params['deep_link_url']);
+  }
+
+  /* -- The resident mail ------------------------------------------------------ */
+
+  public function testTheSubjectOfTheOfferResidentMail() {
+    $message = ['body' => [], 'headers' => []];
+
+    myapi_mail_format_service_request_offer_resident($message, $this->residentMailParams());
+
+    $this->assertSame('Nueva oferta recibida — Fuga en el calentador', $message['subject']);
+  }
+
+  /**
+   * A subject is plain text, so the escaped title is decoded back — same
+   * reason the two SPEC 109 subjects above do it.
+   */
+  public function testTheOfferResidentSubjectDecodesTheEscapedTitle() {
+    $message = ['body' => [], 'headers' => []];
+
+    myapi_mail_format_service_request_offer_resident($message, $this->residentMailParams(['subject' => 'Fuga A&B']));
+
+    $this->assertSame('Nueva oferta recibida — Fuga A&B', $message['subject']);
+  }
+
+  public function testTheOfferResidentMailDrawsExactlyThreeLines() {
+    $html = myapi_mail_service_request_offer_resident_html($this->residentMailParams());
+
+    $this->assertSame(
+      [
+        'Asunto'    => 'Fuga en el calentador',
+        'Proveedor' => 'Plomería Sur',
+        'Monto'     => '150.00 (Precio cerrado)',
+      ],
+      $this->lines($html)
+    );
+  }
+
+  public function testTheOfferResidentMailGreetsByName() {
+    $html = myapi_mail_service_request_offer_resident_html($this->residentMailParams());
+
+    $this->assertStringContainsString('Hola Ana Pérez', $html);
+  }
+
+  public function testTheOfferResidentMailGreetsBareWhenTheNameIsUnresolved() {
+    $html = myapi_mail_service_request_offer_resident_html($this->residentMailParams(['name' => NULL]));
+
+    $this->assertStringContainsString('>Hola<', $html);
+  }
+
+  /**
+   * Unlike the two SPEC 109 emails, this one has a button: the resident's next
+   * step is the app.
+   */
+  public function testTheOfferResidentButtonOpensTheDeepLink() {
+    $html = myapi_mail_service_request_offer_resident_html($this->residentMailParams());
+
+    $this->assertStringContainsString('>Ver solicitud</a>', $html);
+    $this->assertStringContainsString('href="myapp://service-requests/' . self::NID . '"', $html);
+  }
+
+  /* -------------------------------------------------------------------------
+   * The orchestrator (step 5).
+   *
+   * Same boundary as the SPEC 109 orchestrator tests above: the notification
+   * insert cannot run in tests/unit (db_insert() throws by design), so what is
+   * asserted here is the promise the endpoint relies on — the failure is
+   * swallowed and logged — plus the one branch that never reaches the insert
+   * at all: a requester account that no longer exists.
+   * ---------------------------------------------------------------------- */
+
+  private function offerNode() {
+    return (object) ['nid' => 9001, 'title' => 'Oferta de Plomería Sur'];
+  }
+
+  private function offerContext($extra = []) {
+    return $extra + [
+      'request_nid'    => self::NID,
+      'request_title'  => 'Fuga en el calentador',
+      'requester_uid'  => self::REQUESTER,
+      'condominium_id' => self::CONDO,
+      'unit_id'        => self::UNIT,
+      'provider_id'    => self::PROVIDER,
+      'provider_name'  => 'Plomería Sur',
+      'amount'         => 150,
+      'amount_type'    => 'fixed',
+    ];
+  }
+
+  /**
+   * A requester whose account was deleted between the request and the offer
+   * costs nothing: no notification query, no mail, no watchdog entry — there
+   * is nobody left to tell.
+   */
+  public function testAMissingRequesterAccountNotifiesNobodyWithoutQuerying() {
+    myapi_service_request_notify_offer_received($this->offerNode(), $this->offerContext());
+
+    $this->assertSame([], myapi_test_db_queries());
+    $this->assertSame([], $GLOBALS['myapi_test_watchdog']);
+  }
+
+  /**
+   * THE PROMISE THE ENDPOINT RELIES ON, same as the SPEC 109 fan-out test
+   * above: the notification insert fails on purpose in tests/unit, and the
+   * trigger still returns normally, with the failure in watchdog — never the
+   * 201 of POST /api/v1/service-requests/{id}/offers.
+   */
+  public function testAFailingInsertIsLoggedAndNeverPropagates() {
+    $GLOBALS['myapi_test_users'][self::REQUESTER] = [
+      'uid'    => self::REQUESTER,
+      'name'   => 'residente42',
+      'mail'   => 'ana@example.com',
+      'status' => 1,
+    ];
+
+    myapi_service_request_notify_offer_received($this->offerNode(), $this->offerContext());
 
     $this->assertNotSame([], $GLOBALS['myapi_test_watchdog']);
     $this->assertStringContainsString('myapi_notifications', $GLOBALS['myapi_test_watchdog'][0]['text']);
