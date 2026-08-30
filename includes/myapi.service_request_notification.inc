@@ -865,6 +865,41 @@ function myapi_service_request_awarded_admin_mail_params($nid, array $values) {
 }
 
 /* ---------------------------------------------------------------------------
+ * SPEC 113 — pure text builders for the request-cancelled notice.
+ *
+ * Same two rules as the blocks above: an unresolvable value degrades to
+ * MYAPI_SERVICE_REQUEST_MAIL_EMPTY rather than an empty line or a thrown
+ * error, and the push/inbox text is plain while the mail params (added in
+ * Step 6, alongside the orchestrator that resolves the values they need) are
+ * escaped.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Title of the push and of the inbox row sent to each affected provider.
+ *
+ * @return string  Fixed Spanish text.
+ */
+function myapi_service_request_cancelled_push_title() {
+  return 'Solicitud cancelada';
+}
+
+/**
+ * Body of the push and of the inbox row sent to each affected provider.
+ *
+ * One line only — the request's own subject. No status distinction between a
+ * 'sent' offer (never chosen) and a 'selected' one (work already assigned):
+ * both providers read the same text (the spec's decision). No reason either:
+ * the resident's private text never reaches a provider (the spec's decision).
+ *
+ * @param string|null $subject  node.title of the request.
+ *
+ * @return string  One line.
+ */
+function myapi_service_request_cancelled_push_body($subject) {
+  return myapi_service_request_notification_label($subject);
+}
+
+/* ---------------------------------------------------------------------------
  * Resolution of the values the three channels share.
  *
  * Each of these runs ONCE per request, no matter how many providers are being
