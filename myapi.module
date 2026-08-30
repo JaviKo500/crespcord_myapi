@@ -1143,6 +1143,22 @@ function myapi_mail($key, &$message, $params) {
     case 'service_request_offer_withdrawn_resident':
       myapi_mail_format_service_request_offer_withdrawn_resident($message, $params);
       break;
+
+    // SPEC 112. Fire for PUT /api/v1/service-offers/{id}/accept only: an
+    // award made from the back office notifies nobody, same criterion as the
+    // four cases above. Once per award, to the winning provider, to each
+    // losing provider, and to the 'backend' role.
+    case 'service_request_offer_accepted_provider':
+      myapi_mail_format_service_offer_accepted_provider($message, $params);
+      break;
+
+    case 'service_request_offer_rejected_provider':
+      myapi_mail_format_service_offer_rejected_provider($message, $params);
+      break;
+
+    case 'service_request_awarded_admin':
+      myapi_mail_format_service_request_awarded_admin($message, $params);
+      break;
   }
 }
 

@@ -966,6 +966,164 @@ function myapi_mail_service_request_offer_withdrawn_resident_html($params) {
   );
 }
 
+/* ---------------------------------------------------------------------------
+ * Offer-award emails (SPEC 112).
+ *
+ * Three keys, fired together by myapi_service_request_notify_offer_accepted()
+ * from PUT /api/v1/service-offers/{id}/accept:
+ * - 'service_request_offer_accepted_provider': the winner. NO button, same
+ *   criterion as 'service_request_provider' (SPEC 109) — a provider has no
+ *   back office to land on.
+ * - 'service_request_offer_rejected_provider': each loser. Same shape, minus
+ *   the amount line, and without a single field naming the winner.
+ * - 'service_request_awarded_admin': the whole award, sent to the 'backend'
+ *   role, with the button that opens the node — same shape as
+ *   'service_request_admin' (SPEC 109).
+ *
+ * $params arrives ALREADY RESOLVED AND ESCAPED from
+ * myapi_service_offer_accepted_provider_mail_params() /
+ * myapi_service_offer_rejected_provider_mail_params() /
+ * myapi_service_request_awarded_admin_mail_params() — nothing here escapes
+ * anything.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Formats the award email sent to the winning provider.
+ *
+ * Called from myapi_mail() (in myapi.module) for the
+ * 'service_request_offer_accepted_provider' key.
+ *
+ * @param array $message  Mail message array, altered by reference.
+ * @param array $params   'nid', 'subject' and 'amount_text', already escaped.
+ */
+function myapi_mail_format_service_offer_accepted_provider(&$message, $params) {
+  // A subject is plain text, so the escaped title is decoded back — same
+  // reason myapi_mail_format_service_request_provider() does it.
+  $message['subject'] = 'Fuiste seleccionado — ' . decode_entities($params['subject']);
+  $message['body'][] = myapi_mail_service_offer_accepted_provider_html($params);
+
+  $message['headers']['Content-Type'] = 'text/html; charset=UTF-8';
+}
+
+/**
+ * Builds the HTML body of that email.
+ *
+ * Two lines — the same two the push carries — and no button, same criterion
+ * as myapi_mail_service_request_provider_html(): the provider's next step is
+ * the app.
+ *
+ * @param array $params  Already-escaped values (see the formatter).
+ *
+ * @return string  Full HTML document.
+ */
+function myapi_mail_service_offer_accepted_provider_html($params) {
+  $lines = array(
+    'Asunto' => $params['subject'],
+    'Monto'  => $params['amount_text'],
+  );
+
+  return myapi_mail_reservation_html(
+    'Solicitud #' . $params['nid'],
+    '¡Fuiste seleccionado!',
+    'Tu oferta fue elegida para esta solicitud de servicio.',
+    $lines,
+    'Revisa la solicitud en la app.'
+  );
+}
+
+/**
+ * Formats the award email sent to a losing provider.
+ *
+ * Called from myapi_mail() (in myapi.module) for the
+ * 'service_request_offer_rejected_provider' key.
+ *
+ * @param array $message  Mail message array, altered by reference.
+ * @param array $params   'nid' and 'subject', already escaped.
+ */
+function myapi_mail_format_service_offer_rejected_provider(&$message, $params) {
+  // A subject is plain text, so the escaped title is decoded back — same
+  // reason myapi_mail_format_service_offer_accepted_provider() does it.
+  $message['subject'] = 'Solicitud adjudicada — ' . decode_entities($params['subject']);
+  $message['body'][] = myapi_mail_service_offer_rejected_provider_html($params);
+
+  $message['headers']['Content-Type'] = 'text/html; charset=UTF-8';
+}
+
+/**
+ * Builds the HTML body of that email.
+ *
+ * One line only — the request's own subject — and no button. Deliberately
+ * without the winner's identity or amount, same rule as the push (see
+ * myapi_service_offer_rejected_push_body()).
+ *
+ * @param array $params  Already-escaped values (see the formatter).
+ *
+ * @return string  Full HTML document.
+ */
+function myapi_mail_service_offer_rejected_provider_html($params) {
+  $lines = array(
+    'Asunto' => $params['subject'],
+  );
+
+  return myapi_mail_reservation_html(
+    'Solicitud #' . $params['nid'],
+    'Ya se seleccionó un proveedor',
+    'Se seleccionó a otro proveedor para esta solicitud de servicio.',
+    $lines,
+    'Revisa la solicitud en la app.'
+  );
+}
+
+/**
+ * Formats the award detail email sent to the 'backend' role.
+ *
+ * Called from myapi_mail() (in myapi.module) for the
+ * 'service_request_awarded_admin' key. Same subject pattern as
+ * myapi_mail_format_service_request_admin() (SPEC 109): the nid and the
+ * condominium, the two values an operator triages by.
+ *
+ * @param array $message  Mail message array, altered by reference.
+ * @param array $params   'nid', 'subject', 'provider_name', 'amount_text',
+ *                        'condominium', 'unit' and 'node_url', already
+ *                        escaped.
+ */
+function myapi_mail_format_service_request_awarded_admin(&$message, $params) {
+  $message['subject'] = 'Solicitud adjudicada #' . $params['nid']
+    . ' — ' . decode_entities($params['condominium']);
+  $message['body'][] = myapi_mail_service_request_awarded_admin_html($params);
+
+  $message['headers']['Content-Type'] = 'text/html; charset=UTF-8';
+}
+
+/**
+ * Builds the HTML body of that email.
+ *
+ * Five lines, in the order an operator reads them: what was asked, who won it,
+ * for how much, and where — the same order the spec's data model dictates.
+ *
+ * @param array $params  Already-escaped values (see the formatter).
+ *
+ * @return string  Full HTML document.
+ */
+function myapi_mail_service_request_awarded_admin_html($params) {
+  $lines = array(
+    'Asunto'              => $params['subject'],
+    'Proveedor adjudicado' => $params['provider_name'],
+    'Monto'               => $params['amount_text'],
+    'Condominio'          => $params['condominium'],
+    'Vivienda'            => $params['unit'],
+  );
+
+  return myapi_mail_reservation_html(
+    'Solicitud #' . $params['nid'],
+    'Solicitud adjudicada',
+    'Se adjudicó una solicitud de servicio a un proveedor.',
+    $lines,
+    'Solicitud #' . $params['nid'],
+    array('label' => 'Ver solicitud', 'url' => $params['node_url'])
+  );
+}
+
 /**
  * Shared HTML shell of the reservation emails — and, since SPEC 68, of the five
  * claim ones.

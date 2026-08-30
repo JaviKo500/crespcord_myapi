@@ -751,6 +751,90 @@ function myapi_service_offer_rejected_push_body($subject) {
   return myapi_service_request_notification_label($subject);
 }
 
+/**
+ * Params of the award email sent to the winning provider.
+ *
+ * No 'name' field, unlike the resident-facing emails of this file: the
+ * provider emails (SPEC 109's 'service_request_provider' included) never
+ * greet by name, only the resident ones do.
+ *
+ * @param int   $nid     nid of the request (not the offer).
+ * @param array $values  Already-resolved 'subject' and 'amount_text'.
+ *
+ * @return array  Escaped params for
+ *   myapi_mail_format_service_offer_accepted_provider().
+ */
+function myapi_service_offer_accepted_provider_mail_params($nid, array $values) {
+  $values += [
+    'subject'     => NULL,
+    'amount_text' => NULL,
+  ];
+
+  return [
+    'nid'         => (int) $nid,
+    'subject'     => myapi_service_request_mail_label($values['subject']),
+    'amount_text' => myapi_service_request_mail_label($values['amount_text']),
+  ];
+}
+
+/**
+ * Params of the award email sent to a losing provider.
+ *
+ * Deliberately without 'amount_text' or any field naming the winner: the
+ * spec's rule that a competitor never learns who won or for how much applies
+ * to every channel, this one included.
+ *
+ * @param int   $nid     nid of the request (not the offer).
+ * @param array $values  Already-resolved 'subject'.
+ *
+ * @return array  Escaped params for
+ *   myapi_mail_format_service_offer_rejected_provider().
+ */
+function myapi_service_offer_rejected_provider_mail_params($nid, array $values) {
+  $values += [
+    'subject' => NULL,
+  ];
+
+  return [
+    'nid'     => (int) $nid,
+    'subject' => myapi_service_request_mail_label($values['subject']),
+  ];
+}
+
+/**
+ * Params of the award detail email sent to the 'backend' role.
+ *
+ * Same button pattern as myapi_service_request_admin_mail_params() (SPEC
+ * 109): absolute node URL, escaped here because url() does not encode the
+ * '&' between query arguments for HTML output.
+ *
+ * @param int   $nid     nid of the request.
+ * @param array $values  Already-resolved 'subject', 'provider_name',
+ *   'amount_text', 'condominium' and 'unit'.
+ *
+ * @return array  Escaped params for
+ *   myapi_mail_format_service_request_awarded_admin().
+ */
+function myapi_service_request_awarded_admin_mail_params($nid, array $values) {
+  $values += [
+    'subject'       => NULL,
+    'provider_name' => NULL,
+    'amount_text'   => NULL,
+    'condominium'   => NULL,
+    'unit'          => NULL,
+  ];
+
+  return [
+    'nid'           => (int) $nid,
+    'subject'       => myapi_service_request_mail_label($values['subject']),
+    'provider_name' => myapi_service_request_mail_label($values['provider_name']),
+    'amount_text'   => myapi_service_request_mail_label($values['amount_text']),
+    'condominium'   => myapi_service_request_mail_label($values['condominium']),
+    'unit'          => myapi_service_request_mail_label($values['unit']),
+    'node_url'      => check_plain(url('node/' . (int) $nid, ['absolute' => TRUE])),
+  ];
+}
+
 /* ---------------------------------------------------------------------------
  * Resolution of the values the three channels share.
  *
