@@ -36,6 +36,13 @@ function myapi_flood_is_allowed($event, $identifier, $limit_var, $window_var) {
     'myapi_flood_forgot_ip_limit'        => 10,
     'myapi_flood_forgot_identifier_limit' => 3,
     'myapi_flood_reset_ip_limit'         => 10,
+    // SPEC 115. The highest ceiling of this file, and the only one that is
+    // not guarding a password: POST /api/v1/chat/token is not an attempt at
+    // anything, it is an RSA signature, and what is bounded is that cost. An
+    // app calls it once per session, so 60 an hour from one IP leaves a whole
+    // household far below the limit while a script paying for signatures is
+    // stopped.
+    'myapi_flood_chat_token_ip_limit'    => 60,
   ];
   static $window_defaults = [
     'myapi_flood_login_user_window'       => 3600,
@@ -45,6 +52,7 @@ function myapi_flood_is_allowed($event, $identifier, $limit_var, $window_var) {
     'myapi_flood_forgot_ip_window'        => 3600,
     'myapi_flood_forgot_identifier_window' => 3600,
     'myapi_flood_reset_ip_window'         => 900,
+    'myapi_flood_chat_token_ip_window'    => 3600,
   ];
 
   $default_limit  = isset($limit_defaults[$limit_var])   ? $limit_defaults[$limit_var]   : 10;
@@ -92,6 +100,7 @@ function myapi_flood_register($event, $identifier, $window_var) {
     'myapi_flood_forgot_ip_window'        => 3600,
     'myapi_flood_forgot_identifier_window' => 3600,
     'myapi_flood_reset_ip_window'         => 900,
+    'myapi_flood_chat_token_ip_window'    => 3600,
   ];
 
   $default_window = isset($window_defaults[$window_var]) ? $window_defaults[$window_var] : 3600;

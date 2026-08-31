@@ -234,6 +234,20 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'service_request_closed'             => 'Service request closed successfully.',
       'service_request_not_closable'       => 'This service request can no longer be closed.',
       'service_request_provider_missing'   => 'This service request has no assigned provider and cannot be rated.',
+      // SPEC 115 — the chat credential. Neither key tells the client WHAT is
+      // wrong: whether it is the private key, the client_email or the OpenSSL
+      // extension goes to watchdog and nowhere else.
+      //
+      // not_configured is a 503 and not a 500 on purpose: a deployment whose
+      // settings.php has no credential is not broken, it is NOT SET UP.
+      // token_failed is a key of its own rather than a reused server_error
+      // because the app can do something different with it — retry the chat
+      // without dropping the session — the same criterion SPEC 105 and SPEC 106
+      // used for not collapsing error_codes. Everything else this endpoint
+      // answers — method_not_allowed, too_many_attempts, missing_authorization
+      // and invalid_token — is reused above, unchanged.
+      'chat_not_configured'                => 'Chat is not available right now.',
+      'chat_token_failed'                  => 'Could not start the chat. Please try again.',
     ],
     'es' => [
       'invalid_credentials'    => 'Usuario o contraseña incorrectos.',
@@ -359,6 +373,9 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'service_request_closed'             => 'Solicitud cerrada correctamente.',
       'service_request_not_closable'       => 'Esta solicitud ya no se puede cerrar.',
       'service_request_provider_missing'   => 'Esta solicitud no tiene proveedor asignado y no se puede calificar.',
+      // SPEC 115 — see the note next to the English block.
+      'chat_not_configured'                => 'El chat no está disponible en este momento.',
+      'chat_token_failed'                  => 'No se pudo iniciar el chat. Intentá de nuevo.',
     ],
   ];
 
