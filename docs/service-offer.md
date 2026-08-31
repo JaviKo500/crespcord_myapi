@@ -252,7 +252,16 @@ ratings, and the resident contracts the provider, not the account.
 | `node.title` | *"Oferta de &lt;proveedor&gt; — solicitud #&lt;nid&gt;"*, truncated to 255 |
 | `field_request` | The `{id}` of the route |
 | `field_offer_status` | Always `sent` |
-| `field_firebase_path`, `field_chat_opened_at`, `field_last_message_at` | Always empty — the chat is another spec |
+| `field_firebase_path`, `field_chat_opened_at`, `field_last_message_at` | Always empty — see the note below |
+
+**The three chat fields are still empty, and the chat already works.** SPEC 115
+([chat.md](chat.md)) added `POST /api/v1/chat/token` without writing one of
+them: the path of a thread is a **convention over the offer's `nid`** —
+`service_offers/{nid}` — derived on every signature and never stored. Storing
+it would be keeping a function of the `nid` in a hand-editable column that, as
+`myapi.install` puts it, "breaks the chat without raising any error". The day
+the back office has to see a thread, `field_firebase_path` gets written **with
+the same value**, and nothing in the app changes.
 
 `node.uid` and `field_provider` are **two different things and both are
 written**: a provider may be operated by several accounts, and the offer has to

@@ -6,7 +6,7 @@
 Cuatro notas que la cabecera fija:
 
 - **Un `direct` hoy es un trabajo adjudicado sin sitio donde poner el precio.** `service_request` tiene seis campos propios y ninguno es monetario; el único lugar del módulo donde vive el precio de un trabajo es `field_offer_amount`, **que está en `service_offer`**. Un `direct` sin oferta no tiene precio, y no lo tendrá nunca por diseño, no por olvido.
-- **Y tampoco tiene chat.** `field_firebase_path`, `field_chat_opened_at` y `field_last_message_at` están instanciados sobre `service_offer` y sobre ningún otro bundle. Sin oferta no hay hilo posible. Este spec no abre el chat —sigue siendo otra spec— pero es el que hace que **pueda** abrirse algún día sobre un `direct`.
+- **Y tampoco tiene chat.** `field_firebase_path`, `field_chat_opened_at` y `field_last_message_at` están instanciados sobre `service_offer` y sobre ningún otro bundle. Sin oferta no hay hilo posible. Este spec no abre el chat —sigue siendo otra spec— pero es el que hace que **pueda** abrirse algún día sobre un `direct`. **✅ Resuelto parcialmente por SPEC 115:** `POST /api/v1/chat/token` firma la credencial del chat, y su regla de pertenencia —solicitud con `field_assigned_provider` más oferta viva de ese proveedor— reconoce un `direct` presupuestado **exactamente igual** que una adjudicada, porque su oferta se queda en `sent` y `sent` es viva. Lo que sigue fuera: **abrir** el hilo (los tres campos continúan vacíos: la ruta es una convención sobre el `nid` de la oferta, no un dato guardado) y **notificar** un mensaje nuevo. Ver `specs/services/115-chat-token.md`.
 - **Y su calificación no tiene a qué apuntar.** `myapi_services_close_requires_rating('direct')` devuelve `TRUE` porque hay una empresa que hizo el trabajo, y `field_rating_offer` se hizo **opcional** en SPEC 87 precisamente porque un `direct` no tenía oferta. El modelo lleva señalando este agujero desde entonces.
 - **El estado NO se mueve, y esa es la decisión central.** Un `direct` que pasa a `offered` se puede cerrar **sin calificar al proveedor**, porque esa función solo devuelve `TRUE` para `assigned` y `direct`. Un `direct` que pasa a `assigned` registra un precio como acordado que el residente nunca aceptó. La única opción que no rompe nada es la que no toca el estado.
 
@@ -32,7 +32,7 @@ Cuatro notas que la cabecera fija:
 
 - **Que el residente acepte o rechace el presupuesto.** La oferta nace `sent` y **nada la mueve de ahí**. No hay `selected`, no hay `rejected`, y `field_assigned_offer` sigue sin escribirse nunca. Es una limitación real, anotada en Riesgos.
 - **Editar o retirar la oferta.** Sigue siendo el spec inmediatamente siguiente, y este lo hace **más urgente** — ver Riesgo 1.
-- **El chat.** Los tres campos siguen vacíos. Lo que este spec cambia es que ahora existe la fila de la que podrían colgar.
+- **El chat.** Los tres campos siguen vacíos. Lo que este spec cambia es que ahora existe la fila de la que podrían colgar. **✅ Resuelto parcialmente por SPEC 115** — la credencial existe y cubre el `direct`; abrir el hilo y notificar siguen fuera. Ver arriba.
 - **Cambiar `myapi_services_close_requires_rating()`** ni la firma con la que se pregunta. Sigue decidiéndose con un solo valor.
 - **Mover `direct` en el grafo.** `myapi_services_request_transitions()` no se toca: `direct` sigue siendo una raíz que solo sale a `closed` y a `cancelled`.
 - **Cualquier `hook_update_N`.** No hay campo nuevo, no hay instancia nueva, no hay migración. Este spec no toca la base de datos.
@@ -228,7 +228,7 @@ Cuatro pasos.
 - Que el residente **acepte o rechace** el presupuesto de su `direct`.
 - Editar, retirar o borrar la oferta.
 - Adjudicar la oferta: `selected` y `field_assigned_offer` siguen sin escribirse.
-- El chat. Los tres campos siguen vacíos; lo único que cambia es que ya existe la fila de la que colgarían.
+- El chat. Los tres campos siguen vacíos; lo único que cambia es que ya existe la fila de la que colgarían. **✅ Resuelto parcialmente por SPEC 115** — ver arriba.
 - Notificar al residente de que le han presupuestado.
 - Cualquier cambio de esquema, de catálogo o del grafo de transiciones.
 - Un precio en `service_request`.
