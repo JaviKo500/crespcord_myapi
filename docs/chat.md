@@ -161,6 +161,18 @@ nothing.** They are applied by hand from the Firebase console — this module do
 not deploy them (automating it would need OAuth2 against the Admin API, which is
 what this design exists to avoid).
 
+**Two things have to exist in the project before the rules mean anything**, and
+neither is a rule: the Realtime Database itself (create it in **locked mode** —
+test mode opens everything for 30 days, which is what this whole design exists
+to avoid), and **Firebase Authentication, turned on once from
+Compilación → Authentication → Comenzar**. Skipping the second is the failure
+described under "If `signInWithCustomToken()` fails" below: the token is signed
+correctly, the rules are published correctly, and nothing works.
+
+**Publishing this replaces the WHOLE ruleset.** If that database already holds
+data for something else, merge the `service_offers` node into the existing
+`rules` object instead of pasting over it.
+
 ```json
 {
   "rules": {
@@ -256,13 +268,42 @@ The flood ceiling can be tuned without a cache clear:
 
 ## If `signInWithCustomToken()` fails
 
-**Look at the server's clock first.** Google rejects a token whose `iat` is in
+**`CONFIGURATION_NOT_FOUND` means Firebase Authentication was never turned on
+for the project.** It is the first thing to check on a fresh project, it has
+nothing to do with the token or with the rules, and the message says none of
+that. Fix it in the console: **Compilación → Authentication → Comenzar**. That
+is the whole fix — **do not enable any sign-in provider**. Custom-token sign-in
+does not appear in that list and needs no toggle; it works because the token is
+signed by a service account of the project. All the button does is make the
+Identity Toolkit configuration exist.
+
+The symptom is total and identical everywhere, which is what makes it
+confusing: every device fails, and so does a bare `curl` carrying no token at
+all —
+
+```bash
+curl -s "https://identitytoolkit.googleapis.com/v1/projects?key=$WEB_API_KEY"
+```
+
+— answers `CONFIGURATION_NOT_FOUND` too. **That call is the diagnosis**: it
+takes no custom token, so an error there rules the signature, the claims and
+the credential out in one step. A project with Authentication enabled answers
+something else.
+
+**Then look at the server's clock.** Google rejects a token whose `iat` is in
 the future, and a server running fast breaks the chat **for every device at
-once**, with an error message that says nothing about time. Keep NTP running.
+once**, with an error message that says nothing about time either. Keep NTP
+running.
 
 After that: an expired or revoked API Bearer answers `401` here long before
 Firebase is involved, and a `503` means the credential never reached
 `settings.php` on that environment.
+
+**A `permission_denied` from the database is a different failure and a later
+one.** By then the token was accepted: what failed is the rules, and the usual
+reason is a `threads` claim that does not cover the path being read. Decode the
+custom token — its payload is plain base64url — and look at
+`claims.threads` before touching the rules.
 
 ---
 
