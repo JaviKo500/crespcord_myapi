@@ -68,6 +68,11 @@ class ChatTokenTest extends TestCase {
   const STRANGER_UID = 99;
 
   /**
+   * An account of a DIFFERENT provider — the one that lost the award.
+   */
+  const LOSER_UID = 21;
+
+  /**
    * The provider node the requests below are awarded to.
    */
   const PROVIDER_NID = 55;
@@ -670,8 +675,13 @@ class ChatTokenTest extends TestCase {
    * A LOSER of the award: field_assigned_provider names the winner, and this
    * offer was swept to 'rejected'. No thread — the provider who lost has
    * nothing to talk about.
+   *
+   * Asserted from BOTH sides, because they fail differently: the resident must
+   * not get a second thread on their own request, and the loser must not get
+   * the WINNER'S thread — the one row of this table where a mistake would hand
+   * a stranger the conversation instead of merely hiding one.
    */
-  public function testALosingOfferIsNoThread() {
+  public function testALosingOfferIsNoThreadForEitherSide() {
     $this->seed([
       $this->offerRow(),
       $this->offerRow([
@@ -679,9 +689,14 @@ class ChatTokenTest extends TestCase {
         'fos.field_offer_status_value' => 'rejected',
         'fp.field_provider_target_id'  => 77,
       ]),
-    ]);
+    ], array_merge(
+      $this->bothProviderAccounts(),
+      [$this->providerUserRow(77, self::LOSER_UID)]
+    ));
 
     $this->assertSame([901], myapi_chat_offer_nids_for_uid(self::RESIDENT_UID));
+    $this->assertSame([901], myapi_chat_offer_nids_for_uid(self::PROVIDER_UID));
+    $this->assertSame([], myapi_chat_offer_nids_for_uid(self::LOSER_UID));
   }
 
   /**

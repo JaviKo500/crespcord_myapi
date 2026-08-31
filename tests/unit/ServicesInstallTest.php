@@ -993,14 +993,29 @@ class ServicesInstallTest extends TestCase {
     $this->assertStringContainsString('function myapi_update_7033()', $source);
     // SPEC 91 appended 7034 (the file_managed.uri repair), SPEC 100 appended
     // 7035 (the ten quote fields), SPEC 109 appended 7036 (the provider_id
-    // column plus the two new mail keys) and SPEC 110 appended 7037 (the
-    // third mail key, no schema change); the ceiling moves with each of them,
-    // so the guard keeps saying "nothing beyond the last spec".
+    // column plus the two new mail keys), SPEC 110 appended 7037 (the third
+    // mail key, no schema change), and SPEC 111 to SPEC 114 appended 7038 to
+    // 7041, one per notification spec and none of them touching the schema
+    // either; the ceiling moves with each of them, so the guard keeps saying
+    // "nothing beyond the last spec".
+    //
+    // THE CEILING IS THE HALF THAT ROTS, and this line is the evidence: it sat
+    // at 7038 through four specs that each appended an update, so the suite
+    // carried a red test instead of a guard. Whoever appends myapi_update_7042()
+    // moves the assertion below with it, in the same commit — that is the whole
+    // job of this test, and a stale ceiling does not do it.
+    //
+    // SPEC 115 appended NOTHING here and is deliberately absent from the list:
+    // the chat credential writes no field, no table and no hook_update_N.
     $this->assertStringContainsString('function myapi_update_7034()', $source);
     $this->assertStringContainsString('function myapi_update_7035()', $source);
     $this->assertStringContainsString('function myapi_update_7036()', $source);
     $this->assertStringContainsString('function myapi_update_7037()', $source);
-    $this->assertStringNotContainsString('function myapi_update_7038()', $source);
+    $this->assertStringContainsString('function myapi_update_7038()', $source);
+    $this->assertStringContainsString('function myapi_update_7039()', $source);
+    $this->assertStringContainsString('function myapi_update_7040()', $source);
+    $this->assertStringContainsString('function myapi_update_7041()', $source);
+    $this->assertStringNotContainsString('function myapi_update_7042()', $source);
     // 7028 is still SPEC 81's, not this spec's.
     $this->assertStringContainsString(
       '_myapi_services_install();',
