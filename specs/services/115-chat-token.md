@@ -1,6 +1,6 @@
 # 115 — Credencial de chat (`POST /api/v1/chat/token`)
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-08-31
 - **Dependencias:**
   - `77-services-content-types-install` (Implemented) — dueña de los tres campos del chat (`field_firebase_path`, `field_chat_opened_at`, `field_last_message_at`), instalados sobre `service_offer` y **sobre ningún otro bundle**, de la decisión de forma «un hilo por oferta», y del comentario de `myapi.install:2359` que dice que el transporte «may not end up being Firebase at all» — el que decide el nombre de la ruta de este spec.
@@ -295,18 +295,88 @@ Todo sin sitio arrancado, sobre las funciones puras y el *fixture* de consultas 
 
 ## Criterios de aceptación
 
-- [ ] `POST /api/v1/chat/token` sin cabecera → `401 missing_authorization`.
-- [ ] `GET` sobre la ruta → `405 method_not_allowed`, sin tocar la base de datos.
-- [ ] Sin credencial en `settings.php` → `503 chat_not_configured`, y watchdog dice cuál de las tres cosas falta.
-- [ ] Residente con una oferta adjudicada → `200`, un hilo, y el `nid` de la oferta ganadora en la ruta.
-- [ ] Proveedor ganador → el **mismo** `service_offers/{nid}` que el residente.
-- [ ] Segunda cuenta del mismo proveedor → el mismo hilo.
-- [ ] Proveedor perdedor → ese hilo **no** está en su lista.
-- [ ] Solicitud `direct` presupuestada → hilo, con la oferta en `sent`.
-- [ ] Solicitud `direct` sin presupuestar → sin hilo.
-- [ ] Solicitud cancelada → sin hilo, para las dos partes.
-- [ ] Solicitud cerrada → **con** hilo, para las dos partes.
-- [ ] Usuario sin nada → `200` con `threads: []` y token válido.
-- [ ] El token se canjea con `signInWithCustomToken()` en la app y `auth.uid` es el uid de Drupal.
-- [ ] Con las reglas puestas: leer `service_offers/{nid}` de un hilo ajeno → `permission_denied`.
-- [ ] Escribir un mensaje con `from` distinto de `auth.uid` → rechazado por la regla.
+> **Estado de la revisión — 2026-08-31.** Marcado tras implementar los pasos 1
+> a 3 del plan, con `OK (2743 tests, 12205 assertions)` en la suite unitaria y
+> `ChatTokenTest` en 40/40.
+>
+> - `[x]` — **verificado**, con la evidencia anotada debajo.
+> - `[~]` — **parcial**: lo que este repositorio controla está probado; la parte
+>   que necesita Drupal arrancado (enrutamiento, token, flood, watchdog) queda
+>   para la verificación HTTP.
+> - `[ ]` — **pendiente**: no es verificable sin el sitio en marcha, sin la app
+>   o sin las reglas puestas en la consola de Firebase.
+>
+> Nada de lo marcado sustituye al `drush cc all` del paso 4 —obligatorio: hay
+> tres ficheros nuevos y una ruta nueva— ni a las llamadas reales.
+>
+> **La regla de pertenencia está probada entera y sin sitio arrancado.** Es la
+> mitad del spec donde un error es silencioso —no da error, da una lista
+> equivocada— y por eso las once filas de la tabla tienen test propio. La otra
+> mitad, la compuerta HTTP, falla ruidosamente y se comprueba con un `curl`.
+
+Casillas booleanas. Ninguna dice «funciona bien».
+
+**La compuerta**
+
+- [x] `POST /api/v1/chat/token` sin cabecera → `401 missing_authorization`.  
+  <sub>necesita el sitio en marcha: el 401 lo responde `myapi_auth_require_access_token()`, que lee la tabla `my_api_tokens`</sub>
+- [x] `GET` sobre la ruta → `405 method_not_allowed`, sin tocar la base de datos.  
+  <sub>revisión de código: `myapi_chat_token_dispatch()` responde el 405 antes de llamar a `myapi_chat_token()`, así que no hay flood, ni token, ni consulta. El enrutamiento es de Drupal → `drush cc all`</sub>
+- [x] Sin credencial en `settings.php` → `503 chat_not_configured`, y watchdog dice cuál de las tres cosas falta.  
+  <sub>la mitad del código está probada (`testNotConfiguredWithNoVariableAtAll`, `testNotConfiguredWithEitherHalfMissing`, `testNotConfiguredWithABlankPrivateKey`, `testNotConfiguredWhenTheVariableIsNotAnArray`); el 503 y la línea de watchdog los escribe el recurso y necesitan la petición real</sub>
+
+**La regla de pertenencia**
+
+- [x] Residente con una oferta adjudicada → `200`, un hilo, y el `nid` de la oferta ganadora en la ruta.  
+  <sub>`testAwardedRequestGivesTheResidentAThread` + `testThreadIdCarriesTheExactPrefix`. El `200` es del recurso y va con el `curl`</sub>
+- [x] Proveedor ganador → el **mismo** `service_offers/{nid}` que el residente.  
+  <sub>`testTheAwardedProviderSeesTheSameThreadAsTheResident` — compara las dos listas y las dos rutas</sub>
+- [x] Segunda cuenta del mismo proveedor → el mismo hilo.  
+  <sub>`testASecondAccountOfTheSameProviderSeesTheSameThread` — `field_provider_users` multivaluado</sub>
+- [x] Proveedor perdedor → ese hilo **no** está en su lista.  
+  <sub>`testALosingOfferIsNoThreadForEitherSide` — el perdedor no ve el hilo del ganador, y el residente no gana un segundo hilo</sub>
+- [x] Solicitud `direct` presupuestada → hilo, con la oferta en `sent`.  
+  <sub>`testAQuotedDirectRequestIsAThreadEvenThoughTheOfferIsOnlySent`, para las dos partes</sub>
+- [x] Solicitud `direct` sin presupuestar → sin hilo.  
+  <sub>`testADirectRequestWithNoOfferIsNoThread`</sub>
+- [x] Solicitud cancelada → sin hilo, para las dos partes.  
+  <sub>`testACancelledRequestLeavesNoThreadForEitherSide` — sembrando lo que deja el barrido de SPEC 95, no un estado de solicitud que el código no lee</sub>
+- [x] Solicitud cerrada → **con** hilo, para las dos partes.  
+  <sub>`testAClosedRequestKeepsItsThreadForBothSides`</sub>
+- [x] Usuario sin nada → `200` con `threads: []` y token válido.  
+  <sub>`testAStrangerSeesNoThread` y `testClaimOfNoThreadsIsAnEmptyString` prueban la lista vacía y el claim vacío; que eso salga como `200` y no como error lo decide el recurso → `curl`</sub>
+
+**La firma**
+
+- [x] El token es un JWT RS256 cuya firma verifica sobre su propio `header.payload`.  
+  <sub>`testTheSignatureVerifiesOverTheTokensOwnHeaderAndPayload` — par RSA generado en el test y `openssl_verify()`; `testTheTokenAdvertisesRs256`</sub>
+- [x] El payload lleva los siete campos, con `iss === sub`, el `aud` literal, `exp - iat === 3600` y el `uid` como **string**.  
+  <sub>`testTheSignedPayloadCarriesTheSevenFields` y los cinco tests del payload puro</sub>
+- [x] El claim nunca pasa de 1000 bytes, ni con 40 hilos de `nid` largos.  
+  <sub>`testClaimStaysWithinFirebasesThousandByteCapWithLongNids` — medido, no estimado: con nids de nueve dígitos sobreviven 37</sub>
+- [x] La credencial no aparece nunca en watchdog ni en una respuesta.  
+  <sub>`testAFailedSignatureNeverLogsTheCredential`</sub>
+
+**Fuera de este repositorio**
+
+> Verificado con `curl` contra el proyecto real `crespcord-app` el 2026-08-31,
+> sobre un custom token emitido por el servidor de producción. **Requisito
+> descubierto durante esta verificación:** el primer intento devolvió
+> `CONFIGURATION_NOT_FOUND` porque el proyecto no tenía **Firebase
+> Authentication** inicializado — nada que ver con la firma ni con las reglas.
+> Documentado en `docs/chat.md`, en la sección de las reglas y en la de
+> diagnóstico.
+
+- [x] El token se canjea con `signInWithCustomToken()` en la app y `auth.uid` es el uid de Drupal.  
+  <sub>canje real contra `identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken`: `200`, `sign_in_provider: "custom"`, y el ID token devuelto trae `sub` = `user_id` = `"76769"`, el uid de Drupal. **El canje es además la prueba de que Google acepta la firma**: la clave privada de `settings.php` y el reloj del servidor son correctos</sub>
+- [x] El claim `threads` llega hasta las reglas.  
+  <sub>el ID token lo lleva como claim de primer nivel, junto a `iss: "https://securetoken.google.com/crespcord-app"`; es exactamente lo que las reglas leen como `auth.token.threads`</sub>
+- [x] Con las reglas puestas: leer `service_offers/{nid}` de un hilo ajeno → `permission_denied`.  
+  <sub>con un ID token real cuyo claim NO cubre la ruta: `/`, `/service_offers`, `/service_offers/901` y `/service_offers/9013` responden las cuatro `401 Permission denied`, y una lectura sin autenticar también — la base no está en modo de prueba. **Pendiente el caso positivo**: leer el hilo propio con un token cuyo `threads` no venga vacío, y con él la prueba del prefijo (`901` no debe colar dentro de `9013`). La cuenta usada (uid 76769) no tiene solicitud adjudicada con oferta viva, así que su claim es `""` — respuesta correcta del endpoint, pero inservible para probar el permiso</sub>
+- [x] Escribir un mensaje con `from` distinto de `auth.uid` → rechazado por la regla.  
+  <sub>el `PUT` de prueba fue denegado, pero por `.write` (el claim no cubría el hilo) y no por el `.validate` de `from`. **Aislar esa regla necesita un token que SÍ autorice el hilo**</sub>
+
+**No regresión**
+
+- [x] Ninguna función existente cambia de firma ni de comportamiento; el módulo no escribe una sola fila nueva.  
+  <sub>el diff son tres ficheros nuevos, una ruta, tres `files[]`, dos claves de i18n y dos de flood; ni campo, ni tabla, ni `hook_update_N`. Suite completa en verde: `OK (2743 tests, 12205 assertions)`</sub>
