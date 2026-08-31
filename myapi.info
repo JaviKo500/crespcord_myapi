@@ -72,3 +72,6 @@ files[] = includes/myapi.service_transaction.inc
 files[] = includes/myapi.service_transaction_admin.inc
 files[] = includes/myapi.service_rating.inc
 files[] = includes/myapi.service_request_notification.inc
+files[] = includes/myapi.firebase.inc
+files[] = includes/myapi.chat.inc
+files[] = resources/chat.resource.inc

@@ -686,6 +686,34 @@ function myapi_menu() {
     'file'             => 'resources/service_offer.resource.inc',
   ];
 
+  // The chat credential (SPEC 115): the app trades this API's Bearer for a
+  // Firebase custom token whose custom claims declare which chat threads the
+  // account takes part in, so the Realtime Database rules can authorise the
+  // conversation between a resident and their awarded provider without Firebase
+  // ever asking Drupal. No message travels through this module, today or ever.
+  //
+  // 'chat/token' AND NOT 'firebase/token' (SPEC 115, decision 1).
+  // myapi.install already wrote down that the transport "may not end up being
+  // Firebase at all". The URL names what the app needs; who signs it is a detail
+  // of the server, and the day the transport changes it is the BODY of the
+  // response that changes — not a URL already-published versions of the app
+  // depend on.
+  //
+  // THREE LITERAL COMPONENTS, no wildcard and therefore no 'page arguments'.
+  // It opens the 'chat' prefix, which nothing else uses, so it competes with no
+  // existing route: Drupal 7 never even reaches the count-the-components
+  // question that the 'service-offers' family needed spelled out above.
+  //
+  // 'access callback' => TRUE like every api/v1 route of this module:
+  // authentication is the resource's job — it answers the envelope with 401,
+  // and Drupal's own 403 page would break the contract.
+  $items['api/v1/chat/token'] = [
+    'page callback'    => 'myapi_chat_token_dispatch',
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/chat.resource.inc',
+  ];
+
   // Back-office reservation calendar (SPEC 47). The only route of this module
   // that is not an api/v1 endpoint: it renders HTML for an operator, not the
   // JSON envelope for the app, which is why its callback lives in includes/
