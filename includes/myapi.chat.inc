@@ -277,6 +277,13 @@ function myapi_chat_offer_nids_for_uid($uid) {
  * nothing; the loop after it is what makes the guarantee true regardless of how
  * long the nids grow.
  *
+ * THE MEASURE IS DELIBERATELY CONSERVATIVE. PHP escapes the '/' of every thread
+ * path as '\/', so each one is weighed one byte heavier than Firebase will
+ * actually count it. Erring that way is the cheap mistake: over-counting drops
+ * one more thread than strictly necessary in the very worst case, while
+ * under-counting hands Firebase a claim it REJECTS — and a rejected claim is
+ * not a degraded chat, it is no chat at all.
+ *
  * THE ORDER IS PRESERVED AND THE TAIL IS WHAT GOES. The caller hands the threads
  * in "most recent activity first" order, so what is dropped is always the
  * quietest — the degradation SPEC 115 accepts and documents, and the signal that

@@ -228,8 +228,22 @@ function myapi_firebase_sign_custom_token($uid, array $claims) {
     . '.'
     . myapi_firebase_base64url_encode(drupal_json_encode($payload));
 
+  // THE KEY IS READ BEFORE IT IS USED, and not handed to openssl_sign() raw.
+  // A malformed PEM makes openssl_sign() emit a PHP warning on its way to
+  // returning FALSE, and a warning is not this function's contract: the
+  // contract is FALSE plus one watchdog line. Reading the key first fails
+  // silently and lets the reason be logged in the module's own words.
+  $private_key = openssl_pkey_get_private($service_account['private_key']);
+  if ($private_key === FALSE) {
+    watchdog('myapi', 'Firebase custom token not signed: the private key in myapi_firebase_service_account could not be read (@error).', [
+      '@error' => ($error = openssl_error_string()) === FALSE ? 'no OpenSSL error reported' : $error,
+    ], WATCHDOG_ERROR);
+
+    return FALSE;
+  }
+
   $signature = '';
-  if (!openssl_sign($signing_input, $signature, $service_account['private_key'], OPENSSL_ALGO_SHA256)) {
+  if (!openssl_sign($signing_input, $signature, $private_key, OPENSSL_ALGO_SHA256)) {
     // openssl_error_string() is drained here and not in the response: it names
     // the private key's problem, which is the one thing a client must never be
     // told and the one thing whoever reads the log needs.
