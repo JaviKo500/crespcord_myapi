@@ -79,10 +79,32 @@ function myapi_onesignal_is_configured() {
  * @param array  $data           Deep-link payload forwarded verbatim to the app
  *                               (e.g. ['target' => 'bulletin', 'id' => 812,
  *                               'notification_type' => 'bulletin']).
+ * @param array  $options        Optional delivery options (SPEC 116). FIVE KEYS
+ *   AND NOTHING ELSE; anything else in the array is ignored rather than passed
+ *   through, so a typo cannot reach OneSignal as an unknown field:
+ *     - 'collapse_id'    string. One notification that REPLACES the previous one
+ *                        with the same id instead of stacking under it. What
+ *                        turns twenty chat messages into one banner.
+ *     - 'thread_id'      string. Native grouping on iOS.
+ *     - 'android_group'  string. The same on Android.
+ *     - 'ttl'            int, seconds. How long the platform keeps trying. A
+ *                        push with no ttl is delivered whenever the device comes
+ *                        back, however late that is.
+ *     - 'timeout'        int, seconds, DEFAULT 30 — today's value, so a caller
+ *                        that passes nothing waits exactly as long as it always
+ *                        did. SPEC 116 lowers it to 5 for the one call that is
+ *                        made SYNCHRONOUSLY inside a request: what is being
+ *                        protected there is the PHP-FPM process, not a user,
+ *                        because nobody is waiting for that response.
+ *
+ *   WITHOUT $options THE REQUEST IS BYTE FOR BYTE THE ONE OF BEFORE: every key
+ *   is added only when given, and appended after 'data', so the payload of a
+ *   bulletin and of a service notification does not change shape. That is a
+ *   non-regression criterion of SPEC 116 and it is asserted, not assumed.
  *
  * @return bool  TRUE if every chunk was accepted (2xx), FALSE otherwise.
  */
-function myapi_onesignal_send(array $external_ids, $title, $body, array $data) {
+function myapi_onesignal_send(array $external_ids, $title, $body, array $data, array $options = []) {
   $app_id = variable_get('myapi_onesignal_app_id', '');
   $rest_api_key = variable_get('myapi_onesignal_rest_api_key', '');
 
@@ -99,6 +121,24 @@ function myapi_onesignal_send(array $external_ids, $title, $body, array $data) {
   // Keep the push banner compact; the inbox already stored the full text.
   $body = myapi_onesignal_truncate_body($body);
 
+  // The three string options and the numeric one, resolved ONCE: they are
+  // properties of the notification, not of the chunk. An empty string or a
+  // non-positive ttl counts as "not given" — passing OneSignal a blank
+  // collapse_id would group every notification of the site into one.
+  $extra = [];
+  foreach (['collapse_id', 'thread_id', 'android_group'] as $key) {
+    if (isset($options[$key]) && (string) $options[$key] !== '') {
+      $extra[$key] = (string) $options[$key];
+    }
+  }
+  if (isset($options['ttl']) && (int) $options['ttl'] > 0) {
+    $extra['ttl'] = (int) $options['ttl'];
+  }
+
+  // 30 is what every caller before SPEC 116 waited, so an absent 'timeout' must
+  // keep waiting it.
+  $timeout = (isset($options['timeout']) && (int) $options['timeout'] > 0) ? (int) $options['timeout'] : 30;
+
   $ok = TRUE;
 
   // Chunk to OneSignal's per-request cap.
@@ -111,6 +151,10 @@ function myapi_onesignal_send(array $external_ids, $title, $body, array $data) {
       'data'                      => $data,
     ];
 
+    // Appended, never interleaved: with no options this is a no-op and the five
+    // keys above are the whole request, exactly as before.
+    $payload += $extra;
+
     $response = drupal_http_request(MYAPI_ONESIGNAL_ENDPOINT, [
       'method'  => 'POST',
       'headers' => [
@@ -118,7 +162,7 @@ function myapi_onesignal_send(array $external_ids, $title, $body, array $data) {
         'Authorization' => 'Basic ' . $rest_api_key,
       ],
       'data'    => drupal_json_encode($payload),
-      'timeout' => 30,
+      'timeout' => $timeout,
     ]);
 
     $code = isset($response->code) ? (int) $response->code : 0;
