@@ -111,6 +111,63 @@ function myapi_chat_thread_id($offer_nid) {
 }
 
 /**
+ * The SelectQuery every membership question starts from.
+ *
+ * THE RULE OF MEMBERSHIP, BUILT ONCE. Six joins that say a live offer, a
+ * request with an assigned provider, and THE OFFER'S PROVIDER BEING THAT
+ * ASSIGNED PROVIDER. The three callers — the two sides of
+ * myapi_chat_offer_nids_for_uid() and myapi_chat_thread_row() — differ only in
+ * what they hang off this, and that is the whole reason the builder exists:
+ * with three hand-written copies, the day one of the two live-status constants
+ * changes is the day the chat and its push stop agreeing on what a thread is,
+ * silently and with no red test. Rule 3 of CLAUDE.md, applied to a criterion
+ * rather than to a helper.
+ *
+ * A REFACTOR AND NOT A CHANGE OF CRITERION: every condition below was already
+ * written, twice, in the function under it, and ChatTokenTest — the whole
+ * membership table of SPEC 115 — is the detector that says so.
+ *
+ * The reasons behind each condition are in this file's header and are not
+ * repeated: 'no.type' because field_request is shared with
+ * 'service_transaction', and the fap join condition because SPEC 106 sweeps the
+ * losers with no transaction, so a stray 'sent' offer of another provider can
+ * hang off an awarded request for a moment and must not open a thread.
+ *
+ * @return SelectQuery
+ *   Aliases: 'fq' the offer's field_request, 'no' the offer node, 'fos' its
+ *   status, 'fp' its provider, 'rn' the request node, 'fap' the assignment.
+ *   NOT A SINGLE FIELD IS SELECTED and no ordering is applied — what to read
+ *   and how to sort it is each caller's business.
+ */
+function myapi_chat_thread_base_query() {
+  $query = db_select('field_data_field_request', 'fq');
+  $query->condition('fq.entity_type', 'node');
+  $query->condition('fq.deleted', 0);
+
+  $query->innerJoin('node', 'no', 'no.nid = fq.entity_id');
+  $query->condition('no.type', MYAPI_SERVICES_OFFER_TYPE);
+  $query->condition('no.status', 1);
+
+  $query->innerJoin('field_data_field_offer_status', 'fos', "fos.entity_id = no.nid AND fos.entity_type = 'node' AND fos.deleted = 0");
+  $query->condition('fos.field_offer_status_value', [
+    MYAPI_SERVICES_OFFER_STATUS_SENT,
+    MYAPI_SERVICES_OFFER_STATUS_SELECTED,
+  ], 'IN');
+
+  $query->innerJoin('field_data_field_provider', 'fp', "fp.entity_id = no.nid AND fp.entity_type = 'node' AND fp.deleted = 0");
+
+  $query->innerJoin('node', 'rn', 'rn.nid = fq.field_request_target_id');
+  $query->condition('rn.type', MYAPI_SERVICES_REQUEST_TYPE);
+  $query->condition('rn.status', 1);
+
+  // The rule of membership, in one join: the request is awarded, and it is
+  // awarded to the provider this very offer belongs to.
+  $query->innerJoin('field_data_field_assigned_provider', 'fap', "fap.entity_id = rn.nid AND fap.entity_type = 'node' AND fap.deleted = 0 AND fap.field_assigned_provider_target_id = fp.field_provider_target_id");
+
+  return $query;
+}
+
+/**
  * The nids of every offer that is a chat thread of this account.
  *
  * TWO SEPARATE db_select()s, JOINED IN PHP, and that is deliberate. The two
@@ -156,35 +213,11 @@ function myapi_chat_offer_nids_for_uid($uid) {
     return [];
   }
 
-  $live_statuses = [
-    MYAPI_SERVICES_OFFER_STATUS_SENT,
-    MYAPI_SERVICES_OFFER_STATUS_SELECTED,
-  ];
-
   // nid => the request's 'changed', so the union can be ordered as a whole.
   $threads = [];
 
   // ---------------------------------------------------------------- resident.
-  $query = db_select('field_data_field_request', 'fq');
-  $query->condition('fq.entity_type', 'node');
-  $query->condition('fq.deleted', 0);
-
-  $query->innerJoin('node', 'no', 'no.nid = fq.entity_id');
-  $query->condition('no.type', MYAPI_SERVICES_OFFER_TYPE);
-  $query->condition('no.status', 1);
-
-  $query->innerJoin('field_data_field_offer_status', 'fos', "fos.entity_id = no.nid AND fos.entity_type = 'node' AND fos.deleted = 0");
-  $query->condition('fos.field_offer_status_value', $live_statuses, 'IN');
-
-  $query->innerJoin('field_data_field_provider', 'fp', "fp.entity_id = no.nid AND fp.entity_type = 'node' AND fp.deleted = 0");
-
-  $query->innerJoin('node', 'rn', 'rn.nid = fq.field_request_target_id');
-  $query->condition('rn.type', MYAPI_SERVICES_REQUEST_TYPE);
-  $query->condition('rn.status', 1);
-
-  // The rule of membership, in one join: the request is awarded, and it is
-  // awarded to the provider this very offer belongs to.
-  $query->innerJoin('field_data_field_assigned_provider', 'fap', "fap.entity_id = rn.nid AND fap.entity_type = 'node' AND fap.deleted = 0 AND fap.field_assigned_provider_target_id = fp.field_provider_target_id");
+  $query = myapi_chat_thread_base_query();
 
   $query->innerJoin('field_data_field_requester', 'fr', "fr.entity_id = rn.nid AND fr.entity_type = 'node' AND fr.deleted = 0");
   $query->condition('fr.field_requester_target_id', $uid);
@@ -209,24 +242,7 @@ function myapi_chat_offer_nids_for_uid($uid) {
   $provider_ids = array_map('intval', myapi_provider_role_provider_ids((object) ['uid' => $uid]));
 
   if ($provider_ids) {
-    $query = db_select('field_data_field_request', 'fq');
-    $query->condition('fq.entity_type', 'node');
-    $query->condition('fq.deleted', 0);
-
-    $query->innerJoin('node', 'no', 'no.nid = fq.entity_id');
-    $query->condition('no.type', MYAPI_SERVICES_OFFER_TYPE);
-    $query->condition('no.status', 1);
-
-    $query->innerJoin('field_data_field_offer_status', 'fos', "fos.entity_id = no.nid AND fos.entity_type = 'node' AND fos.deleted = 0");
-    $query->condition('fos.field_offer_status_value', $live_statuses, 'IN');
-
-    $query->innerJoin('field_data_field_provider', 'fp', "fp.entity_id = no.nid AND fp.entity_type = 'node' AND fp.deleted = 0");
-
-    $query->innerJoin('node', 'rn', 'rn.nid = fq.field_request_target_id');
-    $query->condition('rn.type', MYAPI_SERVICES_REQUEST_TYPE);
-    $query->condition('rn.status', 1);
-
-    $query->innerJoin('field_data_field_assigned_provider', 'fap', "fap.entity_id = rn.nid AND fap.entity_type = 'node' AND fap.deleted = 0 AND fap.field_assigned_provider_target_id = fp.field_provider_target_id");
+    $query = myapi_chat_thread_base_query();
     $query->condition('fap.field_assigned_provider_target_id', $provider_ids, 'IN');
 
     $query->addField('no', 'nid', 'nid');
