@@ -35,6 +35,10 @@
 // constants and the two quote catalogues: no bundle machine name and no
 // catalogue key is ever written as a literal here.
 module_load_include('inc', 'myapi', 'includes/myapi.services_common');
+// For myapi_text_to_plain() and myapi_text_to_multiline(): the four strings an
+// offer carries — the provider's name, the message, the includes and the
+// excludes — leave this serialiser with no markup in them.
+module_load_include('inc', 'myapi', 'includes/myapi.text');
 
 /**
  * Shapes one offer row into the item of `offers` / `my_offers` (SPEC 100).
@@ -65,16 +69,25 @@ module_load_include('inc', 'myapi', 'includes/myapi.services_common');
  * is a price somebody offered, not a missing one. Same rule as `hourly_rate` in
  * GET /api/v1/providers.
  *
- * `message` travels AS STORED, with the line breaks the provider typed, exactly
- * like `description` in the listing item. The instance pins the 'plain_text'
- * format (SPEC 77); the note in docs/service-request.md says what depends on
- * that.
+ * `message`, `includes` AND `excludes` GO THROUGH myapi_text_to_multiline(),
+ * exactly like `description` in the listing item and for the same reason: the
+ * provider writes them with the Enter key, so the line breaks are content and
+ * the one-line helper would answer a wall of text — but any markup in them is
+ * removed, because the app paints these in a Text widget. They used to travel
+ * as stored, on the argument that the instance pins the 'plain_text' format
+ * (SPEC 77); that argument holds only for what the app's creation form writes,
+ * and not for the back office, whose node form has a rich editor behind these
+ * fields. Nothing new gets stored with markup either — the flattening also runs
+ * on the way in, in myapi_service_offer_validate_body() — so this is what fixes
+ * the rows written before that.
  *
  * THE NINE NEW KEYS, and the two rules they all obey:
  *
- *   A MISSING OPTIONAL TEXT IS null AND NEVER "". `message` is the exception
- *   and stays "" when empty, because it is REQUIRED: an empty message is a
- *   corrupt row, not an absence, and the two must not read alike.
+ *   A MISSING OPTIONAL TEXT IS null AND NEVER "", and the emptiness is judged
+ *   AFTER the flattening, so a stored `<p></p>` answers null like any other
+ *   nothing. `message` is the exception and stays "" when empty, because it is
+ *   REQUIRED: an empty message is a corrupt row, not an absence, and the two
+ *   must not read alike.
  *
  *   `amount_type` IS null ON EVERY OFFER OLDER THAN SPEC 100. Nothing
  *   backfilled it and nothing will: null says "this offer predates the field",
@@ -107,12 +120,19 @@ function myapi_service_offer_build($row) {
   if (isset($row->provider_id) && $row->provider_id !== '') {
     $provider = [
       'id'   => (int) $row->provider_id,
-      'name' => isset($row->provider_name) ? $row->provider_name : NULL,
+      'name' => isset($row->provider_name) ? myapi_text_to_plain($row->provider_name) : NULL,
       'logo' => isset($row->provider_logo_uri) && $row->provider_logo_uri !== ''
         ? file_create_url($row->provider_logo_uri)
         : NULL,
     ];
   }
+
+  // Flattened HERE and not inline in the array below, so the "empty is null"
+  // rule is decided over the FLATTENED value: a stored `<p></p>` is nothing
+  // written, and answering "" for it would invent a third state the app has to
+  // test for on top of null and a real text.
+  $includes = myapi_text_to_multiline(isset($row->includes) ? $row->includes : '');
+  $excludes = myapi_text_to_multiline(isset($row->excludes) ? $row->excludes : '');
 
   // Both halves or neither — see the docblock.
   $duration = NULL;
@@ -130,7 +150,13 @@ function myapi_service_offer_build($row) {
     'amount'         => isset($row->amount) && $row->amount !== ''
       ? (float) $row->amount
       : NULL,
-    'message'        => isset($row->message) ? $row->message : '',
+    // The three long strings of the offer go through the MULTILINE helper: the
+    // provider writes them with the Enter key — a message of two paragraphs, an
+    // includes that is really a list — so the line breaks are the content and
+    // the one-line helper would destroy them. What goes is the markup, and only
+    // the markup, whether it was typed in the app or written from the back
+    // office with a rich editor behind the field.
+    'message'        => myapi_text_to_multiline(isset($row->message) ? $row->message : ''),
     'status'         => isset($row->status) ? $row->status : NULL,
     'created'        => isset($row->created)
       ? format_date((int) $row->created, 'custom', 'Y-m-d\TH:i:s')
@@ -145,12 +171,8 @@ function myapi_service_offer_build($row) {
       ? format_date((int) $row->available_from, 'custom', 'Y-m-d\TH:i:s')
       : NULL,
     'duration'       => $duration,
-    'includes'       => isset($row->includes) && $row->includes !== ''
-      ? $row->includes
-      : NULL,
-    'excludes'       => isset($row->excludes) && $row->excludes !== ''
-      ? $row->excludes
-      : NULL,
+    'includes'       => $includes !== '' ? $includes : NULL,
+    'excludes'       => $excludes !== '' ? $excludes : NULL,
     // The only three-valued key of the fifteen: TRUE, FALSE or "never said".
     'tax_included'   => isset($row->tax_included) && $row->tax_included !== ''
       ? (bool) $row->tax_included
@@ -575,7 +597,17 @@ function myapi_service_offer_validate_body($body) {
   if (!is_string($body['message'])) {
     return _myapi_service_offer_invalid('invalid_field', 'message');
   }
-  $message = trim($body['message']);
+  // FLATTENED BEFORE IT IS MEASURED AND BEFORE IT IS STORED. A client that
+  // sends `<p>Hola</p>` — which is what a rich-text editor on the app's edit
+  // screen produces, while its create screen sends plain text — must not put
+  // markup into field_offer_message: the app paints this value in a Text
+  // widget, and nothing downstream of here would ever turn it back into a
+  // paragraph. Doing it BEFORE the length check is what makes the 2000 count
+  // the provider's words and not the tags around them, and doing it BEFORE the
+  // empty check is what makes a body of nothing but `<p></p>` a 422 instead of
+  // an offer with an empty message. Old rows that already carry markup are
+  // covered on the way out, in myapi_service_offer_build().
+  $message = myapi_text_to_multiline($body['message']);
   if ($message === '') {
     return _myapi_service_offer_invalid('invalid_field', 'message');
   }
@@ -671,7 +703,9 @@ function myapi_service_offer_validate_body($body) {
     if (!is_string($body[$field])) {
       return _myapi_service_offer_invalid('invalid_field', $field);
     }
-    $text = trim($body[$field]);
+    // Same rule as `message` above, and for the same reason: no markup gets
+    // into the field, and the 2000 counts characters the provider typed.
+    $text = myapi_text_to_multiline($body[$field]);
     if (drupal_strlen($text) > 2000) {
       return _myapi_service_offer_invalid('invalid_field', $field);
     }

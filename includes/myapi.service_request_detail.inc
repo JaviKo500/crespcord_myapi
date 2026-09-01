@@ -100,6 +100,10 @@ module_load_include('inc', 'myapi', 'includes/myapi.service_offer');
 // where SPEC 89 moved it out of resources/provider.resource.inc — and never
 // rebuilt here.
 module_load_include('inc', 'myapi', 'includes/myapi.provider_card');
+// For myapi_text_to_plain() and myapi_text_to_multiline(): the timeline's
+// comment and the two names of the detail travel flattened, so nothing the
+// back office wrote with a rich editor reaches the app as markup.
+module_load_include('inc', 'myapi', 'includes/myapi.text');
 
 /**
  * How many offers each request of a page received, in ONE query (SPEC 88).
@@ -441,7 +445,10 @@ function myapi_service_request_load_transactions($nid) {
       'status'      => $row->status,
       // The stored value with a 'T' in it. See the note above: no strtotime().
       'status_date' => $row->status_date === NULL ? NULL : str_replace(' ', 'T', $row->status_date),
-      'comment'     => $row->comment,
+      // MULTILINE: an operator writes this one in the back office, where the
+      // field has a rich editor behind it, and a comment of three lines is a
+      // comment of three lines — not one line and not a literal `<p>`.
+      'comment'     => $row->comment === NULL ? NULL : myapi_text_to_multiline($row->comment),
       'created'     => format_date((int) $row->created, 'custom', 'Y-m-d\TH:i:s'),
     ];
   }
@@ -749,7 +756,7 @@ function myapi_service_request_build_detail($row, $viewer, array $images, array 
   if (isset($row->requester_uid) && $row->requester_uid !== '') {
     $requester = [
       'id'   => (int) $row->requester_uid,
-      'name' => isset($row->requester_name) ? $row->requester_name : NULL,
+      'name' => isset($row->requester_name) ? myapi_text_to_plain($row->requester_name) : NULL,
     ];
   }
 
@@ -757,7 +764,7 @@ function myapi_service_request_build_detail($row, $viewer, array $images, array 
   if (isset($row->condominium_id) && $row->condominium_id !== '') {
     $condominium = [
       'id'   => (int) $row->condominium_id,
-      'name' => isset($row->condominium_name) ? $row->condominium_name : NULL,
+      'name' => isset($row->condominium_name) ? myapi_text_to_plain($row->condominium_name) : NULL,
     ];
   }
 

@@ -88,7 +88,7 @@ for a small job must be able to finish the form.
 | Field | Type | Required | Notes |
 |-------|------|:--------:|-------|
 | `provider_id` | int > 0 | **Yes** | Which of *your* providers is bidding. Always explicit, even when the account operates only one — deriving it would choose in silence, and the day that account operated two, a client that never sent the field would start bidding with the wrong company without anything failing. |
-| `message` | string, 1–2000 chars | **Yes** | What you are offering to do. Stored as typed, line breaks and all. |
+| `message` | string, 1–2000 chars | **Yes** | What you are offering to do. **Flattened before it is measured and before it is stored** (`myapi_text_to_multiline()`): any markup is removed, the line breaks are kept. So the 2000 counts your words and not the tags, and a message of nothing but `<p></p>` is a `422`. |
 | `amount_type` | `fixed` \| `estimate` \| `hourly` \| `on_site_quote` | **Yes** | How the amount is to be read. Mandatory because the number is unreadable without it: the same `150` means a closed price, a guess, an hourly rate or nothing at all. |
 | `amount` | decimal ≥ 0, ≤ 99999999.99 | **conditional** | **Required** for `fixed`, `estimate` and `hourly`; **forbidden** for `on_site_quote`. `0` is a price somebody offered. May be sent as a number or as a string, so the decimals survive the wire. |
 | `tax_included` | bool | No | Only alongside an `amount`. Omitting it is *I did not say*, which is a different answer from `false`. |
@@ -96,7 +96,7 @@ for a small job must be able to finish the form.
 | `available_from` | string `Y-m-d H:i` | No | When you could start the work. Strictly in the future. **Not compared against `valid_until`** — see below. |
 | `duration` | int 1–9999 | No | Estimated duration. **Coupled with `duration_unit`: send both or neither.** |
 | `duration_unit` | `hours` \| `days` | No | Same. |
-| `includes` | string, ≤ 2000 chars | No | What the quote covers. Empty after trimming is stored as absent. |
+| `includes` | string, ≤ 2000 chars | No | What the quote covers. Flattened like `message`. Empty after that is stored as absent. |
 | `excludes` | string, ≤ 2000 chars | No | What it does not. |
 | `warranty_days` | int 0–3650 | No | `0` is a declaration — *no warranty* — and not an absence. |
 | `requires_visit` | bool | No | Defaults to `false`. |

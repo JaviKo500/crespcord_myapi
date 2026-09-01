@@ -66,8 +66,10 @@ module_load_include('inc', 'myapi', 'includes/myapi.provider_card');
 // inside the back-office hooks that need it, so an api/v1 request would reach
 // myapi_provider_mine_list() with the two functions undefined.
 module_load_include('inc', 'myapi', 'includes/myapi.provider_role');
-// For myapi_text_to_plain(): flattens field_address and field_services_desc
-// (SPEC 84), both text_long with a rich editor behind them.
+// For myapi_text_to_plain() and myapi_text_to_multiline(): flatten
+// field_address and field_services_desc (SPEC 84), both text_long with a rich
+// editor behind them, plus the comment of every rating. Which of the two per
+// field is decided in myapi_provider_detail_build_item().
 module_load_include('inc', 'myapi', 'includes/myapi.text');
 // For myapi_user_fetch_profile_fields(): resolves the abbreviated author name
 // of a rating (SPEC 84), same helper myapi.claim_notification.inc uses for
@@ -1130,7 +1132,11 @@ function myapi_provider_build_rating_item($row) {
 
   return [
     'stars'       => (int) (isset($row->stars) ? $row->stars : 0),
-    'comment'     => myapi_text_to_plain(isset($row->comment) ? $row->comment : NULL),
+    // THE MULTILINE HELPER AND NOT ITS ONE-LINE SISTER: a resident who writes
+    // three paragraphs about a job gets three paragraphs on the provider's
+    // card, not one endless line. The markup still goes — which is the whole
+    // point — but the line breaks are the content here, not whitespace.
+    'comment'     => myapi_text_to_multiline(isset($row->comment) ? $row->comment : NULL),
     'author_name' => myapi_text_to_plain($author_name),
     // The ternary stays: myapi_text_to_plain() answers "" for a NULL, and ""
     // is not the answer here — a rating with no unit says so with NULL.
@@ -1153,12 +1159,15 @@ function myapi_provider_build_rating_item($row) {
  * the detail answer the same URL for the same provider because there is one
  * builder and not two.
  *
- * `address` and `description` go through myapi_text_to_plain(), which is by now
- * the only string helper this resource uses: they are text_long fields with
- * text_processing on (a rich editor behind them), so there is markup to
- * flatten, and the fields with no markup behind them take the same route
- * anyway. The reason that rule is one and not two is in
- * myapi_provider_build_item().
+ * `address` and `description` are both flattened, and NOT BY THE SAME HELPER:
+ * they are text_long fields with text_processing on (a rich editor behind
+ * them), so there is markup to remove in either case, but only one of the two
+ * is something a person writes with the Enter key. `address` is one line and
+ * takes myapi_text_to_plain(); `description` is the provider's account of what
+ * they do, often several paragraphs long, and takes
+ * myapi_text_to_multiline() — flattening it to a single line would answer a
+ * wall of text nobody wrote. The reason a field with no markup behind it takes
+ * the same route anyway is in myapi_provider_build_item().
  *
  * `gallery` and `ratings` are mapped here, with the exact same builders the
  * gallery listing and this file's own myapi_provider_build_rating_item() use,
@@ -1196,7 +1205,7 @@ function myapi_provider_detail_build_item($row, array $categories, array $tags, 
 
   return array_merge($item, [
     'address'        => myapi_text_to_plain(isset($row->address) ? $row->address : NULL),
-    'description'    => myapi_text_to_plain(isset($row->description) ? $row->description : NULL),
+    'description'    => myapi_text_to_multiline(isset($row->description) ? $row->description : NULL),
     'tags'           => $tags,
     'gallery'        => $gallery,
     'ratings'        => $ratings,

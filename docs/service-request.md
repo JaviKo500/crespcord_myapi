@@ -345,20 +345,37 @@ The breakdown by status is detail information and belongs to
 > `offers_count`. Without that condition the failure would be silent: the number
 > stays plausible and is simply too high.
 
-### The description travels raw
+### The description travels flattened, with its line breaks
 
-`description` is served **as stored**, without `myapi_text_to_plain()`. That
-helper collapses the line breaks the resident typed, and the resident typed
-them. It is also exactly what [`/api/v1/claims`](claim.md) does with this **same
-shared field**, so the same datum travels the same way in both endpoints.
+`description` is served through **`myapi_text_to_multiline()`**: markup
+stripped, entities decoded, **line breaks kept**, at most one blank line in a
+row, no HTML escaping. `title` and every `name` of this endpoint go through
+`myapi_text_to_plain()` instead — the one-line sister of that helper — because
+a node title is one line by definition.
 
-The contract therefore **depends on the instance keeping the `plain_text`
-format**, which is what SPEC 77 pinned. If someone switches it to a format that
-allows HTML, this endpoint starts serving unescaped markup — the same risk
-`/api/v1/claims` already runs with the same field, which is why the answer is
-the same in both places rather than different in one.
+It used to be served **as stored**, on the argument that the instance pins the
+`plain_text` format (SPEC 77) so there could never be markup in it. That
+argument does not survive contact with anything that writes into the field
+other than the app's creation form: the back-office node form has a rich editor
+behind it, and a client whose **edit** screen uses a rich text editor sends
+`<p>…</p>` where its **create** screen sends plain text. The result was a
+description that came back correct after a create and full of literal `<p>`
+after an edit.
 
-Truncation is presentation and belongs to the app, which knows how much fits.
+Two doors are now closed and not one:
+
+- **On the way in.** `POST /api/v1/service-requests` and
+  `POST /api/v1/service-requests/{id}` flatten `title` and `description` the
+  moment they read them — before the required check and before the length check,
+  so the 255 of the title counts characters and not tags, and a description of
+  nothing but `<p></p>` answers `422` instead of storing emptiness. Nothing new
+  reaches the database with markup in it.
+- **On the way out.** The serialiser flattens again, which is what fixes the
+  rows written before this and anything an operator writes from the back office.
+
+The app therefore never has to strip anything, and `\n` in the value is real:
+render it in a `Text` widget as-is. Truncation is presentation and belongs to
+the app, which knows how much fits.
 
 ### The category is required
 
@@ -425,8 +442,10 @@ Two rules, and they are the ones the sibling endpoints already follow:
   category that would otherwise vanish from the resident's own listing stays
   visible. This is the one join of the category that is **`LEFT`** — its two
   term joins are `INNER`, see above.
-- **It travels as stored**, unescaped, exactly like `title` and `category.name`
-  in this endpoint. The consumer is a Flutter `Text` widget, not an HTML page.
+- **It travels flattened**, unescaped, exactly like `title` and `category.name`
+  in this endpoint: `myapi_text_to_plain()` strips any markup and decodes the
+  entities, and nothing is HTML-escaped. The consumer is a Flutter `Text`
+  widget, not an HTML page.
 
 ### Ordering
 
@@ -869,14 +888,14 @@ legibility is paid for instead.
 | 2 | `provider.id` / `.name` | `field_provider` → `node.title` | **Yes** (the whole object) | An unpublished or deleted provider leaves `provider: null` and **the offer stays in the list** — dropping it would make the list disagree with `offers_count`. |
 | 2 | `provider.logo` | `field_logo` → `file_create_url()` | **Yes** | An absolute, **direct** URL: `field_logo` is `public://` (SPEC 85), unlike the request's own images. Never an `api/v1/...` path. |
 | 3 | `amount` | `field_offer_amount` | **Yes** | **A number or `null`**, never `"95.50"`. `null` means *no price yet* — an `on_site_quote` carries none, and the price of any offer can still be settled in the chat. `0` is a price somebody offered. |
-| 4 | `message` | `field_offer_message` | No¹ | As stored, with its line breaks, exactly like `description`. |
+| 4 | `message` | `field_offer_message` | No¹ | Flattened with `myapi_text_to_multiline()`: no markup, line breaks kept — exactly like `description`. |
 | 5 | `status` | `field_offer_status` | No¹ | `sent` / `selected` / `rejected` / `withdrawn`. |
 | 6 | `created` | `node.created` | No | `Y-m-d\TH:i:s`. |
 | 7 | `amount_type` | `field_offer_amount_type` | **Yes** | `fixed` / `estimate` / `hourly` / `on_site_quote` — how the number is to be read. **`null` on every offer stored before SPEC 100**, and nothing will ever backfill it: deducing a type from the amount would put in a provider's mouth a statement they never made. |
 | 8 | `valid_until` | `field_offer_valid_until` | **Yes** | `Y-m-d\TH:i:s`. **Informative only: no process expires an offer by this date.** A lapsed offer stays `sent` until somebody awards or the request is cancelled. |
 | 9 | `available_from` | `field_offer_available_from` | **Yes** | `Y-m-d\TH:i:s`. When the provider could start. |
 | 10 | `duration` | `field_offer_duration` + `field_offer_duration_unit` | **Yes** | `{"value": 3, "unit": "hours"}` — **one object or one whole `null`**, never `{"value": null, "unit": null}`. The two columns are coupled: one without the other means nothing. `unit` is `hours` or `days`. |
-| 11 | `includes` | `field_offer_includes` | **Yes** | What the quote covers, as stored, with its line breaks. |
+| 11 | `includes` | `field_offer_includes` | **Yes** | What the quote covers, flattened like `message`: no markup, line breaks kept. |
 | 12 | `excludes` | `field_offer_excludes` | **Yes** | What it does not. |
 | 13 | `tax_included` | `field_offer_tax_included` | **Yes** | **Three-valued**: `true`, `false`, or `null` for *the provider never said*. A `null` is not a `false`. |
 | 14 | `warranty_days` | `field_offer_warranty_days` | **Yes** | JSON integer. `0` is a declaration — *no warranty* — and not an absence. |
@@ -927,7 +946,7 @@ its own since SPEC 95. Awarding and closing still add none. See
 | `id` | the transaction's `nid` | No | JSON integer. |
 | `status` | `field_request_status` | **Yes**¹ | The **raw catalogue key** — `open`, `direct`, `offered`, `assigned`, `closed`, `cancelled` — exactly like the request's own `status`. No translated label: the catalogue is the client's. |
 | `status_date` | `field_status_date` | **Yes**¹ | `Y-m-d\TH:i:s`. **The stored value with a `T` in it, with no timezone conversion** — see the note below. |
-| `comment` | `field_comment` | **Yes** | Plain text, with its line breaks, no `format`. `null` — never `""` — when the entry carries no comment. |
+| `comment` | `field_comment` | **Yes** | Flattened with `myapi_text_to_multiline()`: no markup, line breaks kept, no `format`. Written from the back office with a rich editor behind the field, which is why it is flattened on the way out. `null` — never `""` — when the entry carries no comment. |
 | `created` | `node.created` | No | `Y-m-d\TH:i:s`, in the site's timezone. |
 
 ¹ Required on the bundle; the `LEFT JOIN`s answer `null` if somebody deleted the
@@ -1724,7 +1743,7 @@ contract in `docs/service-request-notifications.md`.
 
 | Field | Required | Type | Rule |
 |-------|----------|------|------|
-| `reason` | no | string | Up to **255 characters**, measured with `drupal_strlen()` and not `strlen()`, so 255 accented ones fit. Trimmed before storing. |
+| `reason` | no | string | Up to **255 characters**, measured with `drupal_strlen()` and not `strlen()`, so 255 accented ones fit. **Flattened before it is measured and before it is stored** (`myapi_text_to_multiline()`): markup goes, line breaks stay. A reason that is empty after that counts as absent, and the automatic fallback takes its place. |
 
 **No body at all, no `reason` key, `""` and whitespace-only all mean "no
 reason", and none of them is an error.** The reason is optional by design:
@@ -1980,7 +1999,7 @@ only when, there was a provider who did the job.**
 | Field | Required | Type | Rule |
 |-------|----------|------|------|
 | `stars` | **yes** | integer | 1, 2, 3, 4 or 5. A string of digits is accepted, so `5` and `"5"` are the same value. |
-| `comment` | no | string | Up to **1000 characters**, measured with `drupal_strlen()` and not `strlen()`, so 1000 accented ones fit. Trimmed before storing. |
+| `comment` | no | string | Up to **1000 characters**, measured with `drupal_strlen()` and not `strlen()`, so 1000 accented ones fit. **Flattened before it is measured and before it is stored** (`myapi_text_to_multiline()`): markup goes, line breaks stay, so the 1000 counts what was written and not the tags around it. |
 | `close_reason` | — | — | **Ignored in silence** if sent. Here the rating's comment *is* the text of the close. |
 
 **B. Closing with nothing awarded — from `offered`**
@@ -1991,7 +2010,7 @@ only when, there was a provider who did the job.**
 
 | Field | Required | Type | Rule |
 |-------|----------|------|------|
-| `close_reason` | **yes** | string | 1 to **1000 characters**, `drupal_strlen()`, trimmed. Whitespace-only counts as absent. |
+| `close_reason` | **yes** | string | 1 to **1000 characters**, `drupal_strlen()`. **Flattened before it is measured and before it is stored** (`myapi_text_to_multiline()`): markup goes, line breaks stay. Empty after that counts as absent. |
 | `stars`, `comment` | — | — | **Ignored in silence** if sent. There is nobody to rate. |
 
 `close_reason` is **required** while the cancellation's `reason` is optional,

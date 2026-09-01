@@ -140,6 +140,11 @@ module_load_include('inc', 'myapi', 'includes/myapi.service_request_detail');
 // writes the same node it always wrote; what changed is that one function now
 // writes it for both.
 module_load_include('inc', 'myapi', 'includes/myapi.service_transaction');
+// For myapi_text_to_plain() and myapi_text_to_multiline(): the title and the
+// description a resident writes are flattened ON THE WAY IN, so nothing this
+// endpoint stores carries markup, and the two names this file serialises are
+// flattened on the way out like every other name of the marketplace.
+module_load_include('inc', 'myapi', 'includes/myapi.text');
 
 /**
  * Dispatcher for /api/v1/service-requests (SPECS 88 and 90).
@@ -1015,7 +1020,7 @@ function myapi_service_request_provider_build_item($row, array $offer_counts, ar
   if (isset($row->requester_uid) && $row->requester_uid !== '') {
     $requester = [
       'id'   => (int) $row->requester_uid,
-      'name' => isset($row->requester_name) ? $row->requester_name : NULL,
+      'name' => isset($row->requester_name) ? myapi_text_to_plain($row->requester_name) : NULL,
     ];
   }
 
@@ -1026,7 +1031,7 @@ function myapi_service_request_provider_build_item($row, array $offer_counts, ar
   if (isset($row->condominium_id) && $row->condominium_id !== '') {
     $condominium = [
       'id'   => (int) $row->condominium_id,
-      'name' => isset($row->condominium_name) ? $row->condominium_name : NULL,
+      'name' => isset($row->condominium_name) ? myapi_text_to_plain($row->condominium_name) : NULL,
     ];
   }
 
@@ -2085,6 +2090,21 @@ function myapi_service_request_create() {
   $description = myapi_request_post_field('description');
   $desired_start_raw = myapi_request_post_field('desired_start');
 
+  // FLATTENED THE MOMENT THEY ARE READ, before the required check and before
+  // the length check. A client whose edit screen has a rich-text editor behind
+  // it sends `<p>Se rompió la tubería</p>` while its create screen sends plain
+  // text, and without this the two write two different things into the same
+  // field — which is exactly how a request comes back from the API with a
+  // literal `<p>` in it. `title` gets the ONE-LINE helper (node.title is one
+  // line by definition) and `description` the MULTILINE one (the paragraphs
+  // the resident typed are content). Doing it first is what makes the 255 of
+  // the title count characters and not tags, and what makes a description of
+  // nothing but `<p></p>` answer 422 instead of storing emptiness. Rows
+  // written before this are covered on the way out, in
+  // myapi_service_request_build_item().
+  $title = $title === NULL ? NULL : myapi_text_to_plain($title);
+  $description = $description === NULL ? NULL : myapi_text_to_multiline($description);
+
   $required = [
     'title'         => $title,
     'unit_id'       => $unit_raw,
@@ -2599,7 +2619,13 @@ function myapi_service_request_validate_cancel_reason($body) {
     return ['ok' => FALSE, 'error_code' => 'invalid_field', 'replacements' => ['@field' => 'reason']];
   }
 
-  $value = trim($body['reason']);
+  // Flattened and not merely trimmed: this string is stored as the
+  // field_comment of the cancellation transaction and travels back in the
+  // request's timeline, so markup in it would be painted literally by the app.
+  // Before the length check, so the 255 counts the resident's words; before
+  // the empty check, so a reason of nothing but `<p></p>` is the same as no
+  // reason at all and the automatic fallback takes its place.
+  $value = myapi_text_to_multiline($body['reason']);
   if ($value === '') {
     return ['ok' => TRUE, 'value' => NULL];
   }
@@ -2815,6 +2841,13 @@ function myapi_service_request_update($nid) {
   $title = myapi_request_post_field('title');
   $description = myapi_request_post_field('description');
   $desired_start_raw = myapi_request_post_field('desired_start');
+
+  // The same two lines the creation runs, in the same place and for the same
+  // reason — see myapi_service_request_create(). THE EDIT IS THE PATH THAT
+  // NEEDED THEM MOST: it is the one a client with a rich-text editor behind
+  // its form uses, and the one that overwrites a description that was clean.
+  $title = $title === NULL ? NULL : myapi_text_to_plain($title);
+  $description = $description === NULL ? NULL : myapi_text_to_multiline($description);
 
   $required = [
     'title'         => $title,
@@ -3471,9 +3504,12 @@ function myapi_service_request_validate_close_body($body, $requires_rating) {
       return _myapi_service_request_close_invalid('invalid_field', 'close_reason');
     }
 
-    $close_reason = trim($body['close_reason']);
-    // Empty after the trim is the SAME as absent, and both are missing_field:
-    // a reason made of spaces explains nothing to the providers who bid.
+    // Flattened, like the cancellation reason and for the same reason: it ends
+    // up in the closing transaction's comment, which the timeline serves back.
+    $close_reason = myapi_text_to_multiline($body['close_reason']);
+    // Empty after the flattening is the SAME as absent, and both are
+    // missing_field: a reason made of spaces explains nothing to the providers
+    // who bid.
     if ($close_reason === '') {
       return _myapi_service_request_close_invalid('missing_field', 'close_reason');
     }
@@ -3502,12 +3538,16 @@ function myapi_service_request_validate_close_body($body, $requires_rating) {
       return _myapi_service_request_close_invalid('invalid_field', 'comment');
     }
 
-    $comment = trim($body['comment']);
+    // Flattened: this is the rating the provider's card publishes, so it is
+    // read by everybody who opens that provider — the last place markup should
+    // survive. Before the 1000, which therefore counts what was written.
+    $comment = myapi_text_to_multiline($body['comment']);
     if (drupal_strlen($comment) > 1000) {
       return _myapi_service_request_close_invalid('field_too_long', 'comment');
     }
-    // Empty after the trim is the same as absent, and NOT an error: the comment
-    // is optional, and a resident who rates without writing owes nobody words.
+    // Empty after the flattening is the same as absent, and NOT an error: the
+    // comment is optional, and a resident who rates without writing owes
+    // nobody words.
     if ($comment !== '') {
       $values['comment'] = $comment;
     }

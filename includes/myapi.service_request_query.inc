@@ -55,6 +55,10 @@
 // MYAPI_SERVICES_PROVIDER_TYPE and the two request status keys: neither a
 // bundle machine name nor a status key is ever written as a literal here.
 module_load_include('inc', 'myapi', 'includes/myapi.services_common');
+// For myapi_text_to_plain() and myapi_text_to_multiline(): no string of a
+// request reaches the app carrying markup — see the note on `description` in
+// myapi_service_request_build_item().
+module_load_include('inc', 'myapi', 'includes/myapi.text');
 // SPEC 103: the four questions the provider's half of
 // myapi_service_request_viewer() hangs on — which providers the reader
 // operates, their categories, whether any of them is active, and whether one
@@ -473,12 +477,20 @@ function myapi_service_request_detail_row($nid) {
  *   and never an absent key: "how many offers did I get" always has a numeric
  *   answer, and 0 is the honest one for a request nobody bid on — every
  *   'direct' request included.
- * - `description` travels AS STORED, without myapi_text_to_plain(): that helper
- *   collapses the line breaks the resident typed. It is also exactly what
- *   myapi_claim_build_item() does with this very same shared field, so the same
- *   datum travels the same way in both endpoints. The instance pins the
- *   'plain_text' format (SPEC 77), so no markup travels — see the note in
- *   docs/service-request.md.
+ * - `description` goes through myapi_text_to_multiline() AND NOT THROUGH
+ *   myapi_text_to_plain(): the second one collapses the line breaks the
+ *   resident typed and would answer three paragraphs as one endless line. It
+ *   used to travel AS STORED, on the argument that the instance pins the
+ *   'plain_text' format (SPEC 77) so no markup could ever be in there; that
+ *   argument does not hold once anything writes into the field other than the
+ *   creation form — the back-office node form with a rich editor behind it, or
+ *   a client that sends HTML on an edit while it sends plain text on a create —
+ *   and what the app then paints inside a Text widget is a literal `<p>`.
+ *   Flattening on the way out fixes the rows that already carry markup, which
+ *   is why it is done here and not only where the field is written.
+ *   `title` gets the ONE-LINE helper for the same reason and with the opposite
+ *   criterion: node.title is a single line by definition, so a '\n' in it is
+ *   noise, not structure.
  * - `created` and `desired_start` are real timestamps — field_desired_start is
  *   a datestamp with tz_handling, NOT the tz_handling = 'none' of
  *   field_reception_date — so both get format_date() in the site's timezone,
@@ -518,7 +530,7 @@ function myapi_service_request_build_item($row, array $offer_counts) {
   if (isset($row->unit_id) && $row->unit_id !== '') {
     $unit = [
       'id'   => (int) $row->unit_id,
-      'name' => isset($row->unit_name) ? $row->unit_name : NULL,
+      'name' => isset($row->unit_name) ? myapi_text_to_plain($row->unit_name) : NULL,
     ];
   }
 
@@ -539,16 +551,17 @@ function myapi_service_request_build_item($row, array $offer_counts) {
   if (isset($row->assigned_provider_id) && $row->assigned_provider_id !== '') {
     $assigned_provider = [
       'id'   => (int) $row->assigned_provider_id,
-      'name' => isset($row->assigned_provider_name) ? $row->assigned_provider_name : NULL,
+      'name' => isset($row->assigned_provider_name) ? myapi_text_to_plain($row->assigned_provider_name) : NULL,
     ];
   }
 
   return [
     'id'          => $nid,
-    'title'       => isset($row->title) ? $row->title : '',
-    // As stored — see the docblock: myapi_text_to_plain() would eat the line
-    // breaks, and claims already answers this same field this same way.
-    'description' => isset($row->description) ? $row->description : '',
+    'title'       => myapi_text_to_plain(isset($row->title) ? $row->title : ''),
+    // The MULTILINE helper — see the docblock: the one-line one would eat the
+    // paragraphs the resident typed, and answering the value as stored is what
+    // shows a literal `<p>` on screen.
+    'description' => myapi_text_to_multiline(isset($row->description) ? $row->description : ''),
     'status'      => isset($row->status) ? $row->status : NULL,
     // Three keys, in the same order /api/v1/service-categories prints them —
     // id, code, name. `code` is the stable identifier the app hangs its
@@ -559,7 +572,7 @@ function myapi_service_request_build_item($row, array $offer_counts) {
     'category'    => [
       'id'   => isset($row->category_id) ? (int) $row->category_id : NULL,
       'code' => isset($row->category_code) ? $row->category_code : '',
-      'name' => isset($row->category_name) ? $row->category_name : '',
+      'name' => myapi_text_to_plain(isset($row->category_name) ? $row->category_name : ''),
     ],
     // The unit the service goes to (SPEC 91). A WHOLE null, never {id: null,
     // name: null}: "this request has no unit I can paint" is one answer and not

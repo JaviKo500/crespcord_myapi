@@ -62,6 +62,11 @@ module_load_include('inc', 'myapi', 'includes/myapi.service_offer');
 // another way inside an offer that hangs off it. See
 // myapi_service_offer_build_context().
 module_load_include('inc', 'myapi', 'includes/myapi.service_request_query');
+// For myapi_text_to_plain(): the names and the request title this file copies
+// out of its own rows travel flattened, like every other string of the
+// marketplace. The long fields of the offer are flattened by the serialiser
+// that owns them, myapi_service_offer_build().
+module_load_include('inc', 'myapi', 'includes/myapi.text');
 
 /**
  * The query the count and the page are both built on: one provider's offers,
@@ -429,7 +434,7 @@ function myapi_service_offer_provider_scope($provider_id, $uid) {
 
   return [
     'id'   => (int) $row->nid,
-    'name' => isset($row->title) ? $row->title : NULL,
+    'name' => isset($row->title) ? myapi_text_to_plain($row->title) : NULL,
   ];
 }
 
@@ -514,14 +519,14 @@ function myapi_service_offer_provider_build_item($row, array $provider) {
     ],
     'request'     => [
       'id'       => isset($row->request_id) ? (int) $row->request_id : NULL,
-      'title'    => isset($row->request_title) ? $row->request_title : '',
+      'title'    => myapi_text_to_plain(isset($row->request_title) ? $row->request_title : ''),
       'status'   => isset($row->request_status) ? $row->request_status : NULL,
       // Three keys, in the same order /api/v1/service-categories and the two
       // request listings print them — id, code, name.
       'category' => [
         'id'   => isset($row->category_id) ? (int) $row->category_id : NULL,
         'code' => isset($row->category_code) ? $row->category_code : '',
-        'name' => isset($row->category_name) ? $row->category_name : '',
+        'name' => myapi_text_to_plain(isset($row->category_name) ? $row->category_name : ''),
       ],
     ],
   ];
@@ -847,7 +852,7 @@ function myapi_service_offer_build_context($request_row, $show_requester, $show_
   if (isset($request_row->condominium_id) && $request_row->condominium_id !== '') {
     $condominium = [
       'id'   => (int) $request_row->condominium_id,
-      'name' => isset($request_row->condominium_name) ? $request_row->condominium_name : NULL,
+      'name' => isset($request_row->condominium_name) ? myapi_text_to_plain($request_row->condominium_name) : NULL,
     ];
   }
 
@@ -859,7 +864,7 @@ function myapi_service_offer_build_context($request_row, $show_requester, $show_
   if ($show_requester && isset($request_row->requester_uid) && $request_row->requester_uid !== '') {
     $requester = [
       'id'   => (int) $request_row->requester_uid,
-      'name' => isset($request_row->requester_name) ? $request_row->requester_name : NULL,
+      'name' => isset($request_row->requester_name) ? myapi_text_to_plain($request_row->requester_name) : NULL,
     ];
   }
 

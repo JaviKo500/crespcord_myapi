@@ -83,7 +83,7 @@ collection, and there is nothing else to wrap it with.
 | `short_description` | string | Plain text, unescaped. `""` when empty, never `null`. |
 | `hourly_rate` | float \| **null** | `null` when the provider publishes no rate. |
 | `address` | string | `field_address`, flattened with `myapi_text_to_plain()` — markup stripped, entities decoded, no escaping. `""` when empty, never `null`. |
-| `description` | string | `field_services_desc`, same helper as `address`. `""` when empty, never `null` — even though the field is required in the back-office form, the endpoint does not assume it is filled. |
+| `description` | string | `field_services_desc`, flattened with `myapi_text_to_multiline()` and **not** with the helper `address` uses: markup stripped, entities decoded, **line breaks kept**, because this one is written in paragraphs. `""` when empty, never `null` — even though the field is required in the back-office form, the endpoint does not assume it is filled. |
 | `tags` | array of string | `field_tags`, plain text, in delta order. `[]` when the provider has none. |
 | `gallery` | array | Exactly the same items, same order, as [GET /api/v1/providers/%/gallery](provider-gallery.md) for this provider — the two routes share the query. |
 | `ratings` | array | The last **3** ratings, most recent `created` first. `[]` when the provider has none. |
@@ -107,8 +107,13 @@ content uploaded for one record.
 **Every string of this response is plain text and travels unescaped** —
 `title`, `short_description`, `address`, `description`, the `tags`, both
 strings of each `categories` item and `comment` / `author_name` / `unit` of
-each rating. All of them go through `myapi_text_to_plain()`: markup stripped,
-entities decoded, whitespace collapsed. `&` arrives as `&`, never as `&amp;`.
+each rating. All of them are flattened: markup stripped, entities decoded, `&`
+arriving as `&` and never as `&amp;`. Two helpers do it, and the difference is
+only about **line breaks**: `description` and the `comment` of a rating go
+through `myapi_text_to_multiline()`, which keeps them because they are written
+in paragraphs; everything else goes through `myapi_text_to_plain()`, which
+collapses all whitespace into single spaces because those values are one line
+by nature.
 See [Every string travels unescaped](provider.md#every-string-travels-unescaped)
 in provider.md for the why and for the one endpoint that still differs.
 
@@ -117,7 +122,7 @@ in provider.md for the why and for the one endpoint that still differs.
 | Field | Type | Notes |
 |-------|------|-------|
 | `stars` | int | `1`–`5`. |
-| `comment` | string | `myapi_text_to_plain()`. `""` when the rating carries none — the field is optional. |
+| `comment` | string | `myapi_text_to_multiline()`: markup stripped, entities decoded, **line breaks kept** — a resident who wrote three paragraphs gets three paragraphs. `""` when the rating carries none — the field is optional. |
 | `author_name` | string | **Abbreviated** — `"Andrés M."`, first name plus the initial of the last name — resolved from the same profile pair `myapi_claim_notification.inc` uses for `requester_name`, with three fallback levels: the profile → the account's username → `"Usuario eliminado"` for a deleted account. |
 | `unit` | string \| **null** | The **name** (`field_nombre_vivienda`) of the `vivienda` node of `field_unit` — the same value `GET /api/v1/units` answers as `name`, **not** the node title. `null` when the rating carries no `field_unit`, and also `null` when that unit has no name recorded or no longer exists: the title is never used as a fallback. Since SPEC 108 **every rating written from the app carries it**: closing a request records the unit the service went to. Ratings created by hand from the back office may still leave it empty. |
 | `created` | string | `Y-m-d\TH:i:s`, same format as `claim.resource.inc` and `reservation.resource.inc`. |
