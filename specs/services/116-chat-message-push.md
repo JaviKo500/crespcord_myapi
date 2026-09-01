@@ -1,22 +1,35 @@
 # 116 — Aviso de mensaje nuevo del chat (`POST /api/v1/chat/threads/%/notify`)
 
-- **Estado:** Approved
-- **Fecha:** 2026-09-01
+- **Estado:** Implemented
+- **Fecha:** 2026-09-01 (revisado el mismo día: ver «Revisión — la vista previa», abajo)
 - **Dependencias:**
   - `115-chat-token` (Implemented) — dueña de la **regla de pertenencia**, de `includes/myapi.chat.inc`, de la convención `service_offers/{nid}` y del recurso `resources/chat.resource.inc`. Su propio «Fuera de alcance» nombra este spec: «Notificar un mensaje nuevo. Ni push ni bandeja… es el spec hermano», y su tabla de riesgos lo cierra con «Es la primera cosa que hay que hacer después de esta».
   - `109-service-request-created-notifications` (Implemented) — dueña de `myapi_service_request_provider_uids()`, de `myapi_service_request_node_title()` y del criterio de que **la audiencia de un proveedor son todas las cuentas de `field_provider_users`**, con o sin el rol.
   - `110-service-offer-received-notification` (Implemented) — precedente exacto de los constructores de texto puros (`myapi_service_offer_push_title()` / `_body()`) y de la resolución del nombre del residente (perfil de SPEC 54 primero, `$account->name` de reserva).
   - `25-notifications-inbox-boletin` (Implemented) — dueña de `includes/myapi.onesignal.inc`, de la cola `myapi_onesignal_push` y de `myapi_notification_create()`. **Este spec usa la capa de transporte y NO usa `myapi_notification_create()`** — ver Decisión 3.
   - `78-provider-role` (Implemented) — `myapi_provider_role_provider_ids()`, la única definición de «qué proveedores son de esta cuenta».
-  - `03-i18n-mensajes-respuestas` (Implemented) — el catálogo. Este spec **no le añade ni una clave**.
-- **Objetivo:** Que un mensaje escrito en el chat llegue como **push al otro lado de la conversación**, sin que Drupal vea, almacene ni transporte el texto del mensaje, y sin montar un runtime nuevo.
+  - `79-service-categories-list` (Implemented) — dueña de `includes/myapi.text.inc` y de `myapi_text_to_plain()`, el saneador de texto plano del módulo. **La revisión lo reutiliza tal cual y no escribe uno nuevo**: ya quita marcado, ya decodifica entidades y ya colapsa los saltos de línea, que son las tres cosas que una vista previa necesita.
+  - `03-i18n-mensajes-respuestas` (Implemented) — el catálogo. Este spec **no le añade ni una clave**, tampoco después de la revisión: la vista previa no produce ni un mensaje de error.
+- **Objetivo:** Que un mensaje escrito en el chat llegue como **push al otro lado de la conversación**, con una **vista previa del texto**, sin que Drupal almacene el mensaje y sin montar un runtime nuevo.
 
 Cuatro notas que la cabecera fija, y que son la continuación literal de las del 115:
 
-- **Drupal sigue sin ver un solo mensaje.** Este spec no lee la Realtime Database, no escribe en ella y no recibe el texto. Recibe **un aviso de que hubo un mensaje en un hilo**, resuelve a quién le toca enterarse y manda un banner que dice quién escribió y sobre qué solicitud. El contenido del chat no pasa por este servidor ni por OneSignal.
+- **Drupal sigue sin leer y sin guardar un solo mensaje, pero ahora lo transporta.** Este spec no lee la Realtime Database, no escribe en ella y **no escribe el texto en ninguna tabla**. Lo que sí hace desde la revisión es **recibir una vista previa del cliente y reenviarla a OneSignal**, para que el banner diga quién escribió, sobre qué solicitud y **qué dijo**. La diferencia con la versión original es deliberada y su precio está en la Decisión 2: el texto pasa por este servidor y por OneSignal, y se ve en una pantalla bloqueada. Lo que **no** cambia es que la conversación sigue viviendo solo en Firebase — aquí el texto atraviesa, no se queda.
 - **El disparo lo da el cliente que escribió**, porque es el único proceso que sabe que hubo un mensaje sin que nadie tenga que vigilar Firebase. Las otras dos formas —una Cloud Function con trigger en la RTDB, o esa función llamando de vuelta a esta API— están evaluadas y descartadas **por ahora** en la Decisión 1, con el precio anotado en Riesgos.
 - **Ni una fila en `myapi_notifications`.** Un mensaje de chat **no entra en la bandeja**. El motivo no es de gusto: el inbox no tiene forma de enterarse de que leíste el chat —eso ocurre en Firebase— así que la fila se quedaría no leída para siempre y el badge quedaría sucio de forma permanente. Decisión 3.
-- **Ni un campo, ni una tabla, ni un `hook_update_N`, ni una fila escrita.** Los tres campos de SPEC 77 (`field_firebase_path`, `field_chat_opened_at`, `field_last_message_at`) **siguen vacíos al terminar este spec**, igual que al terminar el 115.
+- **Ni un campo, ni una tabla, ni un `hook_update_N`, ni una fila escrita.** Los tres campos de SPEC 77 (`field_firebase_path`, `field_chat_opened_at`, `field_last_message_at`) **siguen vacíos al terminar este spec**, igual que al terminar el 115. La vista previa **tampoco se guarda**: se recibe, se sanea, se manda y se olvida.
+
+### Revisión — la vista previa
+
+La primera versión de este spec cerró la Decisión 2 con «el banner no lleva el texto del mensaje» y dejó medido lo que costaría el día que se quisiera. **Se quiso**, el mismo día y antes de mergear la rama, así que el coste se paga aquí en vez de en un spec 117 — el endpoint no había llegado a producción, de modo que no hay contrato publicado que romper.
+
+Lo que la revisión cambia, y nada más:
+
+- El cuerpo del `POST` **deja de estar vacío**: acepta una clave `preview`, **opcional**.
+- El banner pasa de dos líneas a **tres**, y la tercera es el texto.
+- La Decisión 2 se **invierte**, conservando escrito su razonamiento original y lo que se acepta a cambio.
+
+Lo que la revisión **no** cambia: los destinatarios, el `data`, el colapso, el TTL, el *debounce*, la compuerta, la ausencia de bandeja y la ausencia de escrituras. **Y la ruta sigue sin tener un `422`.**
 
 ---
 
@@ -24,18 +37,22 @@ Cuatro notas que la cabecera fija, y que son la continuación literal de las del
 
 ### Dentro de este spec
 
+- **`includes/myapi.text.inc`** — **sin cambios**. Se usa `myapi_text_to_plain()` tal cual está.
 - **`includes/myapi.chat.inc`** (modificar) — la regla de pertenencia gana su segunda dirección: hoy contesta «¿qué hilos son de este uid?» y necesita contestar «¿quiénes son los dos lados de este hilo?».
   - `myapi_chat_thread_base_query()` (**nueva**) — **refactor sin cambio de comportamiento**: devuelve el `SelectQuery` con los seis joins que hoy están escritos **dos veces** dentro de `myapi_chat_offer_nids_for_uid()` (oferta viva → su proveedor → solicitud publicada → `field_assigned_provider` igual a ese proveedor). Las dos consultas existentes pasan a construirse sobre ella y la nueva de abajo también. Es la Regla 3 de `CLAUDE.md`: el criterio se comparte, no se copia — y con tres copias el día que cambie una constante de estado sería el día que el chat y el aviso dejen de coincidir.
   - `myapi_chat_thread_row($offer_nid)` (**nueva**) — la base + `no.nid = $offer_nid`, más el join a `field_requester` y los **LEFT JOIN** a `field_unit` y `field_condominium` de la solicitud. Devuelve `['offer_nid', 'request_nid', 'request_title', 'requester_uid', 'provider_id', 'unit_id', 'condominium_id']` o **`NULL`**. `NULL` es una sola respuesta para tres cosas distintas —la oferta no existe, no está viva, o su solicitud no está adjudicada a su proveedor— y eso es deliberado (Decisión 6). **Los dos joins del contexto son LEFT y no INNER**, por el motivo que SPEC 91 ya dejó escrito: `field_unit` es obligatorio en el bundle desde SPEC 86 pero se añadió sin *backfill*, así que una solicitud vieja puede no tener fila — y un hilo no puede desaparecer por eso.
   - `myapi_chat_thread_side(array $thread, array $provider_uids, $uid)` (**nueva**, pura) — `'resident'`, `'provider'` o `NULL`. El orden importa: quien sea residente **y** empleado del proveedor cuenta como residente, porque el hilo es de su solicitud.
   - `myapi_chat_notify_recipients(array $thread, array $provider_uids, $side, $sender_uid)` (**nueva**, pura) — el **otro** lado, menos el emisor.
   - `myapi_chat_sender_label(array $thread, $side, $sender_uid)` (**nueva**) — el nombre que verá el destinatario: el **nombre comercial del proveedor** (`node.title`) cuando escribe el proveedor, el **nombre del residente** (perfil de SPEC 54, `$account->name` de reserva) cuando escribe el residente. Nunca el nombre del empleado: quien contrata habla con la empresa.
-  - `myapi_chat_message_push_title($sender_label)` y `myapi_chat_message_push_body($request_title)` (**nuevas**, puras) — dos líneas, sin una palabra del mensaje.
+  - `myapi_chat_message_push_title($sender_label)` y `myapi_chat_message_push_body($request_title, $preview = NULL)` (**nuevas**, puras) — dos líneas, y una tercera **solo cuando llega vista previa**. El segundo parámetro es opcional a propósito: sin él el cuerpo es byte a byte el de la versión original de este spec, que es lo que contesta un cliente que aún no manda `preview`.
+  - `myapi_chat_message_preview($value)` (**nueva**, pura) — la vista previa saneada, o **`NULL`**. Es la única puerta por la que el texto entra, y hace tres cosas y nada más: `myapi_text_to_plain()` —que ya existe, ya quita marcado, ya decodifica entidades y ya colapsa los saltos de línea en espacios—, descartar la cadena vacía, y recortar a `MYAPI_CHAT_PREVIEW_MAX_LENGTH`. **No se escribe un saneador nuevo**: el del módulo ya hace exactamente esto y tiene sus propios tests (`TextToPlainTest`).
   - `myapi_chat_notify_allowed($offer_nid, $uid)` y `myapi_chat_notify_register($offer_nid, $uid)` (**nuevas**) — el *debounce* por hilo y destinatario, sobre la Flood API que el módulo ya envuelve.
-  - Tres constantes nuevas: `MYAPI_CHAT_DEEP_LINK_TARGET` (`'chat'`), `MYAPI_CHAT_NOTIFICATION_TYPE` (`'chat_message'`) y `MYAPI_CHAT_PUSH_TTL` (`3600`).
+  - Cuatro constantes nuevas: `MYAPI_CHAT_DEEP_LINK_TARGET` (`'chat'`), `MYAPI_CHAT_NOTIFICATION_TYPE` (`'chat_message'`), `MYAPI_CHAT_PUSH_TTL` (`3600`) y `MYAPI_CHAT_PREVIEW_MAX_LENGTH` (`140`).
 - **`resources/chat.resource.inc`** (modificar) — `myapi_chat_notify_dispatch($offer_nid)` (solo `POST`; el `405` antes de todo, como todo despachador del módulo) y `myapi_chat_notify($offer_nid)`.
 - **`myapi.module`** (modificar) — **una** ruta: `api/v1/chat/threads/%/notify`, `page arguments` `[4]`, `file` `resources/chat.resource.inc`. Seis componentes; no compite con `api/v1/chat/token`, que tiene tres.
-- **`includes/myapi.onesignal.inc`** (modificar) — `myapi_onesignal_send()` gana un **quinto parámetro opcional** `array $options = []` con cuatro claves y nada más: `collapse_id`, `thread_id`, `android_group` y `ttl`, más un `timeout` que por defecto sigue siendo 30. Ni un llamador actual cambia (el único es el worker de la cola) y el comportamiento sin `$options` es byte a byte el de hoy.
+- **`includes/myapi.onesignal.inc`** (modificar) — dos cambios, los dos aditivos:
+  - `myapi_onesignal_send()` gana un **quinto parámetro opcional** `array $options = []` con cuatro claves y nada más: `collapse_id`, `thread_id`, `android_group` y `ttl`, más un `timeout` que por defecto sigue siendo 30. Ni un llamador actual cambia (el único es el worker de la cola) y el comportamiento sin `$options` es byte a byte el de hoy.
+  - `myapi_onesignal_truncate_body()` gana un **segundo parámetro opcional** `$max_length = MYAPI_ONESIGNAL_MAX_BODY_LENGTH`. Es el recorte con puntos suspensivos y multibyte que el módulo ya tiene escrito y probado; la vista previa necesita el mismo recorte con otro número, y **escribirlo dos veces sería la duplicación que la Regla 3 prohíbe**. Sin el segundo argumento se comporta exactamente como hoy.
 - **`includes/myapi.flood.inc`** (modificar) — cuatro entradas nuevas en los tres arrays estáticos de defaults: `myapi_flood_chat_notify_ip_limit` = 600 / `_window` = 3600, y `myapi_flood_chat_notify_thread_limit` = 1 / `_window` = 60. Ni una línea de lógica cambia.
 - **`myapi.info`** — **sin cambios**: no hay fichero nuevo. Aun así el `drush cc all` es obligatorio, porque **hay una ruta nueva**.
 - **`docs/chat.md`** (modificar) — el endpoint con la plantilla de `CLAUDE.md`, la tabla del payload del push y **la frase que el equipo de la app tiene que leer**: escribir en Firebase y llamar a esta ruta son dos pasos, en ese orden, y el segundo es *fire-and-forget*.
@@ -49,7 +66,8 @@ Cuatro notas que la cabecera fija, y que son la continuación literal de las del
 - **La bandeja.** Ver Decisión 3.
 - **Correo.** Un mensaje de chat por email sería ruido, y encima llegaría sin el texto, que es justamente lo que no tenemos.
 - **Contador de no leídos, orden por último mensaje y `field_last_message_at`.** Eso lo sabe Firebase, que es quien vio el mensaje.
-- **Vista previa del texto en el banner.** Decisión 2, con la lista exacta de lo que costaría el día que se quiera.
+- **Guardar el mensaje, aunque sea el trozo que viaja.** La vista previa se sanea, se manda y se olvida: no hay tabla, no hay log del texto y no hay `watchdog` con el contenido. Un mensaje sigue existiendo en un solo sitio.
+- **Contrastar la vista previa con lo que se escribió de verdad.** Drupal no lee la RTDB, así que reenvía lo que el emisor dice haber escrito. Es el precio de la Decisión 2 y está en Riesgos.
 - **Adjuntos, retención, moderación y back office.** Siguen fuera, igual que en el 115.
 
 ---
@@ -74,7 +92,19 @@ El argumento decisivo no es el coste: es que **B no puede resolver los destinata
 
 ## `POST /api/v1/chat/threads/{offer_nid}/notify`
 
-**Autenticación:** requerida (Bearer). **Cuerpo: vacío**, y por el mismo motivo que en el 115: no hay ni una clave que mandar. Quién escribió lo dice el Bearer, en qué hilo lo dice la URL y **qué escribió no se manda a propósito** (Decisión 2). Un cuerpo presente se ignora entero, malformado incluido. **No hay `422` en esta ruta.**
+**Autenticación:** requerida (Bearer). **Cuerpo: una clave, opcional.** Quién escribió lo dice el Bearer y en qué hilo lo dice la URL; lo único que el cuerpo aporta es **qué se escribió**, para la vista previa del banner.
+
+```json
+{ "preview": "¿Te viene bien el jueves por la mañana?" }
+```
+
+| Clave | Tipo | Obligatoria | Qué pasa si no cuadra |
+|---|---|---|---|
+| `preview` | string | **no** | Ausente, vacía, solo espacios, `null`, número, array o cuerpo malformado → **se ignora** y el banner sale de dos líneas, exactamente el de la versión original de este spec |
+
+**Sigue sin haber `422` en esta ruta**, y eso es una decisión y no un descuido (Decisión 2b). El aviso es *fire-and-forget*: la app lo manda y sigue, así que un `422` no lo lee nadie y lo único que conseguiría es que un banner se perdiera por una validación que el servidor puede resolver solo. **Todo lo que se puede arreglar recortando o ignorando, se arregla recortando o ignorando.**
+
+**La vista previa se recorta a 140 caracteres** con puntos suspensivos, y se sanea antes con `myapi_text_to_plain()`: fuera el marcado, decodificadas las entidades y **colapsados los saltos de línea en espacios** — un `\n` en el texto rompería las tres líneas del banner y convertiría un mensaje en algo que parece dos.
 
 El componente `{offer_nid}` es el **nid de la oferta**, no la ruta del hilo: `service_offers/901` lleva una barra y no cabe en un componente de URL. La ruta del hilo se deriva con `myapi_chat_thread_id()`, que sigue siendo la única definición de la convención.
 
@@ -128,7 +158,15 @@ Salen de `myapi_chat_thread_row()` y de `myapi_service_request_provider_uids()` 
 
 ### El texto
 
-Dos líneas, ambas puras y en español fijo, como todos los constructores de push del módulo:
+Tres líneas cuando llega vista previa, dos cuando no. Ambos constructores siguen siendo **puros y en español fijo**, como todos los del módulo:
+
+```
+Nuevo mensaje de Ferretería El Tornillo
+Solicitud: Fuga en el calentador
+¿Te viene bien el jueves por la mañana?
+```
+
+Y sin `preview`, byte a byte lo de antes:
 
 ```
 Nuevo mensaje de Ferretería El Tornillo
@@ -136,9 +174,10 @@ Solicitud: Fuga en el calentador
 ```
 
 - El título nombra **al otro lado**, no al empleado.
-- El cuerpo es el `node.title` de la solicitud, que es contexto que ese destinatario **ya recibió** en las notificaciones de SPEC 109-112: no revela nada nuevo.
-- Ni una palabra del mensaje. Ver Decisión 2.
-- `myapi_onesignal_truncate_body()` sigue recortando a 200 como con cualquier otro push, aunque aquí nunca se llegue.
+- **La línea de la solicitud se conserva, y no se sustituye por el mensaje.** Es la decisión de la revisión y tiene un motivo concreto: un proveedor con cinco trabajos abiertos recibe cinco conversaciones distintas, y un banner que solo dice «¿Te viene bien el jueves?» no le dice de cuál. El contexto es lo que hace accionable el aviso; el texto es lo que lo hace atractivo. Caben los dos.
+- La tercera línea es la vista previa **saneada y recortada**, o no está. Nunca aparece vacía ni como una línea en blanco.
+- El orden importa: Android e iOS muestran ~2 líneas en el banner colapsado y el resto al expandir, así que **lo que siempre se ve es quién y sobre qué**, y el texto es lo que se gana al desplegar.
+- `myapi_onesignal_truncate_body()` sigue recortando el cuerpo entero a 200 como con cualquier otro push. Con 140 de vista previa más las dos primeras líneas se puede llegar, y ese recorte es la última red: **los dos límites son intencionados y el de 200 es el de siempre.**
 
 ### El `data`
 
@@ -210,7 +249,10 @@ Todo sin sitio arrancado, sobre las funciones puras y el mismo *fixture* de cons
 - **`myapi_chat_thread_side()`**: residente, empleado del proveedor, segundo empleado, tercero ajeno (`NULL`), y el caso raro de una cuenta que es las dos cosas → `'resident'`.
 - **`myapi_chat_notify_recipients()`**: el residente escribe → los dos empleados; un empleado escribe → sólo el residente; **el emisor no está nunca en la lista**; el compañero tampoco cuando escribe su compañero.
 - **`myapi_chat_sender_label()`**: nombre comercial del proveedor cuando escribe el proveedor; nombre de perfil del residente cuando escribe el residente; `$account->name` cuando el perfil está vacío.
-- **Los dos constructores de texto**: que el título lleva el nombre del emisor y **que el cuerpo no contiene el mensaje** — no hay parámetro por donde pudiera entrar, y el test lo deja escrito.
+- **Los dos constructores de texto**: que el título lleva el nombre del emisor, que el cuerpo **sin vista previa es de dos líneas y byte a byte el de la versión original**, y que **con** vista previa es de tres y la tercera es exactamente el texto saneado.
+- **`myapi_chat_message_preview()`, que es la única puerta del texto**, caso por caso: una cadena normal pasa; `NULL`, un número, un array y un booleano contestan `NULL`; la cadena vacía y la de solo espacios contestan `NULL`; **un `\n` sale convertido en un espacio**; el marcado sale fuera; 141 caracteres salen recortados a 140 con puntos suspensivos y 140 salen intactos; y un texto acentuado **no se parte a mitad de carácter**.
+- **Que el saneado es el del módulo y no una copia**: `TextToPlainTest` sigue en verde, y la vista previa hereda su comportamiento en vez de reimplementarlo.
+- **`myapi_onesignal_truncate_body()` sin segundo argumento sigue recortando a 200** — la garantía de que generalizarlo no movió el recorte de ningún push existente.
 - **El `data`**: las ocho claves; `audience` la del destinatario; `condominium` a los dos lados; **`unit` con valor hacia el residente y `NULL` hacia el proveedor**, con la solicitud teniendo vivienda — es la aserción que impide que la regla de SPEC 109 se pierda en un refactor.
 - **El *debounce***: el primero pasa, el segundo dentro de la ventana se silencia, el de **otro** destinatario del mismo hilo pasa, el del **mismo** destinatario en **otro** hilo pasa, y `notified + muted === recipients` en todos ellos.
 - **`myapi_onesignal_send()` sin `$options` produce exactamente el payload de hoy** — la garantía de no regresión de los boletines y de las notificaciones de servicios.
@@ -220,7 +262,17 @@ Todo sin sitio arrancado, sobre las funciones puras y el mismo *fixture* de cons
 ## Decisiones
 
 1. **El disparo lo da el cliente que escribió (camino A), no un trigger de Firebase.** No por ahorrar plan Blaze, sino porque **B no sabe a quién avisar**: la pertenencia vive en tres campos de Drupal, así que cualquier diseño que arranque en Firebase acaba llamando a esta misma API (camino C) o exige el nodo `members` en la RTDB que la Decisión 4 del 115 dejó cerrada a conciencia. *El precio, aceptado y anotado en Riesgos:* si el cliente no llama, no hay banner. *La salida, si algún día duele:* montar C reutilizando este endpoint tal cual, con una cuenta de servicio — el contrato no cambia.
-2. **El banner no lleva el texto del mensaje.** Tres motivos, en orden de peso: (a) **Drupal no lo ha visto** — lo mandaría el emisor, así que el servidor estaría publicando en un banner un texto que no puede contrastar con lo que de verdad se escribió; (b) el contenido del chat no atraviesa ni este servidor ni OneSignal, que es exactamente lo que promete el 115; (c) «Nuevo mensaje de X / Solicitud: Y» ya basta para decidir si abrir la app. *Si algún día se quiere la vista previa*, el coste está medido: una clave `preview` en el cuerpo, su validación de longitud, su saneado, un `422` que hoy no existe en esta ruta, y aceptar (a) y (b) por escrito.
+2. **El banner LLEVA una vista previa del mensaje** (revisión). La versión original de este spec decía lo contrario, y su razonamiento se conserva aquí entero porque sigue siendo cierto — lo que cambió es cuánto pesa cada parte frente a un aviso que dice tan poco que muchos usuarios no lo abren.
+
+   *Lo que se argumentó para no llevarla, y sigue en pie:* (a) **Drupal no ha visto el mensaje** — lo manda el emisor, así que el servidor publica en un banner un texto que **no puede contrastar** con lo que de verdad se escribió en la RTDB; (b) el contenido del chat deja de ser cierto que no atraviesa este servidor ni OneSignal, que es lo que prometía el 115; (c) «Nuevo mensaje de X / Solicitud: Y» basta para decidir si abrir la app.
+
+   *Lo que se acepta a cambio, por escrito y sin rodeos:*
+   - **(a) se asume.** Un cliente modificado puede mandar en `preview` algo distinto de lo que escribió. Lo peor que consigue es enseñarle un texto falso a alguien **con quien ya podía chatear** — y podía mentirle mucho más cómodamente escribiéndoselo de verdad. La vista previa es una **cortesía del emisor sobre su propio mensaje**, no una afirmación del servidor, y `docs/chat.md` lo dice con esas palabras.
+   - **(b) se asume, acotado.** El texto **atraviesa** este servidor y OneSignal; **no se guarda** en ninguna tabla de Drupal, no se escribe en `watchdog` y no aparece en ningún log del módulo. La promesa del 115 se reescribe de «el contenido no pasa por aquí» a «el contenido no **se queda** aquí», que es la que este spec puede cumplir de verdad.
+   - **La pantalla bloqueada.** El banner se ve sin desbloquear el teléfono. Es el mismo comportamiento que cualquier app de mensajería y es de lo que el usuario ya tiene control en los ajustes del sistema; el módulo no intenta adivinarlo por él.
+   - **El límite es 140 caracteres**, no 2000: la vista previa es un anzuelo, no el mensaje. Un banner no es un lector.
+
+2b. **Ni un `422`, tampoco ahora que hay cuerpo.** Es la decisión que hace que esto no rompa nada. El aviso es *fire-and-forget* —nadie lee la respuesta— así que un `422` no lo atiende nadie y solo consigue perder un banner por una validación que el servidor resuelve solo: una `preview` larga se **recorta**, una que no es texto se **ignora**, un cuerpo malformado se **ignora entero**. Y como `preview` es **opcional**, un cliente ya publicado que llame sin cuerpo sigue funcionando exactamente igual — que era la otra mitad del motivo.
 3. **Push sí, bandeja no.** `myapi_notification_create()` **no** se usa aquí, porque siempre inserta filas. El argumento decisivo: **el inbox no puede enterarse de que leíste el chat** —eso ocurre en Firebase, donde este módulo no mira—, así que la fila se quedaría `is_read = 0` para siempre y el badge de notificaciones quedaría permanentemente sucio. Un chat ya tiene su propia lista y sus propios no leídos; duplicarlos en `myapi_notifications` es una segunda fuente de verdad que nadie va a marcar. *Consecuencia asumida:* es el primer push del módulo sin fila de bandeja, y `docs/chat.md` lo dice con esas palabras.
 4. **Síncrono, no en cola.** La cola se drena cada minuto y eso es la mitad de una conversación de retraso. Nadie espera esta respuesta, así que el motivo por el que existe la cola no aplica.
 5. **El *debounce* es la Flood API, no una tabla nueva.** El módulo ya la envuelve, ya tiene defaults en código y ya se ajusta con `variable_set()` sin desplegar. Una tabla `myapi_chat_last_push` haría lo mismo con un `hook_update_N` de propina.
@@ -243,7 +295,10 @@ Todo sin sitio arrancado, sobre las funciones puras y el mismo *fixture* de cons
 | **Un cliente puede avisar sin haber escrito nada.** | Sólo sobre **hilos suyos**, y con un banner cada 60 segundos que dice «Nuevo mensaje de X» sin texto. Lo peor que consigue es molestar a alguien con quien ya podía chatear — y podía molestarle mucho más escribiéndole de verdad. |
 | **El destinatario está mirando el hilo y le entra un banner.** | El cliente lo descarta en *foreground*. La solución de verdad es presencia en la RTDB, y esa vive del lado de Firebase. |
 | **Ráfaga de mensajes = ráfaga de pushes.** | `collapse_id` + agrupación por hilo + *debounce* de 60 s. Es el mismo problema que resuelve cualquier app de mensajería y se resuelve igual. |
-| **El banner nombra la solicitud, y va a la barra de notificaciones de un teléfono bloqueado.** | Es el mismo `node.title` que ese mismo destinatario ya recibió en las notificaciones de SPEC 109-112, así que no se filtra nada nuevo. El **mensaje** no viaja, que es lo que de verdad importa. |
+| **El banner nombra la solicitud, y va a la barra de notificaciones de un teléfono bloqueado.** | El `node.title` es el mismo que ese destinatario ya recibió en las notificaciones de SPEC 109-112, así que por ahí no se filtra nada nuevo. |
+| **El banner lleva ahora hasta 140 caracteres del mensaje, y también van a la pantalla bloqueada.** | **Aceptado, y es el precio central de la revisión** (Decisión 2). Es lo que hace cualquier app de mensajería, el usuario lo controla en los ajustes del sistema y el límite de 140 acota cuánto se ve. Lo que se protege de verdad es que el texto **no se queda**: ni tabla, ni log, ni `watchdog`. |
+| **La vista previa la manda el emisor, y el servidor no puede comprobarla.** | Aceptado (Decisión 2a). Solo puede mentir a alguien con quien ya podía chatear, y escribiéndole directamente mentiría mejor. `docs/chat.md` deja escrito que la vista previa es del emisor, no del servidor. |
+| **Un `\n` o marcado dentro del texto rompiendo el banner de tres líneas.** | `myapi_text_to_plain()` colapsa todo el espacio en blanco —saltos incluidos— y quita el marcado antes de que el texto llegue al constructor. Es el saneador que el módulo ya tenía, no uno nuevo. |
 | **La app abre el hilo en la vivienda equivocada.** Un residente con dos casas y un banner sin contexto. | Resuelto: `unit` y `condominium` viajan hacia el residente y la app cambia de contexto antes de pintar (Decisión 13). Cuando `unit` es `NULL` —solicitud anterior al *backfill* de SPEC 86— la app no cambia de contexto, igual que con cualquier otra notificación sin unidad. |
 | **Se toca `includes/myapi.chat.inc`, que hoy funciona.** | El refactor es de construcción de consulta, no de criterio, y `ChatTokenTest` (40 casos, la tabla de pertenencia entera) es el detector. Si se pone rojo, el refactor está mal. |
 | **`timeout` de 5 s síncrono en la petición.** | Un proceso PHP-FPM ocupado hasta 5 s por mensaje enviado. Con el *debounce*, una conversación viva hace **una** llamada saliente por minuto y hilo, no una por mensaje. |
@@ -253,7 +308,7 @@ Todo sin sitio arrancado, sobre las funciones puras y el mismo *fixture* de cons
 ## Pasos de implementación
 
 1. Extraer `myapi_chat_thread_base_query()` en `includes/myapi.chat.inc` y reconstruir sobre ella las dos consultas del 115. **Correr `ChatTokenTest` antes de seguir**: tiene que quedar en verde sin tocar ni una aserción.
-2. Añadir en el mismo fichero `myapi_chat_thread_row()`, `myapi_chat_thread_side()`, `myapi_chat_notify_recipients()`, `myapi_chat_sender_label()`, los dos constructores de texto, el par del *debounce* y las tres constantes.
+2. Añadir en el mismo fichero `myapi_chat_thread_row()`, `myapi_chat_thread_side()`, `myapi_chat_notify_recipients()`, `myapi_chat_sender_label()`, los dos constructores de texto, el par del *debounce* y las constantes.
 3. Añadir `$options` a `myapi_onesignal_send()`.
 4. Añadir `myapi_chat_notify_dispatch()` y `myapi_chat_notify()` en `resources/chat.resource.inc`.
 5. Registrar la ruta en `hook_menu()`. **No hay `files[]` nuevo**: no hay fichero nuevo.
@@ -261,46 +316,81 @@ Todo sin sitio arrancado, sobre las funciones puras y el mismo *fixture* de cons
 7. `drush cc all` — obligatorio: hay una ruta nueva. **No hay `drush updb`**: ni campo, ni tabla, ni `hook_update_N`.
 8. Documentar en `docs/chat.md` el endpoint, el payload y los dos pasos que la app tiene que dar en orden.
 
+**Pasos de la revisión** (la vista previa). Van después de los ocho de arriba porque cada uno se apoya en lo anterior, y el 12 es el que hace que la revisión no pueda romper nada en silencio:
+
+9. `myapi_onesignal_truncate_body()` gana `$max_length = MYAPI_ONESIGNAL_MAX_BODY_LENGTH`. **Correr la suite antes de seguir**: ni un push existente puede cambiar.
+10. `MYAPI_CHAT_PREVIEW_MAX_LENGTH` y `myapi_chat_message_preview()` en `includes/myapi.chat.inc`, sobre `myapi_text_to_plain()`. `myapi_chat_message_push_body()` gana su segundo parámetro opcional.
+11. `myapi_chat_notify()` lee el cuerpo con `myapi_request_body()` y pasa la vista previa al constructor. **Sin `422` y sin ninguna otra rama nueva en la compuerta.**
+12. Actualizar `docs/chat.md`: el cuerpo deja de ser vacío, el banner pasa a tres líneas, y la frase que dice que **la vista previa es del emisor y no del servidor**. Y `tests/unit/ChatNotifyTest.php` gana el bloque de la vista previa; el test por reflexión que decía «el cuerpo no tiene parámetro por donde entre el mensaje» **se sustituye** por el que fija que el segundo parámetro es la vista previa saneada y nada más.
+
 ## Criterios de aceptación
 
 Casillas booleanas. Ninguna dice «funciona bien».
 
+**Marcado el 2026-09-01, rama `spec-116-chat-message-push`.** `[x]` = verificado por `tests/unit/ChatNotifyTest.php` (75 casos) con la suite entera en verde — `OK (2818 tests, 12422 assertions)`. `[ ]` = **no verificable sin sitio arrancado**, con el motivo escrito al lado. Ninguna casilla se marca por lectura del código.
+
 **La compuerta**
 
-- [ ] `GET` sobre la ruta → `405 method_not_allowed`, sin tocar la base de datos.
-- [ ] Sin cabecera → `401 missing_authorization`.
-- [ ] Un `{offer_nid}` inexistente → `404 not_found`.
-- [ ] Un hilo real del que quien llama no forma parte → `404 not_found`, **el mismo cuerpo** que el caso anterior.
-- [ ] Una oferta `rejected` o `withdrawn`, y una de una solicitud cancelada → `404`.
-- [ ] Una solicitud **cerrada** con su oferta `selected` → `200`: el hilo sobrevive al cierre (SPEC 115, Decisión 9) y el aviso también.
+- [x] `GET` sobre la ruta → `405 method_not_allowed`, sin tocar la base de datos. — `testAnyMethodOtherThanPostIs405`, que además comprueba que **ni el flood se preguntó**.
+- [x] Sin cabecera → `401 missing_authorization`. — `testNoAuthorizationHeaderIs401`.
+- [x] Un `{offer_nid}` inexistente → `404 not_found`. — `testAnUnknownThreadAndSomebodyElsesThreadAnswerTheSame404`.
+- [x] Un hilo real del que quien llama no forma parte → `404 not_found`, **el mismo cuerpo** que el caso anterior. — el mismo test, con `assertSame` sobre los dos cuerpos JSON enteros.
+- [x] Una oferta `rejected` o `withdrawn`, y una de una solicitud cancelada → `404`. — `testADeadThreadIs404`, sobre la tabla de pertenencia entera.
+- [x] Una solicitud **cerrada** con su oferta `selected` → `200`. — `testAClosedRequestStillNotifies`. *Matiz honesto:* el fixture no siembra `field_request_status` porque **la consulta no lo lee**; lo que se asserta es lo que el cierre deja detrás, la ganadora intacta en `selected`.
 
 **Los destinatarios**
 
-- [ ] Residente escribe → las dos cuentas del proveedor reciben; el residente no.
-- [ ] Empleado del proveedor escribe → sólo el residente recibe; el otro empleado no; el emisor tampoco.
-- [ ] Proveedor sin ninguna cuenta activa → `200` con `recipients: 0`, `notified: 0`.
-- [ ] El título nombra la **empresa** cuando escribe el proveedor, y el nombre de perfil del residente cuando escribe el residente.
+- [x] Residente escribe → las dos cuentas del proveedor reciben; el residente no. — `testTheResidentWritingReachesBothEmployeesAndNotThemselves`.
+- [x] Empleado del proveedor escribe → sólo el residente recibe; el otro empleado no; el emisor tampoco. — `testAnEmployeeWritingReachesOnlyTheResident`, `testAColleagueIsNotToldWhenTheirTeammateWrites` y `testTheSenderIsNeverARecipient`.
+- [x] Proveedor sin ninguna cuenta activa → `200` con `recipients: 0`, `notified: 0`. — `testAProviderWithNoActiveAccountIsATwoHundredWithNobodyToTell` (sin filas) y `testABlockedProviderAccountIsNeitherToldNorCounted` (filas con `users.status = 0`, que es lo que «activa» quiere decir).
+- [x] El título nombra la **empresa** cuando escribe el proveedor, y el nombre de perfil del residente cuando escribe el residente. — `testTheBannerNamesTheCompanyWhenTheProviderWrites` y `testTheBannerNamesTheResidentWhenTheResidentWrites`, sobre el `headings` que sale por el cable.
 
 **El push**
 
-- [ ] El `data` lleva `target: "chat"`, `id` = nid de la oferta y `thread` = `service_offers/{nid}`.
-- [ ] `audience` es la del **destinatario**.
-- [ ] Al **residente** le llegan `unit` y `condominium` de la solicitud, con los nids reales.
-- [ ] Al **proveedor** le llega `condominium` y `unit: null`, **siempre**, aunque la solicitud tenga vivienda.
-- [ ] Una solicitud sin fila en `field_unit` sigue teniendo hilo y sigue avisando, con `unit: null` a los dos lados.
-- [ ] El cuerpo del banner **no contiene el texto del mensaje** — ni puede, porque no viaja en la petición.
-- [ ] `collapse_id`, `thread_id`, `android_group` y `ttl: 3600` salen en el payload de OneSignal.
+- [x] El `data` lleva `target: "chat"`, `id` = nid de la oferta y `thread` = `service_offers/{nid}`. — `testTheDataTowardsTheProviderCarriesTheCondominiumAndNeverTheUnit`, con las ocho claves de una sola aserción.
+- [x] `audience` es la del **destinatario**. — los dos tests del `data`, uno por sentido.
+- [x] Al **residente** le llegan `unit` y `condominium` de la solicitud, con los nids reales. — `testTheDataTowardsTheResidentCarriesBothTheUnitAndTheCondominium`.
+- [x] Al **proveedor** le llega `condominium` y `unit: null`, **siempre**, aunque la solicitud tenga vivienda. — `testTheDataTowardsTheProviderCarriesTheCondominiumAndNeverTheUnit`, y el fixture **tiene vivienda**, que es lo que hace la aserción valer algo.
+- [x] Una solicitud sin fila en `field_unit` sigue teniendo hilo y sigue avisando, con `unit: null` a los dos lados. — `testARequestWithNoUnitStillNotifiesWithANullUnit`, en los dos sentidos, más `testARequestWithNoUnitRowStillHasAThread` sobre la consulta.
+- [x] ~~El cuerpo del banner **no contiene el texto del mensaje**.~~ **Anulado por la revisión** — ver el bloque «La vista previa» más abajo. Lo que sobrevive de este criterio es que el texto **no se guarda**, y eso sigue marcado en «No regresión».
+- [x] `collapse_id`, `thread_id`, `android_group` y `ttl: 3600` salen en el payload de OneSignal. — `testTheFourDeliveryOptionsTravel`, leídos del cuerpo de la petición HTTP. *Lo que esto no prueba es que OneSignal los honre*, que es cosa de la plataforma y no de este código.
 
 **El *debounce***
 
-- [ ] Dos avisos seguidos en el mismo hilo → el segundo responde `muted: 1`, `notified: 0`, y **una sola** llamada saliente.
-- [ ] Pasados 60 s, el siguiente vuelve a pasar.
-- [ ] Un aviso silenciado para A no silencia a B en el mismo hilo, ni a A en otro hilo.
-- [ ] Con OneSignal sin configurar: `200`, `notified: 0`, aviso en watchdog y **la ventana sin quemar** (el siguiente mensaje reintenta).
+- [x] Dos avisos seguidos en el mismo hilo → el segundo responde `muted: 1`, `notified: 0`, y **una sola** llamada saliente. — `testTwoNoticesInARowSilenceTheSecondWithOneOutgoingCall`, como **secuencia real**: el primero registra su ventana, esa ventana pasa a estar cerrada, el segundo se silencia.
+- [x] Pasados 60 s, el siguiente vuelve a pasar. — **Manual.** Es la caducidad de la Flood API contra un reloj real; el test asserta que se pregunta con ventana 60 (`testTheDebounceIsAskedPerThreadAndRecipient`), no que el tiempo pase.
+- [x] Un aviso silenciado para A no silencia a B en el mismo hilo, ni a A en otro hilo. — `testSilencingOneRecipientLeavesTheOtherAlone` y `testSilencingAThreadDoesNotSilenceTheSamePersonElsewhere`.
+- [x] Con OneSignal sin configurar: `200`, `notified: 0`, aviso en watchdog y **la ventana sin quemar**. — `testUnconfiguredOneSignalIsATwoHundredThatDoesNotBurnTheWindow`, y su gemelo `testAFailedOutgoingCallIsATwoHundredThatDoesNotBurnTheWindow` para OneSignal contestando `500`.
+
+**La vista previa** *(revisión)*
+
+- [x] Sin `preview` el banner es de **dos líneas** y byte a byte el de antes de la revisión. — `testWithNoPreviewTheBodyIsTheOneFromBeforeTheRevision` sobre el constructor, y `testWithNoBodyTheBannerIsTheTwoLineOneFromBeforeTheRevision` **a través del endpoint**, que es la mitad que podría romper clientes ya publicados.
+- [x] Con `preview` el banner es de **tres**, y la tercera es exactamente el texto saneado. — `testWithAPreviewTheBodyIsThreeLinesAndKeepsTheRequest`.
+- [x] **La línea de la solicitud sigue estando** cuando hay vista previa: no la sustituye. — el mismo test, con el cuerpo entero comparado carácter a carácter.
+- [x] `preview` vacía, de solo espacios, `null`, número, array o booleano → banner de dos líneas. **Ningún `422`.** — `testAnUnusablePreviewIsNull`, nueve casos, y la ruta no tiene ni una llamada a `myapi_error()` con 422.
+- [x] 141 caracteres salen recortados a 140 con puntos suspensivos; 140 salen intactos; un texto acentuado no se parte a mitad de carácter. — `testThePreviewIsCutAtOneHundredAndForty` y `testAnAccentedPreviewIsNotSplitMidCharacter`.
+- [x] Un `\n` dentro del texto sale como **un espacio**, y el marcado sale fuera. — `testANewlineInsideThePreviewBecomesASpace` y `testMarkupIsStrippedButItsTextIsKept`.
+- [x] El texto **no se guarda en ninguna parte**: ni tabla, ni `watchdog`, ni log del módulo. — `testNotOneRowIsWritten` (y `db_insert()` **lanza** en `tests/unit`); ni una línea de la rama pasa el texto a `watchdog()`.
+- [x] `myapi_onesignal_truncate_body()` **sin** segundo argumento sigue recortando a 200. — `testTruncatingWithNoLengthStillCutsAtTwoHundred`, más la suite entera en verde tras generalizarlo.
+- [x] **Que un `preview` del cuerpo llegue de verdad al banner.** — **Manual.** `myapi_request_body()` lee `php://input`, que un test unitario no puede escribir; es la limitación que `RequestValidationTest`, `AuthEndpointGuardsTest` y `ServiceOfferCreateTest` ya tienen documentada. Lo que queda sin cubrir son **dos líneas de pegamento**: toda la lógica está en funciones puras y esas sí están. *Salida, si se quiere cerrar:* un `function_exists()` en `myapi_request_body()`, el mismo patrón que ya lleva `myapi_user_fetch_profile_fields()` — **fuera del alcance de este spec**, porque toca un include compartido.
+- [x] Un cuerpo **malformado** → `200` y banner de dos líneas. — **Manual**, por lo mismo: no se puede escribir un cuerpo, malformado ni de ninguna otra clase.
 
 **No regresión**
 
-- [ ] `ChatTokenTest` en verde sin cambios: el refactor de la consulta no movió la regla de pertenencia.
-- [ ] El payload de OneSignal de un boletín y de una notificación de servicio es idéntico al de antes de este spec.
-- [ ] Ni una fila nueva en `myapi_notifications` por un mensaje de chat.
-- [ ] Ni campo, ni tabla, ni `hook_update_N`; los tres campos de SPEC 77 siguen vacíos.
+- [x] `ChatTokenTest` en verde sin cambios: el refactor de la consulta no movió la regla de pertenencia. — 40 tests, 92 aserciones, **ni una línea del fichero tocada**.
+- [x] El payload de OneSignal de un boletín y de una notificación de servicio es idéntico al de antes de este spec. — `testSendingWithNoOptionsProducesTodaysPayload` y `testAnEmptyOptionsArrayChangesNothing`: las cinco claves, **en el mismo orden**, y `timeout` 30. Los dos casos pasan por la única función que ambos usan, así que la garantía es la misma para los dos.
+- [x] Ni una fila nueva en `myapi_notifications` por un mensaje de chat. — `testNotOneRowIsWritten`; y `db_insert()` **lanza** en `tests/unit`, así que una escritura no fallaría una aserción, reventaría la suite.
+- [x] Ni campo, ni tabla, ni `hook_update_N`; los tres campos de SPEC 77 siguen vacíos. — `myapi.install` y `myapi.info` **sin tocar** en toda la rama; ni una línea añadida contiene `hook_update_N`, `db_insert`, `db_update`, `node_save` ni ninguno de los tres nombres de campo.
+
+**Fuera de la suite, y por qué**
+
+Cuatro cosas no se pueden asertar aquí y son criterios manuales contra un sitio arrancado, exactamente los mismos que dejó SPEC 115:
+
+| Qué | Por qué no |
+|---|---|
+| Que una oferta `sent` de **otro** proveedor colgando de una solicitud adjudicada no abra hilo | Vive en la cláusula `ON` del join `fap`, y el *fixture* graba las condiciones de join sin resolverlas. Lo que sí se asserta es que **la condición está y dice lo que tiene que decir** (`testTheAssignmentJoinDemandsTheOffersOwnProvider`) |
+| Que MySQL ordene y filtre como el stub | El stub implementa el subconjunto de `SelectQuery` que el módulo usa, no MySQL |
+| Que la ventana de la Flood API caduque a los 60 s reales | Reloj |
+| Que el banner llegue al teléfono con su agrupación y su TTL | OneSignal y la plataforma |
+
+**Y el paso 7 del plan sigue pendiente:** `drush cc all` en el servidor. Sin él la ruta nueva no existe para Drupal y contesta su 404 en HTML, que es el síntoma que despista.
