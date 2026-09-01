@@ -1693,17 +1693,21 @@ function myapi_service_request_file_download($nid, $fid) {
   // 5. The bytes. file_transfer() sends the headers, streams the file in chunks
   // and ends the request; nothing after this line runs.
   //
-  // 'inline' because the app renders these images on screen and 'attachment'
-  // would force a download in any web viewer; the original filename travels in
-  // the header either way. 'private, no-store' because the whole point of this
-  // endpoint is that the file is not cacheable by anything between the app and
-  // Drupal.
-  file_transfer($file->uri, [
-    'Content-Type'        => $file->filemime,
-    'Content-Length'      => $file->filesize,
-    'Content-Disposition' => 'inline; filename="' . $file->filename . '"',
-    'Cache-Control'       => 'private, no-store',
-  ]);
+  // The header block is myapi_file_download_headers()'s and not this file's:
+  // the disposition is a security decision (a text/html or an image/svg+xml
+  // served inline from this origin is stored XSS) and it is taken in ONE place
+  // for the six call sites that stream a managed file. A photo still travels
+  // 'inline', which is what the app renders on screen; anything whose type is
+  // not on that function's closed list travels as an inert attachment.
+  //
+  // 'private, no-store' stays here because it is this ENDPOINT's decision and
+  // not the file's: the whole point of the route is that the bytes are not
+  // cacheable by anything between the app and Drupal.
+  module_load_include('inc', 'myapi', 'includes/myapi.file_download');
+
+  file_transfer($file->uri, myapi_file_download_headers($file, [
+    'Cache-Control' => 'private, no-store',
+  ]));
 }
 
 /* ---------------------------------------------------------------------------

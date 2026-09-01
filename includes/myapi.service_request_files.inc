@@ -280,13 +280,12 @@ function myapi_service_request_file_download_headers($uri, $account) {
     return NULL;
   }
 
-  // 'inline' and not 'attachment', same reason as claim files and provider
-  // galleries: the back office renders these images on screen — the node/%/edit
-  // thumbnails of field_images — and forcing a download on every one of them
-  // would make the form unusable.
-  return [
-    'Content-Type'        => $file->filemime,
-    'Content-Length'      => $file->filesize,
-    'Content-Disposition' => 'inline; filename="' . $file->filename . '"',
-  ];
+  // The same header block the API endpoints send, from the same function: a
+  // photo travels 'inline' — the back office renders these on screen, and
+  // forcing a download on every node/%/edit thumbnail would make the forms
+  // unusable — while a type that could carry script never does. One decision,
+  // one place, both audiences.
+  module_load_include('inc', 'myapi', 'includes/myapi.file_download');
+
+  return myapi_file_download_headers($file);
 }

@@ -17,6 +17,7 @@ require_once __DIR__ . '/../../includes/myapi.provider_files.inc';
 // that chain end to end, so every link of it has to be loaded here.
 require_once __DIR__ . '/../../includes/myapi.service_request_files.inc';
 require_once __DIR__ . '/../../includes/myapi.provider_card.inc';
+require_once __DIR__ . '/../../includes/myapi.file_download.inc';
 require_once __DIR__ . '/../../resources/provider.resource.inc';
 require_once __DIR__ . '/../../myapi.module';
 
@@ -574,6 +575,7 @@ class ProviderGalleryEndpointTest extends TestCase {
       'Content-Type'        => 'image/jpeg',
       'Content-Length'      => 20481,
       'Content-Disposition' => 'inline; filename="taller-01.jpg"',
+      'X-Content-Type-Options' => 'nosniff',
       'Cache-Control'       => 'private, no-store',
     ], $transfers[0]['headers']);
   }
@@ -753,6 +755,7 @@ class ProviderGalleryEndpointTest extends TestCase {
       'Content-Type'        => 'image/jpeg',
       'Content-Length'      => 20481,
       'Content-Disposition' => 'inline; filename="taller-01.jpg"',
+      'X-Content-Type-Options' => 'nosniff',
     ], $headers);
   }
 

@@ -11,6 +11,7 @@ require_once __DIR__ . '/../../includes/myapi.unit_access.inc';
 require_once __DIR__ . '/../../includes/myapi.claims_common.inc';
 require_once __DIR__ . '/../../includes/myapi.building_admin.inc';
 require_once __DIR__ . '/../../includes/myapi.claims_files.inc';
+require_once __DIR__ . '/../../includes/myapi.file_download.inc';
 require_once __DIR__ . '/../../resources/claim.resource.inc';
 require_once __DIR__ . '/../../myapi.module';
 
@@ -537,6 +538,7 @@ class ClaimFileAccessTest extends TestCase {
       'Content-Type'        => 'image/jpeg',
       'Content-Length'      => 20481,
       'Content-Disposition' => 'inline; filename="fuga.jpg"',
+      'X-Content-Type-Options' => 'nosniff',
     ], $headers);
   }
 
@@ -711,6 +713,7 @@ class ClaimFileAccessTest extends TestCase {
       'Content-Type'        => 'image/jpeg',
       'Content-Length'      => 20481,
       'Content-Disposition' => 'inline; filename="fuga.jpg"',
+      'X-Content-Type-Options' => 'nosniff',
       'Cache-Control'       => 'private, no-store',
     ], $transfers[0]['headers']);
   }
