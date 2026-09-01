@@ -1001,3 +1001,49 @@ function myapi_chat_field_write($offer_nid, $vid, array $values) {
   cache_clear_all('field:node:' . $offer_nid, 'cache_field');
   entity_get_controller('node')->resetCache([$offer_nid]);
 }
+
+/**
+ * Brings the mirror of a batch of threads up to date. The whole spec, in one
+ * call, and the only one the two endpoints know about.
+ *
+ * state() -> values() -> write(), PER OFFER (SPEC 117). One read query for the
+ * batch and, in steady state, NOT ONE WRITE: an app launching for the second
+ * time finds every path already written, gets [] out of the decision, and
+ * myapi_chat_field_write() returns before touching anything.
+ *
+ * THE try/catch IS THE POINT OF THIS FUNCTION AND NOT AN ORNAMENT (decision 4).
+ * THE MIRROR NEVER BREAKS THE CHAT: a failure is logged and the endpoint's
+ * response does not change by one byte — not the status, not the body. These
+ * three columns are telemetry nobody reads, and the chat has been working
+ * without them since SPEC 115, so answering 500 to chat/token because a mirror
+ * could not be written would be throwing away a user's chat session for
+ * nothing. It is the very same criterion SPEC 116 applies to a OneSignal
+ * outage: it is recorded, it is not propagated.
+ *
+ * THE CATCH IS AROUND THE WHOLE BATCH AND NOT AROUND EACH OFFER. A database
+ * error here is not "this row is odd", it is the field tables being
+ * unavailable; retrying the other thirty-nine would only write the same
+ * exception to watchdog forty times.
+ *
+ * IT AUTHORISES NOTHING, and that is deliberate: which threads may be mirrored
+ * is decided BEFORE this call, by whoever knows — the token passes the threads
+ * its claim really carries, never the whole membership query (decision 3).
+ *
+ * REQUEST_TIME AND NOT time(): the two dates of a first notice must be the same
+ * integer, and the whole request has to agree on when it happened.
+ *
+ * @param array $offer_nids  The threads to mirror. Empty is a no-op.
+ * @param bool $is_message   TRUE from the notice, FALSE from the credential.
+ *   The only thing that can ever write a timestamp.
+ */
+function myapi_chat_field_sync(array $offer_nids, $is_message) {
+  try {
+    foreach (myapi_chat_field_state($offer_nids) as $current) {
+      $values = myapi_chat_field_values($current, REQUEST_TIME, $is_message);
+      myapi_chat_field_write($current['nid'], $current['vid'], $values);
+    }
+  }
+  catch (Exception $e) {
+    watchdog_exception('myapi', $e);
+  }
+}
