@@ -194,9 +194,17 @@ function myapi_chat_token() {
   // The rule of membership, and the only queries of this endpoint.
   $offer_nids = myapi_chat_offer_nids_for_uid($uid);
 
+  // The path of each thread, and the nid it came from. The second one is the
+  // mirror's (SPEC 117): what is written down has to be exactly what the claim
+  // ends up carrying, and after the cut the only way back from a path to its
+  // offer is a map built here — parsing 'service_offers/901' apart again would
+  // be a second definition of a convention myapi_chat_thread_id() owns.
   $thread_ids = [];
+  $offer_nid_by_thread = [];
   foreach ($offer_nids as $offer_nid) {
-    $thread_ids[] = myapi_chat_thread_id($offer_nid);
+    $thread_id = myapi_chat_thread_id($offer_nid);
+    $thread_ids[] = $thread_id;
+    $offer_nid_by_thread[$thread_id] = $offer_nid;
   }
 
   // The claim is built ONCE and the response is derived FROM IT, never rebuilt
@@ -211,6 +219,24 @@ function myapi_chat_token() {
   if ($jwt === FALSE) {
     myapi_error('chat_token_failed', 500);
   }
+
+  // The mirror (SPEC 117), AFTER the signature and BEFORE the response, which
+  // exits. It writes field_firebase_path on THE THREADS THIS TOKEN AUTHORISES
+  // and not on every thread of the membership query (decision 3):
+  // myapi_chat_offer_nids_for_uid() is not cut — the cut to
+  // MYAPI_CHAT_MAX_THREADS is myapi_chat_threads_claim()'s — so a large
+  // provider could have hundreds of live offers, and mirroring a thread the
+  // credential does not cover would be writing down something that did not
+  // happen. The batch is bounded at 40 by construction, with no new constant.
+  //
+  // IT CANNOT CHANGE ONE BYTE OF WHAT IS ANSWERED BELOW: it reads nothing back,
+  // it swallows its own failures into watchdog (decision 4), and in steady
+  // state — every path already written — it runs not one write query.
+  $mirror_nids = [];
+  foreach ($threads as $thread_id) {
+    $mirror_nids[] = $offer_nid_by_thread[$thread_id];
+  }
+  myapi_chat_field_sync($mirror_nids, FALSE);
 
   myapi_respond([
     'token'        => $jwt,
