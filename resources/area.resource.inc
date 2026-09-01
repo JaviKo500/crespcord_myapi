@@ -11,7 +11,8 @@
  * myapi_area_base_select(). Mirrors payment.resource.inc, except the visibility
  * criterion is by inclusion: only areas whose field_area_status is one of
  * MYAPI_AREA_VISIBLE_STATUSES are exposed, and an area with no status row is
- * hidden (inner join with an IN condition). The detail endpoint reuses that
+ * hidden (inner join with an IN condition). The list also takes an optional
+ * ?search over the area name and the category label. The detail endpoint reuses that
  * same criterion, so a hidden area is a non-revealing 404, just as it is
  * absent from the list.
  */
@@ -23,6 +24,7 @@ module_load_include('inc', 'myapi', 'includes/myapi.token');
 module_load_include('inc', 'myapi', 'includes/myapi.auth');
 module_load_include('inc', 'myapi', 'includes/myapi.unit_access');
 module_load_include('inc', 'myapi', 'includes/myapi.reservation_query');
+module_load_include('inc', 'myapi', 'includes/myapi.text');
 
 /**
  * Area statuses that are visible to the app (inclusion criterion).
@@ -98,6 +100,11 @@ function myapi_area_availability_dispatch($area_id) {
  * resolved with a lax in_array() against myapi_condominium_related_nids()
  * without a separate existence check.
  *
+ * ?search filters the list by area NAME or by the label of its CATEGORY,
+ * case- and accent-insensitively, and keeps paginating (see
+ * myapi_area_apply_search()). ?page, ?limit and ?sort keep their meaning over
+ * the narrowed set.
+ *
  * @param int $condominium_id  The 'condominium' nid from the route.
  */
 function myapi_area_list($condominium_id) {
@@ -127,12 +134,29 @@ function myapi_area_list($condominium_id) {
     ? $_GET['sort']
     : 'desc';
 
-  $total = myapi_area_count($condominium_id);
+  // The needle, taken RAW (only trimmed) and never folded here: it travels to
+  // SQL as a LIKE over n.title, where the accent- and case-insensitivity is the
+  // column collation's job (utf8_general_ci on a standard Drupal 7 install).
+  // Folding it first would be strictly worse — under an accent-SENSITIVE
+  // collation "Jardín" would stop finding "Jardín". The folding that this
+  // module does control happens one level down, over the category labels.
+  // Absent, non-scalar or blank (spaces only) all mean "no search": a search
+  // box the user cleared must answer the whole list, not an empty one.
+  $search = isset($_GET['search']) && is_scalar($_GET['search'])
+    ? trim((string) $_GET['search'])
+    : '';
+
+  // Searching does NOT turn pagination off here, unlike the service-category
+  // catalogue (SPEC 119). That catalogue is ~40 fixed rows and is answered
+  // whole; this list is per-condominium node data the client already reads page
+  // by page, so a search narrows the SAME paginated set: `total` and
+  // `total_pages` describe the matches, not the whole condominium.
+  $total = myapi_area_count($condominium_id, $search);
   $total_pages = $limit === -1
     ? ($total > 0 ? 1 : 0)
     : ($total > 0 ? (int) ceil($total / $limit) : 0);
 
-  $rows = myapi_area_fetch($condominium_id, $page, $limit, $sort);
+  $rows = myapi_area_fetch($condominium_id, $page, $limit, $sort, $search);
   $areas = array_map('myapi_area_build_item', $rows);
 
   myapi_respond([
@@ -312,13 +336,16 @@ function myapi_area_availability($area_id) {
  * Visibility is by inclusion: field_area_status is an inner join with an IN
  * condition over MYAPI_AREA_VISIBLE_STATUSES, so an area whose status is not
  * visible (e.g. 'closed') or which has no status row at all is excluded. The
- * count therefore matches the same filtered set as the fetched page.
+ * count therefore matches the same filtered set as the fetched page — which is
+ * why $search has to reach here too: a search that narrowed the page but not
+ * the count would report pages the client cannot reach.
  *
- * @param int $condominium_id  The 'condominium' nid to filter by.
+ * @param int    $condominium_id  The 'condominium' nid to filter by.
+ * @param string $search          Raw, trimmed ?search needle, or '' for none.
  *
  * @return int  Total number of matching areas.
  */
-function myapi_area_count($condominium_id) {
+function myapi_area_count($condominium_id, $search = '') {
   $query = db_select('node', 'n')
     ->condition('n.type', 'area')
     ->condition('n.status', 1);
@@ -332,7 +359,100 @@ function myapi_area_count($condominium_id) {
   $query->innerJoin('field_data_field_area_status', 'fsta', "fsta.entity_id = n.nid AND fsta.entity_type = 'node' AND fsta.deleted = 0");
   $query->condition('fsta.field_area_status_value', MYAPI_AREA_VISIBLE_STATUSES, 'IN');
 
+  // The counting query carries none of the projection joins, so the category
+  // one is added here and ONLY when there is something to search: an unfiltered
+  // count keeps the exact three-join query it has always run.
+  if ($search !== '') {
+    $query->leftJoin('field_data_field_area_category', 'fcat', "fcat.entity_id = n.nid AND fcat.entity_type = 'node' AND fcat.deleted = 0");
+    myapi_area_apply_search($query, $search);
+  }
+
   return (int) $query->countQuery()->execute()->fetchField();
+}
+
+/**
+ * Applies the ?search filter to an area query (name OR category).
+ *
+ * Shared by the count and the fetch so both answer the same set. The caller
+ * MUST have joined field_data_field_area_category as 'fcat' (the base select
+ * already does; myapi_area_count() adds it on demand).
+ *
+ * The two halves are matched by different machinery, on purpose:
+ *
+ *  - The NAME is the node title, free text an operator typed, so it is matched
+ *    in SQL with a LIKE over the raw needle. Case- and accent-insensitivity
+ *    come from the column collation (utf8_general_ci on a standard Drupal 7
+ *    install), which is why the needle is not folded first.
+ *  - The CATEGORY is a list_text field whose stored value is a machine key
+ *    ('pool'), while the user types the Spanish label ("piscina"). No LIKE can
+ *    bridge that, so the labels are resolved to keys in PHP first
+ *    (myapi_area_category_keys_matching()) and the query filters by an IN over
+ *    those keys. That resolution is where myapi_text_fold() earns its keep:
+ *    "jardin" finds "Zona verde / Jardín".
+ *
+ * The two are OR-ed: one needle, either field, mirroring how ?search reads to
+ * the person typing it — "show me what has this in it".
+ *
+ * @param SelectQuery $query   The query to narrow, with 'n' and 'fcat' joined.
+ * @param string      $search  Raw, trimmed needle; must be non-empty.
+ */
+function myapi_area_apply_search($query, $search) {
+  $group = db_or();
+  // db_like() escapes the % and _ a user may type, so a needle of "100%" is a
+  // literal search and not a match-everything wildcard.
+  $group->condition('n.title', '%' . db_like($search) . '%', 'LIKE');
+
+  $keys = myapi_area_category_keys_matching($search);
+  if (!empty($keys)) {
+    $group->condition('fcat.field_area_category_value', $keys, 'IN');
+  }
+
+  $query->condition($group);
+}
+
+/**
+ * Resolves a search needle to the field_area_category keys whose label matches.
+ *
+ * The catalogue is read from the LIVE field definition
+ * (field_info_field('field_area_category')['settings']['allowed_values']) and
+ * not from _myapi_area_category_allowed_values() in myapi.install, for the same
+ * reason myapi_claims_field_allowed_values() does it: the install file is the
+ * seed, the field is the truth, and a label an administrator edited from
+ * admin/structure must stay findable. A site whose field is missing simply
+ * matches no category, and the caller falls back to searching the name alone.
+ *
+ * Only the LABELS are searched, never the machine keys — the same call SPEC 119
+ * made for the service categories. Keys exist so the app can key its icons on
+ * something stable; matching them would only add hits nobody typed for (the
+ * needle "other" answering every area classified as 'Otra').
+ *
+ * A plain folded substring test, not a word or prefix one: "cancha" finds all
+ * five courts, "eria" finds "Lavandería". With ~40 short labels this is a
+ * handful of microseconds and no query at all.
+ *
+ * @param string $search  Raw, trimmed needle.
+ *
+ * @return array  Machine keys to match, possibly empty.
+ */
+function myapi_area_category_keys_matching($search) {
+  $needle = myapi_text_fold($search);
+  if ($needle === '') {
+    return [];
+  }
+
+  $field = field_info_field('field_area_category');
+  $labels = ($field && isset($field['settings']['allowed_values']))
+    ? $field['settings']['allowed_values']
+    : [];
+
+  $keys = [];
+  foreach ($labels as $key => $label) {
+    if (strpos(myapi_text_fold($label), $needle) !== FALSE) {
+      $keys[] = $key;
+    }
+  }
+
+  return $keys;
 }
 
 /**
@@ -411,8 +531,8 @@ function myapi_area_base_select() {
  * Fetches a page of visible 'area' nodes for a condominium, with every field.
  *
  * Shares the whole projection and inclusion criteria with the area detail via
- * myapi_area_base_select(), then restricts to field_condominium, orders by
- * title in the requested direction with n.nid as a deterministic tie-breaker
+ * myapi_area_base_select(), then restricts to field_condominium, applies the
+ * optional ?search filter, orders by title in the requested direction with n.nid as a deterministic tie-breaker
  * in the same direction (so rows sharing a title stay stable across pages),
  * and paginates.
  *
@@ -421,12 +541,19 @@ function myapi_area_base_select() {
  * @param int    $limit           Rows per page, already clamped to [1, 50], or
  *                                -1 to return every row unpaginated.
  * @param string $sort            'asc' or 'desc', applied to n.title.
+ * @param string $search           Raw, trimmed ?search needle, or '' for none.
  *
  * @return array  Rows keyed numerically, one per area.
  */
-function myapi_area_fetch($condominium_id, $page, $limit, $sort) {
+function myapi_area_fetch($condominium_id, $page, $limit, $sort, $search = '') {
   $query = myapi_area_base_select();
   $query->condition('fcon.field_condominium_target_id', $condominium_id);
+
+  // The base select already joined 'fcat', so the filter needs no extra join
+  // here; it must stay in step with myapi_area_count($condominium_id, $search).
+  if ($search !== '') {
+    myapi_area_apply_search($query, $search);
+  }
 
   $query->orderBy('n.title', $sort === 'asc' ? 'ASC' : 'DESC');
   // Deterministic tie-breaker: areas sharing the same title would otherwise

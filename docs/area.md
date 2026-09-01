@@ -2,8 +2,9 @@
 
 Returns a paginated list of `area` nodes belonging to `condominium_id`, visible
 only to an authenticated user who is related to that condominium — same access
-rule as the rest of the `condominiums/{id}/...` endpoints. Read-only: no
-create/update/delete. For a single area by id, see
+rule as the rest of the `condominiums/{id}/...` endpoints. The list can be
+narrowed with `?search`, which matches the area name or its category label.
+Read-only: no create/update/delete. For a single area by id, see
 [`GET /api/v1/areas/{id}`](#get-apiv1areasid) below.
 
 **Authentication:** required (Bearer access token)
@@ -19,6 +20,7 @@ create/update/delete. For a single area by id, see
 | `page` | `1` | 1-based. Any non-positive-integer value falls back to the default silently (no `422`). |
 | `limit` | `20` | Clamped to `[1, 50]`. Any non-positive-integer or out-of-range value falls back to the default/clamp silently. Special value `-1` disables pagination entirely: every matching area is returned in one response, `page` is forced to `1`, and `total_pages` is `1` (or `0` when `total` is `0`). |
 | `sort` | `desc` | `asc` or `desc`, applied to the area **title** (`node.title`). Any other value falls back to `desc`. There is no date-range filter — areas have no temporal dimension. |
+| `search` | _(none)_ | Free text. Keeps only the areas whose **name** OR whose **category label** contains it, case- and accent-insensitively. Absent, non-string or blank (spaces only) means "no search" and the whole list is answered — a cleared search box never returns an empty list. Never a `422`. |
 
 **Success response (200)**
 ```json
@@ -68,6 +70,30 @@ Notes:
   `403 condominium_access_denied` — the response never reveals whether a
   condominium exists.
 - Only published (`status = 1`) `area` nodes are returned.
+- **`search` matches two things with one needle**, OR-ed together:
+  - the area **name** (`node.title`), as a substring — `?search=cancha` finds
+    "Cancha techada" and "Cancha de tenis norte";
+  - the **label of its category**, not the stored key — `?search=piscina` also
+    finds an area called "Zona húmeda" whose `category` is `kids_pool`
+    (label "Piscina infantil"). The labels are read from the live
+    `field_area_category` definition, so a label edited from
+    `admin/structure` stays findable. The machine keys themselves
+    (`pool`, `gym`, …) are **not** searched: they exist so the app can key its
+    icons on something stable, and matching them would make `?search=other`
+    answer every area classified as "Otra".
+  Matching is a plain substring test, not a prefix or whole-word one, so
+  `?search=eria` finds "Lavandería". `%` and `_` typed by the user are literal,
+  not wildcards. The accent- and case-insensitivity of the **name** half comes
+  from the column collation (`utf8_general_ci` on a standard Drupal 7 install);
+  the **category** half is folded in PHP, so `jardin` finds
+  "Zona verde / Jardín" regardless of the collation.
+- **`search` does not turn pagination off.** Unlike
+  [`GET /api/v1/service-categories`](service-category.md), which answers a
+  search whole, this list keeps paging: `pagination.total` and
+  `pagination.total_pages` describe the **matches**, not the whole condominium,
+  and `page` / `limit` / `sort` / `limit=-1` keep their meaning over that
+  narrowed set. A search with no match is `200` with
+  `{"areas": [], "pagination": {"total": 0, ..., "total_pages": 0}}`.
 - The status criterion is **by inclusion**: only areas whose `field_area_status`
   is one of `active` / `maintenance` are exposed. Areas in status `closed`, and
   areas with **no** `field_area_status` row at all, are silently excluded from

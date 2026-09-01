@@ -569,6 +569,18 @@ if (!function_exists('myapi_user_fetch_profile_fields')) {
 require_once __DIR__ . '/../../includes/myapi.user.inc';
 
 /**
+ * The search folding, needed by the query stub itself (SPEC 120).
+ *
+ * MyapiTestSelectQuery::like() folds both sides of a LIKE to stand in for the
+ * accent-insensitive collation the module runs on, so the production function
+ * has to be loaded here and not only by the test files that pull it in
+ * themselves. Same reason as the line above: a copy of the map inside the
+ * bootstrap is a copy that drifts. Also BELOW the drupal_strtolower() stub,
+ * which myapi_text_fold() calls.
+ */
+require_once __DIR__ . '/../../includes/myapi.text.inc';
+
+/**
  * The request timestamp (SPEC 74).
  *
  * Drupal defines it once per request in bootstrap.inc. Token expiry is compared
@@ -1348,6 +1360,12 @@ class MyapiTestSelectQuery implements IteratorAggregate {
       case 'NOT IN':
         return !in_array($actual, (array) $expected);
 
+      case 'LIKE':
+        return $this->like($actual, $expected);
+
+      case 'NOT LIKE':
+        return !$this->like($actual, $expected);
+
       case 'IS NULL':
         return $actual === NULL;
 
@@ -1356,6 +1374,49 @@ class MyapiTestSelectQuery implements IteratorAggregate {
     }
 
     throw new RuntimeException('MyapiTestSelectQuery: unsupported operator "' . $operator . '".');
+  }
+
+  /**
+   * MySQL's LIKE, as the module's collation resolves it (SPEC 120).
+   *
+   * The area search filters `n.title` with a LIKE, and what makes that filter
+   * accent- and case-insensitive in production is the COLLATION of the column
+   * (utf8_general_ci on a standard Drupal 7 install), not anything myapi
+   * writes. So the fixture folds both sides with the same map
+   * myapi_text_fold() uses: a stub that compared bytes would answer "Jardin
+   * does not find Jardín" and quietly contradict the server.
+   *
+   * `%` and `_` keep their wildcard meaning, and the backslash escaping that
+   * db_like() applies is honoured — which is the half worth simulating, since
+   * dropping it is exactly how a needle of "100%" would silently start
+   * matching every row.
+   */
+  private function like($subject, $pattern) {
+    $subject = myapi_text_fold((string) $subject);
+    $pattern = myapi_text_fold((string) $pattern);
+
+    $regex = '';
+    $length = strlen($pattern);
+    for ($i = 0; $i < $length; $i++) {
+      $char = $pattern[$i];
+      if ($char === '\\' && $i + 1 < $length) {
+        // db_like() escaped this one: it is a literal %, _ or backslash.
+        $i++;
+        $regex .= preg_quote($pattern[$i], '/');
+        continue;
+      }
+      if ($char === '%') {
+        $regex .= '.*';
+        continue;
+      }
+      if ($char === '_') {
+        $regex .= '.';
+        continue;
+      }
+      $regex .= preg_quote($char, '/');
+    }
+
+    return (bool) preg_match('/^' . $regex . '$/u', $subject);
   }
 
   private function sort(array $rows) {
@@ -1593,6 +1654,19 @@ class MyapiTestConditionGroup {
     return $this->conditions;
   }
 
+}
+
+/**
+ * db_like(): the escaping Drupal applies before a LIKE (SPEC 120).
+ *
+ * Verbatim from database.inc — `\`, `%` and `_` get a backslash — because the
+ * area search relies on it to keep a needle of "100%" literal, and
+ * MyapiTestSelectQuery::like() undoes exactly this escaping on the other side.
+ */
+if (!function_exists('db_like')) {
+  function db_like($string) {
+    return addcslashes($string, '\\%_');
+  }
 }
 
 if (!function_exists('db_or')) {
