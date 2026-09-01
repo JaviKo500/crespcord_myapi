@@ -172,6 +172,11 @@ class UnitQueriesTest extends TestCase {
 
     foreach ($queries as $index => $query) {
       $this->assertTrue($this->hasCondition($query, 'deleted', 0), 'query ' . $index . ' filters deleted rows out');
+      // The scope that makes an entity_id a NODE id. What this function
+      // returns is the allowlist payments, reservations and units check
+      // ownership against, so an entity_id borrowed from another entity type
+      // would be a wrong access decision and not a wrong listing.
+      $this->assertTrue($this->hasCondition($query, 'entity_type', 'node'), 'query ' . $index . ' is scoped to nodes');
     }
   }
 

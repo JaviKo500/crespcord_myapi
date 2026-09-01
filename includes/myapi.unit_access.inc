@@ -12,6 +12,18 @@
  * Three independent queries merged in PHP instead of a single UNION, to keep
  * each query simple and easy to debug on its own.
  *
+ * ALL THREE FILTER ON entity_type = 'node', like myapi_user_owned_unit_nids()
+ * and myapi_user_occupied_unit_nids() further down this file always did. A
+ * field_data_* table is keyed by (entity_type, entity_id, deleted), never by
+ * entity_id alone: the day one of these three fields is attached to a second
+ * entity type — a user, a term — an id collision would return a foreign
+ * entity_id from here as if it were a 'vivienda' nid. What this function
+ * returns is not a listing, it is the ALLOWLIST that
+ * resources/payment.resource.inc, resources/reservation.resource.inc and
+ * resources/unit.resource.inc check ownership against, so a wrong nid in it is
+ * a wrong access decision. Cheap on top of that: the index starts with the
+ * column, so the condition narrows the scan instead of widening it.
+ *
  * @param int $uid  User id to look up.
  *
  * @return array  Unique list of 'vivienda' nids.
@@ -20,6 +32,7 @@ function myapi_unit_related_nids($uid) {
   $owner_nids = db_select('field_data_field_propietario', 'p')
     ->fields('p', ['entity_id'])
     ->condition('field_propietario_target_id', $uid)
+    ->condition('entity_type', 'node')
     ->condition('deleted', 0)
     ->execute()
     ->fetchCol();
@@ -27,6 +40,7 @@ function myapi_unit_related_nids($uid) {
   $occupant_nids = db_select('field_data_field_ocupante', 'o')
     ->fields('o', ['entity_id'])
     ->condition('field_ocupante_target_id', $uid)
+    ->condition('entity_type', 'node')
     ->condition('deleted', 0)
     ->execute()
     ->fetchCol();
@@ -34,6 +48,7 @@ function myapi_unit_related_nids($uid) {
   $occupants_nids = db_select('field_data_field_ocupantes', 'os')
     ->fields('os', ['entity_id'])
     ->condition('field_ocupantes_target_id', $uid)
+    ->condition('entity_type', 'node')
     ->condition('deleted', 0)
     ->execute()
     ->fetchCol();
