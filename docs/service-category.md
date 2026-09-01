@@ -9,8 +9,10 @@ create/update/delete — categories are loaded by the operator from
 `admin/structure/taxonomy/service_category`. The list is ordered alphabetically
 by `name`, ascending by default (see the `sort` query parameter).
 
-The whole catalogue is returned on every call: there is no pagination and no
-filtering.
+Pagination is **opt-in** (SPEC 118): without `?page` and without `?limit` the
+whole catalogue is returned and the body carries no `pagination` key at all,
+exactly as the endpoint shipped. `?search=` filters by name or description
+and, when it carries text, **turns pagination off** (SPEC 119).
 
 **Authentication:** required (Bearer access token)
 
@@ -27,6 +29,9 @@ the same list as a building admin or a provider.
 | Param | Values | Default | Notes |
 |-------|--------|---------|-------|
 | `sort` | `asc` \| `desc` | `asc` | Sort order by `name` (case-insensitive). `asc` = A→Z, `desc` = Z→A. Any other value (absent, empty, uppercase `ASC`, another field name) is silently ignored and falls back to `asc` — no `422`. |
+| `page` | integer >= 1 | `1` | 1-based page number. Any other value (`0`, `-1`, `abc`, empty, an array) silently falls back to `1` — no `422`. A page beyond the last one answers `200` with an empty list. |
+| `limit` | integer 1-50 | `20` | Items per page. Above 50 it is **cut to 50**. Any invalid value falls back to `20`, and `-1` is **not** "everything" — not asking for a page already is. |
+| `search` | text | *(off)* | Filters by `name` **or** `description`, case- and accent-insensitively. An empty value, spaces only, or an array means **no search**. A search answers every match with no `pagination` block, ignoring `page` and `limit`. No `422`. |
 | `with_counts` | `1` | *(off)* | Adds `providers_count` to every item. Only the exact value `1` turns it on: `0`, `true`, `yes`, an empty value or anything else answers the 6-key response with a `200` — no `422`. |
 
 **Success response (200)**
@@ -73,6 +78,78 @@ Plus a seventh key, **only** when the request carries `?with_counts=1`:
 | Field | Type | Notes |
 |-------|------|-------|
 | `providers_count` | int | Number of **active** providers in that category. Never `null`. A category with no provider answers `0` and is still listed. |
+
+### `page`, `limit` and the `pagination` block
+
+**What turns pagination on is the presence of either parameter, not its
+validity.** `?page=abc` answers page 1 of 20 with its block; it does not fall
+back to the whole catalogue. A client that asked for a page always gets a page,
+so its parser never has to branch.
+
+```
+GET /api/v1/service-categories?page=2&limit=20
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "service_categories": [ "... 20 items ..." ],
+    "pagination": { "total": 64, "page": 2, "limit": 20, "total_pages": 4 }
+  }
+}
+```
+
+| Field | Notes |
+|-------|-------|
+| `total` | Size of the **whole** catalogue, never of the page. |
+| `page` | The page that was served, echoed back — the value asked for, even beyond the last page. It is never rewritten to the last page. |
+| `limit` | Items per page actually applied, after the 1-50 cut. |
+| `total_pages` | `ceil(total / limit)`, and **`0`** when `total` is `0` — not `1`. |
+
+- The slice is taken **after** the ordering, so page 2 is the second
+  alphabetical page and not the second chunk of the term order. With
+  `?sort=desc` it is the second page of the reversed catalogue.
+- The two degraded cases (vocabulary missing, vocabulary empty) also carry the
+  block when the request opted in: `{"service_categories": [], "pagination":
+  {"total": 0, "page": 1, "limit": 20, "total_pages": 0}}`.
+- **`?search` overrules both**: a request carrying a non-blank `search` is
+  answered whole, with no slice and no `pagination` block, whatever `page` and
+  `limit` say (SPEC 119).
+- Pagination saves **payload, not queries**: the endpoint loads and sorts the
+  whole vocabulary in PHP either way. The one thing it does make cheaper is
+  `?with_counts=1` — see below.
+
+### `search`
+
+```
+GET /api/v1/service-categories?search=plomeria
+```
+
+```json
+{ "success": true, "data": { "service_categories": [ { "id": 30, "code": "plomeria", "name": "Plomería", "…": "…" } ] } }
+```
+
+- **Accent- and case-insensitive both ways**: `plomeria`, `PLOMERIA` and
+  `Plomería` all find "Plomería", which matters because every `code` is
+  unaccented and so is the keyboard of a resident in a hurry.
+- Matches a **substring** anywhere, not a prefix or a whole word: `eria` finds
+  Plomería, Jardinería and Cerrajería. Matches come back in the usual
+  alphabetical order — there is no relevance ranking.
+- Searches `name` and `description` only. **`code` is not searched**: it is the
+  app's icon key, not a label, and the folding already covers the accent case
+  that made it tempting.
+- The description is matched **as it is answered** (flattened to plain text),
+  so a word that only exists in the stored markup never produces a hit.
+- **A search ignores `page` and `limit` entirely**, and the response carries no
+  `pagination` key — its absence is how the app knows it is holding every
+  match, not the first page of them.
+- An empty or blank `search` is **not** a search: the whole catalogue comes
+  back and `?page`/`?limit` apply as usual, so the app can clear its search box
+  without rewriting the URL.
+- No match is `200` with `{"service_categories": []}`, never a `404`.
+- With `?with_counts=1`, the count query covers the matches alone (still one
+  grouped query); a search with no match runs no count query at all.
 
 ### `providers_count` and `?with_counts=1`
 
@@ -204,8 +281,10 @@ a name **starting** with an accented vowel ("Áreas verdes") sorts after Z.
 - `service_categories` is always a JSON array, even with one element or none.
 - With `?with_counts=1` and an empty (or missing) vocabulary, the response is
   the same empty list and no count query is run.
-- The counts cost **one** grouped query for the whole catalogue, not one per
-  category.
+- The counts cost **one** grouped query, never one per category. Without
+  pagination it covers the whole catalogue; with `?page`/`?limit` it covers the
+  page being answered, and a page beyond the last one runs no count query at
+  all.
 
 **Possible errors**
 | Code | error_code | When |

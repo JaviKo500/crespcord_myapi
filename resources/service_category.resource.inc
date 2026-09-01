@@ -73,8 +73,15 @@ function myapi_service_category_dispatch() {
  * what is installed. Same rule as /api/v1/banks. Neither case runs the count
  * query — there is no category to count for.
  *
- * The whole catalog is returned on every call — no pagination and no filters.
- * It is a handful of terms that the app needs all at once to paint the grid.
+ * Pagination is OPT-IN (SPEC 118): without ?page and without ?limit the whole
+ * catalog travels and there is no `pagination` key, exactly as SPEC 79 shipped
+ * it, so an app built against that contract keeps seeing every category. The
+ * block appears — and the list is sliced — only for a client that asked for a
+ * page, and then it appears always, degraded cases included.
+ *
+ * ?search= filters by `name` and `description`, accent- and case-insensitively
+ * (SPEC 119), and TURNS PAGINATION OFF: a search answers every match, with no
+ * slice and no `pagination` block, even when ?page and ?limit travel with it.
  */
 function myapi_service_category_list() {
   // Authentication only: any user with a valid access token may list the
@@ -96,15 +103,46 @@ function myapi_service_category_list() {
   // notification.resource.inc, so the module writes URL booleans one way only.
   $with_counts = isset($_GET['with_counts']) && $_GET['with_counts'] === '1';
 
+  // Pagination is opt-in and the PRESENCE of either parameter is what turns it
+  // on — not their validity. ?page=abc pages from 1, it does not fall back to
+  // the whole catalogue: a client that asked for a page always gets a page and
+  // a `pagination` block, and a client that asked for nothing keeps the SPEC 79
+  // response byte for byte. Same lax parse as the marketplace listing: an
+  // invalid page is 1, an invalid limit is 20, over 50 is cut to 50, and none
+  // of it is a 422.
+  // The needle, folded once for the whole request. Absent, non-scalar or
+  // blank (spaces only) all mean "no search" — a search box the user cleared
+  // must answer the catalogue, not an empty list.
+  $search = isset($_GET['search']) && is_scalar($_GET['search'])
+    ? myapi_text_fold(trim((string) $_GET['search']))
+    : '';
+  $searching = $search !== '';
+
+  // SEARCHING OVERRULES PAGINATING, by decision of SPEC 119: a result set the
+  // user is reading as "what matched" is answered whole, and ?page/?limit
+  // travelling alongside a ?search are ignored — block included, so the app
+  // cannot mistake a complete result for the first page of one.
+  $paginate = (isset($_GET['page']) || isset($_GET['limit'])) && !$searching;
+
+  $page = isset($_GET['page']) && is_scalar($_GET['page'])
+    && ctype_digit((string) $_GET['page']) && (int) $_GET['page'] > 0
+    ? (int) $_GET['page']
+    : 1;
+
+  $limit = isset($_GET['limit']) && is_scalar($_GET['limit'])
+    && ctype_digit((string) $_GET['limit']) && (int) $_GET['limit'] > 0
+    ? min(50, (int) $_GET['limit'])
+    : 20;
+
   $vocabulary = taxonomy_vocabulary_machine_name_load(MYAPI_SERVICES_CATEGORY_VOCABULARY);
   if ($vocabulary === FALSE) {
-    myapi_respond(['service_categories' => []], 200);
+    myapi_respond(myapi_service_category_response([], $paginate, 0, $page, $limit), 200);
     return;
   }
 
   $tree = taxonomy_get_tree($vocabulary->vid);
   if (empty($tree)) {
-    myapi_respond(['service_categories' => []], 200);
+    myapi_respond(myapi_service_category_response([], $paginate, 0, $page, $limit), 200);
     return;
   }
 
@@ -116,20 +154,28 @@ function myapi_service_category_list() {
   }, $tree);
   $terms = entity_load('taxonomy_term', $tids);
 
-  // One grouped query for the whole catalogue, run once and only when asked
-  // for. Every loaded tid comes back in the map, so the mapping below never
-  // has to decide what a missing count means.
-  $counts = $with_counts ? myapi_service_category_provider_counts($tids) : [];
+  // The filter runs over the TERMS and not over the built items, so it reads
+  // the name the operator wrote rather than its check_plain() escaping: a
+  // category called "Cortes & instalaciones" is findable by "&", which it
+  // would not be against the `&amp;` that travels in the response.
+  if ($searching) {
+    $terms = array_filter($terms, function ($term) use ($search) {
+      return myapi_service_category_matches($term, $search);
+    });
+  }
+
+  // Keyed by (int) tid whatever entity_load() used for its own keys, because
+  // the count pass below reaches back for the term of an already built item.
+  $by_tid = [];
+  foreach ($terms as $term) {
+    $by_tid[(int) $term->tid] = $term;
+  }
 
   // array_values() because entity_load() answers a tid-keyed map and the
-  // response must be a JSON array, not an object.
-  $items = array_values(array_map(function ($term) use ($with_counts, $counts) {
-    $count = NULL;
-    if ($with_counts) {
-      $count = isset($counts[(int) $term->tid]) ? $counts[(int) $term->tid] : 0;
-    }
-
-    return myapi_service_category_build_item($term, $count);
+  // response must be a JSON array, not an object. Counts are NOT resolved here
+  // any more: they are paid for after the slice, over the page alone.
+  $items = array_values(array_map(function ($term) {
+    return myapi_service_category_build_item($term);
   }, $terms));
 
   // Order alphabetically by `name`, ignoring case, regardless of the weight
@@ -142,7 +188,111 @@ function myapi_service_category_list() {
     return $sort === 'desc' ? -$cmp : $cmp;
   });
 
-  myapi_respond(['service_categories' => $items], 200);
+  // `total` is the size of the whole catalogue, which is also the set that was
+  // just ordered: the slice is taken AFTER the sort, so page 2 is the second
+  // alphabetical page and not the second chunk of the tid order.
+  $total = count($items);
+  if ($paginate) {
+    $items = array_slice($items, ($page - 1) * $limit, $limit);
+  }
+
+  // The counts are the one part of the response the slice actually makes
+  // cheaper: still ONE grouped query, but over the tids being answered instead
+  // of the whole vocabulary. The item is rebuilt through the same builder
+  // rather than having the key appended here, so `providers_count` keeps
+  // travelling last and the six other keys keep their order.
+  if ($with_counts) {
+    $counts = myapi_service_category_provider_counts(array_column($items, 'id'));
+    $items = array_map(function ($item) use ($by_tid, $counts) {
+      $tid = (int) $item['id'];
+
+      return myapi_service_category_build_item($by_tid[$tid], isset($counts[$tid]) ? $counts[$tid] : 0);
+    }, $items);
+  }
+
+  myapi_respond(myapi_service_category_response($items, $paginate, $total, $page, $limit), 200);
+}
+
+/**
+ * Whether a term matches the search needle (SPEC 119).
+ *
+ * TWO FIELDS AND NOT THREE: `name` and `description`, the two the operator
+ * writes for a human to read. `code` is deliberately NOT searched — it exists
+ * so the app can key its icons on something stable, and the one thing that
+ * made searching it tempting (typing "plomeria" and finding "Plomería") is
+ * already covered by the folding, so matching it would only add hits nobody
+ * asked for.
+ *
+ * The description is compared AS IT IS ANSWERED — flattened with
+ * myapi_text_to_plain() — so a word that is only in the stored markup (a
+ * class name, an href) never matches something the user cannot see.
+ *
+ * A plain substring test, not a word or prefix one: "eria" finds "Plomería"
+ * and "Cerrajería". With 64 short strings this is a handful of microseconds
+ * and no query at all.
+ *
+ * @param object $term
+ *   A hydrated term object.
+ * @param string $needle
+ *   The needle, ALREADY folded by myapi_text_fold() and non-empty.
+ *
+ * @return bool
+ *   TRUE when the needle is inside the folded name or the folded description.
+ */
+function myapi_service_category_matches($term, $needle) {
+  $name = myapi_text_fold(isset($term->name) ? $term->name : '');
+  if (strpos($name, $needle) !== FALSE) {
+    return TRUE;
+  }
+
+  $description = myapi_text_fold(myapi_text_to_plain(isset($term->description) ? $term->description : ''));
+
+  return strpos($description, $needle) !== FALSE;
+}
+
+/**
+ * Assembles the response body, with or without the pagination block (SPEC 118).
+ *
+ * ONE function and four callers — the two degraded exits and the two ends of
+ * the normal path — because the promise the app is given is precisely that the
+ * shape does not depend on which of them answered: ask for a page and the
+ * block is there, over a missing vocabulary too, with `total` and
+ * `total_pages` at 0. A client that opted in never has to parse an optional
+ * key.
+ *
+ * `page` is echoed AS ASKED FOR, not clamped to the last page: a page beyond
+ * the end is an empty list with a 200, the same rule as /api/v1/providers, and
+ * a page silently rewritten to the last one would hide the client's bug.
+ *
+ * @param array $items
+ *   The categories already ordered and, when paginating, already sliced.
+ * @param bool $paginate
+ *   Whether the request carried ?page or ?limit at all.
+ * @param int $total
+ *   Size of the whole catalogue, never of the page.
+ * @param int $page
+ *   1-based page asked for, already defaulted.
+ * @param int $limit
+ *   Items per page, already clamped to [1, 50].
+ *
+ * @return array
+ *   `service_categories` alone, or `service_categories` plus `pagination` in
+ *   that order.
+ */
+function myapi_service_category_response(array $items, $paginate, $total, $page, $limit) {
+  $data = ['service_categories' => $items];
+
+  if ($paginate) {
+    $data['pagination'] = [
+      'total'       => (int) $total,
+      'page'        => (int) $page,
+      'limit'       => (int) $limit,
+      // 0 and not 1 when there is nothing to page through, same as providers.
+      'total_pages' => $total > 0 ? (int) ceil($total / $limit) : 0,
+    ];
+  }
+
+  return $data;
 }
 
 /**

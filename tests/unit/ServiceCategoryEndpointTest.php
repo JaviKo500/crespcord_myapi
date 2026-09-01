@@ -48,11 +48,11 @@ class ServiceCategoryEndpointTest extends TestCase {
     myapi_test_taxonomy_seed();
     $GLOBALS['myapi_test_users'] = [];
     $_SERVER['REQUEST_METHOD'] = 'GET';
-    unset($_SERVER['HTTP_AUTHORIZATION'], $_GET['sort'], $_GET['with_counts']);
+    unset($_SERVER['HTTP_AUTHORIZATION'], $_GET['sort'], $_GET['with_counts'], $_GET['page'], $_GET['limit'], $_GET['search']);
   }
 
   protected function tearDown(): void {
-    unset($_SERVER['HTTP_AUTHORIZATION'], $_GET['sort'], $_GET['with_counts']);
+    unset($_SERVER['HTTP_AUTHORIZATION'], $_GET['sort'], $_GET['with_counts'], $_GET['page'], $_GET['limit'], $_GET['search']);
     $GLOBALS['myapi_test_users'] = [];
     myapi_test_db_seed();
     myapi_test_taxonomy_seed();
@@ -1282,9 +1282,15 @@ class ServiceCategoryEndpointTest extends TestCase {
     $this->assertSame([MYAPI_SERVICES_PROVIDER_TYPE, '='], $conditions['n.type']);
     $this->assertSame([1, '='], $conditions['n.status']);
     $this->assertSame([REQUEST_TIME, '>='], $conditions['l.field_license_expiry_value']);
-    // Every loaded category, and only those: the query counts, it does not
-    // discover.
-    $this->assertSame([[3, 5, 7], 'IN'], $conditions['c.field_categories_tid']);
+    // Every ANSWERED category, and only those: the query counts, it does not
+    // discover. Since SPEC 118 the tids reach it in the answered (alphabetical)
+    // order rather than the tree order, because the count is now paid for after
+    // the slice — so the SET is asserted and not its order, which is not a
+    // contract of an IN list.
+    $this->assertSame('IN', $conditions['c.field_categories_tid'][1]);
+    $tids = $conditions['c.field_categories_tid'][0];
+    sort($tids);
+    $this->assertSame([3, 5, 7], $tids);
   }
 
   /**
@@ -1541,6 +1547,642 @@ class ServiceCategoryEndpointTest extends TestCase {
 
     $this->assertSame(401, $result['status']);
     $this->assertNotContains('node', $this->queriedTables());
+  }
+
+  /* -------------------------------------------------------------------------
+   * ?page and ?limit — opt-in pagination (SPEC 118).
+   *
+   * The whole point of the parameter pair is what happens when it is ABSENT,
+   * so half of this block asserts a response that did not change.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * A catalogue of $count terms named so that the alphabetical order is also
+   * the numeric one: "Categoria 01" … "Categoria 26", tid = position.
+   */
+  private function seedNumberedCategories($count) {
+    $terms = [];
+    for ($i = 1; $i <= $count; $i++) {
+      $terms[] = $this->term($i, sprintf('Categoria %02d', $i), sprintf('cat_%02d', $i));
+    }
+    // Seeded in reverse so nothing can pass by keeping the tree order.
+    $this->seedCategories(array_reverse($terms));
+
+    return $terms;
+  }
+
+  /**
+   * The `pagination` block of the answer, or NULL when there is none.
+   */
+  private function pagination(array $result) {
+    return isset($result['json']['data']['pagination'])
+      ? $result['json']['data']['pagination']
+      : NULL;
+  }
+
+  /**
+   * NEITHER PARAMETER, NOTHING CHANGES. This is the compatibility promise: an
+   * app built against SPEC 79 keeps receiving the whole catalogue and no
+   * `pagination` key at all — not an empty one, not a null one.
+   */
+  public function testWithoutPageAndLimitTheWholeCatalogueTravelsWithNoPaginationKey() {
+    $this->authenticateAs();
+    $this->seedNumberedCategories(26);
+
+    $result = $this->request();
+
+    $this->assertSame(200, $result['status']);
+    $this->assertCount(26, $this->categories($result));
+    $this->assertSame(['service_categories'], array_keys($result['json']['data']));
+    $this->assertStringNotContainsString('pagination', $result['output']);
+  }
+
+  /**
+   * ?page + ?limit slice the list and add the block, with `total` describing
+   * the WHOLE catalogue and not the page.
+   */
+  public function testPageAndLimitSliceTheListAndAddTheBlock() {
+    $this->authenticateAs();
+    $this->seedNumberedCategories(26);
+    $_GET['page'] = '2';
+    $_GET['limit'] = '10';
+
+    $result = $this->request();
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame(
+      ['Categoria 11', 'Categoria 12', 'Categoria 13', 'Categoria 14', 'Categoria 15',
+       'Categoria 16', 'Categoria 17', 'Categoria 18', 'Categoria 19', 'Categoria 20'],
+      $this->names($result)
+    );
+    $this->assertSame(
+      ['total' => 26, 'page' => 2, 'limit' => 10, 'total_pages' => 3],
+      $this->pagination($result)
+    );
+  }
+
+  /**
+   * The two keys of the body, in this order — the app parses a list and then
+   * a block, never the other way round.
+   */
+  public function testTheBodyCarriesTheListFirstAndThePaginationSecond() {
+    $this->authenticateAs();
+    $this->seedNumberedCategories(3);
+    $_GET['limit'] = '2';
+
+    $result = $this->request();
+
+    $this->assertSame(['service_categories', 'pagination'], array_keys($result['json']['data']));
+    $this->assertSame(
+      ['total', 'page', 'limit', 'total_pages'],
+      array_keys($this->pagination($result))
+    );
+  }
+
+  /**
+   * EITHER parameter alone turns pagination on; the other one takes its
+   * default (page 1, 20 per page).
+   */
+  public function testEitherParameterAloneTurnsPaginationOn() {
+    $this->authenticateAs();
+    $this->seedNumberedCategories(26);
+
+    $_GET['limit'] = '5';
+    $result = $this->request();
+    $this->assertCount(5, $this->categories($result));
+    $this->assertSame(['total' => 26, 'page' => 1, 'limit' => 5, 'total_pages' => 6], $this->pagination($result));
+
+    unset($_GET['limit']);
+    $_GET['page'] = '2';
+    $result = $this->request();
+    $this->assertCount(6, $this->categories($result));
+    $this->assertSame('Categoria 21', $this->names($result)[0]);
+    $this->assertSame(['total' => 26, 'page' => 2, 'limit' => 20, 'total_pages' => 2], $this->pagination($result));
+  }
+
+  /**
+   * AN INVALID VALUE PAGES, IT DOES NOT DISABLE PAGINATION. ?page=abc is page
+   * 1 of 20, never the whole catalogue: what turns the block on is that the
+   * client asked, not that it asked correctly. Same lax rule as the
+   * marketplace listing — nothing here is a 422.
+   */
+  public function testInvalidValuesFallBackToTheDefaultsAndStillPaginate() {
+    $this->authenticateAs();
+    $this->seedNumberedCategories(26);
+
+    foreach (['abc', '0', '-1', '', '1.5', ['1']] as $value) {
+      $_GET['page'] = $value;
+      $_GET['limit'] = $value;
+
+      $result = $this->request();
+
+      $label = is_array($value) ? 'array' : var_export($value, TRUE);
+      $this->assertSame(200, $result['status'], $label);
+      $this->assertCount(20, $this->categories($result), $label);
+      $this->assertSame('Categoria 01', $this->names($result)[0], $label);
+      $this->assertSame(
+        ['total' => 26, 'page' => 1, 'limit' => 20, 'total_pages' => 2],
+        $this->pagination($result),
+        $label
+      );
+    }
+  }
+
+  /**
+   * The limit is cut to 50, and the cut value is the one echoed back — the
+   * block describes what was applied, not what was asked for.
+   */
+  public function testLimitAboveFiftyIsCutToFifty() {
+    $this->authenticateAs();
+    $this->seedNumberedCategories(26);
+    $_GET['limit'] = '500';
+
+    $result = $this->request();
+
+    $this->assertCount(26, $this->categories($result));
+    $this->assertSame(['total' => 26, 'page' => 1, 'limit' => 50, 'total_pages' => 1], $this->pagination($result));
+  }
+
+  /**
+   * A page beyond the last one is an empty list with a 200 — never a 404 — and
+   * `page` is echoed AS ASKED FOR, not rewritten to the last page: a silent
+   * rewrite would hide the client's bug.
+   */
+  public function testAPageBeyondTheLastOneIsAnEmptyListWithA200() {
+    $this->authenticateAs();
+    $this->seedNumberedCategories(26);
+    $_GET['page'] = '9';
+    $_GET['limit'] = '10';
+
+    $result = $this->request();
+
+    $this->assertSame(200, $result['status']);
+    $this->assertTrue($result['json']['success']);
+    $this->assertSame([], $this->categories($result));
+    $this->assertSame(['total' => 26, 'page' => 9, 'limit' => 10, 'total_pages' => 3], $this->pagination($result));
+    $this->assertStringContainsString('"service_categories":[]', $result['output']);
+  }
+
+  /**
+   * THE SLICE IS TAKEN AFTER THE SORT, both ways round: page 2 descending is
+   * the second page of the reversed catalogue, not the reverse of page 2.
+   */
+  public function testTheSliceFollowsTheOrderingAndNotTheTreeOrder() {
+    $this->authenticateAs();
+    $this->seedNumberedCategories(26);
+    $_GET['page'] = '2';
+    $_GET['limit'] = '3';
+
+    $_GET['sort'] = 'asc';
+    $this->assertSame(['Categoria 04', 'Categoria 05', 'Categoria 06'], $this->names($this->request()));
+
+    $_GET['sort'] = 'desc';
+    $this->assertSame(['Categoria 23', 'Categoria 22', 'Categoria 21'], $this->names($this->request()));
+  }
+
+  /**
+   * The union of every page is the whole catalogue, in order, with no
+   * duplicate and no hole — the property that actually matters to a client
+   * looping until `total_pages`.
+   */
+  public function testEveryPageTogetherRebuildsTheOrderedCatalogue() {
+    $this->authenticateAs();
+    $this->seedNumberedCategories(26);
+    $_GET['limit'] = '7';
+
+    $seen = [];
+    for ($page = 1; $page <= 4; $page++) {
+      $_GET['page'] = (string) $page;
+      $result = $this->request();
+      $this->assertSame(4, $this->pagination($result)['total_pages']);
+      $seen = array_merge($seen, $this->names($result));
+    }
+
+    $expected = [];
+    for ($i = 1; $i <= 26; $i++) {
+      $expected[] = sprintf('Categoria %02d', $i);
+    }
+    $this->assertSame($expected, $seen);
+  }
+
+  /**
+   * An empty vocabulary paginating answers the block with everything at zero —
+   * `total_pages` 0 and not 1 — and still runs no extra query.
+   */
+  public function testEmptyVocabularyPaginatingAnswersATotalOfZero() {
+    $this->authenticateAs();
+    $this->seedCategories([]);
+    $_GET['page'] = '3';
+    $_GET['limit'] = '10';
+
+    $result = $this->request();
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame([], $this->categories($result));
+    $this->assertSame(['total' => 0, 'page' => 3, 'limit' => 10, 'total_pages' => 0], $this->pagination($result));
+  }
+
+  /**
+   * AND SO DOES A MISSING VOCABULARY: the degraded exits keep the shape a
+   * client that opted in was promised, so it never parses an optional key.
+   * Both degraded cases still answer identical bytes to each other.
+   */
+  public function testMissingVocabularyPaginatingAnswersTheSameShape() {
+    $this->authenticateAs();
+    myapi_test_taxonomy_seed(['bancos' => [['tid' => '99', 'name' => 'Banco Pichincha', 'description' => '']]]);
+    $_GET['limit'] = '10';
+
+    $result = $this->request();
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame([], $this->categories($result));
+    $this->assertSame(['total' => 0, 'page' => 1, 'limit' => 10, 'total_pages' => 0], $this->pagination($result));
+  }
+
+  /**
+   * WITH COUNTS, THE PAGE IS WHAT GETS COUNTED: still exactly one grouped
+   * query, but its IN list is the page and not the whole vocabulary. This is
+   * the only thing pagination actually makes cheaper on the server.
+   */
+  public function testWithCountsTheCountQueryCoversThePageAlone() {
+    $this->authenticateAs();
+    $this->seedNumberedCategories(26);
+    $this->seedProviders([$this->provider(100, 2), $this->provider(101, 2), $this->provider(102, 5)]);
+    $_GET['page'] = '1';
+    $_GET['limit'] = '3';
+    $_GET['with_counts'] = '1';
+
+    $result = $this->request();
+
+    $this->assertSame(['my_api_tokens', 'node'], $this->queriedTables());
+
+    $queries = myapi_test_db_queries();
+    $conditions = [];
+    foreach ($queries[1]['conditions'] as $condition) {
+      $conditions[$condition['field']] = [$condition['value'], $condition['operator']];
+    }
+    $tids = $conditions['c.field_categories_tid'][0];
+    sort($tids);
+    $this->assertSame([1, 2, 3], $tids);
+    $this->assertSame(
+      ['Categoria 01' => 0, 'Categoria 02' => 2, 'Categoria 03' => 0],
+      $this->countsByName($result)
+    );
+  }
+
+  /**
+   * A count belongs to its own category after being sliced, and it is still
+   * the SEVENTH and last key of the item.
+   */
+  public function testThePaginatedItemKeepsItsKeyOrderAndItsOwnCount() {
+    $this->authenticateAs();
+    $this->seedNumberedCategories(26);
+    $this->seedProviders([$this->provider(100, 12)]);
+    $_GET['page'] = '4';
+    $_GET['limit'] = '4';
+    $_GET['with_counts'] = '1';
+
+    $result = $this->request();
+
+    $this->assertSame(
+      ['Categoria 13', 'Categoria 14', 'Categoria 15', 'Categoria 16'],
+      $this->names($result)
+    );
+    $this->assertSame(
+      ['id', 'code', 'name', 'description', 'icon_id', 'icon_url', 'providers_count'],
+      array_keys($this->categories($result)[0])
+    );
+    $this->assertSame(0, $this->categories($result)[0]['providers_count']);
+
+    $_GET['page'] = '3';
+    $result = $this->request();
+    $this->assertSame(1, $this->countsByName($result)['Categoria 12']);
+  }
+
+  /**
+   * A page beyond the last one with ?with_counts=1 runs NO count query: there
+   * is no tid to count for, and an empty IN list would count the whole site.
+   */
+  public function testAPageBeyondTheLastOneRunsNoCountQuery() {
+    $this->authenticateAs();
+    $this->seedNumberedCategories(5);
+    $this->seedProviders([$this->provider(100, 1)]);
+    $_GET['page'] = '7';
+    $_GET['limit'] = '5';
+    $_GET['with_counts'] = '1';
+
+    $result = $this->request();
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame([], $this->categories($result));
+    $this->assertSame(['my_api_tokens'], $this->queriedTables());
+  }
+
+  /**
+   * Pagination does not touch the guards: a page asked for by an
+   * unauthenticated client is still a 401, and by the wrong method still a 405.
+   */
+  public function testPaginationDoesNotWeakenTheGuards() {
+    $this->seedNumberedCategories(26);
+    $_GET['page'] = '2';
+    $_GET['limit'] = '10';
+
+    $result = $this->request();
+    $this->assertSame(401, $result['status']);
+    $this->assertArrayNotHasKey('data', $result['json']);
+
+    $this->authenticateAs();
+    $_SERVER['REQUEST_METHOD'] = 'POST';
+    $result = $this->request();
+    $this->assertSame(405, $result['status']);
+    $this->assertSame([], $this->queriedTables());
+  }
+
+  /* -------------------------------------------------------------------------
+   * ?search — filter by name or description (SPEC 119).
+   *
+   * The rule that matters most here is the one that is NOT about matching: a
+   * search answers every match whole, and any ?page/?limit alongside it is
+   * ignored, block included.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * The catalogue every search case reads, with the accents and the markup a
+   * real term carries.
+   */
+  private function seedSearchableCategories() {
+    $this->seedCategories([
+      $this->term(30, 'Plomería', 'plomeria', 'Fugas, grifería, desagües'),
+      $this->term(31, 'Electricidad', 'electricidad', 'Instalaciones y reparaciones'),
+      $this->term(32, 'Jardinería', 'jardineria', '<p class="intro">Poda, césped, mantenimiento</p>'),
+      $this->term(33, 'Cerrajería', 'cerrajeria', 'Cerraduras y llaves'),
+      $this->term(34, 'Climatización', 'climatizacion', 'A/C, ventilación'),
+    ]);
+  }
+
+  /**
+   * A NEEDLE WITHOUT ACCENTS FINDS AN ACCENTED NAME, which is the whole reason
+   * the folding exists: every code is unaccented and so is the keyboard of a
+   * resident in a hurry.
+   */
+  public function testSearchIsAccentAndCaseInsensitiveOverTheName() {
+    $this->authenticateAs();
+    $this->seedSearchableCategories();
+
+    foreach (['plomeria', 'PLOMERIA', 'Plomería', 'plomería', 'oMeRi'] as $needle) {
+      $_GET['search'] = $needle;
+
+      $result = $this->request();
+
+      $this->assertSame(200, $result['status'], $needle);
+      $this->assertSame(['Plomería'], $this->names($result), $needle);
+    }
+  }
+
+  /**
+   * The description is searched too, and it is searched AS ANSWERED: the
+   * flattened text matches, the markup around it does not.
+   */
+  public function testSearchAlsoReadsTheDescriptionButNotItsMarkup() {
+    $this->authenticateAs();
+    $this->seedSearchableCategories();
+
+    $_GET['search'] = 'cesped';
+    $this->assertSame(['Jardinería'], $this->names($this->request()));
+
+    $_GET['search'] = 'grifería';
+    $this->assertSame(['Plomería'], $this->names($this->request()));
+
+    // 'intro' and 'class' live only in the stored markup.
+    foreach (['intro', 'class'] as $needle) {
+      $_GET['search'] = $needle;
+      $this->assertSame([], $this->names($this->request()), $needle);
+    }
+  }
+
+  /**
+   * A needle in the middle of a word matches, and every match comes back —
+   * ordered, like any other answer.
+   */
+  public function testSearchMatchesASubstringAndAnswersEveryMatchOrdered() {
+    $this->authenticateAs();
+    $this->seedSearchableCategories();
+    $_GET['search'] = 'eria';
+
+    $this->assertSame(['Cerrajería', 'Jardinería', 'Plomería'], $this->names($this->request()));
+
+    $_GET['sort'] = 'desc';
+    $this->assertSame(['Plomería', 'Jardinería', 'Cerrajería'], $this->names($this->request()));
+  }
+
+  /**
+   * `code` is NOT searched: it is the app's icon key, not a label. Here
+   * 'climatizacion' matches through the NAME (folded), while a needle that
+   * only exists as a code matches nothing.
+   */
+  public function testTheCodeIsNotSearched() {
+    $this->authenticateAs();
+    $this->seedCategories([
+      $this->term(30, 'Plomería', 'plomeria', 'Fugas'),
+      $this->term(40, 'Portones automáticos', 'portones_automaticos', 'Motores y controles'),
+    ]);
+
+    $_GET['search'] = 'portones_automaticos';
+    $this->assertSame([], $this->names($this->request()));
+
+    $_GET['search'] = 'portones automaticos';
+    $this->assertSame(['Portones automáticos'], $this->names($this->request()));
+  }
+
+  /**
+   * No match is an empty list with a 200 — never a 404 and never the whole
+   * catalogue.
+   */
+  public function testASearchThatMatchesNothingIsAnEmptyListWithA200() {
+    $this->authenticateAs();
+    $this->seedSearchableCategories();
+    $_GET['search'] = 'buceo';
+
+    $result = $this->request();
+
+    $this->assertSame(200, $result['status']);
+    $this->assertTrue($result['json']['success']);
+    $this->assertSame([], $this->categories($result));
+    $this->assertStringContainsString('"service_categories":[]', $result['output']);
+  }
+
+  /**
+   * A CLEARED SEARCH BOX IS NOT A SEARCH: an empty or blank value answers the
+   * whole catalogue, and so does an array. Nothing here is a 422.
+   */
+  public function testAnEmptyBlankOrArraySearchIsIgnored() {
+    $this->authenticateAs();
+    $this->seedSearchableCategories();
+
+    foreach (['', '   ', "\t", ['plomeria']] as $value) {
+      $_GET['search'] = $value;
+
+      $result = $this->request();
+
+      $label = is_array($value) ? 'array' : var_export($value, TRUE);
+      $this->assertSame(200, $result['status'], $label);
+      $this->assertCount(5, $this->categories($result), $label);
+      $this->assertArrayNotHasKey('pagination', $result['json']['data'], $label);
+    }
+  }
+
+  /**
+   * The needle is trimmed before it is used, so a trailing space pasted from
+   * the keyboard still matches.
+   */
+  public function testTheNeedleIsTrimmed() {
+    $this->authenticateAs();
+    $this->seedSearchableCategories();
+    $_GET['search'] = '  plomeria  ';
+
+    $this->assertSame(['Plomería'], $this->names($this->request()));
+  }
+
+  /**
+   * SEARCHING OVERRULES PAGINATING: every match travels, with no slice and NO
+   * `pagination` key, so the app can never read a complete result as the first
+   * page of one.
+   */
+  public function testASearchIgnoresPageAndLimitEntirely() {
+    $this->authenticateAs();
+    $this->seedSearchableCategories();
+    $_GET['search'] = 'eria';
+    $_GET['page'] = '2';
+    $_GET['limit'] = '1';
+
+    $result = $this->request();
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame(['Cerrajería', 'Jardinería', 'Plomería'], $this->names($result));
+    $this->assertSame(['service_categories'], array_keys($result['json']['data']));
+    $this->assertStringNotContainsString('pagination', $result['output']);
+  }
+
+  /**
+   * And a blank search does NOT take pagination down with it: the parameter
+   * was never a search, so the page is served.
+   */
+  public function testABlankSearchStillPaginates() {
+    $this->authenticateAs();
+    $this->seedSearchableCategories();
+    $_GET['search'] = '   ';
+    $_GET['limit'] = '2';
+
+    $result = $this->request();
+
+    $this->assertCount(2, $this->categories($result));
+    $this->assertSame(['total' => 5, 'page' => 1, 'limit' => 2, 'total_pages' => 3], $this->pagination($result));
+  }
+
+  /**
+   * ?search + ?with_counts=1: still ONE grouped query, and its IN list is the
+   * matches — the search makes the count cheaper for the same reason the slice
+   * does.
+   */
+  public function testSearchWithCountsCountsTheMatchesAlone() {
+    $this->authenticateAs();
+    $this->seedSearchableCategories();
+    $this->seedProviders([$this->provider(100, 30), $this->provider(101, 30), $this->provider(102, 31)]);
+    $_GET['search'] = 'plomeria';
+    $_GET['with_counts'] = '1';
+
+    $result = $this->request();
+
+    $this->assertSame(['my_api_tokens', 'node'], $this->queriedTables());
+
+    $conditions = [];
+    foreach (myapi_test_db_queries()[1]['conditions'] as $condition) {
+      $conditions[$condition['field']] = [$condition['value'], $condition['operator']];
+    }
+    $this->assertSame([[30], 'IN'], $conditions['c.field_categories_tid']);
+    $this->assertSame(['Plomería' => 2], $this->countsByName($result));
+  }
+
+  /**
+   * A search that matches nothing runs no count query: there is no tid to
+   * count for.
+   */
+  public function testASearchWithNoMatchRunsNoCountQuery() {
+    $this->authenticateAs();
+    $this->seedSearchableCategories();
+    $this->seedProviders([$this->provider(100, 30)]);
+    $_GET['search'] = 'buceo';
+    $_GET['with_counts'] = '1';
+
+    $result = $this->request();
+
+    $this->assertSame([], $this->categories($result));
+    $this->assertSame(['my_api_tokens'], $this->queriedTables());
+  }
+
+  /**
+   * The items of a search are the items of the catalogue: same six keys, same
+   * values, same order.
+   */
+  public function testASearchedItemIsTheSameItemAsAlways() {
+    $this->authenticateAs();
+    $this->seedCategories([
+      $this->term(30, 'Plomería', 'plomeria', 'Fugas', $this->icon(42, 'plumbing.png')),
+    ]);
+    $_GET['search'] = 'plomeria';
+
+    $category = $this->categories($this->request())[0];
+
+    $this->assertSame(['id', 'code', 'name', 'description', 'icon_id', 'icon_url'], array_keys($category));
+    $this->assertSame(30, $category['id']);
+    $this->assertSame('plomeria', $category['code']);
+    $this->assertSame('Fugas', $category['description']);
+    $this->assertSame(42, $category['icon_id']);
+  }
+
+  /**
+   * The search reads the name the operator WROTE, not its escaping: a category
+   * with an ampersand is findable by the ampersand, which it would not be
+   * against the `&amp;` that travels in the response.
+   */
+  public function testTheSearchReadsTheRawNameAndNotItsEscaping() {
+    $this->authenticateAs();
+    $this->seedCategories([$this->term(30, 'Cortes & instalaciones', 'cortes')]);
+
+    $_GET['search'] = '& inst';
+    $result = $this->request();
+
+    $this->assertSame(['Cortes &amp; instalaciones'], $this->names($result));
+  }
+
+  /**
+   * A search over a missing or empty vocabulary is the same empty list as
+   * always, with no extra query and no pagination block.
+   */
+  public function testASearchOverAnEmptyVocabularyIsStillAnEmptyList() {
+    $this->authenticateAs();
+    $this->seedCategories([]);
+    $_GET['search'] = 'plomeria';
+
+    $result = $this->request();
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame([], $this->categories($result));
+    $this->assertSame(['service_categories'], array_keys($result['json']['data']));
+  }
+
+  /**
+   * And the guards still come first: an unauthenticated search is a 401 that
+   * touches no taxonomy at all.
+   */
+  public function testAnUnauthenticatedSearchIsStillA401() {
+    $this->seedSearchableCategories();
+    $_GET['search'] = 'plomeria';
+
+    $result = $this->request();
+
+    $this->assertSame(401, $result['status']);
+    $this->assertArrayNotHasKey('data', $result['json']);
   }
 
 }

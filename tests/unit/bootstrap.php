@@ -130,6 +130,12 @@ if (!function_exists('drupal_strlen')) {
   }
 }
 
+if (!function_exists('drupal_strtolower')) {
+  function drupal_strtolower($text) {
+    return mb_strtolower($text, 'UTF-8');
+  }
+}
+
 if (!function_exists('check_plain')) {
   function check_plain($text) {
     return htmlspecialchars($text, ENT_QUOTES, 'UTF-8');

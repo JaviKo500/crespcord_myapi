@@ -2,10 +2,12 @@
 
 /**
  * @file
- * Plain-text flattening of stored rich text (SPEC 79).
+ * Plain-text flattening of stored rich text (SPEC 79) and search folding
+ * (SPEC 119).
  *
- * One helper, myapi_text_to_plain(), shared by every resource that has to send
- * a long text field to the Flutter app. It lives in includes/ and not inside a
+ * Two helpers. myapi_text_to_plain() is shared by every resource that has to
+ * send a long text field to the Flutter app; myapi_text_fold() is shared by
+ * every resource that has to compare a user's search box against it. It lives in includes/ and not inside a
  * resource because the marketplace repeats the same problem in more than one
  * place (the provider description, the offer message, the rating comment), and
  * rule 3 of CLAUDE.md says shared logic is written once.
@@ -90,4 +92,61 @@ function myapi_text_to_plain($value) {
   $text = preg_replace('/(?:\xC2\xA0|\s)+/', ' ', $text);
 
   return trim($text);
+}
+
+/**
+ * Folds a string for comparison: lower-cased and stripped of Spanish accents.
+ *
+ * Pure, and the whole reason ?search= is usable at all in this catalogue: the
+ * categories are named "Plomería", "Jardinería", "Climatización" while every
+ * `code` — and every keyboard a resident types on in a hurry — is unaccented.
+ * Comparing the raw strings would mean "plomeria" finds nothing while
+ * "Plomer" finds one thing, which reads as a broken search box, not as a
+ * strict one.
+ *
+ * ONLY FOR COMPARING. The folded value is never answered: the response always
+ * carries what the operator wrote, accents included. Nothing here is
+ * sanitisation either — a folded string is not safe to print, it is only safe
+ * to compare.
+ *
+ * The map covers the accented letters Spanish actually uses plus the ones a
+ * borrowed word drags in (ä, â, ã, å, ë, ê, î, ï, ô, õ, û, ç). It is a plain
+ * strtr() over UTF-8 byte sequences and not iconv()/transliteration: iconv
+ * with //TRANSLIT depends on the C locale of the server and answers different
+ * strings on different machines, and Drupal 7's transliteration module is not
+ * a dependency of this module.
+ *
+ * Uppercase accented letters are mapped straight to their lowercase ASCII
+ * letter, so the strtr() also does half the lower-casing; drupal_strtolower()
+ * then handles the plain ASCII and whatever multibyte letters the map does not
+ * know about.
+ *
+ * @param string $value
+ *   Any stored or user-supplied string. NULL, arrays and any other non-string
+ *   are accepted and answer "".
+ *
+ * @return string
+ *   The folded string, never NULL.
+ */
+function myapi_text_fold($value) {
+  if (!is_string($value)) {
+    return '';
+  }
+
+  $map = [
+    'á' => 'a', 'à' => 'a', 'ä' => 'a', 'â' => 'a', 'ã' => 'a', 'å' => 'a',
+    'é' => 'e', 'è' => 'e', 'ë' => 'e', 'ê' => 'e',
+    'í' => 'i', 'ì' => 'i', 'ï' => 'i', 'î' => 'i',
+    'ó' => 'o', 'ò' => 'o', 'ö' => 'o', 'ô' => 'o', 'õ' => 'o',
+    'ú' => 'u', 'ù' => 'u', 'ü' => 'u', 'û' => 'u',
+    'ñ' => 'n', 'ç' => 'c',
+    'Á' => 'a', 'À' => 'a', 'Ä' => 'a', 'Â' => 'a', 'Ã' => 'a', 'Å' => 'a',
+    'É' => 'e', 'È' => 'e', 'Ë' => 'e', 'Ê' => 'e',
+    'Í' => 'i', 'Ì' => 'i', 'Ï' => 'i', 'Î' => 'i',
+    'Ó' => 'o', 'Ò' => 'o', 'Ö' => 'o', 'Ô' => 'o', 'Õ' => 'o',
+    'Ú' => 'u', 'Ù' => 'u', 'Ü' => 'u', 'Û' => 'u',
+    'Ñ' => 'n', 'Ç' => 'c',
+  ];
+
+  return drupal_strtolower(strtr($value, $map));
 }
