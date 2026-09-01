@@ -913,3 +913,91 @@ function myapi_chat_field_values(array $current, $now, $is_message) {
 
   return $values;
 }
+
+/**
+ * Writes the mirror of one offer. The only impure part, and the only door.
+ *
+ * SIX MERGES AT MOST AND TWO INVALIDATIONS, WITH NO CRITERION INSIDE (SPEC
+ * 117). It is handed a column list somebody else decided on, and it does not
+ * know what a thread is, whether a message arrived or which of the three values
+ * may be overwritten. Everything that could be wrong about the mirror was left
+ * in myapi_chat_field_values(), where a test can reach it.
+ *
+ * TWO TABLES PER FIELD, BECAUSE A D7 FIELD IS TWO TABLES. field_data_* is what
+ * a node_load() reads and field_revision_* is what a revision diff reads, and
+ * NOBODY ELSE IS GOING TO WRITE THE SECOND ONE FOR US — this is the module's
+ * first write that skips the Field API (decision 2). Both take THE SAME KEY:
+ * the revision_id of the revision table is the offer's CURRENT vid, because no
+ * new revision is created. Writing only field_data_* would leave the ficha
+ * right and the revision empty, which is precisely the kind of half-write that
+ * shows up months later as "the history lost it".
+ *
+ * db_merge() AND NOT db_insert(), because the same call has to be able to open
+ * field_chat_opened_at and move field_last_message_at, and the second one has a
+ * row already. It also makes the whole function idempotent: running it twice
+ * with the same values leaves the same two rows.
+ *
+ * THE format COLUMN IS THE ONE THING THAT IS NOT SYMMETRIC. field_firebase_path
+ * is a text field, so its tables carry a *_format column the two datestamps do
+ * not have; it is written to NULL, which is exactly what the Field API would
+ * store for a text_textfield with no filter. It is a property of the field's
+ * TYPE and not a decision, which is why it reads off a map instead of an if.
+ *
+ * THE TWO INVALIDATIONS LIVE HERE AND NOT IN THE ENDPOINTS, and that is risk 1
+ * of the spec answered in code: a fourth mirrored column added in a year
+ * inherits them by coming through this door, instead of being remembered.
+ *
+ *   - cache_field is what a node_load() consults. Without clearing it, the back
+ *     office would be shown the value from before the write, with no error —
+ *     "I wrote the thread and the ficha still shows it empty".
+ *   - the entity controller's static cache is the same problem inside THIS
+ *     request: anything that loaded the offer before us holds the old values.
+ *
+ * NOTHING ELSE IS TOUCHED. node.changed keeps its value, no new revision is
+ * created, and cache_node is left alone because it stores no field values.
+ *
+ * @param mixed $offer_nid  The offer being mirrored.
+ * @param mixed $vid        Its CURRENT vid, from myapi_chat_field_state().
+ * @param array $values     Field name => value, as myapi_chat_field_values()
+ *   answers it. An empty array writes nothing and invalidates nothing.
+ */
+function myapi_chat_field_write($offer_nid, $vid, array $values) {
+  if (!$values) {
+    return;
+  }
+
+  $offer_nid = (int) $offer_nid;
+  $vid = (int) $vid;
+
+  // What each field type carries besides its _value column. A property of the
+  // field, not a decision of this spec — see the docblock.
+  $extra_columns = [
+    'field_firebase_path' => ['field_firebase_path_format' => NULL],
+  ];
+
+  foreach ($values as $field_name => $value) {
+    $key = [
+      'entity_type' => 'node',
+      'entity_id' => $offer_nid,
+      'revision_id' => $vid,
+      'deleted' => 0,
+      'delta' => 0,
+      'language' => LANGUAGE_NONE,
+    ];
+
+    $fields = [
+      'bundle' => MYAPI_SERVICES_OFFER_TYPE,
+      $field_name . '_value' => $value,
+    ];
+    if (isset($extra_columns[$field_name])) {
+      $fields += $extra_columns[$field_name];
+    }
+
+    db_merge('field_data_' . $field_name)->key($key)->fields($fields)->execute();
+    db_merge('field_revision_' . $field_name)->key($key)->fields($fields)->execute();
+  }
+
+  // What the Field API would have done for us. See the docblock.
+  cache_clear_all('field:node:' . $offer_nid, 'cache_field');
+  entity_get_controller('node')->resetCache([$offer_nid]);
+}
