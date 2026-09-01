@@ -83,6 +83,266 @@ have no conversations yet is a datum, not an authentication failure.
 
 ---
 
+## POST /api/v1/chat/threads/{offer_nid}/notify
+
+The **new-message notice** (SPEC 116): tells the **other side** of a
+conversation that somebody wrote, as a push, **without Drupal seeing, storing or
+carrying the text of the message**.
+
+**This endpoint is told *that* there was a message, never *what* it said.** It
+does not read the Realtime Database, it does not write to it, and it does not
+receive the text. It works out who the other side is — the very rule the token
+route signs into a claim — and sends a banner naming **who wrote** and **which
+request** it was about. The content of the chat passes through neither this
+server nor OneSignal.
+
+**The client that wrote is what fires this.** It is the only process that knows
+a message happened without somebody watching Firebase. A Cloud Function with an
+`onWrite` trigger was considered and set aside: **it cannot resolve the
+recipients**, because membership lives in `field_requester`,
+`field_assigned_provider` and `field_provider_users` — three Drupal fields an
+RTDB trigger cannot read. Any design that starts in Firebase ends up calling
+this same endpoint.
+
+### ⚠️ Two steps, in this order — read this before wiring the app
+
+```
+1.  write the message to Firebase        await ref.push({from, text, at})
+2.  THEN call this endpoint              POST /api/v1/chat/threads/901/notify
+                                         { "preview": text }
+```
+
+Send the **same** `text` you just wrote as `preview`: the server has no way to
+check it, so sending anything else puts a line on somebody's lock screen that
+does not match the message they will read.
+
+- **Second, never first.** If the notice went out before the write and the write
+  then failed, the recipient gets a banner for a message that does not exist.
+- **Fire-and-forget.** Nobody waits for this response. Do not block the UI on
+  it, and do not show an error if it fails: **the message is already delivered**
+  — what is lost is the banner, not the conversation.
+- **Retrying is safe.** A second call inside the debounce window silences
+  itself, so the endpoint is idempotent within the minute with nothing written
+  to make it so. Send it twice after a reconnection if that is simpler.
+- **If the phone dies between step 1 and step 2**, the message still arrives and
+  the banner does not. The recipient sees it when they next open the app. That
+  is the accepted price of this design.
+
+**Authentication:** required (Bearer access token). No role is needed: a
+resident and a provider call the same route.
+
+**Headers**
+| Header | Value |
+|--------|-------|
+| Authorization | Bearer `<access_token>` |
+
+**The `{offer_nid}` component is the offer's `nid`, not the thread path.**
+`service_offers/901` carries a slash and does not fit in one URL component. The
+path is derived by the server and answered back.
+
+**Request body**
+
+**One key, and it is optional.** Who wrote is what the Bearer says and which
+thread is what the URL says; all the body adds is **what was written**, for the
+banner's preview.
+
+```json
+{ "preview": "¿Te viene bien el jueves por la mañana?" }
+```
+
+| Key | Type | Required | If it does not fit |
+|-----|------|:--------:|--------------------|
+| `preview` | string | **no** | Absent, empty, whitespace only, `null`, a number, an array, or a malformed body → **ignored**, and the banner comes out with two lines instead of three |
+
+**There is no `422` on this route**, and now that there *is* a body that is a
+decision rather than an oversight. The notice is fire-and-forget — nobody reads
+this response — so a `422` would be a banner lost to a validation the server can
+settle by itself. Everything degrades instead: a long preview is **cut**, a
+preview that is not text is **ignored**, a malformed body is **ignored whole**.
+
+**Send plain text and do not pre-truncate it.** The server sanitises it
+(`myapi_text_to_plain()`: markup out, entities decoded, **every newline
+collapsed into a space**) and cuts it at **140 characters** with an ellipsis. A
+`\n` left in would turn the three-line banner into four and make one message
+look like two.
+
+⚠️ **The preview is the sender's word, not the server's.** Drupal never reads
+the Realtime Database, so what it forwards is what the writing client *says* it
+wrote — it cannot compare the two. Treat the banner as a courtesy of the sender
+about their own message. The message itself is whatever is in Firebase.
+
+**And it is not stored.** The preview is sanitised, sent to OneSignal and
+forgotten: no table, no log, no watchdog entry. The conversation still lives in
+exactly one place.
+
+**Success response (200)**
+```json
+{
+  "success": true,
+  "data": {
+    "thread": "service_offers/901",
+    "recipients": 2,
+    "notified": 2,
+    "muted": 0
+  }
+}
+```
+
+| Key | What it is |
+|-----|------------|
+| `thread` | The thread's path, derived. Sent back so the client can check it talked about the thread it thought it was talking about. |
+| `recipients` | How many accounts are on the other side. **The sender is never counted.** |
+| `notified` | How many were sent a banner **in this call**. |
+| `muted` | How many were **not**, because they already got one for this same thread inside the debounce window. |
+
+**`notified: 0` is a `200`, not an error.** Not when the other side has no
+active account, not when the debounce silenced everyone, not when OneSignal is
+unconfigured, and not when the call to OneSignal failed. The push is
+best-effort end to end: **the message is already in Firebase and the chat works
+without a banner.** A `5xx` here would only make the app doubt a message that
+did arrive. Real failures go to watchdog, which is where they are looked at.
+
+`notified + muted === recipients` **whenever the outgoing call succeeded**. When
+OneSignal is down or unconfigured the sum is lower, on purpose: those recipients
+are neither notified nor muted — nothing was sent to them and **their debounce
+window was not burnt**, so the next message tries again.
+
+**Possible errors**
+| Code | `error_code` | When |
+|------|--------------|------|
+| 405 | `method_not_allowed` | Any method other than `POST`. Answered **before** the flood, the token and any query. |
+| 429 | `too_many_attempts` | Flood limit by **IP**: 600 per hour by default. Evaluated **before** the token, because until then there is no uid to count against. The ceiling is high because chatting is many calls and a household shares one address; what really bounds the outgoing traffic is the debounce below. |
+| 401 | `missing_authorization` | No `Authorization` header. |
+| 401 | `invalid_token` | Token unknown, revoked, expired, or its user blocked. |
+| 404 | `not_found` | The `{offer_nid}` **is not a thread** — it does not exist, its offer is not live, or its request is not awarded to its provider — **or it is not *your* thread**. |
+
+**The `404` is one answer for two different things, deliberately.** Telling
+"it exists but is not yours" (`403`) apart from "it does not exist" (`404`)
+would turn this route into an **enumerator of live threads**: ask for `1..N` and
+you would learn which offers are awarded and active. Both cases answer the same
+status **and the same body**.
+
+### Who gets told
+
+Recipients come from the same rule the token route uses, and from the same
+function the notifications of SPEC 109-112 use — not a second query:
+
+- **The resident writes** → **every** active account of the awarded provider's
+  `field_provider_users`. Membership is by company, so the notice is too.
+- **The provider writes** → the request's `field_requester`, and only them.
+- **The sender never gets their own push**, not even on another device. And a
+  **colleague does not get a banner when their teammate writes**: the message
+  came from their company, and they both already see the thread.
+
+An account that is *both* the resident and an employee of the awarded provider
+counts as the **resident** — the thread hangs off their request.
+
+### What the banner says
+
+With a preview — three lines:
+
+```
+Nuevo mensaje de Ferretería El Tornillo
+Solicitud: Fuga en el calentador
+¿Te viene bien el jueves por la mañana?
+```
+
+Without one — two, exactly as before the preview existed:
+
+```
+Nuevo mensaje de Ferretería El Tornillo
+Solicitud: Fuga en el calentador
+```
+
+- The title names **the other side of the conversation**, never the individual
+  employee: whoever hired talks to the company. When the resident writes, it is
+  their profile name (`field_nombre` + `field_apellidos`), with their username
+  as the fallback.
+- **The request's line stays, and the preview does not replace it.** A provider
+  with five open jobs receives five different conversations, and "¿Te viene bien
+  el jueves?" with no context does not say which one. The title is what makes
+  the notice actionable; the preview is what makes it worth opening.
+- **The order matters.** Android and iOS show about two lines in the collapsed
+  banner, so **who and about what is always visible** and the text is what you
+  gain by expanding.
+- The third line is the **sanitised, truncated** preview, or it is not there. It
+  never appears as an empty line.
+
+### The push `data`
+
+**The same seven keys every other push of this API carries, plus an eighth**, so
+the app does not have to learn a second format:
+
+| Key | Value |
+|-----|-------|
+| `target` | `"chat"` |
+| `id` | The offer's nid — what the deep link needs to open the thread |
+| `thread` | `"service_offers/901"`, the derived path. **The eighth key**, and the only one no other push carries |
+| `notification_type` | `"chat_message"` |
+| `audience` | `"resident"` or `"provider"` — **the recipient's**, not the sender's |
+| `provider` | The nid of the thread's provider |
+| `condominium` | The nid of the request's condominium, **to both sides** |
+| `unit` | The nid of the home **only when the recipient is the resident**. To the provider it is `null`, **always** |
+
+**Why the unit travels one way only.** An account can hold more than one home
+and the app always works *inside* one: without `unit` and `condominium` the
+banner would open the thread in whatever context was last on screen — possibly
+the wrong house. Towards the **provider** it is `null` even when the request has
+a home, because a provider does not learn which door asked until they open the
+detail endpoint; that rule is older than this endpoint and the chat does not
+relax it. Knowing which complex a job is in is not knowing which door it is
+behind, so `condominium` goes to both.
+
+**If `unit` arrives `null` to the resident** — a request older than the
+`field_unit` backfill — the app opens the thread **without switching context**,
+which is what it already does with any notification that carries no unit. That
+is not an error case.
+
+### Collapsing, grouping and TTL
+
+| Option | Value | Why |
+|--------|-------|-----|
+| `collapse_id` | `chat_{offer_nid}` | Twenty messages in a row are **one** banner that gets replaced, not twenty stacked |
+| `thread_id` | The thread path | Native grouping on iOS |
+| `android_group` | `chat_{offer_nid}` | The same on Android |
+| `ttl` | `3600` | A chat notice from six hours ago is worth nothing. Without a TTL, a phone switched off all afternoon lights up with the whole afternoon at once |
+
+### The debounce
+
+**At most one banner per thread and per recipient every 60 seconds.** No new
+table: it is the Flood API, over the composite identifier `{offer_nid}:{uid}`.
+
+- A silenced recipient is a `muted++` and a `200`, **never a 429**.
+- **The window is burnt only when a banner actually went out.** If OneSignal is
+  unconfigured or the call failed, it is left open so the next message tries
+  again.
+- It does not know whether the recipient *read* anything, and it does not need
+  to: they were told less than a minute ago.
+- **Wanted side effect:** a retried or duplicated `POST` silences itself.
+
+### No inbox row, and this one is on purpose
+
+**A chat message is the first push of this API with no row in
+`myapi_notifications`.** `myapi_notification_create()` is not called.
+
+The reason is not taste: **the inbox has no way of learning that you read the
+chat** — that happens in Firebase, where this module does not look — so the row
+would stay `is_read = 0` **for ever** and the notifications badge would be
+permanently dirty. A chat already has its own list and its own unread counter;
+duplicating them in `myapi_notifications` would be a second source of truth
+nobody is going to mark.
+
+**Consequences for the app:** do not expect a chat message in
+`GET /api/v1/notifications`, do not count it towards the badge, and take the
+unread count from Firebase.
+
+**The notice is sent synchronously**, not through the push queue. That queue is
+drained by `drush queue-run` once a minute, and a minute of delay is fine for a
+bulletin and useless for a chat: the banner would arrive after the other
+person's reply.
+
+---
+
 ## Which threads you get, and why
 
 **One rule, and it fits in a line:**
@@ -259,10 +519,19 @@ in a response.
 
 The flood ceiling can be tuned without a cache clear:
 
-| Variable | Default |
-|----------|---------|
-| `myapi_flood_chat_token_ip_limit` | 60 |
-| `myapi_flood_chat_token_ip_window` | 3600 |
+| Variable | Default | What it bounds |
+|----------|---------|----------------|
+| `myapi_flood_chat_token_ip_limit` | 60 | Signatures per hour and IP on `chat/token` |
+| `myapi_flood_chat_token_ip_window` | 3600 | |
+| `myapi_flood_chat_notify_ip_limit` | 600 | Calls per hour and IP on `threads/%/notify` |
+| `myapi_flood_chat_notify_ip_window` | 3600 | |
+| `myapi_flood_chat_notify_thread_limit` | 1 | **The debounce**: banners per thread and recipient |
+| `myapi_flood_chat_notify_thread_window` | 60 | The debounce window, in seconds |
+
+**`notify` needs no configuration of its own beyond these.** It uses the two
+OneSignal variables that already exist (`myapi_onesignal_app_id`,
+`myapi_onesignal_rest_api_key`) and adds no field, no table and no
+`hook_update_N`.
 
 ---
 
@@ -312,9 +581,22 @@ custom token — its payload is plain base64url — and look at
 - **Open the thread, or write the three chat fields of SPEC 77.** With the path
   derived from the `nid`, the chat works without them. They get written the day
   the back office has to see a thread.
-- **Notify a new message.** Neither push nor inbox: a chat message does not
-  appear in `myapi_notifications` and OneSignal never fires. That is the sibling
-  spec, and it is the first thing to build after this one.
+- ~~**Notify a new message.**~~ **Done by SPEC 116** — see
+  `POST /api/v1/chat/threads/{offer_nid}/notify` above. Push only: a chat
+  message still does **not** appear in `myapi_notifications`, and that stays
+  deliberate.
+- **Notice a message without the client saying so.** If the phone that wrote
+  dies between the Firebase write and the notify call, the message arrives and
+  the banner does not.
+- **Stay quiet when the recipient is looking at the thread.** Drupal cannot know
+  whether they have the screen open; the client dismisses the banner in
+  foreground. Real presence needs a Cloud Function.
+- ~~**A preview of the text in the banner.**~~ **Added in the SPEC 116
+  revision** — send `preview` in the body. What is still not done is
+  **verifying** it: the server forwards the sender's word for their own message
+  and cannot compare it with the Realtime Database.
+- **Store the message, or even the fragment that travels.** The preview is
+  sanitised, sent and forgotten.
 - **Attachments.** Firebase Storage has rules and a credential of its own.
 - **Immediate revocation.** See above: up to one hour.
 - **Deploy the rules.** By hand, from the console.
