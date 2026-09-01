@@ -431,11 +431,15 @@ function myapi_auth_password_reset_execute($token, $new_password) {
 
   user_save($account, ['pass' => $new_password]);
 
-  db_update('my_api_tokens')
-    ->fields(['revoked' => 1])
-    ->condition('uid', $account->uid)
-    ->condition('revoked', 0)
-    ->execute();
+  // Every session of this account ends here. The call is kept even though
+  // myapi_user_update() (myapi.module) already fired on the user_save() above
+  // and did the same thing: this line is the CONTRACT of the endpoint —
+  // "resetting the password logs every device out" is documented in
+  // docs/auth.md and covered by its own test — and it must not become
+  // something that only holds while a hook elsewhere keeps firing. Both go
+  // through the same function and the second one revokes nothing, because the
+  // `revoked = 0` condition makes it idempotent.
+  myapi_token_revoke_all_for_user($account->uid);
 
   return ['ok' => TRUE];
 }
