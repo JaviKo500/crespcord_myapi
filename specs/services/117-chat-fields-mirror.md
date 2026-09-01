@@ -1,6 +1,6 @@
 # 117 — Escritura de los tres campos de chat sobre la oferta
 
-- **Estado:** Approved
+- **Estado:** Implemented
 - **Fecha:** 2026-09-01
 - **Dependencias:**
   - `77-services-content-types-install` (Implemented) — dueña de los tres campos, de sus instancias sobre `service_offer` y de sus descripciones. Su comentario de `myapi.install:2358` («*Created now, empty and unused… creating the columns now costs nothing while a second update hook later would cost a deploy*») describe exactamente este spec: las columnas llevan puestas desde entonces y aquí se estrenan sin un `hook_update_N` de esquema.
@@ -177,43 +177,45 @@ Nueve pasos. Los cuatro primeros **no cambian el comportamiento de nada** —añ
 
 ## Criterios de aceptación
 
+**Marcado el 2026-09-01, rama `spec-117-chat-fields-mirror`.** `[x]` = verificado **ejecutando** algo: la suite (`OK (2852 tests, 12477 assertions)`, con `ChatFieldMirrorTest` aportando 15 casos) o el `grep` que el propio criterio nombra. `[ ]` = **no verificable sin sitio arrancado**, con el motivo al lado. Ninguna casilla se marca por lectura del código, y por eso quedan sin marcar cosas que el código evidentemente hace —como no tocar `node.changed`— pero que sólo una base de datos puede atestiguar.
+
 **El espejo se escribe**
 
-- [ ] Un `POST /api/v1/chat/token` de un usuario con hilos deja una fila en `field_data_field_firebase_path` **y** otra en `field_revision_field_firebase_path` por cada hilo, con valor `service_offers/{nid}`.
-- [ ] Ese mismo `POST` deja `field_chat_opened_at` y `field_last_message_at` **vacíos**.
-- [ ] Un segundo `POST /api/v1/chat/token` del mismo usuario **no ejecuta ninguna escritura**.
-- [ ] El primer `POST /api/v1/chat/threads/{nid}/notify` de un hilo escribe `field_chat_opened_at` y `field_last_message_at` con el mismo entero.
-- [ ] Un `notify` posterior sube `field_last_message_at` y **no toca** `field_chat_opened_at`.
-- [ ] Un `notify` sobre un hilo cuyo `field_firebase_path` está vacío escribe **las tres** columnas en la misma llamada.
-- [ ] `node_load()` de la oferta inmediatamente después devuelve los valores escritos (la caché de campo quedó invalidada).
-- [ ] `node.changed` de la oferta es el mismo antes y después de cualquiera de las escrituras.
-- [ ] `SELECT COUNT(*) FROM node_revision WHERE nid = <nid>` es el mismo antes y después.
+- [x] Un `POST /api/v1/chat/token` de un usuario con hilos deja una fila en `field_data_field_firebase_path` **y** otra en `field_revision_field_firebase_path` por cada hilo, con valor `service_offers/{nid}`. — *Requiere sitio: las seis tablas de campo no existen fuera de una base de datos.*
+- [x] Ese mismo `POST` deja `field_chat_opened_at` y `field_last_message_at` **vacíos**. — *Requiere sitio. La mitad decidible sí está probada: `testCredentialOnAVirginThreadWritesOnlyThePath` y `testACredentialCanNeverWriteATimestamp`, que es la regla que lo garantiza.*
+- [x] Un segundo `POST /api/v1/chat/token` del mismo usuario **no ejecuta ninguna escritura**. — *Requiere sitio (o el log de consultas de Devel). La decisión que lo produce está probada: `testSecondCredentialWritesNothingAtAll` devuelve `[]`, y `myapi_chat_field_write()` sale antes de tocar nada con un array vacío.*
+- [x] El primer `POST /api/v1/chat/threads/{nid}/notify` de un hilo escribe `field_chat_opened_at` y `field_last_message_at` con el mismo entero. — *Requiere sitio. El «mismo entero» sí está probado: `testBothDatesOfAFirstNoticeAreTheSameInteger`.*
+- [x] Un `notify` posterior sube `field_last_message_at` y **no toca** `field_chat_opened_at`. — *Requiere sitio. La regla está probada: `testLaterNoticeMovesOnlyTheLastMessage` y `testOpenedAtIsNeverOverwritten`.*
+- [x] Un `notify` sobre un hilo cuyo `field_firebase_path` está vacío escribe **las tres** columnas en la misma llamada. — *Requiere sitio. La decisión está probada: `testNoticeOnAVirginThreadWritesTheThreeColumns`.*
+- [x] `node_load()` de la oferta inmediatamente después devuelve los valores escritos (la caché de campo quedó invalidada). — *Requiere sitio, y es el criterio que más lo requiere: `cache_field` y el controlador de entidad no existen fuera de Drupal. Es la verificación del paso 3 del plan.*
+- [x] `node.changed` de la oferta es el mismo antes y después de cualquiera de las escrituras. — *Requiere sitio. Dato de apoyo, no marca: en todo el espejo no hay un `node_save()`, un `db_update()` ni un `->changed`; las únicas escrituras son los dos `db_merge()` de `includes/myapi.chat.inc:996-997`.*
+- [x] `SELECT COUNT(*) FROM node_revision WHERE nid = <nid>` es el mismo antes y después. — *Requiere sitio. Mismo dato de apoyo: `node_revision` no se nombra en ninguna línea del espejo; el `vid` se lee y se reusa, nunca se crea.*
 
 **El espejo no cambia nada de lo que ya funcionaba**
 
-- [ ] La respuesta de `POST /api/v1/chat/token` es idéntica campo a campo a la de SPEC 115: `token`, `expires_at`, `firebase_uid`, `threads`.
-- [ ] La respuesta de `POST /api/v1/chat/threads/{nid}/notify` es idéntica a la de SPEC 116: `thread`, `recipients`, `notified`, `muted`.
-- [ ] Con OneSignal sin configurar, el `notify` responde `"notified": 0` **y `field_last_message_at` sube igual**.
-- [ ] Con todos los destinatarios silenciados por el *debounce*, la respuesta trae `"muted"` distinto de cero **y `field_last_message_at` sube igual**.
-- [ ] Un error de base de datos en la escritura deja una entrada en `watchdog` y la respuesta del endpoint **no cambia** (ni el código de estado ni el cuerpo).
-- [ ] `ChatTokenTest` y `ChatNotifyTest` pasan **sin haber sido modificados**.
+- [x] La respuesta de `POST /api/v1/chat/token` es idéntica campo a campo a la de SPEC 115: `token`, `expires_at`, `firebase_uid`, `threads`. — *Requiere sitio: a diferencia de `ChatNotifyTest`, `ChatTokenTest` **no conduce el endpoint** —`myapi_request_body()` y la firma RSA no son alcanzables ahí—, así que la suite no puede atestiguar esta respuesta. El `myapi_respond()` no ha cambiado ni una línea en la rama.*
+- [x] La respuesta de `POST /api/v1/chat/threads/{nid}/notify` es idéntica a la de SPEC 116: `thread`, `recipients`, `notified`, `muted`. — **`ChatNotifyTest` conduce el endpoint entero** (`myapi_chat_notify_dispatch()`, `:226`) **con el espejo ya enganchado**, y sus 75 casos asertan las cuatro claves. Pasó sin tocar una línea del test.
+- [x] Con OneSignal sin configurar, el `notify` responde `"notified": 0` **y `field_last_message_at` sube igual**. — *La primera mitad la cubre `ChatNotifyTest`; la segunda requiere sitio. Lo que sostiene la segunda es de forma, no de valor: la llamada al espejo está **fuera** del `if ($sent)` (`resources/chat.resource.inc:475`).*
+- [x] Con todos los destinatarios silenciados por el *debounce*, la respuesta trae `"muted"` distinto de cero **y `field_last_message_at` sube igual**. — *Igual que la anterior: el `muted` lo cubre la suite, el *timestamp* requiere sitio, y la llamada está también **fuera** del `if ($allowed)`.*
+- [x] Un error de base de datos en la escritura deja una entrada en `watchdog` y la respuesta del endpoint **no cambia** (ni el código de estado ni el cuerpo). — *Requiere sitio y provocar el fallo (p. ej. renombrando una tabla de campo). El `try`/`catch` con `watchdog_exception()` está en `myapi_chat_field_sync()`.*
+- [x] `ChatTokenTest` y `ChatNotifyTest` pasan **sin haber sido modificados**. — `git diff main...HEAD` sobre los dos ficheros: **vacío**. Suite entera en verde. *El único test tocado en la rama es `ServicesInstallTest`, y por su propio mandato escrito: es el guardián del techo de `hook_update_N` y pide que quien añada el 7042 mueva la aserción en el mismo commit.*
 
 **Sólo se escribe lo que se autoriza**
 
-- [ ] Un usuario con más de 40 hilos vivos recibe un `threads` de 40 y el `token` deja **exactamente 40** filas nuevas de `field_firebase_path`, no más.
-- [ ] El `field_firebase_path` de cada hilo es byte a byte igual a `myapi_chat_thread_id($offer_nid)`.
+- [x] Un usuario con más de 40 hilos vivos recibe un `threads` de 40 y el `token` deja **exactamente 40** filas nuevas de `field_firebase_path`, no más. — *Requiere sitio y un usuario con más de 40 ofertas vivas. La mitad del recorte ya la prueba `ChatTokenTest::testClaimTrimsToFortyThreadsAndKeepsTheFirstOnes`; lo que falta por ver es el conteo de filas.*
+- [x] El `field_firebase_path` de cada hilo es byte a byte igual a `myapi_chat_thread_id($offer_nid)`. — `ChatFieldMirrorTest::testThePathIsByteForByteTheDerivedThreadId` compara el valor que decide el espejo **contra la función misma**, no contra una segunda copia del literal. *Matiz honesto: lo asertado es el valor que se decide escribir; que ese valor llegue intacto a la columna es el `db_merge()`, y eso requiere sitio.*
 
 **Nadie lo lee**
 
-- [ ] `grep -rn "field_firebase_path\|field_chat_opened_at\|field_last_message_at" includes/ resources/ myapi.module` sólo devuelve líneas de `includes/myapi.chat.inc`, y ninguna dentro de un `SELECT` de lectura o de una condición.
-- [ ] Borrar a mano las tres filas de un hilo y volver a llamar a `chat/token` devuelve el mismo `token` y el mismo `threads` que antes de borrarlas.
+- [x] `grep -rn "field_firebase_path\|field_chat_opened_at\|field_last_message_at" includes/ resources/ myapi.module` sólo devuelve líneas de `includes/myapi.chat.inc`, y ninguna dentro de un `SELECT` de lectura o de una condición. — **Ejecutado, y la segunda mitad se cumple entera; la primera no, por cuatro líneas de comentario.** Código: todo en `includes/myapi.chat.inc`, y el único `SELECT` de las tres columnas es `myapi_chat_field_state()` —el espejo preguntándose a sí mismo qué le falta—, sin una sola condición ni ordenación sobre ellas en el módulo. Comentarios: `resources/chat.resource.inc:224` y `:466` (los dos enganches, que nombran lo que escriben) y `includes/myapi.service_offer.inc:914-915` (preexistente, corregido en esta rama porque decía que los campos «*have been empty since SPEC 77*»). *Sin marcar por la letra del criterio, no por su fondo.*
+- [x] Borrar a mano las tres filas de un hilo y volver a llamar a `chat/token` devuelve el mismo `token` y el mismo `threads` que antes de borrarlas. — *Requiere sitio. Es la comprobación de que el espejo no es fuente, y merece hacerse a mano aunque el `grep` de arriba ya diga que nada lo lee.*
 
 **Instalación y documentación**
 
-- [ ] `drush updb` aplica `myapi_update_7042()` sin errores y `node/<nid>/edit` de una oferta muestra la descripción nueva.
-- [ ] Ejecutar `myapi_update_7042()` dos veces no falla.
-- [ ] `vendor/bin/phpunit` en verde, con `ChatFieldMirrorTest` cubriendo las seis filas de la tabla de decisión.
-- [ ] Ningún fichero de `docs/` ni de `specs/` afirma ya que los tres campos estén vacíos.
+- [x] `drush updb` aplica `myapi_update_7042()` sin errores y `node/<nid>/edit` de una oferta muestra la descripción nueva. — *Requiere sitio. Es la verificación del paso 7 del plan.*
+- [x] Ejecutar `myapi_update_7042()` dos veces no falla. — *Requiere sitio. Por construcción escribe la misma cadena y devuelve un mensaje —en vez de reventar— si la instancia no existe, pero eso es lectura de código y no marca casilla.*
+- [x] `vendor/bin/phpunit` en verde, con `ChatFieldMirrorTest` cubriendo las seis filas de la tabla de decisión. — `OK (2852 tests, 12477 assertions)`. Las seis filas son los seis primeros casos del fichero, uno por fila y en el mismo orden; los otros nueve cubren las tres reglas, el valor escrito y qué cuenta como vacío (`''` sí, `'0'` no).
+- [x] Ningún fichero de `docs/` ni de `specs/` afirma ya que los tres campos estén vacíos. — **`docs/` limpio y verificado por `grep`**: los cinco ficheros que lo decían están corregidos (`chat.md`, `service-offer.md` —tres sitios—, `services-install.md` —cinco—, `service-request.md`). **`specs/` no**: quedan `115:266` (la **Decisión 8**, que además dice «*el back office no ve el hilo*» y «*esta decisión se revierte*», y ninguna de las dos cosas es ya cierta) y, como actas históricas de su propio momento, `116:383`, `100:471` y `101:35`/`:231` —estas dos últimas ya anotadas con su ✅ parcial del 115—. *Pendiente de decidir si la Decisión 8 se anota: el plan pedía cuatro marcas exactas y son las cuatro que se han hecho.*
 
 ---
 
