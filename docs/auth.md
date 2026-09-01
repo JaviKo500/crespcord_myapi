@@ -499,3 +499,119 @@ Notes:
 - No CSRF token is used (this page does not use Drupal's Form API): the reset
   token itself — secret, single-use, short-lived — serves as the anti-CSRF
   credential.
+
+---
+
+## A password change ends every session
+
+`myapi_user_update()` (hook_user_update, in `myapi.module`) revokes **every**
+live access and refresh token of an account whose password just changed —
+wherever the change came from:
+
+| Path | Covered |
+|------|---------|
+| `POST /api/v1/auth/password/reset` | Yes (and the endpoint also revokes explicitly — that is its documented contract, not something that may depend on a hook firing) |
+| `/user/N/edit`, by the account holder | Yes |
+| `/user/N/edit`, by an administrator on someone else's account | Yes |
+| `drush upwd` | Yes |
+
+Only the reset endpoint was covered before. A password changed from the web
+left every token alive for up to 30 days — exactly backwards, since the reason
+a person changes their password from the web is usually that they believe the
+old one is compromised, and the reason an administrator changes someone else's
+is usually that they know it is.
+
+Two signals are read, because `user_save()` is called in two shapes:
+`$edit['pass']` (the profile form, `drush upwd`, this module's own reset — the
+key is unset when the field was left blank, so its presence really does mean
+the password changed), and a difference between `$account->pass` and
+`$account->original->pass` for callers that set the hash straight on the
+object.
+
+A profile saved for any other reason — email, phone, role, condominium
+assignment — matches neither and revokes nothing. Blocking an account needs no
+help from here: `myapi_auth_require_access_token()` re-reads `status` on every
+request.
+
+The revocation is written to `watchdog` at NOTICE level, because it is a logout
+the person did not explicitly ask for: when a resident calls support saying the
+app stopped working right after they changed their password, that line is the
+answer.
+
+---
+
+## Token retention (cron purge)
+
+Both token tables used to be append-only: a login writes a row, a refresh
+writes another and revokes the first, a reset writes one and marks it used, and
+nothing ever deleted. `myapi_cron()` (glue in `myapi.module`, logic in
+`includes/myapi.token.inc`) now drains them on every cron run.
+
+A row is deletable when it can no longer authenticate anything **and** the
+grace period has passed since it stopped being a credential:
+
+| Table | Deleted when |
+|-------|--------------|
+| `my_api_tokens` | `refresh_expires_at` is older than the grace period (the refresh expiry is the outer bound of the pair — the access token always dies first), **or** the row is `revoked = 1` and its `created` is older than the grace period |
+| `myapi_password_reset_tokens` | `expires_at` is older than the grace period, **or** the row is `used = 1` and its `created` is older than the grace period |
+
+The second condition of each pair is not redundant: a refresh rotation revokes
+the previous row instantly, months before its `refresh_expires_at`, and an
+active session rotates one every 30 minutes — waiting for the expiry would
+leave the bulk of the table behind for a month.
+
+**Grace period.** 7 days by default, so a dead credential still answers "when
+did this device last log in, and from where" for a week — the question support
+actually asks. Configurable:
+
+```bash
+drush vset myapi_token_purge_grace 259200   # 3 days
+```
+
+**Bounded per run.** Each table drains at most `MYAPI_TOKEN_PURGE_LIMIT` (5000)
+rows per cron run, chosen by a `SELECT ... LIMIT` and deleted by primary key,
+because `db_delete()` has no `->range()` in Drupal 7. The first run after
+deployment meets every row ever written, and an unbounded `DELETE` inside cron
+is how a cron run starts timing out. The module sets no interval of its own —
+the purge runs once per pass of whatever cron the site has (`drush vget
+cron_last` / `cron_safe_threshold`, or `admin/config/system/cron`) — so the
+drain rate is that interval times this ceiling. With hourly cron, for example,
+a large backlog clears on its own in a few days, with no manual step. In the
+steady state the cap is never reached: one row per login plus one per refresh
+rotation is a few thousand a day for a few hundred residents, which even daily
+cron absorbs comfortably.
+
+The purge is silent in the steady state — nothing to delete issues no `DELETE`
+at all. Only an actual deletion is written to `watchdog`.
+
+---
+
+## Response headers
+
+Every JSON response of this API — success and error alike, from every resource,
+not just `auth` — is sent by `myapi_response_headers()` in
+`includes/myapi.response.inc`:
+
+| Header | Value |
+|--------|-------|
+| Content-Type | `application/json` |
+| Cache-Control | `private, no-store, no-cache, must-revalidate` |
+| Pragma | `no-cache` |
+| Expires | `0` |
+| X-Content-Type-Options | `nosniff` |
+| Status | the endpoint's HTTP status code |
+
+The cache headers are load-bearing. `myapi_respond()` / `myapi_error()` print
+their body and end the request with `drupal_exit()`, which never reaches
+Drupal's page delivery layer — the one that would otherwise have sent the
+default `Cache-Control` of `drupal_page_header()`. Without them the responses
+leave with no cache directive at all, and every one of them is personal data:
+a CDN, a corporate proxy or a carrier proxy is then entitled to store a `200`
+and hand it to the next caller of the same URL, which for this API means
+handing one resident's receipts to another. Drupal's own page cache is not the
+risk — the same `drupal_exit()` that skips the delivery layer also skips
+`drupal_page_set_cache()` — every cache between the app and Drupal is.
+
+`GET /api/v1/claims/%/files/%` and its siblings are the one exception to the
+envelope and send their own headers (already `Cache-Control: private,
+no-store`); they do not go through these helpers.

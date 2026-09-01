@@ -305,14 +305,43 @@ and break every standard image loader. **Errors still use the envelope**, below.
 
 | Header | Value |
 |--------|-------|
-| `Content-Type` | `file_managed.filemime` |
+| `Content-Type` | `file_managed.filemime` when the type may be rendered (see below), `application/octet-stream` otherwise |
 | `Content-Length` | `file_managed.filesize` |
-| `Content-Disposition` | `inline; filename="<original name>"` |
+| `Content-Disposition` | `inline; filename="<original name>"`, or `attachment; ...` for a type that may not be rendered |
 | `Cache-Control` | `private, no-store` |
+| `X-Content-Type-Options` | `nosniff` |
 
-`inline` and not `attachment`: the app renders these images on screen, and
+`inline` for a photo or a PDF: the app renders these on screen, and
 `attachment` would force a download in any web viewer. The original filename
 travels in the header either way.
+
+**The disposition is a security decision, not a formatting one.** These files
+are served from the site's own origin, and `inline` asks the browser to render
+them: a `text/html` or an `image/svg+xml` (markup that may carry `<script>`)
+served that way would be stored XSS with the session of whoever opened the
+thumbnail. So `myapi_file_download_headers()`
+(`includes/myapi.file_download.inc`) pins a **closed list of MIME types that
+cannot carry script** — `image/jpeg`, `image/png`, `image/gif`, `image/webp`,
+`application/pdf` — and serves anything else as
+`Content-Disposition: attachment` with `Content-Type: application/octet-stream`.
+The two move together: neither half is safe alone.
+
+That list is deliberately **not** a copy of the field's `file_extensions`
+setting. The upload path asks "is this one of the types this field accepts?"
+(re-checked against the real bytes with `finfo`); this asks "can this type
+carry script?". The field setting lives in the database and is edited from the
+Drupal UI, so adding `svg` to `field_images` — two clicks, reads like a feature
+request — must not be able to open the hole. The most a widened field
+configuration can now cost is a download instead of a preview.
+
+`X-Content-Type-Options: nosniff` travels on every one of these responses,
+attachment included: it stops a browser from deciding for itself that the bytes
+look like HTML and rendering them regardless of what was declared.
+
+The filename is stripped of control characters, `"` and `\` before being
+placed inside the quoted `filename="..."` parameter, so a crafted name cannot
+close it early or inject a second header. A name that sanitises down to nothing
+becomes `download`.
 
 **Possible errors**
 | Code | `error_code` | When |

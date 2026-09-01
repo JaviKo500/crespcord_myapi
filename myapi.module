@@ -1935,6 +1935,94 @@ function myapi_node_validate($node, $form, &$form_state) {
 }
 
 /**
+ * Implements hook_user_update().
+ *
+ * Ends every API session of an account whose password just changed, wherever
+ * the change came from.
+ *
+ * THE HOLE THIS CLOSES. POST /api/v1/auth/password/reset already revoked the
+ * account's tokens itself, so the reset flow was covered — but that is the one
+ * path that was. A password changed from /user/N/edit, by an administrator on
+ * somebody else's account, or with `drush upwd`, left every access and refresh
+ * token alive: up to 30 days during which the old credential still opens the
+ * app. That is exactly backwards, because the reason a person changes their
+ * password from the web is usually that they believe the old one is
+ * compromised, and the reason an administrator changes someone else's is
+ * usually that they know it is.
+ *
+ * TWO SIGNALS AND NOT ONE, because user_save() is called in two shapes:
+ *
+ *   1. $edit['pass'] — user_save($account, ['pass' => ...]), what the profile
+ *      form, `drush upwd` and this module's own reset all do. user_save()
+ *      unsets the key when the field was left blank, so its presence really
+ *      does mean "the password was changed" and not merely "the form was
+ *      submitted".
+ *   2. $account->original — the hash set straight on the object by a caller
+ *      that passes no $edit at all. Compared only when Drupal actually loaded
+ *      the unchanged entity, so a missing ->original is simply not a signal
+ *      rather than a fatal.
+ *
+ * A profile saved for any other reason — an email, a field, a role, a
+ * condominium assignment — matches neither and revokes nothing. Blocking an
+ * account needs no help from here either: myapi_auth_require_access_token()
+ * re-reads status on every single request.
+ */
+function myapi_user_update(&$edit, $account, $category) {
+  $changed = !empty($edit['pass']);
+
+  if (!$changed && isset($account->original) && isset($account->original->pass) && isset($account->pass)) {
+    $changed = ($account->original->pass !== $account->pass);
+  }
+
+  if (!$changed || empty($account->uid)) {
+    return;
+  }
+
+  module_load_include('inc', 'myapi', 'includes/myapi.token');
+
+  $revoked = myapi_token_revoke_all_for_user($account->uid);
+
+  // Written down because it is a logout the person did not explicitly ask for:
+  // when a resident calls support saying the app stopped working right after
+  // they changed their password, this line is the answer.
+  if ($revoked) {
+    watchdog('myapi', 'Password changed for uid @uid: @count API session(s) revoked.', [
+      '@uid'   => $account->uid,
+      '@count' => $revoked,
+    ], WATCHDOG_NOTICE);
+  }
+}
+
+/**
+ * Implements hook_cron().
+ *
+ * Glue only: the two purges live in includes/myapi.token.inc, next to the
+ * functions that write the rows they delete.
+ *
+ * Both are bounded per run (MYAPI_TOKEN_PURGE_LIMIT) and both are silent when
+ * they find nothing, which is the steady state — a cron log that says "0 rows"
+ * every hour is a log nobody reads. Only an actual deletion is written down,
+ * so the line in watchdog means something happened.
+ *
+ * Deliberately NOT inside hook_cron_queue_info() below: that hook exists to
+ * describe queues, it can be called outside a cron run, and it must stay free
+ * of side effects.
+ */
+function myapi_cron() {
+  module_load_include('inc', 'myapi', 'includes/myapi.token');
+
+  $tokens = myapi_token_purge();
+  $resets = myapi_password_reset_token_purge();
+
+  if ($tokens || $resets) {
+    watchdog('myapi', 'Token purge: @tokens access/refresh rows and @resets password reset rows deleted.', [
+      '@tokens' => $tokens,
+      '@resets' => $resets,
+    ], WATCHDOG_INFO);
+  }
+}
+
+/**
  * Implements hook_cron_queue_info().
  *
  * Registers the workers that drain the OneSignal push queue and the deferred
