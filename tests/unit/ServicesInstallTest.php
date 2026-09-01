@@ -1007,6 +1007,10 @@ class ServicesInstallTest extends TestCase {
     //
     // SPEC 115 appended NOTHING here and is deliberately absent from the list:
     // the chat credential writes no field, no table and no hook_update_N.
+    // SPEC 116 appended nothing either. SPEC 117 DID append 7042, and it is the
+    // one exception worth naming: it writes three fields for the first time and
+    // STILL changes no schema — what it updates is the description of an
+    // instance that has existed since SPEC 77.
     $this->assertStringContainsString('function myapi_update_7034()', $source);
     $this->assertStringContainsString('function myapi_update_7035()', $source);
     $this->assertStringContainsString('function myapi_update_7036()', $source);
@@ -1015,7 +1019,8 @@ class ServicesInstallTest extends TestCase {
     $this->assertStringContainsString('function myapi_update_7039()', $source);
     $this->assertStringContainsString('function myapi_update_7040()', $source);
     $this->assertStringContainsString('function myapi_update_7041()', $source);
-    $this->assertStringNotContainsString('function myapi_update_7042()', $source);
+    $this->assertStringContainsString('function myapi_update_7042()', $source);
+    $this->assertStringNotContainsString('function myapi_update_7043()', $source);
     // 7028 is still SPEC 81's, not this spec's.
     $this->assertStringContainsString(
       '_myapi_services_install();',

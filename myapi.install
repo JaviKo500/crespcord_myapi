@@ -1910,6 +1910,29 @@ function _myapi_services_ensure_vocabulary($machine_name, $name, $description) {
  * graph — myapi_services_request_transitions() exists but nothing reads it
  * yet.
  */
+/**
+ * The description shown under field_firebase_path on the offer form.
+ *
+ * ONE STRING, TWO CALLERS, AND THAT IS THE WHOLE REASON IT IS A FUNCTION: the
+ * installer writes it on a fresh site and myapi_update_7042() writes it on the
+ * sites that already exist. Two copies of a text whose entire job is to tell an
+ * operator the truth would be two texts that drift, and the one that drifts is
+ * always the one the operator is reading.
+ *
+ * WHAT IT SAYS CHANGED IN SPEC 117, and the change is the point. Until then it
+ * read "editarla a mano rompe el chat sin dar ningún error", which was true of
+ * a design where the column was the source of the thread's path. It is not:
+ * myapi_chat_thread_id() derives that path from the nid on every signature and
+ * NOTHING reads this column (decision 1), so the old warning threatens a
+ * consequence that cannot happen. A label that lies about what an action costs
+ * is worse than no label at all.
+ *
+ * @return string  The instance's 'description'.
+ */
+function _myapi_services_chat_path_description() {
+  return 'Espejo de sólo lectura que escribe el servidor la primera vez que se emite una credencial de chat para esta oferta. La ruta real se deriva del identificador de la oferta en cada llamada, así que editar este campo a mano no rompe el chat: sólo ensucia lo que se ve en esta ficha. Vacío significa que nadie ha vuelto a abrir la app desde el despliegue, no que no haya habido conversación.';
+}
+
 function _myapi_services_install() {
   // The bundle names and the status catalogues. Explicit load, like every
   // other include used from this file: an .install runs early enough that the
@@ -2833,7 +2856,7 @@ function _myapi_services_install() {
     'bundle'      => $offer_type,
     'label'       => 'Ruta del hilo de chat',
     'required'    => 0,
-    'description' => 'Generada por el servidor al abrir el chat. Vacío = chat no abierto. Editarla a mano rompe el chat sin dar ningún error.',
+    'description' => _myapi_services_chat_path_description(),
     'widget'      => ['type' => 'text_textfield'],
   ]);
   _myapi_reservations_ensure_instance('field_chat_opened_at', $offer_type, [
@@ -4567,4 +4590,38 @@ function myapi_update_7041() {
   return t('SPEC 114: registradas las claves de correo HTML del cierre y la calificación de solicitud (@count claves en total, sin cambio de esquema).', [
     '@count' => count(myapi_html_mail_keys()),
   ]);
+}
+
+/**
+ * SPEC 117: corrects the description of field_firebase_path on installed sites.
+ *
+ * NOT A SCHEMA CHANGE AND NOT A BACKFILL. The three chat columns have existed
+ * since SPEC 77 and this spec is the first to write them, but it needs no table
+ * and no column: what this hook moves is ONE STRING OF TEXT, the description
+ * under the field on the offer form, which SPEC 117 turned into a lie the
+ * moment nobody started reading the column (decision 8).
+ *
+ * _myapi_reservations_ensure_instance() WOULD HAVE DONE NOTHING HERE, and
+ * silently: it only creates when the instance is missing, and on an installed
+ * site the instance is there. That is why this reads and updates explicitly.
+ *
+ * IDEMPOTENT AND SAFE ON A SITE THAT NEVER HAD THE INSTANCE: field_read_instance()
+ * answers FALSE and the hook returns saying so, instead of fatalling on a
+ * partially installed site. Run twice, the second run writes the same string.
+ */
+function myapi_update_7042() {
+  module_load_include('inc', 'myapi', 'includes/myapi.services_common');
+
+  $instance = field_read_instance('node', 'field_firebase_path', MYAPI_SERVICES_OFFER_TYPE);
+
+  if (!$instance) {
+    return t('SPEC 117: la instancia field_firebase_path no existe en @bundle; no hay descripción que corregir.', [
+      '@bundle' => MYAPI_SERVICES_OFFER_TYPE,
+    ]);
+  }
+
+  $instance['description'] = _myapi_services_chat_path_description();
+  field_update_instance($instance);
+
+  return t('SPEC 117: corregida la descripción de field_firebase_path — el campo es un espejo de sólo lectura y editarlo a mano no rompe el chat (sin cambio de esquema).');
 }
