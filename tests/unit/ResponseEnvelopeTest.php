@@ -85,6 +85,42 @@ class ResponseEnvelopeTest extends TestCase {
   }
 
   /**
+   * Every response forbids being stored, on both helpers.
+   *
+   * Not a style preference. Both functions end in drupal_exit(), which never
+   * reaches Drupal's page delivery layer — the one that would otherwise have
+   * sent the default Cache-Control of drupal_page_header(). Without these
+   * headers the responses leave with NO cache directive at all, and every one
+   * of them is somebody's receipts, claims or reservations: a CDN or a proxy
+   * is then entitled to store a 200 and hand it to the next caller of the same
+   * URL, which here means handing one neighbour's data to another.
+   *
+   * 'no-store' is asserted by name because it is the one that matters: it
+   * forbids writing the response down at all, where 'no-cache' only forbids
+   * reusing it without revalidating.
+   */
+  public function testEveryResponseIsUncacheable() {
+    $cases = [
+      'success' => myapi_test_capture(function () {
+        myapi_respond(['pong' => TRUE]);
+      }),
+      'error'   => myapi_test_capture(function () {
+        myapi_error('invalid_token', 401);
+      }),
+    ];
+
+    foreach ($cases as $name => $result) {
+      $this->assertStringContainsString('no-store', $result['headers']['Cache-Control'], $name);
+      $this->assertStringContainsString('private', $result['headers']['Cache-Control'], $name);
+      $this->assertSame('no-cache', $result['headers']['Pragma'], $name);
+      $this->assertSame('0', $result['headers']['Expires'], $name);
+      // The other end: an error body is JSON, and a browser that decides for
+      // itself that it looks like HTML would render it.
+      $this->assertSame('nosniff', $result['headers']['X-Content-Type-Options'], $name);
+    }
+  }
+
+  /**
    * No 'message' key unless a catalogue key was passed.
    *
    * The field is optional by contract, so a client checking for its presence
