@@ -400,8 +400,8 @@ service_offers/{offer_nid}
 The app already holds the offer's `nid` — both
 [the offer detail](service-offer.md) and the award hand it over — so the path is
 derived, never read from a field. `field_firebase_path`, `field_chat_opened_at`
-and `field_last_message_at` (SPEC 77) are **still empty** and this feature never
-writes them.
+and `field_last_message_at` (SPEC 77) **are written since SPEC 117, and nothing
+reads them** — see [The three mirror fields](#the-three-mirror-fields) below.
 
 The message shape the rules below enforce:
 
@@ -411,6 +411,59 @@ service_offers/901/messages/{push_id}
     text  -> up to 2000 characters
     at    -> Firebase's server clock
 ```
+
+---
+
+## The three mirror fields
+
+Since SPEC 77 the offer has carried `field_firebase_path`,
+`field_chat_opened_at` and `field_last_message_at`, and until SPEC 117 the three
+of them were empty. They are written now — as a **read-only mirror for the back
+office**, so an operator who opens `node/N` can tell that a conversation exists
+and when it last moved.
+
+| Field | Written by | When | Value |
+|-------|------------|------|-------|
+| `field_firebase_path` | `POST /api/v1/chat/token` | The first time a credential covers this thread. **Never rewritten.** | `service_offers/{offer_nid}` |
+| `field_chat_opened_at` | `POST /api/v1/chat/threads/{offer_nid}/notify` | The **first** notice of the thread. **Never rewritten.** | Unix timestamp |
+| `field_last_message_at` | `POST /api/v1/chat/threads/{offer_nid}/notify` | **Every** notice. Overwritten each time. | Unix timestamp |
+
+**The back office reads them, the app never receives them, and this module never
+consults them.** No endpoint returns them, no query orders by them and no
+condition looks at them. `myapi_chat_thread_id()` is still the single source of
+truth for a thread's path — the column is a copy of what that function derives,
+not the place it is derived from. Delete the three rows of a thread by hand and
+the chat carries on byte for byte the same.
+
+Six things follow from that, and each one is a decision and not an accident:
+
+- **The credential does not open a thread.** It writes the path and nothing
+  else. A resident who launches the app and never writes would otherwise mark
+  twelve conversations as "opened", and the column would end up meaning "a token
+  was issued", which is what the path already says.
+- **The token mirrors only the threads it authorises** — the ones in the
+  `threads` array of the response, at most 40 — and never every live offer of
+  the account. Writing down a thread the credential does not cover would be
+  recording something that did not happen.
+- **A second call writes nothing.** With the path already there and no message
+  announced, the mirror runs not one write query. The cost is paid once in the
+  life of a thread.
+- **`field_last_message_at` moves even when no banner went out**: with every
+  recipient silenced by the debounce, and with OneSignal unconfigured or down.
+  The column is called `last_message_at` and not `last_push_at` — tying it to
+  the transport would show a minute of somebody else's outage, forever, as a
+  minute with no conversation.
+- **A failure to write changes nothing.** It goes to `watchdog` and the response
+  of both endpoints is identical, status and body. The chat worked without these
+  three columns from SPEC 115 to SPEC 117 and it still would.
+- **There was no backfill.** A thread that existed before the deploy stays empty
+  until either side next launches the app. **Empty means "nobody has come back
+  since", not "there was no conversation".**
+
+Editing the three fields by hand on the node form dirties what the operator
+sees and nothing else. Blank `field_firebase_path` and the next credential
+writes it again; type something else into it and it stays as typed, because
+nothing compares it against anything.
 
 ---
 
@@ -578,9 +631,10 @@ custom token — its payload is plain base64url — and look at
 
 ## What this feature deliberately does not do
 
-- **Open the thread, or write the three chat fields of SPEC 77.** With the path
-  derived from the `nid`, the chat works without them. They get written the day
-  the back office has to see a thread.
+- ~~**Open the thread, or write the three chat fields of SPEC 77.**~~ **Done by
+  SPEC 117** — see [The three mirror fields](#the-three-mirror-fields). They are
+  written as a mirror for the back office; the chat still works without them,
+  because nothing reads them.
 - ~~**Notify a new message.**~~ **Done by SPEC 116** — see
   `POST /api/v1/chat/threads/{offer_nid}/notify` above. Push only: a chat
   message still does **not** appear in `myapi_notifications`, and that stays
@@ -601,4 +655,6 @@ custom token — its payload is plain base64url — and look at
 - **Immediate revocation.** See above: up to one hour.
 - **Deploy the rules.** By hand, from the console.
 - **Retention, moderation and deletion.** Firebase deletes nothing on its own.
-- **The back office.** An operator does not see the chat on `node/N`.
+- **The back office.** An operator sees the three mirror fields on `node/N` and
+  nothing else: no view mode, no formatter, no "open the thread" link, and not
+  one message — those live in Firebase.

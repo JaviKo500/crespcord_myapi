@@ -259,9 +259,9 @@ does not validate — that the chosen `vivienda` belongs to the
 | `field_offer_message` | text_long | 1 | Yes | `plain_text` pinned. |
 | `field_offer_amount` | number_decimal (10,2) | 1 | No | Dollars. An offer with no amount is valid — the price can be settled in the chat. |
 | `field_offer_status` | list_text | 1 | Yes | Default `sent`. |
-| `field_firebase_path` | text (255) | 1 | No | Reserved for the chat. Empty = no thread yet. |
-| `field_chat_opened_at` | datestamp | 1 | No | Reserved for the chat. |
-| `field_last_message_at` | datestamp | 1 | No | Reserved for the chat. |
+| `field_firebase_path` | text (255) | 1 | No | The chat's. Written as a read-only mirror since SPEC 117 — see [chat.md](chat.md#the-three-mirror-fields). |
+| `field_chat_opened_at` | datestamp | 1 | No | The chat's. Written on the thread's first notice since SPEC 117. |
+| `field_last_message_at` | datestamp | 1 | No | The chat's. Written on every notice since SPEC 117. |
 | `field_offer_amount_type` | list_text | 1 | **No** | SPEC 100. How the amount is to be read — see [`field_offer_amount_type`](#field_offer_amount_type). `on_site_quote` is the one value that carries **no** amount. |
 | `field_offer_valid_until` | datestamp | 1 | **No** | SPEC 100. **Informative: no process expires an offer by this date.** |
 | `field_offer_available_from` | datestamp | 1 | **No** | SPEC 100. When the provider could start. |
@@ -734,12 +734,15 @@ Written down so nobody spends time looking for them:
   provider offers.
 - Nothing fills the denormalised fields
   (`field_assigned_provider`, `field_rating_provider`, `field_rating_avg`,
-  `field_rating_count`), and nothing hides them in the node form. Editing
-  `field_firebase_path` by hand would break a chat silently — today no
-  operational role reaches that form.
+  `field_rating_count`), and nothing hides them in the node form. The three chat
+  fields are not hidden either, and since SPEC 117 that is harmless: they are a
+  mirror nothing reads, so editing one dirties the ficha and breaks no chat —
+  the warning this list used to carry was corrected by `myapi_update_7042()`.
 - No auto-generated titles.
-- No chat: the three fields are reserved and empty; the transport is not
-  decided.
+- ~~No chat: the three fields are reserved and empty; the transport is not
+  decided.~~ **Done by SPEC 115, SPEC 116 and SPEC 117** — Firebase RTDB, a
+  signed credential, a push per message, and the three fields written as a
+  back-office mirror. See [chat.md](chat.md).
 - Nothing consumes the hourly rate, the tags or the short description (SPEC 81).
   There is no `/api/v1/providers` yet, and the spec that writes it decides then
   how the rate is formatted in JSON, whether the tags travel as strings or as

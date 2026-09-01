@@ -252,16 +252,29 @@ ratings, and the resident contracts the provider, not the account.
 | `node.title` | *"Oferta de &lt;proveedor&gt; — solicitud #&lt;nid&gt;"*, truncated to 255 |
 | `field_request` | The `{id}` of the route |
 | `field_offer_status` | Always `sent` |
-| `field_firebase_path`, `field_chat_opened_at`, `field_last_message_at` | Always empty — see the note below |
+| `field_firebase_path`, `field_chat_opened_at`, `field_last_message_at` | Empty at creation — the chat fills them in later, see the note below |
 
-**The three chat fields are still empty, and the chat already works.** SPEC 115
-([chat.md](chat.md)) added `POST /api/v1/chat/token` without writing one of
-them: the path of a thread is a **convention over the offer's `nid`** —
-`service_offers/{nid}` — derived on every signature and never stored. Storing
-it would be keeping a function of the `nid` in a hand-editable column that, as
-`myapi.install` puts it, "breaks the chat without raising any error". The day
-the back office has to see a thread, `field_firebase_path` gets written **with
-the same value**, and nothing in the app changes.
+**A new offer is born with the three chat fields empty, and the chat works
+before any of them is written.** SPEC 115 ([chat.md](chat.md)) added
+`POST /api/v1/chat/token` without writing one of them: the path of a thread is a
+**convention over the offer's `nid`** — `service_offers/{nid}` — derived on
+every signature and never stored. It said that "the day the back office has to
+see a thread, `field_firebase_path` gets written **with the same value**, and
+nothing in the app changes", and that is exactly what SPEC 117 did.
+
+**They are a read-only mirror for the back office.** The credential writes
+`field_firebase_path` the first time it covers the thread; the new-message
+notice writes `field_chat_opened_at` once and moves `field_last_message_at`
+every time. **Nothing reads them**: no endpoint returns them, no query orders by
+them, no condition looks at them, and `myapi_chat_thread_id()` is still the
+single source of truth for the path. Editing them by hand dirties this ficha and
+breaks nothing — the old warning under `field_firebase_path` on the node form,
+which said the opposite, was corrected by `myapi_update_7042()`.
+
+**There was no backfill**, so on a thread that already existed before that
+deploy, empty means *"neither side has launched the app since"* — not *"there
+was no conversation"*. The full table of who writes what, and when, is in
+[chat.md](chat.md#the-three-mirror-fields).
 
 `node.uid` and `field_provider` are **two different things and both are
 written**: a provider may be operated by several accounts, and the offer has to
@@ -1066,7 +1079,7 @@ because a client that sends it believes it changed something.
 | `field_request` | Editing does not move an offer to another request. |
 | `field_provider` | Changing it would be another offer, not this one. |
 | `field_offer_status` | Stays `sent`. |
-| The three chat fields | Still empty, as they have been since the bundle was installed. |
+| The three chat fields | Whatever the chat has mirrored on them. The `PUT` neither writes nor clears them — only `chat/token` and the chat notice do. |
 
 **Nothing outside the offer moves either:** the request keeps its status, no
 timeline entry is written, and `offers_count` is untouched.

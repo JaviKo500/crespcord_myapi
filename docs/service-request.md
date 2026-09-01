@@ -2252,9 +2252,11 @@ Written down so it is not looked for in this document:
   also carries the **quote of a `direct`**, which moves no status at all. Here
   offers are still only **read**, inside one request.
 - **The chat.** `field_firebase_path`, `field_chat_opened_at` and
-  `field_last_message_at` do not travel: who opens the thread and when the path
-  is generated is another spec, and a key served today is a contract that spec
-  could no longer change.
+  `field_last_message_at` **still do not travel**, and since SPEC 117 that is no
+  longer "another spec will decide": they are written, they are a read-only
+  mirror for the back office, and the app derives the thread's path from the
+  offer's `nid` instead of being served it. See
+  [chat.md](chat.md#the-three-mirror-fields).
 - **Writing to the timeline directly.** It is **read** since SPEC 93, in the
   detail and in the `201` — see [the timeline](#the-timeline-transactions) — and
   the cancellation now **writes** one, as the side effect of a transition; since
