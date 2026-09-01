@@ -769,3 +769,66 @@ function myapi_chat_notify_register($offer_nid, $uid) {
     'myapi_flood_chat_notify_thread_window'
   );
 }
+
+/**
+ * What the mirror has to write on one offer — or nothing at all.
+ *
+ * PURE, AND THE ONLY FUNCTION OF THE MIRROR WITH A CRITERION INSIDE (SPEC 117).
+ * The three around it read, write and orchestrate; this one decides, and it is
+ * the only one the suite covers. That split is deliberate: the impure half must
+ * have nothing to get wrong.
+ *
+ * THREE RULES AND NOT ONE MORE:
+ *
+ *   - field_firebase_path is written WHENEVER IT IS MISSING and never touched
+ *     again. It is a function of the nid — the very same string
+ *     myapi_chat_thread_id() derives on every signature — so rewriting it would
+ *     cost a query to store a value that has not changed and cannot.
+ *   - field_chat_opened_at is written ONCE IN THE LIFE OF THE THREAD, and only
+ *     on a notice. The credential does NOT open a thread (decision 6): a
+ *     resident who launches the app and never writes would otherwise mark
+ *     twelve conversations as opened, and the column would end up meaning "a
+ *     token was issued", which is what the path already says.
+ *   - field_last_message_at is OVERWRITTEN ON EVERY NOTICE. It is the only one
+ *     of the three that is allowed to move.
+ *
+ * $is_message === FALSE CAN NEVER WRITE A TIMESTAMP. That is one condition, not
+ * three, and it is why both dates hang off the same branch.
+ *
+ * AN EMPTY RETURN IS THE COMMON CASE AND THE POINT OF THE WHOLE FUNCTION: an
+ * app launching for the umpteenth time finds its path already written, gets []
+ * back, and the mirror runs NOT ONE write query. It is what makes the cost of
+ * this spec 40 writes once in the life of a thread instead of 40 per launch.
+ *
+ * MISSING IS NULL OR THE EMPTY STRING, and never 0: field_chat_opened_at is a
+ * datestamp, so empty() would read a legitimate — if absurd — 1970 as unwritten
+ * and rewrite it on every notice.
+ *
+ * @param array $current  One row of myapi_chat_field_state(): 'nid', 'vid' and
+ *   the three current values under 'path', 'opened_at' and 'last_message_at'.
+ * @param mixed $now      REQUEST_TIME. Cast here, so the caller passes what it
+ *   has and the column always receives an integer.
+ * @param bool $is_message  TRUE when a message was announced, FALSE when only a
+ *   credential was issued.
+ *
+ * @return array  Column name => value to write, EMPTY when there is nothing to
+ *   write. Keys are the field names, not the column names: turning
+ *   'field_firebase_path' into its two tables is myapi_chat_field_write()'s job.
+ */
+function myapi_chat_field_values(array $current, $now, $is_message) {
+  $values = [];
+
+  if (!isset($current['path']) || $current['path'] === '') {
+    $values['field_firebase_path'] = myapi_chat_thread_id($current['nid']);
+  }
+
+  if ($is_message) {
+    if (!isset($current['opened_at']) || $current['opened_at'] === '') {
+      $values['field_chat_opened_at'] = (int) $now;
+    }
+
+    $values['field_last_message_at'] = (int) $now;
+  }
+
+  return $values;
+}
