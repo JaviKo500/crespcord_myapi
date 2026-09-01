@@ -179,7 +179,12 @@ The values it accepts are the `id` of each provider in
         "created": "2026-08-12T09:14:00",
         "desired_start": "2026-08-20T08:00:00",
         "requester": { "id": 3, "name": "Ana Pérez" },
-        "condominium": { "id": 500, "name": "Residencial Los Almendros" }
+        "condominium": { "id": 500, "name": "Residencial Los Almendros" },
+        "chat": {
+          "offer_nid": 901,
+          "last_message_at": "2026-09-01T10:32:14",
+          "last_message_from": "resident"
+        }
       }
     ],
     "pagination": { "total": 1, "page": 1, "limit": 20, "total_pages": 0 }
@@ -187,7 +192,7 @@ The values it accepts are the `id` of each provider in
 }
 ```
 
-### The item: thirteen keys, always the thirteen, in this order
+### The item: fourteen keys, always the fourteen, in this order
 
 | Field | Type | Note |
 |-------|------|------|
@@ -204,10 +209,43 @@ The values it accepts are the `id` of each provider in
 | `desired_start` | string \| null | `Y-m-d\TH:i:s` |
 | `requester` | object \| null | `{id, name}` — `name` is `"field_nombre field_apellidos"` |
 | `condominium` | object \| null | `{id, name}` — `name` is the **node title** of the `condominio` |
+| `chat` | object \| null | `{offer_nid, last_message_at, last_message_from}` or a whole `null`. **Answered for the reader — see below** |
 
 **The first eleven are produced by the very same serialiser the resident's
-listing uses**, unmodified: same types, same nulls, same order. The two new keys
-go at the end so the shared builder cannot drift.
+listing uses**, unmodified: same types, same nulls, same order. The three keys
+after them go at the end so the shared builder cannot drift.
+
+### The `chat` key is mine or it is `null`
+
+`chat != null` is the whole answer to *"¿ya puedo abrir el chat de este
+trabajo?"*. The field-by-field reference is
+[the resident listing's](service-request.md#the-chat-key) — same three keys,
+same types, same `Y-m-d\TH:i:s`, same `"resident"` / `"provider"` — and on
+**this** route it is also a gate:
+
+> A request awarded to a **rival** can perfectly well be on this board — that is
+> set **A**, and it is deliberate: whoever has a live offer needs to see what
+> became of it. That request **has** a live thread, between its resident and the
+> provider that won it. It is not yours, so `chat` is `null`.
+
+| Where the request sits | `chat` |
+|------------------------|--------|
+| Market (**B**), nobody awarded | `null` — there is no thread yet |
+| Awarded to **one of my providers** (**C**, or my `direct`) | the object |
+| I bid and **a rival won** (**A**) | `null` — the thread is theirs |
+| Awarded to me and later **cancelled** | `null` — cancelling rejects every live offer |
+| Awarded to me and later **closed** | the object — the warranty conversation stays open |
+
+The rule is measured against **the account's providers**, exactly like
+[the `unit` rule](#the-unit-rule) below, and never against `?provider_id`:
+narrowing a view does not change which conversations are yours.
+
+**Never paint a chat button from `status` or `assigned_provider`.** They can say
+"assigned to my company" while Firebase still refuses the read — the offer was
+withdrawn, say. `chat` is the key that is asked the same question the chat
+credential answers.
+
+**Cost:** at most **two queries for the whole page**, never one per request.
 
 `requester` and `condominium` are a **whole `null`**, never
 `{id: null, name: null}` — the shape `unit`, `assigned_offer` and

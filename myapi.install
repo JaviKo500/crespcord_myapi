@@ -1982,6 +1982,45 @@ function _myapi_services_ensure_vocabulary($machine_name, $name, $description) {
  *
  * @return string  The instance's 'description'.
  */
+/**
+ * The catalogue of field_last_message_from: the two sides of a chat thread.
+ *
+ * READ FROM includes/myapi.notification.inc AND NEVER RETYPED HERE, the same
+ * rule field_offer_status and field_request_status already follow. The two
+ * words this column stores are the very ones myapi_chat_thread_side() answers
+ * and the very ones every push of the module puts in its 'audience' key: a
+ * third spelling of one idea is how a column ends up holding 'resident' while
+ * the code compares against 'resident_side'.
+ *
+ * THE LABELS ARE THE OPERATOR'S AND THE KEYS ARE THE API'S. What travels in the
+ * JSON is the key — 'resident' / 'provider' — and what the back office shows is
+ * the Spanish label, exactly the split every other list_text of this module
+ * makes.
+ *
+ * @return array  Stored value => label, for the field's allowed_values.
+ */
+function _myapi_chat_message_from_allowed_values() {
+  module_load_include('inc', 'myapi', 'includes/myapi.notification');
+
+  return [
+    MYAPI_NOTIFICATION_AUDIENCE_RESIDENT => 'Residente',
+    MYAPI_NOTIFICATION_AUDIENCE_PROVIDER => 'Proveedor',
+  ];
+}
+
+/**
+ * The description shown under field_last_message_from on the offer form.
+ *
+ * ONE STRING, TWO CALLERS, for the same reason
+ * _myapi_services_chat_path_description() is a function: the installer writes
+ * it on a fresh site and myapi_update_7044() on the sites that already exist.
+ *
+ * @return string  The instance's 'description'.
+ */
+function _myapi_chat_message_from_description() {
+  return 'Espejo de sólo lectura que escribe el servidor cada vez que la app avisa de un mensaje nuevo en este hilo: dice de qué lado vino el último. Se mueve siempre junto a «Último mensaje». Vacío junto a una fecha significa que ese mensaje es anterior a que el servidor empezara a anotar el lado, no que no se sepa quién habla.';
+}
+
 function _myapi_services_chat_path_description() {
   return 'Espejo de sólo lectura que escribe el servidor la primera vez que se emite una credencial de chat para esta oferta. La ruta real se deriva del identificador de la oferta en cada llamada, así que editar este campo a mano no rompe el chat: sólo ensucia lo que se ve en esta ficha. Vacío significa que nadie ha vuelto a abrir la app desde el despliegue, no que no haya habido conversación.';
 }
@@ -2453,6 +2492,18 @@ function _myapi_services_install() {
     'type'        => 'datestamp',
     'cardinality' => 1,
     'settings'    => $timestamp_settings,
+  ]);
+  // The fourth chat column (SPEC 118). It is the companion of the one above and
+  // not a field of its own life: the mirror writes the two together or neither,
+  // because "when the last message happened" and "which side sent it" are one
+  // fact read twice. list_text and not a plain varchar so the back office shows
+  // a select with the two words the whole module already uses, and so a typo
+  // cannot land a third value in the column the app switches on.
+  _myapi_reservations_ensure_field('field_last_message_from', [
+    'field_name'  => 'field_last_message_from',
+    'type'        => 'list_text',
+    'cardinality' => 1,
+    'settings'    => ['allowed_values' => _myapi_chat_message_from_allowed_values()],
   ]);
 
   // Own fields of 'service_rating'.
@@ -2928,6 +2979,20 @@ function _myapi_services_install() {
     'required'    => 0,
     'widget'      => $date_widget,
   ]);
+  // OPTIONAL, like the three above it, and for the reason SPEC 100 already
+  // wrote down: there are offers saved on this site, and a required instance
+  // would leave every one of them unsaveable from node/%/edit until a human
+  // filled the new field in. A thread nobody has written to yet has no side to
+  // record, so 'required' would also be a lie about the data.
+  _myapi_reservations_ensure_instance('field_last_message_from', $offer_type, [
+    'field_name'  => 'field_last_message_from',
+    'entity_type' => 'node',
+    'bundle'      => $offer_type,
+    'label'       => 'Último mensaje de',
+    'required'    => 0,
+    'description' => _myapi_chat_message_from_description(),
+    'widget'      => ['type' => 'options_select'],
+  ]);
 
   // (d) Instances of 'service_rating'.
   // OPTIONAL since SPEC 87, and the status catalogue is what made it so: a
@@ -3116,6 +3181,7 @@ function _myapi_services_uninstall_destructive() {
     'field_firebase_path',
     'field_chat_opened_at',
     'field_last_message_at',
+    'field_last_message_from',
     'field_rating_offer',
     'field_rating_provider',
     'field_stars',
@@ -4718,5 +4784,63 @@ function myapi_update_7043() {
 
   return t('Ampliado el catálogo de field_area_category a @count opciones, ordenadas por etiqueta y con «Otra» al final (sin cambio de esquema; no se eliminó ninguna clave existente).', [
     '@count' => count($allowed_values),
+  ]);
+}
+
+/**
+ * SPEC 118: creates field_last_message_from and its instance on the offer.
+ *
+ * THE ONE REAL SCHEMA CHANGE OF THIS SPEC, and it is a field and not a table:
+ * field_create_field() writes field_data_field_last_message_from and
+ * field_revision_field_last_message_from, the two tables a D7 list_text field
+ * always is, and the mirror of SPEC 117 writes BOTH of them by hand — which is
+ * why creating the field without its revision twin would leave
+ * myapi_chat_field_write() merging into a table that does not exist.
+ *
+ * NO BACKFILL, AND THAT IS A DECISION RATHER THAN AN OMISSION. Nothing on this
+ * site knows which side sent the last message of a thread that already has one:
+ * the messages live in Firebase, this server has no client for the Realtime
+ * Database, and field_last_message_at records WHEN and never WHO. Guessing —
+ * 'resident' because it is the commoner case, or the offer's provider because
+ * they are the other party — would write a fact nobody checked into a column the
+ * app paints as "quién habló el último". Those threads answer
+ * last_message_from: null next to a real last_message_at until somebody writes
+ * again, and docs/service-request.md says so in those words.
+ *
+ * IDEMPOTENT ON BOTH HALVES: _myapi_reservations_ensure_field() and
+ * _myapi_reservations_ensure_instance() each create only what is missing, so a
+ * second run finds nothing pending, and a site where the field exists but the
+ * instance does not — a half-finished earlier run — is repaired rather than
+ * fatalled on.
+ *
+ * THE INSTANCE IS OPTIONAL. A required one would leave every offer already
+ * saved on this site unsaveable from node/%/edit until a human filled the new
+ * field in; see the installer.
+ */
+function myapi_update_7044() {
+  module_load_include('inc', 'myapi', 'includes/myapi.services_common');
+
+  $offer_type = MYAPI_SERVICES_OFFER_TYPE;
+
+  _myapi_reservations_ensure_field('field_last_message_from', [
+    'field_name'  => 'field_last_message_from',
+    'type'        => 'list_text',
+    'cardinality' => 1,
+    'settings'    => ['allowed_values' => _myapi_chat_message_from_allowed_values()],
+  ]);
+
+  _myapi_reservations_ensure_instance('field_last_message_from', $offer_type, [
+    'field_name'  => 'field_last_message_from',
+    'entity_type' => 'node',
+    'bundle'      => $offer_type,
+    'label'       => 'Último mensaje de',
+    'required'    => 0,
+    'description' => _myapi_chat_message_from_description(),
+    'widget'      => ['type' => 'options_select'],
+  ]);
+
+  return t('SPEC 118: creado field_last_message_from en @bundle (@count valores permitidos). Sin relleno retroactivo: los hilos con mensajes anteriores a este despliegue responden last_message_from nulo junto a su fecha real hasta que alguien vuelva a escribir.', [
+    '@bundle' => $offer_type,
+    '@count'  => count(_myapi_chat_message_from_allowed_values()),
   ]);
 }

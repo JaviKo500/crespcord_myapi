@@ -992,13 +992,18 @@ class ServiceRequestProviderListTest extends TestCase {
   }
 
   /* -------------------------------------------------------------------------
-   * The item: thirteen keys.
+   * The item: fourteen keys.
    * ---------------------------------------------------------------------- */
 
   /**
-   * Exactly thirteen keys, in the documented order.
+   * Exactly fourteen keys, in the documented order.
+   *
+   * Thirteen until SPEC 118 appended `chat` AFTER them — after, and not beside
+   * `assigned_provider` where it would read more naturally, because the detail
+   * of this same route merges the THIRTEEN FIRST keys of this item and `chat`
+   * is not one of the detail's.
    */
-  public function testTheItemHasThirteenKeysInOrder() {
+  public function testTheItemHasFourteenKeysInOrder() {
     $result = $this->board([$this->request()]);
     $item = $this->items($result)[0];
 
@@ -1016,6 +1021,7 @@ class ServiceRequestProviderListTest extends TestCase {
       'desired_start',
       'requester',
       'condominium',
+      'chat',
     ], array_keys($item));
   }
 

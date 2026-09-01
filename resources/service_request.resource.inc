@@ -146,6 +146,13 @@ module_load_include('inc', 'myapi', 'includes/myapi.service_transaction');
 // flattened on the way out like every other name of the marketplace.
 module_load_include('inc', 'myapi', 'includes/myapi.text');
 
+// SPEC 118. The `chat` key of the two listings, and NOT a query of this file's
+// own: which requests this reader can already chat about is the rule of
+// membership of SPEC 115, and a resource that asked it a second way is a
+// resource that would eventually paint a chat button the token does not
+// authorise. Rule 5 of CLAUDE.md — the shared criterion lives in includes/.
+module_load_include('inc', 'myapi', 'includes/myapi.chat');
+
 /**
  * Dispatcher for /api/v1/service-requests (SPECS 88 and 90).
  *
@@ -198,8 +205,10 @@ function myapi_service_request_dispatch() {
  * count, so a malformed request costs no query at all.
  *
  * Exactly THREE listing queries reach the database per request — count, page,
- * offer counts — plus the one the token costs. None of them grows with the
- * number of rows.
+ * offer counts — plus the one the token costs, plus AT MOST TWO MORE since
+ * SPEC 118 for the `chat` key: one for the resident side of the rule of
+ * membership and one for the provider side, the second only when the account
+ * belongs to a provider at all. None of them grows with the number of rows.
  */
 function myapi_service_request_list() {
   // 1. Authentication. Answers 401 missing_authorization / invalid_token on its
@@ -266,8 +275,17 @@ function myapi_service_request_list() {
   }
   $offer_counts = myapi_service_request_offer_counts_by_nid($nids);
 
-  $service_requests = array_map(function ($row) use ($offer_counts) {
-    return myapi_service_request_build_item($row, $offer_counts);
+  // The chat of the whole page in at most two queries (SPEC 118), never one per
+  // request. The reader is the requester here, so every awarded request of the
+  // page comes back with a block — but the helper is asked for THIS uid all the
+  // same, because the question the key answers is "can I chat about this?" and
+  // not "does somebody chat about this?".
+  $chat_blocks = myapi_chat_blocks_for_requests($nids, $uid);
+
+  $service_requests = array_map(function ($row) use ($offer_counts, $chat_blocks) {
+    $item = myapi_service_request_build_item($row, $offer_counts);
+
+    return myapi_chat_attach_block($item, $row->nid, $chat_blocks);
   }, $rows);
 
   // 7. Respond 200 (read-only endpoint, no message_key).
@@ -340,9 +358,17 @@ function myapi_service_request_provider_dispatch() {
  * here, and the whole scope travels inside $filters['provider_scope'].
  *
  * TEN QUERIES, FIXED — token, account, link, active, categories, A, C, count,
- * page, offers, names — AND NOT ONE OF THEM GROWS WITH THE PAGE. Twenty
- * requests cost what one costs; the names of the whole page are resolved in ONE
- * call to myapi_user_display_names() and never one per row.
+ * page, offers, names — PLUS THE TWO SPEC 118 ADDS for the `chat` key, AND NOT
+ * ONE OF THEM GROWS WITH THE PAGE. Twenty requests cost what one costs; the
+ * names of the whole page are resolved in ONE call to
+ * myapi_user_display_names() and the chat of the whole page in ONE call to
+ * myapi_chat_blocks_for_requests(), never one per row.
+ *
+ * THE `chat` KEY IS THE READER'S AND NOT THE REQUEST'S (SPEC 118), and on this
+ * route that is a gate rather than a nicety: set A puts a rival's awarded
+ * request on this page on purpose, and that request has a live thread nobody
+ * here belongs to. The key is asked for the reader's uid, so it comes back
+ * null. See myapi_chat_blocks_for_requests().
  */
 function myapi_service_request_provider_list() {
   // 1. Authentication. Answers 401 on its own and never returns on failure.
@@ -465,6 +491,17 @@ function myapi_service_request_provider_list() {
 
   $offer_counts = myapi_service_request_offer_counts_by_nid($nids);
 
+  // The chat of the whole page (SPEC 118), asked for THE READER and not for the
+  // request. That is the whole gate of this key here: set A of the scope above
+  // means a rival's request can perfectly well be on this page — "whoever has a
+  // live offer needs to see what became of it" — and that request DOES have a
+  // live thread, between its resident and whoever won it. It is not mine, so it
+  // gets no block and the app paints no chat button.
+  //
+  // $token->uid and not $uid: the loop of step 13 below reuses that name for
+  // each row's requester.
+  $chat_blocks = myapi_chat_blocks_for_requests($nids, $token->uid);
+
   // 13. The names of the WHOLE page in one call, by the shared rule of
   // includes/myapi.user.inc — never one query per row. No contact detail is
   // fetched: myapi_user_fetch_profile_fields() is not called from this
@@ -481,8 +518,10 @@ function myapi_service_request_provider_list() {
 
   // 14. Serialise. The account's providers and NOT $scope_ids — decision 5 is
   // measured against what I operate, not against the view I am filtering by.
-  $service_requests = array_map(function ($row) use ($offer_counts, $owned) {
-    return myapi_service_request_provider_build_item($row, $offer_counts, $owned);
+  $service_requests = array_map(function ($row) use ($offer_counts, $owned, $chat_blocks) {
+    $item = myapi_service_request_provider_build_item($row, $offer_counts, $owned);
+
+    return myapi_chat_attach_block($item, $row->nid, $chat_blocks);
   }, $rows);
 
   // 15. Respond 200 (read-only endpoint, no message_key). Same envelope, same

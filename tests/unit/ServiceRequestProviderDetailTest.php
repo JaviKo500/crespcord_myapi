@@ -948,15 +948,27 @@ class ServiceRequestProviderDetailTest extends TestCase {
       // `assigned_provider` to the whole card. Everything else, ids and order
       // included, is still the listing's byte for byte, which is what keeps the
       // two routes from disagreeing about the same request.
+      //
+      // `chat` IS THE SECOND EXCEPTION AND IT IS AN ABSENCE (SPEC 118): the
+      // listing's fourteenth key does not exist on the detail at all, so it is
+      // dropped from the comparison the same way the two award keys are. The
+      // detail of a request the reader can already chat about still says so —
+      // through `assigned_provider` and `my_offers`, which is what it said
+      // before this spec.
       $award = ['assigned_offer', 'assigned_provider'];
-      $listed_rest = array_diff_key($listed, array_flip($award));
-      $detail_rest = array_diff_key(array_slice($detail, 0, 13, TRUE), array_flip($award));
+      $dropped = array_merge($award, ['chat']);
+      $listed_rest = array_diff_key($listed, array_flip($dropped));
+      $detail_rest = array_diff_key(array_slice($detail, 0, 13, TRUE), array_flip($dropped));
 
       $this->assertSame(
         $listed_rest,
         $detail_rest,
         'the first thirteen keys differ — ' . $label
       );
+
+      // `chat` is the listing's alone and has no counterpart to compare.
+      $this->assertArrayHasKey('chat', $listed);
+      $this->assertArrayNotHasKey('chat', $detail);
 
       // And the two that do differ still say the SAME THING about who won: the
       // ids match, only the amount of detail around them changes.
@@ -1682,7 +1694,8 @@ class ServiceRequestProviderDetailTest extends TestCase {
 
   /**
    * The provider LISTING is untouched: the same thirteen keys, in the same
-   * order, over the same fixture.
+   * order, over the same fixture — plus `chat`, which SPEC 118 appended AFTER
+   * them precisely so that none of the thirteen moves.
    */
   public function testTheProviderListingKeepsItsThirteenKeys() {
     $this->authenticate();
@@ -1704,6 +1717,7 @@ class ServiceRequestProviderDetailTest extends TestCase {
       'desired_start',
       'requester',
       'condominium',
+      'chat',
     ], array_keys($item));
   }
 

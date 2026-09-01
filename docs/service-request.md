@@ -221,7 +221,12 @@ payment date in payments, and here the creation date — like bulletins.
         "assigned_offer": { "id": 45, "status": "selected" },
         "assigned_provider": { "id": 7, "name": "Plomería Rivas" },
         "created": "2026-08-14T09:12:33",
-        "desired_start": "2026-08-19T08:00:00"
+        "desired_start": "2026-08-19T08:00:00",
+        "chat": {
+          "offer_nid": 901,
+          "last_message_at": "2026-09-01T10:32:14",
+          "last_message_from": "resident"
+        }
       },
       {
         "id": 127,
@@ -234,7 +239,12 @@ payment date in payments, and here the creation date — like bulletins.
         "assigned_offer": null,
         "assigned_provider": { "id": 7, "name": "Plomería Rivas" },
         "created": "2026-08-12T18:40:02",
-        "desired_start": "2026-08-16T09:00:00"
+        "desired_start": "2026-08-16T09:00:00",
+        "chat": {
+          "offer_nid": 913,
+          "last_message_at": null,
+          "last_message_from": null
+        }
       }
     ],
     "pagination": { "total": 7, "page": 1, "limit": 20, "total_pages": 1 }
@@ -246,7 +256,7 @@ payment date in payments, and here the creation date — like bulletins.
 nothing else. `service_requests` is always a JSON array, even with one element
 or none.
 
-Each element contains exactly these **11 keys, always all 11, in this order**:
+Each element contains exactly these **12 keys, always all 12, in this order**:
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -261,15 +271,67 @@ Each element contains exactly these **11 keys, always all 11, in this order**:
 | `assigned_provider` | object \| **null** | `{ "id": int, "name": string }` or `null`. **In the detail this key travels as the whole provider card** — see [The award, widened](#the-award-widened-assigned_provider-and-assigned_offer). |
 | `created` | string | `Y-m-d\TH:i:s`, site timezone — identical to `created` in `/api/v1/claims`. |
 | `desired_start` | string | `field_desired_start`, same format. A real timestamp, not a naive stored string like `reception_date` in claims. |
+| `chat` | object \| **null** | `{ "offer_nid": int, "last_message_at": string\|null, "last_message_from": string\|null }` or **a whole `null`**. **`null` means there is no chat to open**, and an object means there is one, right now, for *you*. See [The `chat` key](#the-chat-key). |
 
-`id`, `category.id`, `unit.id`, `offers_count`, `assigned_offer.id` and
-`assigned_provider.id` all travel as **JSON integers**, never as the strings the
-database answers.
+`id`, `category.id`, `unit.id`, `offers_count`, `assigned_offer.id`,
+`assigned_provider.id` and `chat.offer_nid` all travel as **JSON integers**,
+never as the strings the database answers.
 
 `unit` sits **beside `category`** and not at the end: the two answer what the
 request is and where it is, while `offers_count` and the two `assigned_*` keys
-are the market's state and stay contiguous. The same order reaches the detail,
-which merges this very item.
+are the market's state and stay contiguous. `chat` goes **last**, after
+everything, and that position is load-bearing: `GET /api/v1/service-requests/{id}`
+merges the **first eleven** keys of this item and does **not** carry `chat`, so
+a key inserted anywhere else would push itself into the detail.
+
+### The `chat` key
+
+**`chat != null` is the whole answer to "¿ya puedo abrir el chat?".** The app
+needs no rule of its own, and must not build one: do not derive the button from
+`status`, from `assigned_provider`, or from `assigned_offer`.
+
+| `chat` | What the app does |
+|--------|-------------------|
+| `null` | No chat button. There is no thread, or there is one and it is not yours. |
+| object | Paint the button. `chat.offer_nid` is the thread — the Firebase path is `service_offers/{offer_nid}` — and it **is** covered by the `threads` claim of [`POST /api/v1/chat/token`](chat.md). |
+
+**It is answered for the reader, not for the request.** The same request can
+carry a `chat` object for its resident and `null` for a provider who is not the
+one it was awarded to. The rule behind it is the one and only rule of
+membership of the chat, asked here a third way:
+
+> the request has a `field_assigned_provider`, **and** there is a live offer
+> (`sent` or `selected`) **from that provider** on it, **and** you are either
+> the requester or an account of that provider.
+
+Two consequences the app gets for free, with no condition of its own:
+
+- **A cancelled request has no chat.** Cancelling rejects every live offer, so
+  nothing matches and `chat` goes `null` on its own.
+- **A closed request keeps its chat.** Closing touches no offer, and a warranty
+  you cannot write to the provider about is a useless warranty.
+
+`last_message_at` is `Y-m-d\TH:i:s` in the site timezone, like every other date
+of this listing, and `last_message_from` is `"resident"` or `"provider"` — the
+same two words the chat push puts in its `audience` key.
+
+**Both can be `null` while `chat` itself is an object, and that is not an
+error.** It means the thread exists and nobody has written in it yet: the chat
+is openable and empty. Sort a conversation list by `last_message_at` with the
+nulls last, and do not treat a null as "no chat".
+
+> ⚠️ **`last_message_from` can be `null` next to a real `last_message_at`** on
+> threads that were written to before the column existed (SPEC 118 ships **no
+> backfill** — the messages live in Firebase and this server cannot read who
+> sent them). Treat that as "no lo sé", never as a side.
+
+These two values move **together and only** when the app calls
+[`POST /api/v1/chat/threads/{offer_nid}/notify`](chat.md). A client that writes
+to Firebase and skips the notice leaves them behind — the message still
+arrives, the listing does not learn about it.
+
+**Cost:** the whole page's chat is resolved in **one query** (two for an account
+that also operates a provider), never one per request.
 
 ### The award is two sibling keys, not one object
 
@@ -2298,12 +2360,13 @@ Written down so it is not looked for in this document:
   what moves a request from `open` to `offered`. Since SPEC 101 that same route
   also carries the **quote of a `direct`**, which moves no status at all. Here
   offers are still only **read**, inside one request.
-- **The chat.** `field_firebase_path`, `field_chat_opened_at` and
-  `field_last_message_at` **still do not travel**, and since SPEC 117 that is no
-  longer "another spec will decide": they are written, they are a read-only
-  mirror for the back office, and the app derives the thread's path from the
-  offer's `nid` instead of being served it. See
-  [chat.md](chat.md#the-three-mirror-fields).
+- **The chat, as raw columns.** `field_firebase_path` and
+  `field_chat_opened_at` **still do not travel**: they are written as a
+  read-only mirror for the back office, and the app derives the thread's path
+  from the offer's `nid` instead of being served it. What DOES travel, since
+  SPEC 118, is the [`chat` block](#the-chat-key) of this very listing — whether
+  the chat can be opened, and the last two of the four columns. See
+  [chat.md](chat.md#the-four-mirror-fields).
 - **Writing to the timeline directly.** It is **read** since SPEC 93, in the
   detail and in the `201` — see [the timeline](#the-timeline-transactions) — and
   the cancellation now **writes** one, as the side effect of a transition; since

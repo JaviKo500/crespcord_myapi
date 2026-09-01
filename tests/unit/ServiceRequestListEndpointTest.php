@@ -531,6 +531,14 @@ class ServiceRequestListEndpointTest extends TestCase {
             'assigned_provider' => ['id' => 7, 'name' => 'Plomería Rivas'],
             'created'           => date('Y-m-d\TH:i:s', self::CREATED),
             'desired_start'     => date('Y-m-d\TH:i:s', self::CREATED + 86400),
+            // NULL EVEN ON THE AWARDED REQUEST, and that is not a hole in the
+            // fixture: `chat` is answered from the rule of membership of SPEC
+            // 115 — a LIVE OFFER from the assigned provider — and this fixture
+            // seeds no offer node for the reader's side to find. What a whole
+            // null pins here is the shape: the key ALWAYS travels, and "no chat"
+            // is one null rather than three null members. ChatRequestBlockTest
+            // owns the case where the block is populated.
+            'chat'              => NULL,
           ],
           [
             'id'                => 127,
@@ -544,6 +552,7 @@ class ServiceRequestListEndpointTest extends TestCase {
             'assigned_provider' => NULL,
             'created'           => date('Y-m-d\TH:i:s', self::CREATED - 100),
             'desired_start'     => date('Y-m-d\TH:i:s', self::CREATED + 86400),
+            'chat'              => NULL,
           ],
         ],
         'pagination' => ['total' => 2, 'page' => 1, 'limit' => 20, 'total_pages' => 1],
@@ -552,7 +561,7 @@ class ServiceRequestListEndpointTest extends TestCase {
   }
 
   /**
-   * Every item carries EXACTLY the eleven documented keys, in the documented
+   * Every item carries EXACTLY the twelve documented keys, in the documented
    * order — the assertion that catches a column leaking into the listing — and
    * `data` carries only the two it should.
    *
@@ -560,8 +569,14 @@ class ServiceRequestListEndpointTest extends TestCase {
    * on purpose: it sits beside `category` because the two answer what and where
    * the request is, and because GET /api/v1/service-requests/% merges this very
    * item first — moving it here moves it there.
+   *
+   * SPEC 118 ADDED `chat` AND IT GOES LAST, which is the opposite decision to
+   * `unit`'s and just as deliberate: the detail merges the ELEVEN FIRST keys of
+   * this item and `chat` is NOT one of the detail's — see
+   * ServiceRequestDetailEndpointTest::testTheElevenFirstKeysAreTheListingsByteForByte.
+   * Putting it anywhere but at the end would push it into that slice.
    */
-  public function testEveryItemHasExactlyElevenKeysInOrder() {
+  public function testEveryItemHasExactlyTwelveKeysInOrder() {
     $result = $this->listing([
       $this->request(128, 'Con adjudicación', [
         'assigned_offer_id'      => '45',
@@ -585,6 +600,7 @@ class ServiceRequestListEndpointTest extends TestCase {
         'assigned_provider',
         'created',
         'desired_start',
+        'chat',
       ], array_keys($item));
       $this->assertSame(['id', 'code', 'name'], array_keys($item['category']));
       $this->assertSame(['id', 'name'], array_keys($item['unit']));
@@ -958,8 +974,16 @@ class ServiceRequestListEndpointTest extends TestCase {
   public function testTheOfferCountQueryIsNarrowedToPublishedOffers() {
     $this->listing([$this->request(128, 'Fuga')], [$this->offer(128)]);
 
+    // TWO QUERIES START FROM THIS TABLE SINCE SPEC 118, and the count is still
+    // the FIRST: the second is the resident side of the chat's rule of
+    // membership, which also hangs off field_data_field_request because a
+    // thread IS an offer. What this test pins is the count, so it takes
+    // queries[0] and the assertion below keeps saying "one per page" about it —
+    // the offers of fifty requests are still resolved in ONE query, which is
+    // what testTheRequestCostsFourListingQueriesWhateverThePageSize proves for
+    // the pair of them.
     $queries = myapi_test_db_queries('field_data_field_request');
-    $this->assertCount(1, $queries, 'one query for the whole page');
+    $this->assertCount(2, $queries, 'the offer count, and the chat of the page');
     $count_query = $queries[0];
 
     $this->assertSame(['node'], array_column($count_query['joins'], 'table'));
@@ -1896,12 +1920,19 @@ class ServiceRequestListEndpointTest extends TestCase {
    * ---------------------------------------------------------------------- */
 
   /**
-   * THREE LISTING QUERIES, whatever the page size: the count, the page and the
-   * offers of that page — never one query per request. One request and fifty
-   * cost the same three, plus the token lookup.
+   * FOUR LISTING QUERIES, whatever the page size: the count, the page, the
+   * offers of that page and — since SPEC 118 — the chat of that page. NEVER ONE
+   * QUERY PER REQUEST, which is the whole point of this test and the reason it
+   * runs the same assertion over one request and over fifty.
+   *
+   * The chat costs ONE query here and not two: the second is the provider side
+   * of the rule of membership, and it is asked only when the account belongs to
+   * a provider at all — this fixture's reader is a plain resident, so
+   * myapi_chat_blocks_for_requests() skips it. A provider reading their own
+   * requests pays five.
    */
-  public function testTheRequestCostsThreeListingQueriesWhateverThePageSize() {
-    $expected = ['my_api_tokens', 'node', 'node', 'field_data_field_request'];
+  public function testTheRequestCostsFourListingQueriesWhateverThePageSize() {
+    $expected = ['my_api_tokens', 'node', 'node', 'field_data_field_request', 'field_data_field_request'];
 
     $this->listing([$this->request(128, 'Fuga')], [$this->offer(128)]);
     $this->assertSame($expected, $this->queriedTables(), 'one request');

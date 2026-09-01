@@ -471,9 +471,16 @@ function myapi_chat_notify($offer_nid) {
   // operator would be reading a third party's health believing they read the
   // chat's.
   //
-  // A thread whose path was never mirrored gets its three columns written here
+  // A thread whose path was never mirrored gets its four columns written here
   // in one go: this endpoint does not assume chat/token came first.
-  myapi_chat_field_sync([$thread['offer_nid']], TRUE);
+  //
+  // $side IS THE SENDER'S AND IT TRAVELS WITH THE DATE (SPEC 118). It is the
+  // very value the gate resolved at step 4 and the very one the 'audience' key
+  // above is derived from — asked once, used three times — so what the two
+  // listings paint as `last_message_from` cannot disagree with who this push
+  // was addressed to. Deriving it a second time from the uid would be a second
+  // definition of a rule myapi_chat_thread_side() owns.
+  myapi_chat_field_sync([$thread['offer_nid']], TRUE, $side);
 
   myapi_respond([
     // Derived and answered back so the client can check it talked about the

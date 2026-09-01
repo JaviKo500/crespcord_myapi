@@ -2,6 +2,7 @@
 
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/../../includes/myapi.notification.inc';
 require_once __DIR__ . '/../../includes/myapi.chat.inc';
 
 /**
@@ -277,5 +278,101 @@ class ChatFieldMirrorTest extends TestCase {
     $values = myapi_chat_field_values($row, self::NOW, TRUE);
 
     $this->assertSame(['field_last_message_at' => self::NOW], $values);
+  }
+
+  // ---------------------------------------------------------------------------
+  // SPEC 118 — the fourth column: WHICH SIDE sent the last message.
+  //
+  // The decision table above, read again with the argument the notice now
+  // passes. Everything these rows assert is one rule: the side moves with the
+  // date, or not at all.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * A NOTICE FROM THE RESIDENT WRITES THE SIDE BESIDE THE DATE. The three
+   * columns of the first notice become four, and the fourth is the sender's.
+   */
+  public function testANoticeWritesTheSideItWasGiven() {
+    $values = myapi_chat_field_values($this->emptyRow(), self::NOW, TRUE, MYAPI_NOTIFICATION_AUDIENCE_RESIDENT);
+
+    $this->assertSame([
+      'field_firebase_path'     => 'service_offers/' . self::OFFER_NID,
+      'field_chat_opened_at'    => self::NOW,
+      'field_last_message_at'   => self::NOW,
+      'field_last_message_from' => 'resident',
+    ], $values);
+  }
+
+  /**
+   * And the other side, over a thread that has been talked on before: the date
+   * moves and the side moves WITH it, from one word to the other.
+   */
+  public function testTheSideIsOverwrittenOnEveryNotice() {
+    $values = myapi_chat_field_values($this->fullRow(), self::NOW, TRUE, MYAPI_NOTIFICATION_AUDIENCE_PROVIDER);
+
+    $this->assertSame([
+      'field_last_message_at'   => self::NOW,
+      'field_last_message_from' => 'provider',
+    ], $values);
+  }
+
+  /**
+   * A CREDENTIAL CAN NEVER WRITE A SIDE, and this is the same guard
+   * testACredentialCanNeverWriteATimestamp() makes for the dates: issuing a
+   * token is not somebody writing. Even handed a side — which the token route
+   * never does — $is_message === FALSE writes nothing but the path.
+   */
+  public function testACredentialCanNeverWriteASide() {
+    $values = myapi_chat_field_values($this->emptyRow(), self::NOW, FALSE, MYAPI_NOTIFICATION_AUDIENCE_RESIDENT);
+
+    $this->assertArrayNotHasKey('field_last_message_from', $values);
+    $this->assertSame(['field_firebase_path' => 'service_offers/' . self::OFFER_NID], $values);
+  }
+
+  /**
+   * AN UNRECOGNISED SIDE WRITES NO SIDE AND STILL MOVES THE DATE. The message
+   * happened; refusing to record THAT because the caller passed rubbish would
+   * trade a known-good fact for a missing one. NULL is the case that matters —
+   * it is what a caller written before SPEC 118 passes — and the other three
+   * are the shapes a bug would take.
+   */
+  public function testAnUnrecognisedSideWritesNoSideAndStillMovesTheDate() {
+    foreach ([NULL, '', 'RESIDENT', 'requester', 0] as $side) {
+      $values = myapi_chat_field_values($this->fullRow(), self::NOW, TRUE, $side);
+
+      $this->assertSame(
+        ['field_last_message_at' => self::NOW],
+        $values,
+        var_export($side, TRUE)
+      );
+    }
+  }
+
+  /**
+   * THE ARGUMENT IS OPTIONAL AND ITS ABSENCE IS NOT A SIDE. Every call written
+   * before this spec keeps answering exactly what it answered, which is what
+   * makes the change additive rather than a new contract for the same function.
+   */
+  public function testOmittingTheSideIsTheOldBehaviourByteForByte() {
+    $row = $this->fullRow();
+
+    $this->assertSame(
+      myapi_chat_field_values($row, self::NOW, TRUE),
+      myapi_chat_field_values($row, self::NOW, TRUE, NULL)
+    );
+  }
+
+  /**
+   * THE TWO WORDS STORED ARE THE MODULE'S OWN, not a private spelling of this
+   * file: what lands in the column is what myapi_chat_thread_side() answers and
+   * what every push of the module puts in its 'audience' key. A future rename
+   * of either constant that forgot this column fails here.
+   */
+  public function testTheStoredWordsAreTheAudienceVocabulary() {
+    $resident = myapi_chat_field_values($this->fullRow(), self::NOW, TRUE, MYAPI_NOTIFICATION_AUDIENCE_RESIDENT);
+    $provider = myapi_chat_field_values($this->fullRow(), self::NOW, TRUE, MYAPI_NOTIFICATION_AUDIENCE_PROVIDER);
+
+    $this->assertSame(MYAPI_NOTIFICATION_AUDIENCE_RESIDENT, $resident['field_last_message_from']);
+    $this->assertSame(MYAPI_NOTIFICATION_AUDIENCE_PROVIDER, $provider['field_last_message_from']);
   }
 }

@@ -1018,6 +1018,12 @@ class ServicesInstallTest extends TestCase {
     // services one. It widens the allowed_values of field_area_category from
     // the original ten options to 36 — no schema change, no backfill, nothing
     // removed or renamed.
+    //
+    // 7044 IS SPEC 118's, and it is the FIRST OF THE CHAT UPDATES THAT REALLY
+    // CHANGES THE SCHEMA: 7042 only rewrote a description, this one creates
+    // field_last_message_from and its two tables. It carries no backfill on
+    // purpose — nothing on this site knows who sent a message that lives in
+    // Firebase — and the hook's own docblock says so.
     $this->assertStringContainsString('function myapi_update_7034()', $source);
     $this->assertStringContainsString('function myapi_update_7035()', $source);
     $this->assertStringContainsString('function myapi_update_7036()', $source);
@@ -1028,7 +1034,8 @@ class ServicesInstallTest extends TestCase {
     $this->assertStringContainsString('function myapi_update_7041()', $source);
     $this->assertStringContainsString('function myapi_update_7042()', $source);
     $this->assertStringContainsString('function myapi_update_7043()', $source);
-    $this->assertStringNotContainsString('function myapi_update_7044()', $source);
+    $this->assertStringContainsString('function myapi_update_7044()', $source);
+    $this->assertStringNotContainsString('function myapi_update_7045()', $source);
     // 7028 is still SPEC 81's, not this spec's.
     $this->assertStringContainsString(
       '_myapi_services_install();',

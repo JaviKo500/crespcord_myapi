@@ -274,7 +274,7 @@ which said the opposite, was corrected by `myapi_update_7042()`.
 **There was no backfill**, so on a thread that already existed before that
 deploy, empty means *"neither side has launched the app since"* — not *"there
 was no conversation"*. The full table of who writes what, and when, is in
-[chat.md](chat.md#the-three-mirror-fields).
+[chat.md](chat.md#the-four-mirror-fields).
 
 `node.uid` and `field_provider` are **two different things and both are
 written**: a provider may be operated by several accounts, and the offer has to

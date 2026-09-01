@@ -949,6 +949,14 @@ class ServiceRequestDetailEndpointTest extends TestCase {
    * They were ten until SPEC 91 moved `unit` into the shared serialiser. The
    * slice below is what pins that the two endpoints answer that key with the
    * same bytes — the reason the detail no longer resolves it on its own.
+   *
+   * BOTH SIDES ARE SLICED SINCE SPEC 118, and the listing's side is the one
+   * that changed: it grew a TWELFTH key, `chat`, which the detail deliberately
+   * does not carry. The eleven this test is named after are still eleven, and
+   * still byte for byte — what the second slice pins is that the new key stayed
+   * OUT of them, so a future spec that inserted one in the middle instead of
+   * appending it would fail here rather than shipping a detail that disagrees
+   * with its own listing.
    */
   public function testTheElevenFirstKeysAreTheListingsByteForByte() {
     $tables = [
@@ -965,7 +973,14 @@ class ServiceRequestDetailEndpointTest extends TestCase {
     $listing = myapi_test_capture('myapi_service_request_dispatch');
     $listed = $listing['json']['data']['service_requests'][0];
 
-    $this->assertSame($listed, array_slice($detail, 0, 11, TRUE));
+    $this->assertSame(
+      array_slice($listed, 0, 11, TRUE),
+      array_slice($detail, 0, 11, TRUE)
+    );
+
+    // And the twelfth is the listing's alone.
+    $this->assertArrayHasKey('chat', $listed);
+    $this->assertArrayNotHasKey('chat', $detail);
   }
 
   /**

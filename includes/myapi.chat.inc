@@ -66,6 +66,14 @@
  * so there is nothing to keep in sync and nothing an operator can break by hand.
  */
 
+// The two audience words — MYAPI_NOTIFICATION_AUDIENCE_RESIDENT and _PROVIDER —
+// that myapi_chat_thread_side() answers, that the push carries and that SPEC 118
+// now also STORES in field_last_message_from. Until that spec they were only
+// ever RETURNED by this file, so whoever called it had loaded them already; a
+// value written to a column cannot depend on the caller having been polite.
+// Loaded here, once, so the vocabulary stays one word per idea (see the header).
+module_load_include('inc', 'myapi', 'includes/myapi.notification');
+
 // The prefix of every thread path. THE ONE DEFINITION OF THE CONVENTION, and
 // the place to change the day a thread stops being an offer.
 //
@@ -873,8 +881,14 @@ function myapi_chat_field_state(array $offer_nids) {
  *   - field_last_message_at is OVERWRITTEN ON EVERY NOTICE. It is the only one
  *     of the three that is allowed to move.
  *
- * $is_message === FALSE CAN NEVER WRITE A TIMESTAMP. That is one condition, not
- * three, and it is why both dates hang off the same branch.
+ *   - field_last_message_from is OVERWRITTEN ON EVERY NOTICE too (SPEC 118),
+ *     and only when the side is one of the two the module knows. It is the
+ *     second of the three that is allowed to move, and it moves in lockstep
+ *     with field_last_message_at — see the code.
+ *
+ * $is_message === FALSE CAN NEVER WRITE A TIMESTAMP, NOR A SIDE. That is one
+ * condition, not four, and it is why the dates and the side hang off the same
+ * branch.
  *
  * AN EMPTY RETURN IS THE COMMON CASE AND THE POINT OF THE WHOLE FUNCTION: an
  * app launching for the umpteenth time finds its path already written, gets []
@@ -891,12 +905,15 @@ function myapi_chat_field_state(array $offer_nids) {
  *   has and the column always receives an integer.
  * @param bool $is_message  TRUE when a message was announced, FALSE when only a
  *   credential was issued.
+ * @param mixed $side  WHO wrote, as myapi_chat_thread_side() answers it:
+ *   MYAPI_NOTIFICATION_AUDIENCE_RESIDENT, _PROVIDER, or NULL. Anything else —
+ *   NULL included — simply writes no side; see the code.
  *
  * @return array  Column name => value to write, EMPTY when there is nothing to
  *   write. Keys are the field names, not the column names: turning
  *   'field_firebase_path' into its two tables is myapi_chat_field_write()'s job.
  */
-function myapi_chat_field_values(array $current, $now, $is_message) {
+function myapi_chat_field_values(array $current, $now, $is_message, $side = NULL) {
   $values = [];
 
   if (!isset($current['path']) || $current['path'] === '') {
@@ -909,6 +926,22 @@ function myapi_chat_field_values(array $current, $now, $is_message) {
     }
 
     $values['field_last_message_at'] = (int) $now;
+
+    // THE FOURTH COLUMN, AND IT MOVES WITH THE THIRD (SPEC 118). It is written
+    // in the same branch and never in another: 'who wrote last' and 'when they
+    // wrote' are ONE fact read twice, and a branch of its own is how the two
+    // would end up disagreeing — a date from this afternoon next to a side from
+    // last week, with nothing to say which of the two is the lie.
+    //
+    // AN UNRECOGNISED SIDE WRITES NOTHING AND STOPS NOTHING. The date still
+    // moves: the message did happen, and refusing to record that because the
+    // caller passed rubbish would trade a known-good fact for a missing one.
+    // The listing then answers last_message_from: null over a real
+    // last_message_at, which is exactly what a thread written to before this
+    // spec shipped looks like — one degraded shape, not two.
+    if ($side === MYAPI_NOTIFICATION_AUDIENCE_RESIDENT || $side === MYAPI_NOTIFICATION_AUDIENCE_PROVIDER) {
+      $values['field_last_message_from'] = $side;
+    }
   }
 
   return $values;
@@ -1035,15 +1068,263 @@ function myapi_chat_field_write($offer_nid, $vid, array $values) {
  * @param array $offer_nids  The threads to mirror. Empty is a no-op.
  * @param bool $is_message   TRUE from the notice, FALSE from the credential.
  *   The only thing that can ever write a timestamp.
+ * @param mixed $side  WHO wrote (SPEC 118). Passed straight through to
+ *   myapi_chat_field_values(), which is the only function of the four allowed
+ *   to have an opinion about it. The credential route passes nothing, because
+ *   issuing a token is not somebody writing.
  */
-function myapi_chat_field_sync(array $offer_nids, $is_message) {
+function myapi_chat_field_sync(array $offer_nids, $is_message, $side = NULL) {
   try {
     foreach (myapi_chat_field_state($offer_nids) as $current) {
-      $values = myapi_chat_field_values($current, REQUEST_TIME, $is_message);
+      $values = myapi_chat_field_values($current, REQUEST_TIME, $is_message, $side);
       myapi_chat_field_write($current['nid'], $current['vid'], $values);
     }
   }
   catch (Exception $e) {
     watchdog_exception('myapi', $e);
   }
+}
+
+/* ---------------------------------------------------------------------------
+ * SPEC 118 — the chat block of the two service-request listings.
+ *
+ * THE SAME RULE OF MEMBERSHIP, ASKED A THIRD WAY. The token asks "which threads
+ * are this account's?", the notice asks "who are the two sides of THIS thread?",
+ * and the listings ask "of THESE requests, which ones can this reader already
+ * chat about, and when did somebody last say something?". All three hang off
+ * myapi_chat_thread_base_query(), which is the entire reason that builder was
+ * extracted: a listing that painted a chat button the token would not authorise
+ * is the one bug this file exists to make impossible.
+ *
+ * THE BLOCK IS THE READER'S, NOT THE REQUEST'S, and that is the whole gate of
+ * this half. In the provider listing a rival can perfectly well see a request
+ * that was awarded to somebody else — set A of SPEC 98, "whoever has a live
+ * offer needs to see what became of it" — and that request HAS a live thread.
+ * It is not theirs. So the two queries below are the two sides of
+ * myapi_chat_offer_nids_for_uid(), narrowed to a page of requests, and never a
+ * bare "does this request have a thread?": the second question is easy, cheaper,
+ * and answers a chat button on somebody else's conversation.
+ *
+ * ONE ROW PER REQUEST IS AN ASSUMPTION THIS FILE DOES NOT MAKE. The rule of
+ * membership already pins the offer's provider to the request's assigned
+ * provider, so two live offers from the SAME provider on the SAME request are
+ * the only way to get two rows — incoherent data nothing creates today, but
+ * cheap to survive: the highest nid wins, deterministically, so two calls never
+ * paint two different threads.
+ *
+ * NOTHING HERE IS THE MIRROR. It reads field_last_message_at and
+ * field_last_message_from and writes NOTHING: a listing is not somebody opening
+ * a chat and not somebody writing in one. The columns it reads are only ever
+ * moved by POST /api/v1/chat/threads/%/notify.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * The chat block of every request of a page THIS READER can already chat about.
+ *
+ * ONE QUERY PER SIDE FOR THE WHOLE PAGE, never one per request — the same
+ * promise the listings make of `offers_count` and of the requesters' names. The
+ * two sides are two db_select()s joined in PHP for the reason
+ * myapi_chat_offer_nids_for_uid() spells out: they share no table beyond 'node',
+ * and an OR over LEFT JOINs in Drupal 7 is exactly where the indexes are lost.
+ *
+ * A REQUEST WITH NO ENTRY IS A REQUEST WITH NO CHAT, and the caller paints
+ * `chat: null`. That covers, with no branch of its own, every case the listings
+ * care about: not awarded yet, awarded but the offer was withdrawn, cancelled
+ * (SPEC 95 leaves no live offer), and awarded to a rival.
+ *
+ * last_message_at IS FORMATTED HERE AND NOT IN THE RESOURCE, in the very format
+ * `created` and `desired_start` already travel in, so the app parses one shape
+ * of date and not two. NULL — never format_date(0) — when nobody has written:
+ * "no messages yet" is an answer, 1970 is a lie.
+ *
+ * @param array $request_nids  The nids of the page. Rubbish is dropped and
+ *   repeats collapse, so callers hand over what they have. Empty costs NO
+ *   query.
+ * @param mixed $uid  THE READER. Not the requester, not the provider — whoever
+ *   the Bearer says is asking.
+ *
+ * @return array
+ *   [request_nid => ['offer_nid' => int, 'last_message_at' => string|NULL,
+ *   'last_message_from' => string|NULL]]. Requests with no thread of this
+ *   reader's simply have NO KEY, which is not an error.
+ */
+function myapi_chat_blocks_for_requests(array $request_nids, $uid) {
+  $uid = (int) $uid;
+
+  $nids = [];
+  foreach ($request_nids as $request_nid) {
+    $request_nid = (int) $request_nid;
+    if ($request_nid > 0) {
+      $nids[$request_nid] = $request_nid;
+    }
+  }
+
+  if ($uid <= 0 || !$nids) {
+    return [];
+  }
+
+  // A LIST AND NOT THE DEDUPLICATING MAP, because what goes into an IN() is a
+  // list: the map's keys are how the repeats were collapsed, not something the
+  // query has any business seeing.
+  $nids = array_values($nids);
+
+  // request_nid => the raw row, highest offer nid wins. See the header.
+  $rows = [];
+
+  // ---------------------------------------------------------------- resident.
+  $query = myapi_chat_thread_base_query();
+  $query->condition('rn.nid', $nids, 'IN');
+  $query->innerJoin('field_data_field_requester', 'fr', "fr.entity_id = rn.nid AND fr.entity_type = 'node' AND fr.deleted = 0");
+  $query->condition('fr.field_requester_target_id', $uid);
+  _myapi_chat_block_select($query);
+
+  foreach ($query->execute() as $row) {
+    _myapi_chat_block_keep($rows, $row);
+  }
+
+  // ---------------------------------------------------------------- provider.
+  // Asked only when the account belongs to at least one provider, exactly as
+  // myapi_chat_offer_nids_for_uid() does: one round trip saved for every
+  // resident in the building. The lightweight account object is the one that
+  // function already builds — myapi_provider_role_provider_ids() never reads
+  // ->roles, and its answer is statically cached per uid, so the provider
+  // listing does not pay for this a second time.
+  $provider_ids = array_map('intval', myapi_provider_role_provider_ids((object) ['uid' => $uid]));
+
+  if ($provider_ids) {
+    $query = myapi_chat_thread_base_query();
+    $query->condition('rn.nid', $nids, 'IN');
+    $query->condition('fap.field_assigned_provider_target_id', $provider_ids, 'IN');
+    _myapi_chat_block_select($query);
+
+    foreach ($query->execute() as $row) {
+      _myapi_chat_block_keep($rows, $row);
+    }
+  }
+
+  $blocks = [];
+  foreach ($rows as $request_nid => $row) {
+    $blocks[$request_nid] = myapi_chat_block($row);
+  }
+
+  return $blocks;
+}
+
+/**
+ * The four columns the block is built from, hung off a thread base query.
+ *
+ * WRITTEN ONCE FOR THE TWO SIDES. The projection is not a detail that may
+ * differ between the resident's query and the provider's: two copies is how one
+ * of them ends up without the LEFT on field_last_message_from and silently
+ * loses every thread nobody has written to yet.
+ *
+ * THE TWO MIRROR JOINS ARE LEFT AND PIN delta AND language, byte for byte the
+ * way myapi_chat_field_state() joins them and myapi_chat_field_write() writes
+ * them. LEFT because A THREAD EXISTS BEFORE ITS FIRST MESSAGE — that is the
+ * whole point of the block, "the chat can be opened" — and an INNER here would
+ * hide exactly the threads the resident is meant to be invited to start. The
+ * pinning is the same rule as the mirror's: reading on a wider key than the one
+ * that is written is how one offer comes back as two rows.
+ *
+ * NO TYPE HINT ON $query, like every other function of this module that is
+ * handed one: what db_select() returns is Drupal's SelectQuery in production
+ * and the suite's double outside it, and pinning the class here would buy
+ * nothing and cost the unit tests.
+ *
+ * @param object $query  A myapi_chat_thread_base_query(), already narrowed to
+ *   one side and to the page's request nids.
+ */
+function _myapi_chat_block_select($query) {
+  $query->leftJoin('field_data_field_last_message_at', 'flast', "flast.entity_id = no.nid AND flast.entity_type = 'node' AND flast.deleted = 0 AND flast.delta = 0 AND flast.language = :myapi_chat_block_lang_at", [':myapi_chat_block_lang_at' => LANGUAGE_NONE]);
+  $query->leftJoin('field_data_field_last_message_from', 'ffrom', "ffrom.entity_id = no.nid AND ffrom.entity_type = 'node' AND ffrom.deleted = 0 AND ffrom.delta = 0 AND ffrom.language = :myapi_chat_block_lang_from", [':myapi_chat_block_lang_from' => LANGUAGE_NONE]);
+
+  $query->addField('rn', 'nid', 'request_nid');
+  $query->addField('no', 'nid', 'offer_nid');
+  $query->addField('flast', 'field_last_message_at_value', 'last_message_at');
+  $query->addField('ffrom', 'field_last_message_from_value', 'last_message_from');
+  $query->distinct();
+}
+
+/**
+ * Keeps ONE row per request: the highest offer nid wins.
+ *
+ * The tie-break is not cosmetic and it is not arbitrary. Two live offers from
+ * the same provider on the same request is data nothing creates today, but if
+ * it ever exists the listing must not paint thread 900 on one call and thread
+ * 901 on the next — an app that opens a different conversation depending on
+ * which row the database happened to hand back first is worse than an app that
+ * always opens the wrong one, because only the second is reportable.
+ *
+ * @param array $rows  The accumulator, by request nid. Modified in place.
+ * @param object $row  One row of a query prepared by _myapi_chat_block_select().
+ */
+function _myapi_chat_block_keep(array &$rows, $row) {
+  $request_nid = (int) $row->request_nid;
+
+  if (!isset($rows[$request_nid]) || (int) $row->offer_nid > (int) $rows[$request_nid]->offer_nid) {
+    $rows[$request_nid] = $row;
+  }
+}
+
+/**
+ * One row into the three keys the listings answer.
+ *
+ * PURE, and the only function of this half with a shape to get wrong — which is
+ * why it is the one the suite covers, the same split the mirror already uses
+ * between myapi_chat_field_values() and the three impure functions around it.
+ *
+ * THE SIDE IS ANSWERED AS STORED OR AS NULL, AND NEVER GUESSED. A thread
+ * written to before SPEC 118 shipped has a date and no side, and that is what
+ * travels: last_message_at with last_message_from: null. Defaulting it to
+ * 'resident' would invent a fact, and the app would paint "tú escribiste el
+ * último" over a message the provider sent.
+ *
+ * @param object $row  A row of a query prepared by _myapi_chat_block_select().
+ *
+ * @return array  'offer_nid', 'last_message_at' and 'last_message_from'.
+ */
+function myapi_chat_block($row) {
+  $last_message_at = NULL;
+  if (isset($row->last_message_at) && $row->last_message_at !== '') {
+    $last_message_at = format_date((int) $row->last_message_at, 'custom', 'Y-m-d\TH:i:s');
+  }
+
+  $last_message_from = NULL;
+  if (isset($row->last_message_from) && $row->last_message_from !== '') {
+    $last_message_from = $row->last_message_from;
+  }
+
+  return [
+    'offer_nid'         => (int) $row->offer_nid,
+    'last_message_at'   => $last_message_at,
+    'last_message_from' => $last_message_from,
+  ];
+}
+
+/**
+ * Hangs the `chat` key on one listing item. ONE LINE, ONE PLACE, TWO CALLERS.
+ *
+ * PURE. It exists so the resident's listing and the provider's cannot drift on
+ * the two things this key promises: THAT IT ALWAYS TRAVELS, and that "no chat"
+ * is a WHOLE null rather than three null members. It is the same shape `unit`,
+ * `assigned_offer` and `assigned_provider` already answer with, for the same
+ * reason — a client that has to tell an absent key from a null one is a client
+ * with a bug waiting in it.
+ *
+ * THE KEY GOES LAST, after everything myapi_service_request_build_item() and
+ * myapi_service_request_provider_build_item() already built. The two listings
+ * document their keys in order, and appending is what keeps a new key from
+ * moving the old ones.
+ *
+ * @param array $item  The item as the listing's serialiser built it.
+ * @param mixed $request_nid  Its request nid.
+ * @param array $blocks  The page's map, from myapi_chat_blocks_for_requests().
+ *
+ * @return array  The item, with `chat` — the block, or NULL.
+ */
+function myapi_chat_attach_block(array $item, $request_nid, array $blocks) {
+  $request_nid = (int) $request_nid;
+  $item['chat'] = isset($blocks[$request_nid]) ? $blocks[$request_nid] : NULL;
+
+  return $item;
 }

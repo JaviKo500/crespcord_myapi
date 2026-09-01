@@ -259,9 +259,10 @@ does not validate — that the chosen `vivienda` belongs to the
 | `field_offer_message` | text_long | 1 | Yes | `plain_text` pinned. |
 | `field_offer_amount` | number_decimal (10,2) | 1 | No | Dollars. An offer with no amount is valid — the price can be settled in the chat. |
 | `field_offer_status` | list_text | 1 | Yes | Default `sent`. |
-| `field_firebase_path` | text (255) | 1 | No | The chat's. Written as a read-only mirror since SPEC 117 — see [chat.md](chat.md#the-three-mirror-fields). |
+| `field_firebase_path` | text (255) | 1 | No | The chat's. Written as a read-only mirror since SPEC 117 — see [chat.md](chat.md#the-four-mirror-fields). |
 | `field_chat_opened_at` | datestamp | 1 | No | The chat's. Written on the thread's first notice since SPEC 117. |
-| `field_last_message_at` | datestamp | 1 | No | The chat's. Written on every notice since SPEC 117. |
+| `field_last_message_at` | datestamp | 1 | No | The chat's. Written on every notice since SPEC 117. **Read back** by the `chat` block of the two service-request listings (SPEC 118). |
+| `field_last_message_from` | list_text | 1 | No | SPEC 118. `resident` \| `provider` — which side sent the message `field_last_message_at` dates. Written on every notice, **always together with it**. Created on installed sites by `myapi_update_7044()`, with **no backfill**. |
 | `field_offer_amount_type` | list_text | 1 | **No** | SPEC 100. How the amount is to be read — see [`field_offer_amount_type`](#field_offer_amount_type). `on_site_quote` is the one value that carries **no** amount. |
 | `field_offer_valid_until` | datestamp | 1 | **No** | SPEC 100. **Informative: no process expires an offer by this date.** |
 | `field_offer_available_from` | datestamp | 1 | **No** | SPEC 100. When the provider could start. |
@@ -628,6 +629,8 @@ hand on the site survives the update untouched.
 | `myapi_update_7032` | 86 | The borrowed `field_unit` instance on `service_request` — the first one of this feature that is **required**. |
 | `myapi_update_7033` | 87 | The `direct` status in `field_request_status` (both bundles at once), and `field_rating_offer` relaxed to optional. The first services update that does **more** than re-run the installer. |
 | `myapi_update_7035` | 100 | The ten quote fields of `service_offer` — price type, validity, availability, duration and its unit, what is and is not included, tax, warranty and prior visit. All ten instances **optional**, and **no backfill**: the offers already stored are not touched and answer `null` on all ten. Back to just re-running the installer, because all twenty creations are new and the idempotent `_ensure_*` helpers only ever create. |
+| `myapi_update_7042` | 117 | **No schema change.** One instance description: `field_firebase_path` is a read-only mirror, and editing it by hand does not break the chat. |
+| `myapi_update_7044` | 118 | `field_last_message_from` on `service_offer` (`list_text`, `resident` \| `provider`) and its **optional** instance. Which side sent the message `field_last_message_at` dates. **No backfill, and there cannot be one**: the messages live in Firebase and this server has no client for it, so threads written to before this deploy answer `last_message_from: null` beside a real date until somebody writes again. |
 
 All of them create **structure only** — no permission, no role and no node, so
 running them changes nothing any user already has. **`7029` is different in two
@@ -735,14 +738,20 @@ Written down so nobody spends time looking for them:
 - Nothing fills the denormalised fields
   (`field_assigned_provider`, `field_rating_provider`, `field_rating_avg`,
   `field_rating_count`), and nothing hides them in the node form. The three chat
-  fields are not hidden either, and since SPEC 117 that is harmless: they are a
-  mirror nothing reads, so editing one dirties the ficha and breaks no chat —
-  the warning this list used to carry was corrected by `myapi_update_7042()`.
+  fields are not hidden either. Editing `field_firebase_path` or
+  `field_chat_opened_at` is harmless — they are a mirror nothing reads, so it
+  dirties the ficha and breaks no chat, and the warning this list used to carry
+  was corrected by `myapi_update_7042()`. **`field_last_message_at` and
+  `field_last_message_from` are the exception since SPEC 118**: they are read
+  back into the `chat` block of the two service-request listings, so editing
+  them changes what the app shows until the next message overwrites them.
 - No auto-generated titles.
 - ~~No chat: the three fields are reserved and empty; the transport is not
-  decided.~~ **Done by SPEC 115, SPEC 116 and SPEC 117** — Firebase RTDB, a
-  signed credential, a push per message, and the three fields written as a
-  back-office mirror. See [chat.md](chat.md).
+  decided.~~ **Done by SPEC 115, SPEC 116, SPEC 117 and SPEC 118** — Firebase
+  RTDB, a signed credential, a push per message, four fields written as a
+  back-office mirror, and a `chat` block in the two service-request listings
+  telling the app whether the conversation can be opened. See
+  [chat.md](chat.md).
 - Nothing consumes the hourly rate, the tags or the short description (SPEC 81).
   There is no `/api/v1/providers` yet, and the spec that writes it decides then
   how the rate is formatted in JSON, whether the tags travel as strings or as
