@@ -43,6 +43,20 @@ function myapi_flood_is_allowed($event, $identifier, $limit_var, $window_var) {
     // household far below the limit while a script paying for signatures is
     // stopped.
     'myapi_flood_chat_token_ip_limit'    => 60,
+    // SPEC 116, and the two of them bound two DIFFERENT things (decision 11),
+    // which is why there is no third counter per uid.
+    //
+    // THE IP ONE BOUNDS THE QUERIES, and its ceiling is the highest of this
+    // file on purpose: CHATTING IS MANY CALLS — one per message written — and a
+    // whole household shares one address. 600 an hour leaves a busy family far
+    // below it and still stops a script.
+    'myapi_flood_chat_notify_ip_limit'   => 600,
+    // THE THREAD ONE IS THE DEBOUNCE, and it is what actually bounds the
+    // OUTGOING traffic: at most ONE banner per thread and per recipient a
+    // minute, over the composite identifier '{offer_nid}:{uid}'. It is read
+    // with myapi_flood_is_allowed() and never with myapi_flood_check(), because
+    // a silenced recipient is a 'muted' in a 200 and not a 429.
+    'myapi_flood_chat_notify_thread_limit' => 1,
   ];
   static $window_defaults = [
     'myapi_flood_login_user_window'       => 3600,
@@ -53,6 +67,10 @@ function myapi_flood_is_allowed($event, $identifier, $limit_var, $window_var) {
     'myapi_flood_forgot_identifier_window' => 3600,
     'myapi_flood_reset_ip_window'         => 900,
     'myapi_flood_chat_token_ip_window'    => 3600,
+    'myapi_flood_chat_notify_ip_window'   => 3600,
+    // Sixty seconds: long enough that a burst of messages is one banner, short
+    // enough that a reply five minutes later still raises one.
+    'myapi_flood_chat_notify_thread_window' => 60,
   ];
 
   $default_limit  = isset($limit_defaults[$limit_var])   ? $limit_defaults[$limit_var]   : 10;
@@ -101,6 +119,10 @@ function myapi_flood_register($event, $identifier, $window_var) {
     'myapi_flood_forgot_identifier_window' => 3600,
     'myapi_flood_reset_ip_window'         => 900,
     'myapi_flood_chat_token_ip_window'    => 3600,
+    'myapi_flood_chat_notify_ip_window'   => 3600,
+    // Sixty seconds: long enough that a burst of messages is one banner, short
+    // enough that a reply five minutes later still raises one.
+    'myapi_flood_chat_notify_thread_window' => 60,
   ];
 
   $default_window = isset($window_defaults[$window_var]) ? $window_defaults[$window_var] : 3600;
