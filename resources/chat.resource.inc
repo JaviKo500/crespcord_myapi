@@ -462,6 +462,19 @@ function myapi_chat_notify($offer_nid) {
     }
   }
 
+  // The mirror (SPEC 117), OUTSIDE both ifs above and that is the whole
+  // decision 5: field_chat_opened_at and field_last_message_at are written
+  // EVEN IF every recipient was silenced by the debounce and EVEN IF OneSignal
+  // is down, because the column is called last_message_at and not
+  // last_push_at. Tying it to the transport would make a minute of somebody
+  // else's outage look, forever, like a minute with no conversation — and the
+  // operator would be reading a third party's health believing they read the
+  // chat's.
+  //
+  // A thread whose path was never mirrored gets its three columns written here
+  // in one go: this endpoint does not assume chat/token came first.
+  myapi_chat_field_sync([$thread['offer_nid']], TRUE);
+
   myapi_respond([
     // Derived and answered back so the client can check it talked about the
     // thread it thought it was talking about.
