@@ -621,6 +621,70 @@ function _myapi_reservations_ensure_node_type($type, $name, $description, $title
 }
 
 /**
+ * The allowed_values catalogue of field_area_category.
+ *
+ * Single source of truth, read by two callers: the installer, which creates the
+ * field with these values on a fresh site, and myapi_update_7043(), which
+ * rewrites them on a site installed before the catalogue grew. Keeping them
+ * here is what stops the two copies from drifting — the pair already drifted
+ * once, when myapi_update_7007() inlined its own copy of the original ten.
+ *
+ * KEYS ARE THE STABLE CONTRACT. The Flutter app picks the icon of an area from
+ * this key, never from the label, and area.resource.inc passes the raw stored
+ * value through to JSON. So a key is added, never renamed and never removed:
+ * a rename silently blanks the icon of every area already classified with it,
+ * and list.module refuses the removal outright (FieldUpdateForbiddenException)
+ * while one node still holds the value.
+ *
+ * ORDER IS THE FORM ORDER. Drupal renders options_select in the order of this
+ * array, so it is alphabetical by LABEL — the visible half — with 'other' kept
+ * last on purpose, where a catch-all belongs, rather than under its O.
+ *
+ * @return array
+ *   Machine key => Spanish label, ready for the 'allowed_values' setting.
+ */
+function _myapi_area_category_allowed_values() {
+  return [
+    'guest_suite'       => 'Apartamento de huéspedes',
+    'playground'        => 'Área infantil',
+    'steam_room'        => 'Baño turco / Vapor',
+    'library'           => 'Biblioteca',
+    'soccer_field'      => 'Cancha de fútbol',
+    'padel_court'       => 'Cancha de pádel',
+    'squash_court'      => 'Cancha de squash',
+    'tennis_court'      => 'Cancha de tenis',
+    'sports_court'      => 'Cancha deportiva',
+    'chapel'            => 'Capilla / Sala de oración',
+    'ev_charger'        => 'Cargador de vehículo eléctrico',
+    'coworking'         => 'Coworking / Sala de trabajo',
+    'storage'           => 'Depósito / Bodega',
+    'gym'               => 'Gimnasio',
+    'jacuzzi'           => 'Jacuzzi',
+    'laundry'           => 'Lavandería',
+    'bike_parking'      => 'Parqueadero de bicicletas',
+    'guest_parking'     => 'Parqueadero de visitantes',
+    'pool'              => 'Piscina',
+    'kids_pool'         => 'Piscina infantil',
+    'cinema_room'       => 'Sala de cine',
+    'study_room'        => 'Sala de estudio',
+    'game_room'         => 'Sala de juegos',
+    'meeting_room'      => 'Sala de juntas',
+    'yoga_room'         => 'Sala de yoga / Pilates',
+    'party_hall'        => 'Salón de eventos',
+    'multipurpose_room' => 'Salón multiusos',
+    'social_room'       => 'Salón social',
+    'sauna'             => 'Sauna / Spa',
+    'rooftop'           => 'Terraza / Rooftop',
+    'car_wash'          => 'Zona de lavado de vehículos',
+    'pet_area'          => 'Zona de mascotas',
+    'bbq'               => 'Zona de parrillas (BBQ)',
+    'picnic_area'       => 'Zona de picnic',
+    'green_area'        => 'Zona verde / Jardín',
+    'other'             => 'Otra',
+  ];
+}
+
+/**
  * Ensures a field exists at the field (storage) level (idempotent).
  *
  * A field is created once regardless of how many bundles use it, so this checks
@@ -991,18 +1055,7 @@ function _myapi_reservations_install() {
     'type'        => 'list_text',
     'cardinality' => 1,
     'settings'    => [
-      'allowed_values' => [
-        'pool'         => 'Piscina',
-        'gym'          => 'Gimnasio',
-        'party_hall'   => 'Salón de eventos',
-        'bbq'          => 'Zona de parrillas (BBQ)',
-        'playground'   => 'Área infantil',
-        'sports_court' => 'Cancha deportiva',
-        'coworking'    => 'Coworking / Sala de trabajo',
-        'sauna'        => 'Sauna / Spa',
-        'rooftop'      => 'Terraza / Rooftop',
-        'other'        => 'Otra',
-      ],
+      'allowed_values' => _myapi_area_category_allowed_values(),
     ],
   ]);
   _myapi_reservations_ensure_field('field_area_notes', [
@@ -4624,4 +4677,46 @@ function myapi_update_7042() {
   field_update_instance($instance);
 
   return t('SPEC 117: corregida la descripción de field_firebase_path — el campo es un espejo de sólo lectura y editarlo a mano no rompe el chat (sin cambio de esquema).');
+}
+
+/**
+ * Widens the field_area_category catalogue on installed sites.
+ *
+ * NOT A SCHEMA CHANGE AND NOT A BACKFILL. field_data_field_area_category keeps
+ * the same one varchar column it has had since SPEC 43; what this hook rewrites
+ * is the allowed_values SETTING of the field, the list the select on
+ * node/add/area offers. The catalogue went from the original ten options to the
+ * @count of _myapi_area_category_allowed_values(), so a building can classify a
+ * jacuzzi, a coworking-adjacent meeting room or a guest parking without falling
+ * back to 'other'.
+ *
+ * _myapi_reservations_ensure_field() WOULD HAVE DONE NOTHING HERE, and
+ * silently: it only creates when the field is missing, and on an installed site
+ * the field is there. That is why this reads the live field and updates it.
+ *
+ * NOTHING IS REMOVED OR RENAMED, only added and reordered. That is what makes
+ * the hook safe on a site with data: every one of the original ten keys is
+ * still in the catalogue, so no stored value is orphaned and list.module has no
+ * reason to throw FieldUpdateForbiddenException, which is exactly what it does
+ * when an update drops a value some node still holds.
+ *
+ * IDEMPOTENT AND SAFE ON A SITE THAT NEVER HAD THE FIELD: field_info_field()
+ * answers NULL and the hook returns saying so, instead of fatalling on a
+ * partially installed site. Run twice, the second run writes the same array.
+ */
+function myapi_update_7043() {
+  $field = field_info_field('field_area_category');
+
+  if (!$field) {
+    return t('El campo field_area_category no existe en este sitio; no hay catálogo que ampliar.');
+  }
+
+  $allowed_values = _myapi_area_category_allowed_values();
+
+  $field['settings']['allowed_values'] = $allowed_values;
+  field_update_field($field);
+
+  return t('Ampliado el catálogo de field_area_category a @count opciones, ordenadas por etiqueta y con «Otra» al final (sin cambio de esquema; no se eliminó ninguna clave existente).', [
+    '@count' => count($allowed_values),
+  ]);
 }

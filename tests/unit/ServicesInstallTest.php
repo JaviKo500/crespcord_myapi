@@ -1011,6 +1011,13 @@ class ServicesInstallTest extends TestCase {
     // one exception worth naming: it writes three fields for the first time and
     // STILL changes no schema — what it updates is the description of an
     // instance that has existed since SPEC 77.
+    //
+    // 7043 IS NOT A SERVICES UPDATE, and the ceiling still moves with it: this
+    // guard is about the numbering of the file, not about one feature, so a
+    // reservations change that appends an update raises it exactly like a
+    // services one. It widens the allowed_values of field_area_category from
+    // the original ten options to 36 — no schema change, no backfill, nothing
+    // removed or renamed.
     $this->assertStringContainsString('function myapi_update_7034()', $source);
     $this->assertStringContainsString('function myapi_update_7035()', $source);
     $this->assertStringContainsString('function myapi_update_7036()', $source);
@@ -1020,7 +1027,8 @@ class ServicesInstallTest extends TestCase {
     $this->assertStringContainsString('function myapi_update_7040()', $source);
     $this->assertStringContainsString('function myapi_update_7041()', $source);
     $this->assertStringContainsString('function myapi_update_7042()', $source);
-    $this->assertStringNotContainsString('function myapi_update_7043()', $source);
+    $this->assertStringContainsString('function myapi_update_7043()', $source);
+    $this->assertStringNotContainsString('function myapi_update_7044()', $source);
     // 7028 is still SPEC 81's, not this spec's.
     $this->assertStringContainsString(
       '_myapi_services_install();',

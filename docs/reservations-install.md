@@ -76,7 +76,7 @@ A reservation of a common area made by a user.
 |---|---|---|
 | `field_area_status` | `area` | `active` → Activo · `closed` → Cerrado · `maintenance` → En Mantenimiento |
 | `field_who_can_reserve` | `area` | `both` → Ambos · `owner` → Propietario · `tenant` → Arrendatario |
-| `field_area_category` | `area` | `pool` → Piscina · `gym` → Gimnasio · `party_hall` → Salón de eventos · `bbq` → Zona de parrillas (BBQ) · `playground` → Área infantil · `sports_court` → Cancha deportiva · `coworking` → Coworking / Sala de trabajo · `sauna` → Sauna / Spa · `rooftop` → Terraza / Rooftop · `other` → Otra |
+| `field_area_category` | `area` | 36 options — see [The category catalogue](#the-category-catalogue) below |
 | `field_reservation_status` | `reservation` | `confirmed` → Confirmada · `cancelled` → Cancelada |
 | `field_cancelled_by` | `reservation` | `user` → Usuario · `admin` → Admin |
 
@@ -186,6 +186,56 @@ The hook reuses the same idempotent `_ensure_field` / `_ensure_instance`
 sub-helpers, so re-running it never duplicates the field/instance nor throws a
 `FieldException`. It only adds the field and its `area` instance — no REST
 endpoint, no business logic — and leaves `reservation` and `condominio` alone.
+
+### The category catalogue
+
+The allowed values of `field_area_category` live in ONE place,
+`_myapi_area_category_allowed_values()` in `myapi.install`, read by the
+installer and by `myapi_update_7043()`. The catalogue started as ten options
+and now holds 36, in the order the select renders them — alphabetical by label,
+with `other` deliberately last instead of under its O:
+
+| Key | Label | | Key | Label |
+|---|---|---|---|---|
+| `guest_suite` | Apartamento de huéspedes | | `bike_parking` | Parqueadero de bicicletas |
+| `playground` | Área infantil | | `guest_parking` | Parqueadero de visitantes |
+| `steam_room` | Baño turco / Vapor | | `pool` | Piscina |
+| `library` | Biblioteca | | `kids_pool` | Piscina infantil |
+| `soccer_field` | Cancha de fútbol | | `cinema_room` | Sala de cine |
+| `padel_court` | Cancha de pádel | | `study_room` | Sala de estudio |
+| `squash_court` | Cancha de squash | | `game_room` | Sala de juegos |
+| `tennis_court` | Cancha de tenis | | `meeting_room` | Sala de juntas |
+| `sports_court` | Cancha deportiva | | `yoga_room` | Sala de yoga / Pilates |
+| `chapel` | Capilla / Sala de oración | | `party_hall` | Salón de eventos |
+| `ev_charger` | Cargador de vehículo eléctrico | | `multipurpose_room` | Salón multiusos |
+| `coworking` | Coworking / Sala de trabajo | | `social_room` | Salón social |
+| `storage` | Depósito / Bodega | | `sauna` | Sauna / Spa |
+| `gym` | Gimnasio | | `rooftop` | Terraza / Rooftop |
+| `jacuzzi` | Jacuzzi | | `car_wash` | Zona de lavado de vehículos |
+| `laundry` | Lavandería | | `pet_area` | Zona de mascotas |
+| | | | `bbq` | Zona de parrillas (BBQ) |
+| | | | `picnic_area` | Zona de picnic |
+| | | | `green_area` | Zona verde / Jardín |
+| | | | `other` | Otra |
+
+**The key is the contract, not the label.** The app chooses the icon of an area
+from this key and `area.resource.inc` passes the stored value straight through
+to JSON, so keys are added — never renamed, never removed. A rename blanks the
+icon of every area already classified with it, and Drupal's `list` module
+refuses the removal outright (`FieldUpdateForbiddenException`) while one node
+still holds the value.
+
+Existing sites widen the catalogue with:
+
+```bash
+drush updb    # runs myapi_update_7043 → rewrites the allowed values
+drush cc all
+```
+
+`myapi_update_7043()` reads the live field and calls `field_update_field()`;
+`_ensure_field` would have done nothing, since it only creates a field that is
+missing. The hook removes and renames nothing, so it is safe on a site full of
+areas, and re-running it writes the same array.
 
 ### The SPEC 53 repair (`myapi_update_7016`)
 
