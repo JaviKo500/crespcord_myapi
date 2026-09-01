@@ -213,3 +213,43 @@ a name **starting** with an accented vowel ("Áreas verdes") sorts after Z.
 | 401  | `missing_authorization` | `Authorization` header is absent or does not match the `Bearer <token>` pattern. |
 | 401  | `invalid_token` | Access token not found in the database, already revoked, expired, or the associated user does not exist or is blocked (`status = 0`). |
 | 405  | `method_not_allowed` | Any method other than `GET` (`POST`, `PUT`, `DELETE`, …). |
+
+---
+
+## Loading the catalogue (`scripts/seed-service-categories.php`)
+
+The vocabulary is created empty by the installer (SPEC 77 keeps the terms out
+of scope), so the catalogue is loaded with a one-off maintenance script rather
+than by hand, term by term:
+
+```bash
+# Dry run — prints what it would create, writes nothing.
+MYAPI_SEED_DRY_RUN=1 drush php-script scripts/seed-service-categories.php
+
+# Real run.
+drush php-script scripts/seed-service-categories.php
+```
+
+The script is **idempotent by `field_category_code`**: a code already present
+in the vocabulary is skipped and its term is never touched — name, description
+and icon may have been adjusted on the site. Adding a row to the `$catalogue`
+array and re-running creates only that row.
+
+Terms are created **without an icon**, so they answer `icon_id: null` and
+`icon_url: null` until the operator uploads the image from
+`admin/structure/taxonomy/service_category`. The app is expected to key its own
+local icon map on `code` and use `icon_url` only when it is present.
+
+`code` is the contract with the app and is immutable once published: renaming
+the category changes `name`, never `code`. The `tid` is not a substitute — it
+changes if the vocabulary is re-imported.
+
+The script is not part of the module (`scripts/` is not in `myapi.info` and is
+not copied by `scripts/deploy.sh`); copy it to the server to run it:
+
+```bash
+scp -i ~/.ssh/crespcord.pem scripts/seed-service-categories.php \
+  ubuntu@crespcord.lamotora.com:~/
+ssh -i ~/.ssh/crespcord.pem ubuntu@crespcord.lamotora.com \
+  "cd /var/www/html && sudo -u www-data drush php-script ~/seed-service-categories.php"
+```
