@@ -92,6 +92,31 @@ if (!defined('MYAPI_CHAT_CLAIM_MAX_BYTES')) {
   define('MYAPI_CHAT_CLAIM_MAX_BYTES', 1000);
 }
 
+// The app section the chat push deep-links to (SPEC 116). Same role as
+// MYAPI_NOTIFICATION_DEEP_LINK_* — a section of the app and not a route of this
+// API — and it lives here rather than there because the chat is the one push of
+// the module that does not go through myapi_notification_create().
+if (!defined('MYAPI_CHAT_DEEP_LINK_TARGET')) {
+  define('MYAPI_CHAT_DEEP_LINK_TARGET', 'chat');
+}
+
+// The 'notification_type' the chat push carries (SPEC 116). It is the key the
+// app switches on, and it is deliberately NOT one of the
+// MYAPI_NOTIFICATION_TYPE_* values: nothing of this type is ever written to
+// myapi_notifications, and a type shared with the inbox would suggest a row the
+// app could go and mark as read (decision 3).
+if (!defined('MYAPI_CHAT_NOTIFICATION_TYPE')) {
+  define('MYAPI_CHAT_NOTIFICATION_TYPE', 'chat_message');
+}
+
+// How long a chat banner is worth delivering, in seconds (SPEC 116). One hour.
+// A push with no TTL is queued by the platform until the device comes back, so a
+// phone switched off all afternoon lights up with the whole afternoon's banners
+// at once — for a conversation the recipient has long since read in the app.
+if (!defined('MYAPI_CHAT_PUSH_TTL')) {
+  define('MYAPI_CHAT_PUSH_TTL', 3600);
+}
+
 /**
  * The path of the chat thread of an offer.
  *
@@ -329,4 +354,328 @@ function myapi_chat_threads_claim(array $thread_ids) {
   }
 
   return '';
+}
+
+/* ---------------------------------------------------------------------------
+ * SPEC 116 — the other direction of the rule of membership, and the text of
+ * the banner.
+ *
+ * Everything above answers "which threads are this account's?", which is what
+ * a token needs. A push needs the opposite question — "who are the two sides of
+ * THIS thread?" — and it is the same rule read backwards, which is why it lives
+ * in this file and on top of myapi_chat_thread_base_query() rather than in a
+ * second place that would drift.
+ *
+ * STILL NOT ONE MESSAGE, AND STILL NOT ONE ROW. Nothing here receives, reads or
+ * stores the text that was written: the whole file works out WHO to tell and
+ * WHAT REQUEST it was about, and the banner says exactly those two things
+ * (decision 2). The three chat fields of SPEC 77 stay empty.
+ *
+ * TWO DEPENDENCIES WORTH NAMING, both of them deliberate reuse rather than a
+ * new query:
+ *
+ *  - includes/myapi.notification.inc, for MYAPI_NOTIFICATION_AUDIENCE_RESIDENT
+ *    and _PROVIDER. The 'audience' key of this push means the same thing it
+ *    means in every other push of the module, so it is spelled with the same
+ *    two constants. A private vocabulary here would be a second word for one
+ *    idea.
+ *  - includes/myapi.service_request_notification.inc, for
+ *    myapi_service_request_provider_uids(), myapi_service_request_node_title()
+ *    and myapi_service_request_notification_label(). "Every active account of
+ *    field_provider_users, role or no role" is SPEC 109's criterion and asking
+ *    it a second way is how the chat and the notifications would start
+ *    disagreeing about who works for a provider.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * The two sides of ONE thread, plus the context its push has to carry.
+ *
+ * THE SAME RULE AS THE TOKEN, ASKED ABOUT ONE OFFER: myapi_chat_thread_base_query()
+ * narrowed to a single nid. That is the whole reason the builder was extracted —
+ * this function cannot answer "yes" to a thread the token would not have
+ * carried, because it is not allowed to state the rule itself.
+ *
+ * NULL IS ONE ANSWER FOR THREE SITUATIONS, AND THAT IS DELIBERATE (decision 6):
+ * the offer does not exist, the offer is not live, or its request is not awarded
+ * to its provider. The caller turns all three into the same 404 with the same
+ * body, because telling them apart would turn the route into an enumerator of
+ * live offers — ask for 1..N and you learn which ones are awarded and active.
+ *
+ * THE TWO CONTEXT JOINS ARE LEFT AND NOT INNER, and the reason is the one SPEC
+ * 91 already wrote down: field_unit is required on the bundle since SPEC 86 but
+ * was added WITHOUT a backfill, so a request created before it simply has no
+ * row. An INNER there would make those threads vanish — no error, no log, just
+ * a 404 on a conversation that works fine in the app.
+ *
+ * ONE HOP AND NOT TWO. Unlike myapi_service_request_detail(), what is read is
+ * the *_target_id of the reference and never the referenced node: the push
+ * carries nids so the app can switch context, and it needs no names.
+ *
+ * @param mixed $offer_nid  The offer's nid.
+ *
+ * @return array|null
+ *   'offer_nid', 'request_nid', 'request_title', 'requester_uid',
+ *   'provider_id', 'unit_id' and 'condominium_id'. The last two are NULL when
+ *   the request has no such row; 'request_title' is NULL when it is empty.
+ *   NULL when this offer is not a thread — see above.
+ */
+function myapi_chat_thread_row($offer_nid) {
+  $offer_nid = (int) $offer_nid;
+  if ($offer_nid <= 0) {
+    return NULL;
+  }
+
+  $query = myapi_chat_thread_base_query();
+  $query->condition('no.nid', $offer_nid);
+
+  $query->innerJoin('field_data_field_requester', 'fr', "fr.entity_id = rn.nid AND fr.entity_type = 'node' AND fr.deleted = 0");
+
+  // LEFT, both of them. See the docblock.
+  $query->leftJoin('field_data_field_unit', 'fu', "fu.entity_id = rn.nid AND fu.entity_type = 'node' AND fu.deleted = 0");
+  $query->leftJoin('field_data_field_condominium', 'fco', "fco.entity_id = rn.nid AND fco.entity_type = 'node' AND fco.deleted = 0");
+
+  $query->addField('no', 'nid', 'offer_nid');
+  $query->addField('rn', 'nid', 'request_nid');
+  $query->addField('rn', 'title', 'request_title');
+  $query->addField('fr', 'field_requester_target_id', 'requester_uid');
+  $query->addField('fp', 'field_provider_target_id', 'provider_id');
+  $query->addField('fu', 'field_unit_target_id', 'unit_id');
+  $query->addField('fco', 'field_condominium_target_id', 'condominium_id');
+  $query->range(0, 1);
+
+  $row = $query->execute()->fetchAssoc();
+  if (!$row) {
+    return NULL;
+  }
+
+  return [
+    'offer_nid'      => (int) $row['offer_nid'],
+    'request_nid'    => (int) $row['request_nid'],
+    'request_title'  => ($row['request_title'] === NULL || $row['request_title'] === '') ? NULL : $row['request_title'],
+    'requester_uid'  => (int) $row['requester_uid'],
+    'provider_id'    => (int) $row['provider_id'],
+    'unit_id'        => $row['unit_id'] !== NULL ? (int) $row['unit_id'] : NULL,
+    'condominium_id' => $row['condominium_id'] !== NULL ? (int) $row['condominium_id'] : NULL,
+  ];
+}
+
+/**
+ * Which side of a thread an account is on.
+ *
+ * PURE: it decides nothing by asking the database, it reads the row and the
+ * list the caller already resolved.
+ *
+ * THE ORDER OF THE TWO CHECKS IS THE ANSWER TO A REAL CASE. An account can be
+ * BOTH the resident of a request and an employee of the provider it was awarded
+ * to — a plumber who lives in the building he works for. The resident check
+ * comes first, so that account counts as the RESIDENT: the thread hangs off
+ * THEIR request, and the alternative would have them writing to themselves.
+ *
+ * @param array $thread         A myapi_chat_thread_row().
+ * @param array $provider_uids  The accounts of the thread's provider, as
+ *   myapi_service_request_provider_uids() answers them.
+ * @param mixed $uid            The account to place.
+ *
+ * @return string|null
+ *   MYAPI_NOTIFICATION_AUDIENCE_RESIDENT, MYAPI_NOTIFICATION_AUDIENCE_PROVIDER,
+ *   or NULL when the account takes no part in this thread — which the caller
+ *   turns into the very same 404 as a thread that does not exist.
+ */
+function myapi_chat_thread_side(array $thread, array $provider_uids, $uid) {
+  $uid = (int) $uid;
+  if ($uid <= 0) {
+    return NULL;
+  }
+
+  if (isset($thread['requester_uid']) && (int) $thread['requester_uid'] === $uid) {
+    return MYAPI_NOTIFICATION_AUDIENCE_RESIDENT;
+  }
+
+  if (in_array($uid, array_map('intval', $provider_uids), TRUE)) {
+    return MYAPI_NOTIFICATION_AUDIENCE_PROVIDER;
+  }
+
+  return NULL;
+}
+
+/**
+ * Who gets told about a message: THE OTHER SIDE, minus whoever wrote it.
+ *
+ * PURE.
+ *
+ * THE SENDER NEVER APPEARS, and neither does a COLLEAGUE of the sender. Both
+ * fall out of "the other side" without a line written for either: a provider
+ * account writing means the recipients are the resident, so the second employee
+ * is not in the list to begin with. That is wanted — the message was sent by
+ * their company, and they can already see the thread. The explicit filter on
+ * the sender is what covers the account that is both sides at once.
+ *
+ * MEMBERSHIP IS BY COMPANY, SO SO IS THE NOTICE: when the resident writes, EVERY
+ * active account of field_provider_users is told, which is the same audience
+ * SPEC 109-112 already notify. A chat that reached only one of two employees
+ * would be a chat whose messages depend on who happened to be listed first.
+ *
+ * @param array  $thread         A myapi_chat_thread_row().
+ * @param array  $provider_uids  The accounts of the thread's provider.
+ * @param string $side           The SENDER's side, from myapi_chat_thread_side().
+ * @param mixed  $sender_uid     Who wrote.
+ *
+ * @return array
+ *   uids as integers, deduplicated. EMPTY IS A NORMAL ANSWER — a provider with
+ *   no active account has nobody to tell, and that is a 200 with notified: 0,
+ *   not an error.
+ */
+function myapi_chat_notify_recipients(array $thread, array $provider_uids, $side, $sender_uid) {
+  $sender_uid = (int) $sender_uid;
+
+  if ($side === MYAPI_NOTIFICATION_AUDIENCE_RESIDENT) {
+    $recipients = array_map('intval', $provider_uids);
+  }
+  elseif ($side === MYAPI_NOTIFICATION_AUDIENCE_PROVIDER) {
+    $recipients = isset($thread['requester_uid']) ? [(int) $thread['requester_uid']] : [];
+  }
+  else {
+    return [];
+  }
+
+  $recipients = array_filter($recipients, function ($uid) use ($sender_uid) {
+    return $uid > 0 && $uid !== $sender_uid;
+  });
+
+  return array_values(array_unique($recipients));
+}
+
+/**
+ * The name the recipient will read in the banner.
+ *
+ * THE COMPANY, NEVER THE EMPLOYEE (decision 9). When the provider writes, the
+ * title is the provider node's own title — the trading name the resident chose
+ * when they hired. "Nuevo mensaje de Pedro" would name somebody the resident has
+ * no reason to recognise, and it would leak which employee is on the job.
+ *
+ * When the RESIDENT writes it is the other way round: there is no company, so
+ * the SPEC 54 profile answers, and users.name is the fallback — the exact
+ * resolution SPEC 110 already uses for "Hola {name}", so the same account is
+ * called the same thing in a chat banner and in an offer email.
+ *
+ * NOT PURE, unlike the two builders below it: both branches read one row. It is
+ * one query per call and it is the reason the builders take a STRING and not a
+ * uid — the text of the banner stays assertable with nothing booted.
+ *
+ * @param array  $thread      A myapi_chat_thread_row().
+ * @param string $side        The SENDER's side.
+ * @param mixed  $sender_uid  Who wrote.
+ *
+ * @return string|null
+ *   The name, or NULL when it cannot be resolved (a deleted provider node, an
+ *   account with no profile and no name). The title builder degrades it to the
+ *   same dash every other notice of the module uses.
+ */
+function myapi_chat_sender_label(array $thread, $side, $sender_uid) {
+  if ($side === MYAPI_NOTIFICATION_AUDIENCE_PROVIDER) {
+    return myapi_service_request_node_title(isset($thread['provider_id']) ? $thread['provider_id'] : NULL);
+  }
+
+  $sender_uid = (int) $sender_uid;
+  if ($sender_uid <= 0) {
+    return NULL;
+  }
+
+  $profile = myapi_user_fetch_profile_fields($sender_uid);
+  $full_name = trim((string) $profile['first_name'] . ' ' . (string) $profile['last_name']);
+  if ($full_name !== '') {
+    return $full_name;
+  }
+
+  $account = user_load($sender_uid);
+
+  return ($account && isset($account->name) && $account->name !== '') ? $account->name : NULL;
+}
+
+/**
+ * Title of the chat push (SPEC 116).
+ *
+ * PURE, and fixed Spanish like every push builder of the module: the catalogue
+ * translates API responses, and a banner is not one.
+ *
+ * @param string|null $sender_label  From myapi_chat_sender_label().
+ *
+ * @return string  'Nuevo mensaje de {who}'.
+ */
+function myapi_chat_message_push_title($sender_label) {
+  return 'Nuevo mensaje de ' . myapi_service_request_notification_label($sender_label);
+}
+
+/**
+ * Body of the chat push (SPEC 116).
+ *
+ * PURE, and the one function of this module whose signature is the point:
+ * IT TAKES THE REQUEST'S TITLE AND NOTHING ELSE. There is no parameter through
+ * which the message could enter, because the message never reaches this server
+ * (decision 2) — and the title is context this very recipient already received
+ * in the notifications of SPEC 109-112, so the banner reveals nothing new on a
+ * locked screen.
+ *
+ * @param string|null $request_title  node.title of the request.
+ *
+ * @return string  'Solicitud: {what}'.
+ */
+function myapi_chat_message_push_body($request_title) {
+  return 'Solicitud: ' . myapi_service_request_notification_label($request_title);
+}
+
+/**
+ * Whether this recipient may be told about this thread right now.
+ *
+ * THE DEBOUNCE, AND IT IS WHAT MAKES A CHAT LIVEABLE: at most one banner per
+ * thread and per recipient every 60 seconds. Twenty messages in a row are one
+ * notice, not twenty.
+ *
+ * THE FLOOD API AND NOT A TABLE OF ITS OWN (decision 5). The module already
+ * wraps it, its defaults already live in code and its window is already
+ * adjustable with variable_set() and no deploy. A myapi_chat_last_push table
+ * would do the same thing plus a hook_update_N.
+ *
+ * myapi_flood_is_allowed() AND NOT myapi_flood_check(): a silenced recipient is
+ * not a caller doing something wrong, it is a 'muted' in a 200. This is the
+ * only flood use in the module that must not be able to answer 429.
+ *
+ * THE IDENTIFIER IS '{offer_nid}:{uid}' and it MUST be the same string
+ * myapi_chat_notify_register() writes — the pair below is one mechanism split in
+ * two calls, and the end-to-end assertions of ChatNotifyTest (first through,
+ * second muted) are what would catch them disagreeing.
+ *
+ * @param mixed $offer_nid  The thread's offer nid.
+ * @param mixed $uid        The recipient.
+ *
+ * @return bool  TRUE when a banner may go out.
+ */
+function myapi_chat_notify_allowed($offer_nid, $uid) {
+  return myapi_flood_is_allowed(
+    'myapi_chat_notify_thread',
+    (int) $offer_nid . ':' . (int) $uid,
+    'myapi_flood_chat_notify_thread_limit',
+    'myapi_flood_chat_notify_thread_window'
+  );
+}
+
+/**
+ * Opens the debounce window for this recipient and this thread.
+ *
+ * CALLED ONLY WHEN A BANNER ACTUALLY WENT OUT, never before the attempt. If
+ * OneSignal is unconfigured or the call failed, the window is left unburnt so
+ * the NEXT message tries again — otherwise a minute of outage would cost a
+ * minute of silence on a conversation that is still going.
+ *
+ * The identifier is the one myapi_chat_notify_allowed() reads. See its docblock.
+ *
+ * @param mixed $offer_nid  The thread's offer nid.
+ * @param mixed $uid        The recipient.
+ */
+function myapi_chat_notify_register($offer_nid, $uid) {
+  myapi_flood_register(
+    'myapi_chat_notify_thread',
+    (int) $offer_nid . ':' . (int) $uid,
+    'myapi_flood_chat_notify_thread_window'
+  );
 }
