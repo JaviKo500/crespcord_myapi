@@ -714,6 +714,31 @@ function myapi_menu() {
     'file'             => 'resources/chat.resource.inc',
   ];
 
+  // POST /api/v1/chat/threads/%/notify (SPEC 116). The client that WROTE a
+  // message calls this so the OTHER SIDE of the conversation gets a push. It is
+  // told THAT there was a message and never WHAT it said: the text stays in the
+  // Realtime Database and does not pass through this server or through
+  // OneSignal, which is the promise SPEC 115 made and this route keeps.
+  //
+  // THE WILDCARD IS THE OFFER'S NID, NOT THE THREAD PATH (decision 7).
+  // 'service_offers/901' carries a slash and does not fit in one URL component;
+  // myapi_chat_thread_id() stays the single place the convention is derived.
+  //
+  // SIX COMPONENTS, so it does not compete with 'api/v1/chat/token', which has
+  // three. Drupal 7 matches on the component count first, and the two never meet.
+  //
+  // 'page arguments' => [4] hands the dispatcher the fifth component — 'api',
+  // 'v1', 'chat', 'threads', '%' — which is the '%'. Same reason as every other
+  // wildcard route of this module: without it the callback is invoked with no
+  // argument at all.
+  $items['api/v1/chat/threads/%/notify'] = [
+    'page callback'    => 'myapi_chat_notify_dispatch',
+    'page arguments'   => [4],
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/chat.resource.inc',
+  ];
+
   // Back-office reservation calendar (SPEC 47). The only route of this module
   // that is not an api/v1 endpoint: it renders HTML for an operator, not the
   // JSON envelope for the app, which is why its callback lives in includes/
