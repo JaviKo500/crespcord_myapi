@@ -771,6 +771,87 @@ function myapi_chat_notify_register($offer_nid, $uid) {
 }
 
 /**
+ * What the three mirror columns currently hold, for a batch of offers.
+ *
+ * THE READ HALF OF THE MIRROR (SPEC 117), and the only place in the module that
+ * SELECTs a field_data_field_* table of the chat. It answers one question —
+ * WHAT IS MISSING — and the three joins are LEFT because that question has no
+ * meaning otherwise: a thread whose path has never been written has no row to
+ * inner-join to, and is exactly the thread this is looking for.
+ *
+ * IT STARTS FROM node AND NOT FROM THE FIELD TABLES, and that is not a matter
+ * of taste: the write needs the offer's vid, and NOT ONE PATH OF THE CHAT KNOWS
+ * IT. myapi_chat_offer_nids_for_uid() and myapi_chat_thread_row() both answer
+ * in bare nids, because until this spec nothing here had any business with
+ * revisions. Hanging the three joins off node brings the vid out of the query
+ * that had to be run anyway, instead of a second one per offer.
+ *
+ * A nid THAT IS NOT A NODE SIMPLY DOES NOT COME BACK, and the caller writes
+ * nothing for it — no branch, no error. The mirror never invents a row.
+ *
+ * THE JOINS PIN language AND delta THE SAME WAY THE MERGE KEYS DO. The three
+ * fields were created without 'translatable' and none is multi-valued, so
+ * LANGUAGE_NONE / 0 is what the Field API would have stored and what
+ * myapi_chat_field_write() does store; reading on a wider key than the one that
+ * is written is how one offer would come back as two rows.
+ *
+ * NOTHING HERE IS AUTHORISATION. This function will read whatever nid it is
+ * given: deciding WHICH threads may be mirrored is the caller's, and is done
+ * before it — the token passes the threads its claim really carries, never the
+ * whole membership query (decision 3).
+ *
+ * @param array $offer_nids  The offers to look at. Rubbish is dropped and
+ *   repeats collapse, so callers hand over what they have.
+ *
+ * @return array
+ *   [nid => ['nid', 'vid', 'path', 'opened_at', 'last_message_at']], EMPTY when
+ *   there is nothing to look at. 'nid' and 'vid' are integers; the three values
+ *   travel AS THE DATABASE ANSWERS THEM — a string or NULL — because what the
+ *   decision needs to know is whether they are there, and casting NULL to an
+ *   integer would answer that question wrong.
+ */
+function myapi_chat_field_state(array $offer_nids) {
+  $nids = [];
+  foreach ($offer_nids as $offer_nid) {
+    $offer_nid = (int) $offer_nid;
+    if ($offer_nid > 0) {
+      $nids[$offer_nid] = $offer_nid;
+    }
+  }
+
+  if (!$nids) {
+    return [];
+  }
+
+  $query = db_select('node', 'n');
+  $query->condition('n.nid', $nids, 'IN');
+
+  // LEFT, the three of them. What is being asked is what is MISSING.
+  $query->leftJoin('field_data_field_firebase_path', 'fpath', "fpath.entity_id = n.nid AND fpath.entity_type = 'node' AND fpath.deleted = 0 AND fpath.delta = 0 AND fpath.language = :myapi_chat_lang", [':myapi_chat_lang' => LANGUAGE_NONE]);
+  $query->leftJoin('field_data_field_chat_opened_at', 'fopen', "fopen.entity_id = n.nid AND fopen.entity_type = 'node' AND fopen.deleted = 0 AND fopen.delta = 0 AND fopen.language = :myapi_chat_lang_open", [':myapi_chat_lang_open' => LANGUAGE_NONE]);
+  $query->leftJoin('field_data_field_last_message_at', 'flast', "flast.entity_id = n.nid AND flast.entity_type = 'node' AND flast.deleted = 0 AND flast.delta = 0 AND flast.language = :myapi_chat_lang_last", [':myapi_chat_lang_last' => LANGUAGE_NONE]);
+
+  $query->addField('n', 'nid', 'nid');
+  $query->addField('n', 'vid', 'vid');
+  $query->addField('fpath', 'field_firebase_path_value', 'path');
+  $query->addField('fopen', 'field_chat_opened_at_value', 'opened_at');
+  $query->addField('flast', 'field_last_message_at_value', 'last_message_at');
+
+  $state = [];
+  foreach ($query->execute() as $row) {
+    $state[(int) $row->nid] = [
+      'nid' => (int) $row->nid,
+      'vid' => (int) $row->vid,
+      'path' => $row->path,
+      'opened_at' => $row->opened_at,
+      'last_message_at' => $row->last_message_at,
+    ];
+  }
+
+  return $state;
+}
+
+/**
  * What the mirror has to write on one offer — or nothing at all.
  *
  * PURE, AND THE ONLY FUNCTION OF THE MIRROR WITH A CRITERION INSIDE (SPEC 117).
