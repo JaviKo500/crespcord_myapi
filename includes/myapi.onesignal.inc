@@ -36,22 +36,33 @@ define('MYAPI_ONESIGNAL_MAX_EXTERNAL_IDS', 2000);
 define('MYAPI_ONESIGNAL_MAX_BODY_LENGTH', 200);
 
 /**
- * Truncates a push body to MYAPI_ONESIGNAL_MAX_BODY_LENGTH characters, appending
- * "..." when it had to cut. Multibyte-safe (drupal_strlen/drupal_substr), so an
- * accented body is never split mid-character. A trailing space before the cut is
- * trimmed for tidiness. The result, ellipsis included, never exceeds the limit.
+ * Truncates a piece of push text to a length, appending "..." when it had to
+ * cut. Multibyte-safe (drupal_strlen/drupal_substr), so an accented body is
+ * never split mid-character. A trailing space before the cut is trimmed for
+ * tidiness. The result, ellipsis included, never exceeds the limit.
  *
- * @param string $body  Plain-text push body.
+ * THE LENGTH IS A PARAMETER SINCE SPEC 116, and it defaults to the constant
+ * this function has always used, so every existing caller is unchanged. The
+ * chat preview needs THE SAME CUT WITH A DIFFERENT NUMBER (140 rather than
+ * 200), and writing that a second time is the duplication Rule 3 of CLAUDE.md
+ * exists to prevent: the multibyte handling, the ellipsis arithmetic and the
+ * trailing-space trim are three chances to get it subtly different.
  *
- * @return string  Body within the limit.
+ * @param string $body        Plain-text push text.
+ * @param int    $max_length  Maximum length in characters, ellipsis included.
+ *   Defaults to MYAPI_ONESIGNAL_MAX_BODY_LENGTH — today's value, so a caller
+ *   that passes nothing cuts exactly where it always did.
+ *
+ * @return string  Text within the limit.
  */
-function myapi_onesignal_truncate_body($body) {
+function myapi_onesignal_truncate_body($body, $max_length = MYAPI_ONESIGNAL_MAX_BODY_LENGTH) {
   $body = (string) $body;
-  if (drupal_strlen($body) <= MYAPI_ONESIGNAL_MAX_BODY_LENGTH) {
+  $max_length = (int) $max_length;
+  if (drupal_strlen($body) <= $max_length) {
     return $body;
   }
   $ellipsis = '...';
-  $keep = MYAPI_ONESIGNAL_MAX_BODY_LENGTH - drupal_strlen($ellipsis);
+  $keep = $max_length - drupal_strlen($ellipsis);
   return rtrim(drupal_substr($body, 0, $keep)) . $ellipsis;
 }
 

@@ -11,10 +11,13 @@
  *   POST /api/v1/chat/threads/%/notify  somebody wrote in this thread; tell the
  *                                     other side.
  *
- * NEITHER OF THEM CARRIES A MESSAGE, and the second one is the interesting case:
- * it is told THAT there was a message, never WHAT it said. Its whole job is to
- * work out who the other side is — the very rule the first route signs into a
- * claim — and hand OneSignal a banner that names the writer and the request.
+ * NEITHER OF THEM STORES A MESSAGE, and the second one is the interesting case.
+ * It is told that there was a message and, since the revision of SPEC 116, a
+ * PREVIEW of what it said. Its job is to work out who the other side is — the
+ * very rule the first route signs into a claim — and hand OneSignal a banner
+ * naming the writer, the request and up to 140 characters of the text. The
+ * preview PASSES THROUGH: it is sanitised, sent and forgotten, and it is never
+ * written to a table, a log or a watchdog entry.
  *
  * THE FIRST ROUTE: POST /api/v1/chat/token. It trades this API's Bearer for a Firebase
  * CUSTOM TOKEN signed by the server, whose custom claims declare WHICH CHAT
@@ -96,6 +99,9 @@ module_load_include('inc', 'myapi', 'includes/myapi.service_request_notification
 
 // For myapi_user_fetch_profile_fields(), the resident's name in the banner.
 module_load_include('inc', 'myapi', 'includes/myapi.user');
+
+// For myapi_text_to_plain() (SPEC 79), which IS the preview's sanitising.
+module_load_include('inc', 'myapi', 'includes/myapi.text');
 
 /**
  * Dispatcher for api/v1/chat/token.
@@ -237,14 +243,22 @@ function myapi_chat_notify_dispatch($offer_nid = NULL) {
  * POST /api/v1/chat/threads/{offer_nid}/notify — tell the other side that a
  * message was written (SPEC 116).
  *
- * WHAT THIS ENDPOINT IS TOLD, AND WHAT IT IS NOT. It is told that SOMETHING was
- * written in a thread. It is not told what, it does not go and read it, and it
- * could not: the message lives in the Realtime Database and this server has no
- * client for it. Who wrote is what the Bearer says, where is what the URL says,
- * and WHAT was written is deliberately not sent (decision 2). THE BODY IS NOT
- * READ AT ALL — same criterion as the token route above, so a body with keys
- * and a body of malformed JSON are the same thing: ignored. THERE IS NO 422 ON
- * THIS ROUTE.
+ * WHAT THIS ENDPOINT IS TOLD, AND WHAT IT CAN DO WITH IT. Who wrote is what the
+ * Bearer says, where is what the URL says, and what was written is what the
+ * body's OPTIONAL 'preview' says. It still does not read the Realtime Database
+ * and could not: the message lives there and this server has no client for it.
+ * So THE PREVIEW IS THE SENDER'S WORD FOR THEIR OWN MESSAGE, not something this
+ * server verified (decision 2a) — a modified client can send one thing and
+ * write another, and the worst that achieves is showing a false line to
+ * somebody it could already chat with.
+ *
+ * THERE IS STILL NO 422 ON THIS ROUTE, and now that there IS a body that is a
+ * decision rather than an accident (decision 2b). The notice is
+ * fire-and-forget: nobody reads this response, so a 422 would be a banner lost
+ * to a validation the server can settle by itself. Everything degrades instead:
+ * a long preview is CUT, a preview that is not text is IGNORED, a malformed
+ * body is IGNORED WHOLE, and an absent one simply gives the two-line banner
+ * every client got before the revision.
  *
  * THE CLIENT THAT WROTE IS WHAT FIRES THIS, and it is the only process that
  * knows a message happened without somebody watching Firebase (decision 1). The
@@ -328,6 +342,14 @@ function myapi_chat_notify($offer_nid) {
   $recipients = myapi_chat_notify_recipients($thread, $provider_uids, $side, $uid);
   $thread_id = myapi_chat_thread_id($thread['offer_nid']);
 
+  // The preview, and the ONLY line of this endpoint that touches the message.
+  // myapi_request_body() answers NULL for an absent or malformed body, so the
+  // two of them and an absent key are one expression and not three branches;
+  // myapi_chat_message_preview() answers NULL for everything else that cannot
+  // be shown. NOTHING IS VALIDATED AND NOTHING IS REFUSED — see the docblock.
+  $body = myapi_request_body();
+  $preview = myapi_chat_message_preview(isset($body['preview']) ? $body['preview'] : NULL);
+
   // The debounce, one recipient at a time: at most one banner per thread and
   // per person every 60 seconds. A silenced recipient is a 'muted', never an
   // error — which is why this reads myapi_chat_notify_allowed() and not
@@ -384,8 +406,10 @@ function myapi_chat_notify($offer_nid) {
       // The company when the provider writes, the resident's own name when the
       // resident does — never the employee's (decision 9).
       myapi_chat_message_push_title(myapi_chat_sender_label($thread, $side, $uid)),
-      // The request's title, and not one word of what was written.
-      myapi_chat_message_push_body($thread['request_title']),
+      // The request's title, and the preview under it when there is one. The
+      // title is NOT replaced by the message: a provider with five open jobs
+      // has to learn which of the five wrote.
+      myapi_chat_message_push_body($thread['request_title'], $preview),
       $data,
       [
         // Twenty messages in a row are ONE banner that gets replaced, not

@@ -395,6 +395,17 @@ if (!function_exists('flood_is_allowed')) {
       'identifier' => $identifier,
     ];
 
+    // SPEC 116. The blanket switch below answers the same thing for every
+    // subject, which is all a rate limit on ONE identifier — an IP, a username
+    // — ever needed. The chat debounce is per THREAD AND RECIPIENT, so a test
+    // has to be able to silence uid 7 on thread 901 while uid 8 on the same
+    // thread and uid 7 on another one still go through. This map does that, and
+    // it is consulted first so nothing that was already passing changes.
+    $key = $name . ':' . $identifier;
+    if (isset($GLOBALS['myapi_test_flood_denied']) && in_array($key, $GLOBALS['myapi_test_flood_denied'], TRUE)) {
+      return FALSE;
+    }
+
     return isset($GLOBALS['myapi_test_flood_allowed']) ? $GLOBALS['myapi_test_flood_allowed'] : TRUE;
   }
 }
@@ -408,6 +419,52 @@ if (!function_exists('flood_register_event')) {
       'identifier' => $identifier,
     ];
   }
+}
+
+if (!function_exists('drupal_http_request')) {
+  /**
+   * Records the outgoing call instead of making it (SPEC 116).
+   *
+   * The one transport of this module that leaves the server is
+   * myapi_onesignal_send(), and until SPEC 116 nothing asserted what it puts on
+   * the wire. That mattered the moment the function grew a fifth parameter:
+   * "a bulletin's payload is IDENTICAL to what it was before" is a
+   * non-regression criterion that can only be checked by reading the request,
+   * and "collapse_id, thread_id, android_group and ttl come out" is only true
+   * if somebody looks.
+   *
+   * The response is shaped like core's — an object with 'code' — and the code
+   * is what the test says, so the failure paths (OneSignal down, OneSignal
+   * refusing) are reachable without a network.
+   */
+  function drupal_http_request($url, array $options = []) {
+    $GLOBALS['myapi_test_http_requests'][] = [
+      'url'     => $url,
+      'options' => $options,
+      // Decoded once here, because every assertion wants the payload and none
+      // of them wants the JSON.
+      'payload' => isset($options['data']) ? json_decode($options['data'], TRUE) : NULL,
+    ];
+
+    $code = isset($GLOBALS['myapi_test_http_code']) ? $GLOBALS['myapi_test_http_code'] : 200;
+
+    return (object) ['code' => $code, 'data' => '', 'error' => ''];
+  }
+}
+
+/**
+ * Every outgoing HTTP call since the last reset, in order (SPEC 116).
+ */
+function myapi_test_http_requests() {
+  return isset($GLOBALS['myapi_test_http_requests']) ? $GLOBALS['myapi_test_http_requests'] : [];
+}
+
+/**
+ * Forgets the recorded calls and goes back to answering 200 (SPEC 116).
+ */
+function myapi_test_http_reset() {
+  $GLOBALS['myapi_test_http_requests'] = [];
+  unset($GLOBALS['myapi_test_http_code']);
 }
 
 if (!function_exists('flood_clear_event')) {

@@ -117,6 +117,15 @@ if (!defined('MYAPI_CHAT_PUSH_TTL')) {
   define('MYAPI_CHAT_PUSH_TTL', 3600);
 }
 
+// How much of the message the banner is allowed to show (SPEC 116, revision).
+// 140 characters, and the number is small on purpose: THE PREVIEW IS A HOOK,
+// NOT THE MESSAGE. A banner is not a reader, it is shown on a LOCKED SCREEN,
+// and the RTDB caps a message at 2000 — pouring those onto a lock screen is
+// not a feature, it is a leak with extra steps.
+if (!defined('MYAPI_CHAT_PREVIEW_MAX_LENGTH')) {
+  define('MYAPI_CHAT_PREVIEW_MAX_LENGTH', 140);
+}
+
 /**
  * The path of the chat thread of an offer.
  *
@@ -366,10 +375,24 @@ function myapi_chat_threads_claim(array $thread_ids) {
  * in this file and on top of myapi_chat_thread_base_query() rather than in a
  * second place that would drift.
  *
- * STILL NOT ONE MESSAGE, AND STILL NOT ONE ROW. Nothing here receives, reads or
- * stores the text that was written: the whole file works out WHO to tell and
- * WHAT REQUEST it was about, and the banner says exactly those two things
- * (decision 2). The three chat fields of SPEC 77 stay empty.
+ * THE TEXT PASSES THROUGH, AND IT DOES NOT STAY (decision 2, as revised). The
+ * banner carries a PREVIEW of the message, so this file does now handle the
+ * text — but it handles it the way a pipe handles water: myapi_chat_message_preview()
+ * sanitises it, myapi_chat_message_push_body() puts it on a line, and it leaves
+ * for OneSignal. IT IS NEVER WRITTEN ANYWHERE: not a table, not a watchdog
+ * entry, not a log line of this module. The three chat fields of SPEC 77 stay
+ * empty, the conversation still lives in exactly one place, and the promise of
+ * SPEC 115 becomes "the content does not STAY here" rather than "the content
+ * does not pass here".
+ *
+ * AND THE SERVER CANNOT VOUCH FOR IT. Drupal does not read the RTDB, so what it
+ * forwards is what the SENDER SAYS they wrote. A modified client can send one
+ * thing and write another. It is accepted (decision 2a) for one reason: the
+ * worst it achieves is showing a false line to somebody the sender could
+ * already chat with — and writing the lie into the actual thread would be both
+ * easier and more convincing. The preview is a COURTESY OF THE SENDER ABOUT
+ * THEIR OWN MESSAGE, never an assertion of this server, and docs/chat.md says
+ * so in those words.
  *
  * TWO DEPENDENCIES WORTH NAMING, both of them deliberate reuse rather than a
  * new query:
@@ -385,6 +408,12 @@ function myapi_chat_threads_claim(array $thread_ids) {
  *    field_provider_users, role or no role" is SPEC 109's criterion and asking
  *    it a second way is how the chat and the notifications would start
  *    disagreeing about who works for a provider.
+ *  - includes/myapi.text.inc, for myapi_text_to_plain() (SPEC 79), and
+ *    includes/myapi.onesignal.inc, for myapi_onesignal_truncate_body(). Between
+ *    them they ARE the preview's sanitising: strip the markup, decode the
+ *    entities, collapse every newline into a space, cut on a character
+ *    boundary. Not one line of that is rewritten here — both already exist and
+ *    both already have their own tests.
  * ------------------------------------------------------------------------ */
 
 /**
@@ -607,21 +636,82 @@ function myapi_chat_message_push_title($sender_label) {
 }
 
 /**
+ * The preview of the message, sanitised — or NULL.
+ *
+ * PURE, and THE ONE DOOR THE MESSAGE COMES IN THROUGH. Everything the text of a
+ * chat is allowed to do to this server happens in these six lines, which is why
+ * they are one function and not three lines inside the resource.
+ *
+ * THREE THINGS, IN THIS ORDER, AND NOT ONE OF THEM IS NEW CODE:
+ *
+ *   1. myapi_text_to_plain() (SPEC 79) — strips the markup, decodes the
+ *      entities and COLLAPSES EVERY RUN OF WHITESPACE INTO ONE SPACE. That last
+ *      one is not tidiness: a '\n' in the message would turn a three-line
+ *      banner into four and make one message look like two. Non-strings answer
+ *      '' there, so a number, an array, a boolean and NULL all fall out here
+ *      with no branch written for them.
+ *   2. An empty result is NULL — the banner shows two lines rather than a third
+ *      blank one.
+ *   3. myapi_onesignal_truncate_body(), with 140 instead of 200. The same cut,
+ *      on a character boundary, with the same ellipsis.
+ *
+ * NOTHING IS ESCAPED, and that is correct: a push body is plain text and its
+ * consumer is a native notification, so check_plain() here would show a literal
+ * '&amp;' on somebody's lock screen. Step 1 already guarantees no markup
+ * survives; there is no HTML context left to inject into.
+ *
+ * @param mixed $value  Whatever arrived in the body's 'preview' key. ANY type
+ *   is accepted on purpose — this route answers no 422 (decision 2b), so
+ *   rubbish is degraded here rather than refused there.
+ *
+ * @return string|null  The preview, or NULL when there is nothing to show.
+ */
+function myapi_chat_message_preview($value) {
+  $text = myapi_text_to_plain($value);
+
+  if ($text === '') {
+    return NULL;
+  }
+
+  return myapi_onesignal_truncate_body($text, MYAPI_CHAT_PREVIEW_MAX_LENGTH);
+}
+
+/**
  * Body of the chat push (SPEC 116).
  *
- * PURE, and the one function of this module whose signature is the point:
- * IT TAKES THE REQUEST'S TITLE AND NOTHING ELSE. There is no parameter through
- * which the message could enter, because the message never reaches this server
- * (decision 2) — and the title is context this very recipient already received
- * in the notifications of SPEC 109-112, so the banner reveals nothing new on a
- * locked screen.
+ * PURE. Two lines, and a third ONLY when a preview came with the notice:
+ *
+ *   Solicitud: Fuga en el calentador
+ *   ¿Te viene bien el jueves por la mañana?
+ *
+ * THE REQUEST'S LINE STAYS, AND THE PREVIEW DOES NOT REPLACE IT. It would have
+ * been tempting to answer just the message, the way a messaging app does, but a
+ * provider with five open jobs receives five different conversations: "¿Te
+ * viene bien el jueves?" with no context does not say WHICH ONE. The title is
+ * what makes the notice actionable, the preview is what makes it worth opening,
+ * and both fit. It also matters in what order: Android and iOS show about two
+ * lines collapsed, so WHO AND ABOUT WHAT IS WHAT IS ALWAYS VISIBLE and the text
+ * is what you gain by expanding.
+ *
+ * THE SECOND PARAMETER IS OPTIONAL, AND THAT IS THE COMPATIBILITY GUARANTEE:
+ * with no preview this returns byte for byte what it returned before the
+ * revision, which is what a client that does not send one still gets.
  *
  * @param string|null $request_title  node.title of the request.
+ * @param string|null $preview        ALREADY through myapi_chat_message_preview().
+ *   This function sanitises nothing — it is pure text assembly, and the raw
+ *   message must never reach it.
  *
- * @return string  'Solicitud: {what}'.
+ * @return string  Two lines, or three.
  */
-function myapi_chat_message_push_body($request_title) {
-  return 'Solicitud: ' . myapi_service_request_notification_label($request_title);
+function myapi_chat_message_push_body($request_title, $preview = NULL) {
+  $body = 'Solicitud: ' . myapi_service_request_notification_label($request_title);
+
+  if ($preview !== NULL && $preview !== '') {
+    $body .= "\n" . $preview;
+  }
+
+  return $body;
 }
 
 /**
