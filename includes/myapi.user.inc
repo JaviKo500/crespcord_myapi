@@ -102,3 +102,45 @@ function myapi_user_display_names(array $uids) {
 
   return $names;
 }
+
+/**
+ * Loads an account from a login identifier: a username OR an email address.
+ *
+ * SPEC 120. Both forms resolve to the same account, and the username wins:
+ * user_load_by_name() is always tried first, so an account whose NAME happens
+ * to be an email string keeps logging in exactly as it did before this
+ * function existed, even if that same string is another account's mail.
+ *
+ * The mail lookup only runs when the identifier contains an '@'. Without one
+ * the query cannot match a valid address, so skipping it keeps the ordinary
+ * username path at the single lookup it has always cost.
+ *
+ * Lives here and not in the auth resource because the identifier is not
+ * login's alone: password/forgot resolves the same two columns, and any future
+ * endpoint that takes "who you are" as a string needs the same rule (rule 3 of
+ * CLAUDE.md).
+ *
+ * @param string $identifier  Username or email address, as typed by the user.
+ *
+ * @return object|false  The loaded account, or FALSE when nothing matches.
+ *                        Callers still have to check uid and status: this
+ *                        function answers "who is this", not "may they in".
+ */
+function myapi_user_load_by_identifier($identifier) {
+  if (!is_string($identifier)) {
+    return FALSE;
+  }
+
+  $identifier = trim($identifier);
+  if ($identifier === '') {
+    return FALSE;
+  }
+
+  $account = user_load_by_name($identifier);
+
+  if (!$account && strpos($identifier, '@') !== FALSE) {
+    $account = user_load_by_mail($identifier);
+  }
+
+  return $account ? $account : FALSE;
+}

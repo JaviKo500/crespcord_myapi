@@ -52,6 +52,13 @@ gestionada por el core.
 |----------------------|----------------------------------------------------|---------------------------------------------|
 | `too_many_attempts`  | Demasiados intentos. Inténtalo de nuevo más tarde. | Too many attempts. Please try again later.  |
 
+> **⚠️ Ampliado por SPEC 120.** El sujeto del contador `myapi_login_user` dejó
+> de ser "el `username` tecleado" para ser **la cuenta**: un intento hecho con
+> el correo se registra sobre la dirección **y** sobre el nombre de usuario
+> detrás de ella, y todos los sujetos se pliegan a minúsculas. Sin eso,
+> aceptar el correo habría duplicado el cupo de 5 intentos por cuenta. Ver
+> `specs/auth/120-login-por-email.md`.
+
 ### Variables Drupal configurables
 
 | Variable                          | Valor por defecto | Significado                                      |
@@ -80,7 +87,9 @@ gestionada por el core.
 ### Flujo por endpoint
 
 **Login** (`myapi_auth_login()`):
-1. Leer `username` del body.
+1. Leer `username` del body. **⚠️ Superseded por SPEC 120:** ese valor es
+   ahora un nombre de usuario **o** un correo, y lo que se pasa al contador no
+   es la cadena cruda sino su forma plegada (`trim` + minúsculas).
 2. `myapi_flood_check('myapi_login_ip', $ip, 'myapi_flood_login_ip_limit', 'myapi_flood_login_ip_window')`.
 3. `myapi_flood_check('myapi_login_user', $username, 'myapi_flood_login_user_limit', 'myapi_flood_login_user_window')`.
 4. Intentar autenticación.

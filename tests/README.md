@@ -138,6 +138,16 @@ reached, three of them shared by every resource rather than by `auth` alone:
   endpoint up to its first `db_select()` and no further. Credentials, token
   lookups, rotation, the email and the password write remain entirely
   `tests/integration`'s job.
+- `tests/unit/AuthLoginIdentifierTest.php` (SPEC 120) — logging in with an
+  email address: `myapi_user_load_by_identifier()` (which column is queried, in
+  which order, and when the second one is skipped) and
+  `myapi_auth_login_flood_subjects()` (which counters one attempt is charged
+  against). The second is the half worth having here — a rate limit that
+  silently doubles still answers `200` to every legitimate login, so nothing
+  but an assertion catches it. The `user_load_by_name()` / `user_load_by_mail()`
+  stubs it needs read the same `$GLOBALS['myapi_test_users']` fixture
+  `user_load()` does, and compare case-insensitively because the real ones run
+  under a `_ci` collation.
 - `tests/unit/TokenTest.php` grew the three TTL resolvers. Nothing asserted
   them at any layer before — the integration suite executes them but never
   reads their value, and `expires_in` is not checked anywhere — so a typo in a

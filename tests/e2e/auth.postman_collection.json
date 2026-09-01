@@ -48,7 +48,56 @@
                   "});",
                   "",
                   "pm.environment.set('access_token', jsonData.data.access_token);",
-                  "pm.environment.set('refresh_token', jsonData.data.refresh_token);"
+                  "pm.environment.set('refresh_token', jsonData.data.refresh_token);",
+                  "pm.environment.set('login_uid', jsonData.data.user.uid);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login by email (SPEC 120)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{test_mail}}\",\n  \"password\": \"{{test_password}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/login",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "auth", "login"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The address travels in the same 'username' field: the key did not",
+                  "// change, only what it accepts.",
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "",
+                  "pm.test('Response envelope reports success', function () {",
+                  "    pm.expect(jsonData.success).to.eql(true);",
+                  "});",
+                  "",
+                  "pm.test('The email opened the same account as the username', function () {",
+                  "    pm.expect(jsonData.data.user.uid).to.eql(Number(pm.environment.get('login_uid')));",
+                  "});",
+                  "",
+                  "// The tokens of the run stay the ones the first login issued: this",
+                  "// request only checks the identifier, so refresh and logout below",
+                  "// keep exercising that same pair."
                 ]
               }
             }

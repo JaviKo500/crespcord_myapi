@@ -1867,6 +1867,52 @@ if (!function_exists('user_load')) {
   }
 }
 
+/**
+ * The two column lookups behind a login identifier (SPEC 120).
+ *
+ * Both scan the same $GLOBALS['myapi_test_users'] fixture user_load() reads,
+ * so one fixture serves the three of them, and both compare CASE-INSENSITIVELY
+ * because that is what the real ones do: Drupal builds a plain '=' condition
+ * and MySQL resolves it under a *_ci collation, which is why 'Javier' logs in
+ * as 'javier' on a real site. A stub comparing with === would make a test pass
+ * on a rule production does not have.
+ *
+ * They return FALSE when nothing matches, exactly as Drupal's do — never NULL.
+ */
+if (!function_exists('myapi_test_user_by_column')) {
+  function myapi_test_user_by_column($column, $value) {
+    $GLOBALS['myapi_test_user_lookups'][] = ['column' => $column, 'value' => $value];
+
+    if (!is_string($value) || $value === '' || empty($GLOBALS['myapi_test_users'])) {
+      return FALSE;
+    }
+
+    foreach ($GLOBALS['myapi_test_users'] as $uid => $account) {
+      $account = (array) $account;
+      if (!isset($account[$column]) || !is_string($account[$column]) || $account[$column] === '') {
+        continue;
+      }
+      if (drupal_strtolower($account[$column]) === drupal_strtolower($value)) {
+        return (object) ($account + ['uid' => $uid]);
+      }
+    }
+
+    return FALSE;
+  }
+}
+
+if (!function_exists('user_load_by_name')) {
+  function user_load_by_name($name) {
+    return myapi_test_user_by_column('name', $name);
+  }
+}
+
+if (!function_exists('user_load_by_mail')) {
+  function user_load_by_mail($mail) {
+    return myapi_test_user_by_column('mail', $mail);
+  }
+}
+
 if (!function_exists('form_load_include')) {
   /**
    * The bookkeeping half of Drupal's own, which is the half that matters here:

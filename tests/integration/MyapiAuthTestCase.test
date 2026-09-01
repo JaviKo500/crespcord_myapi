@@ -250,6 +250,154 @@ class MyapiAuthTestCase extends DrupalWebTestCase {
   }
 
   /**
+   * POST /api/v1/auth/login — the email address opens the same session as the
+   * username (SPEC 120).
+   *
+   * Same field, same account, same token pair: the 'username' key carries
+   * either form, which is what lets an app that already sends it start
+   * accepting addresses without a new contract.
+   */
+  public function testLoginByEmailSucceeds() {
+    $response = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+      'username' => $this->testAccount->mail,
+      'password' => $this->testAccount->pass_raw,
+    ));
+
+    $this->assertResponse(200);
+    $this->assertTrue($response['success'], 'Response envelope reports success.');
+    $this->assertEqual((int) $this->testAccount->uid, $response['data']['user']['uid'], 'The email resolved to the same account as the username.');
+    $this->assertEqual(64, strlen($response['data']['access_token']), 'access_token is 64 hex chars.');
+    $this->assertEqual(128, strlen($response['data']['refresh_token']), 'refresh_token is 128 hex chars.');
+  }
+
+  /**
+   * POST /api/v1/auth/login — the email is matched case-insensitively.
+   *
+   * An address typed on a phone arrives however the keyboard capitalised it.
+   * The insensitivity is the DATABASE's and not the module's: Drupal builds a
+   * plain '=' condition and MySQL resolves it under the utf8_general_ci
+   * collation this site uses. On a _bin collation this case would fail, which
+   * is worth knowing rather than hiding.
+   */
+  public function testLoginByEmailIgnoresCase() {
+    $response = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+      'username' => drupal_strtoupper($this->testAccount->mail),
+      'password' => $this->testAccount->pass_raw,
+    ));
+
+    $this->assertResponse(200);
+    $this->assertEqual((int) $this->testAccount->uid, $response['data']['user']['uid']);
+  }
+
+  /**
+   * POST /api/v1/auth/login — a wrong password sent with the email address is
+   * the same 401 as with the username, and an unknown address is the same 401
+   * again.
+   *
+   * The new identifier must not become a way to ask whether an address is
+   * registered: the answer is identical either way.
+   */
+  public function testLoginByEmailHidesAccountExistenceLikeTheUsernameDoes() {
+    $wrong_password = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+      'username' => $this->testAccount->mail,
+      'password' => $this->testAccount->pass_raw . 'x',
+    ));
+    $this->assertResponse(401);
+
+    $unknown_address = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+      'username' => $this->randomName(12) . '@example.com',
+      'password' => $this->randomName(16),
+    ));
+    $this->assertResponse(401);
+
+    $this->assertEqual('invalid_credentials', $wrong_password['error_code']);
+    $this->assertEqual($wrong_password, $unknown_address, 'An unregistered address gets the exact same body as a wrong password.');
+  }
+
+  /**
+   * POST /api/v1/auth/login — username and email share ONE allowance.
+   *
+   * The regression this guards against is the whole reason
+   * myapi_auth_login_flood_subjects() exists: if each form had its own
+   * counter, accepting the email would have quietly doubled the brute-force
+   * budget against every account — 5 tries by username plus 5 more by address,
+   * against the same password, with nothing in any response to show it.
+   *
+   * Three failures by username plus two by email exhaust the five, and the
+   * sixth attempt is blocked whichever form it uses.
+   */
+  public function testLoginFloodCounterIsSharedBetweenUsernameAndEmail() {
+    for ($i = 0; $i < 3; $i++) {
+      $response = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+        'username' => $this->testAccount->name,
+        'password' => 'wrong-password',
+      ));
+      $this->assertResponse(401);
+      $this->assertEqual('invalid_credentials', $response['error_code']);
+    }
+
+    for ($i = 0; $i < 2; $i++) {
+      $response = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+        'username' => $this->testAccount->mail,
+        'password' => 'wrong-password',
+      ));
+      $this->assertResponse(401);
+      $this->assertEqual('invalid_credentials', $response['error_code']);
+    }
+
+    // The sixth attempt, by username: the two email failures were charged to
+    // this counter too.
+    $response = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+      'username' => $this->testAccount->name,
+      'password' => 'wrong-password',
+    ));
+
+    $this->assertResponse(429);
+    $this->assertEqual('too_many_attempts', $response['error_code']);
+
+    // And the correct password does not get through either, which is what a
+    // rate limit is for.
+    $response = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+      'username' => $this->testAccount->mail,
+      'password' => $this->testAccount->pass_raw,
+    ));
+
+    $this->assertResponse(429);
+    $this->assertEqual('too_many_attempts', $response['error_code']);
+  }
+
+  /**
+   * POST /api/v1/auth/login — a successful login by email clears BOTH
+   * counters, so the username is usable again straight away.
+   */
+  public function testASuccessfulLoginByEmailClearsTheUsernameCounter() {
+    for ($i = 0; $i < 4; $i++) {
+      $this->myapiRequest('api/v1/auth/login', 'POST', array(
+        'username' => $this->testAccount->name,
+        'password' => 'wrong-password',
+      ));
+      $this->assertResponse(401);
+    }
+
+    $this->myapiRequest('api/v1/auth/login', 'POST', array(
+      'username' => $this->testAccount->mail,
+      'password' => $this->testAccount->pass_raw,
+    ));
+    $this->assertResponse(200);
+
+    // Four failures were on the record; had the success cleared only the
+    // address, this one would be the fifth and the next would be a 429.
+    for ($i = 0; $i < 5; $i++) {
+      $response = $this->myapiRequest('api/v1/auth/login', 'POST', array(
+        'username' => $this->testAccount->name,
+        'password' => 'wrong-password',
+      ));
+      $this->assertResponse(401);
+      $this->assertEqual('invalid_credentials', $response['error_code']);
+    }
+  }
+
+  /**
    * GET /api/v1/auth/login — method not allowed.
    */
   public function testLoginMethodNotAllowedForGet() {

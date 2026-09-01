@@ -1,9 +1,9 @@
 ## POST /api/v1/auth/login
 
-Authenticates a user by `username` + `password` against `dr_users`. On success
-it issues an opaque access token (default 30 min) and an opaque refresh token
-(default 30 days), persists their SHA-256 hashes in `my_api_tokens`, and returns
-both tokens together with the basic user data.
+Authenticates a user by **username or email address** + `password` against
+`dr_users`. On success it issues an opaque access token (default 30 min) and an
+opaque refresh token (default 30 days), persists their SHA-256 hashes in
+`my_api_tokens`, and returns both tokens together with the basic user data.
 
 **Authentication:** public
 
@@ -17,10 +17,28 @@ both tokens together with the basic user data.
 { "username": "javier", "password": "1234" }
 ```
 
+Or, with the same field, an email address:
+```json
+{ "username": "javier@lamotora.com", "password": "1234" }
+```
+
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
-| username | string | yes | Non-empty, max 255 chars. Login is by username only (not email). |
+| username | string | yes | Non-empty, max 255 chars. **Username or email address** — the field carries either form, so a client that already sends `username` needs no change. See the resolution notes below. |
 | password | string | yes | Non-empty, max 255 chars. |
+
+**How the identifier is resolved**
+- The **username is tried first** (`users.name`); the email column
+  (`users.mail`) is only queried when the name matched nothing **and** the
+  value contains an `@`. So an account whose *username* happens to be an email
+  string keeps logging in with it, even if that same string is another
+  account's address.
+- Both lookups are case-insensitive and the value is trimmed, so
+  `Javier`, `javier` and ` JAVIER ` all reach the same account. (The
+  insensitivity comes from the database collation, not from the module.)
+- There is no separate `email` field on this endpoint. `POST
+  /api/v1/auth/password/forgot` is the one that takes `username` *or* `email`
+  as two distinct keys.
 
 **Success response (200)**
 ```json
@@ -67,8 +85,8 @@ Notes:
 | Code | `error_code` | When |
 |------|--------------|------|
 | 422  | `missing_field` / `invalid_field` / `field_too_long` | `username` or `password` missing, not a string, empty, or longer than 255 chars. The database is not touched. |
-| 401  | `invalid_credentials` | Invalid credentials: wrong password, nonexistent user, or blocked user (`status = 0`). The same `invalid_credentials` body is returned in all three cases so account existence is never revealed. |
-| 429  | `too_many_attempts` | Flood limit reached: 5 failed attempts for the same `username` (window: 1 h) or 20 failed attempts from the same IP (window: 1 h). Thresholds are configurable via `myapi_flood_login_user_limit` / `myapi_flood_login_ip_limit` (and their `_window` variants). |
+| 401  | `invalid_credentials` | Invalid credentials: wrong password, nonexistent user or email, or blocked user (`status = 0`). The same `invalid_credentials` body is returned in every case so account existence is never revealed — by username or by address. |
+| 429  | `too_many_attempts` | Flood limit reached: 5 failed attempts for the same account (window: 1 h) or 20 failed attempts from the same IP (window: 1 h). Thresholds are configurable via `myapi_flood_login_user_limit` / `myapi_flood_login_ip_limit` (and their `_window` variants). |
 | 405  | `method_not_allowed` | Any HTTP method other than POST. |
 
 Error envelope:
@@ -88,8 +106,13 @@ according to the `Accept-Language` header (`es`/`en`, default `es`). See
 - **HTTPS required in production.** Opaque tokens travel in the response body;
   over plain HTTP they could be intercepted.
 - **Brute-force protection** is active via Drupal Flood API. The IP counter
-  allows 20 failed attempts (1 h window); the per-username counter allows 5
+  allows 20 failed attempts (1 h window); the per-account counter allows 5
   (1 h window). A successful login clears both counters.
+- **The five attempts are per account, not per identifier.** A failed login
+  sent with an email address is charged to the address *and* to the username
+  behind it, so switching between the two forms does not buy a second
+  allowance. The counter subject is trimmed and lowercased, so capitalisation
+  does not either.
 - IP thresholds are generous to accommodate NAT environments; they can be raised
   via `variable_set()` without code changes.
 

@@ -29,39 +29,112 @@ function myapi_auth_dispatch() {
 }
 
 /**
+ * Folds a login identifier into the subject the per-user flood counter uses.
+ *
+ * SPEC 120. The counter is charged on the folded value and never on the raw
+ * one, because ' Javier ' and 'javier' log in as the same account: charging
+ * them apart would hand an attacker five fresh attempts per capitalisation.
+ *
+ * @param string $identifier  Username or email address.
+ *
+ * @return string  Trimmed, lowercased subject for flood_is_allowed().
+ */
+function myapi_auth_login_flood_subject($identifier) {
+  return drupal_strtolower(trim((string) $identifier));
+}
+
+/**
+ * Lists every flood subject one login attempt has to be charged against.
+ *
+ * SPEC 120. An account reached by its EMAIL answers to two subjects — the
+ * address that was typed and the username that address resolves to — and both
+ * are charged, so the five attempts are five in total and not five per form.
+ * Without this, an attacker would get 5 tries by username plus 5 more by email
+ * against the very same password.
+ *
+ * The typed identifier always comes FIRST: it is the subject login can check
+ * before touching the database, which is what keeps a flooded request from
+ * costing a user_load().
+ *
+ * @param string       $identifier  The identifier as typed.
+ * @param object|false $account     The account it resolved to, if any.
+ *
+ * @return array  Flood subjects, deduplicated, typed identifier first.
+ */
+function myapi_auth_login_flood_subjects($identifier, $account) {
+  $subjects = [myapi_auth_login_flood_subject($identifier)];
+
+  // uid 0 is the anonymous row: it is not an account anyone logs into, and its
+  // empty name would fold to a subject shared by every failed attempt.
+  if ($account && !empty($account->uid) && isset($account->name)) {
+    $name = myapi_auth_login_flood_subject($account->name);
+    if (!in_array($name, $subjects, TRUE)) {
+      $subjects[] = $name;
+    }
+  }
+
+  return $subjects;
+}
+
+/**
  * Handles POST /api/v1/auth/login.
  *
- * Authenticates by username + password against dr_users and, on success,
- * issues an opaque access/refresh token pair and returns them together with
- * the basic user data.
+ * Authenticates by username OR email + password against dr_users and, on
+ * success, issues an opaque access/refresh token pair and returns them
+ * together with the basic user data.
+ *
+ * The field is still called 'username' (SPEC 120): it now carries either form,
+ * which keeps every client that already sends it working unchanged.
  */
 function myapi_auth_login() {
   $ip   = ip_address();
   $body = myapi_request_body();
   myapi_request_require_strings((array) $body, ['username', 'password']);
 
-  $username = $body['username'];
-  $password = $body['password'];
+  $identifier = $body['username'];
+  $password   = $body['password'];
 
-  myapi_flood_check('myapi_login_ip',   $ip,       'myapi_flood_login_ip_limit',   'myapi_flood_login_ip_window');
-  myapi_flood_check('myapi_login_user', $username, 'myapi_flood_login_user_limit', 'myapi_flood_login_user_window');
+  // The subject of the typed identifier is checked BEFORE the account is
+  // loaded, so a caller already over the limit is answered without spending a
+  // query on them.
+  $typed_subject = myapi_auth_login_flood_subject($identifier);
+
+  myapi_flood_check('myapi_login_ip',   $ip,            'myapi_flood_login_ip_limit',   'myapi_flood_login_ip_window');
+  myapi_flood_check('myapi_login_user', $typed_subject, 'myapi_flood_login_user_limit', 'myapi_flood_login_user_window');
 
   // user_check_password() lives in includes/password.inc, which Drupal 7 does
   // not load on every request; pull it in before verifying credentials.
   require_once DRUPAL_ROOT . '/' . variable_get('password_inc', 'includes/password.inc');
 
-  // Load the account. Any failure below returns the same generic 401 so the
-  // response never reveals whether a given username exists.
-  $account = user_load_by_name($username);
+  // Load the account by username or by email (SPEC 120). Any failure below
+  // returns the same generic 401 so the response never reveals whether a given
+  // username or address exists.
+  $account = myapi_user_load_by_identifier($identifier);
+
+  // Now that the account is known, the username behind an email address is a
+  // second subject for the same allowance, and it gets its own gate: an
+  // attacker who exhausted the username must not find the counter reset by
+  // switching to the address.
+  $subjects = myapi_auth_login_flood_subjects($identifier, $account);
+  foreach ($subjects as $subject) {
+    if ($subject !== $typed_subject) {
+      myapi_flood_check('myapi_login_user', $subject, 'myapi_flood_login_user_limit', 'myapi_flood_login_user_window');
+    }
+  }
+
   if (!$account || $account->uid == 0 || $account->status == 0
       || !user_check_password($password, $account)) {
-    myapi_flood_register('myapi_login_ip',   $ip,       'myapi_flood_login_ip_window');
-    myapi_flood_register('myapi_login_user', $username, 'myapi_flood_login_user_window');
+    myapi_flood_register('myapi_login_ip', $ip, 'myapi_flood_login_ip_window');
+    foreach ($subjects as $subject) {
+      myapi_flood_register('myapi_login_user', $subject, 'myapi_flood_login_user_window');
+    }
     myapi_error('invalid_credentials', 401);
   }
 
-  flood_clear_event('myapi_login_ip',   $ip);
-  flood_clear_event('myapi_login_user', $username);
+  flood_clear_event('myapi_login_ip', $ip);
+  foreach ($subjects as $subject) {
+    flood_clear_event('myapi_login_user', $subject);
+  }
 
   // Issue and persist a fresh token pair.
   $access = myapi_token_generate_access();

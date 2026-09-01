@@ -34,7 +34,9 @@
   propio; la tabla y los helpers ya quedan listos para soportarlo).
 - **`POST /api/v1/auth/logout`** / revocación de tokens.
 - **Middleware de validación de access token** en otros endpoints.
-- **Login por email** (solo `username` en este spec).
+- **Login por email** (solo `username` en este spec). **⚠️ Superseded por SPEC
+  120:** el campo `username` acepta desde entonces el nombre de usuario **o**
+  el correo. Ver `specs/auth/120-login-por-email.md`.
 - **Rate limiting / flood control** contra fuerza bruta (se documenta como
   riesgo).
 - **Resolver `picture`** (fid → URL): se devuelve `null`.
@@ -174,7 +176,10 @@ Cada paso deja el sistema en estado funcional.
 6. **`resources/auth.resource.inc` — `myapi_auth_login()`:**
    1. Leer body con `myapi_request_body()`; exigir `username` y `password`
       con `myapi_request_require_fields()` (422 si faltan).
-   2. Cargar usuario con `user_load_by_name($username)`.
+   2. Cargar usuario con `user_load_by_name($username)`. **⚠️ Superseded por
+      SPEC 120:** la carga pasa por `myapi_user_load_by_identifier()`, que
+      prueba `users.name` y, si no encuentra y el valor lleva `@`,
+      `users.mail`.
    3. Validar credenciales: si no existe, `uid == 0`, `status == 0`, o
       `user_check_password($password, $account)` es falso →
       `myapi_error('Invalid credentials', 401)`. **Mismo mensaje y código** en
@@ -231,6 +236,8 @@ Cada paso deja el sistema en estado funcional.
       `{"success":false,"error":"Invalid credentials"}`.
 - [x] Usuario inexistente → **HTTP 401** con el **mismo** cuerpo
       `Invalid credentials` (no se distingue de password incorrecta).
+      **Ampliado por SPEC 120:** un correo no registrado responde ese mismo
+      cuerpo.
 - [x] Usuario bloqueado (`status=0`) con password correcta → **HTTP 401**
       `Invalid credentials`.
 - [x] Falta `username` o `password` en el body → **HTTP 422** sin llegar a
@@ -246,7 +253,7 @@ Cada paso deja el sistema en estado funcional.
 | Decisión | Opción elegida | Alternativa descartada | Motivo |
 |---|---|---|---|
 | Alcance | Solo `login` + tabla | Incluir refresh/logout | Spec enfocado; la tabla y los helpers quedan listos para refresh/logout futuros |
-| Identificador de login | Solo `username` | username + email | Simplicidad; `user_load_by_name()` directo. Email queda para otro spec |
+| Identificador de login | Solo `username` | username + email | Simplicidad; `user_load_by_name()` directo. Email queda para otro spec. **⚠️ Superseded por SPEC 120:** ese "otro spec" llegó; el mismo campo `username` acepta las dos formas. Ver `specs/auth/120-login-por-email.md` |
 | Verificación de password | `user_check_password()` | `user_authenticate()` | Evita hooks de login y actualizar `dr_users.login/access`; solo valida credenciales |
 | Clave del envelope de error | `"error"` | `"message"` (del prompt) | Respeta `myapi_error()` y la regla "sin excepciones" del envelope en `CLAUDE.md` |
 | Nombre de la tabla | `my_api_tokens` | `myapi_tokens` (convención) | Decisión explícita del usuario; excepción consciente al prefijo `myapi_` |
