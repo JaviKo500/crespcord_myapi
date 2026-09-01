@@ -912,8 +912,11 @@ function myapi_service_offer_direct_quote_comment($provider_name) {
  *   field_offer_status Always 'sent'. A `status` in the body is ignored, not
  *                      refused: it is not a field of this request.
  *   the three chat     field_firebase_path, field_chat_opened_at and
- *   fields             field_last_message_at are never written. They have been
- *                      empty since SPEC 77 and this spec does not open the chat.
+ *   fields             field_last_message_at are never written HERE. Since
+ *                      SPEC 117 the chat mirrors them on the offer — the
+ *                      credential writes the path, the notice writes the two
+ *                      dates — but a brand new offer has no thread yet, so it
+ *                      is born with the three of them empty.
  *
  * node.uid AND field_provider ARE TWO DIFFERENT THINGS AND BOTH ARE WRITTEN. A
  * provider may be operated by several accounts, and the offer has to know which
