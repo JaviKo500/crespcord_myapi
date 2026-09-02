@@ -501,7 +501,9 @@ class BulletinNotificationTest extends TestCase {
    * immediately, before any resolution: a bug here would be a mass push.
    */
   public function testAnUnknownScopeNotifiesNobodyAndLogs() {
-    foreach (['Difusion', 'general', '', NULL] as $scope) {
+    // 0 is the PHP 7.4 case: switch compares loosely there, so 0 == 'General'
+    // was TRUE and an unknown scope fanned out to every published unit (SPEC 123).
+    foreach (['Difusion', 'general', '', NULL, 0] as $scope) {
       $this->seedBuilding();
       $GLOBALS['myapi_test_watchdog'] = [];
 
@@ -518,7 +520,9 @@ class BulletinNotificationTest extends TestCase {
    */
   public function testAnUnknownRoleNotifiesNobodyAndLogs() {
     foreach (['General', 'Condominio'] as $scope) {
-      foreach (['Vecinos', 'todos', '', NULL] as $role) {
+      // 0 for the same reason as the scope above: on PHP 7.4 it matched
+      // 'Propietarios' and notified every owner instead of nobody (SPEC 123).
+      foreach (['Vecinos', 'todos', '', NULL, 0] as $role) {
         $this->seedBuilding();
         $GLOBALS['myapi_test_watchdog'] = [];
 

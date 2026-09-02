@@ -127,7 +127,39 @@ sustituidos por otras claves. Quedan listadas en `I18nTest::UNREACHED_KEYS`, que
 es lo que mantiene el caso honesto sobre cuántas son. Borrarlas es una decisión
 de una línea para el próximo spec que toque el catálogo.
 
-**Todo lo demás estaba bien.** Los 59 items de `hook_menu()`, los 53 endpoints,
+**La primera ejecución de CI encontró un bug real de PHP 7.4.**
+`myapi_boletin_role_canonical()` resolvía con un `switch`, y `switch` compara
+**laxamente**: en PHP 7.4 `0 == 'Propietarios'` es `TRUE`, y en PHP 8 es `FALSE`.
+Un valor entero llegando a esa función devolvía `'propietarios'` en lugar de
+`NULL`, de modo que el fan-out notificaba a **todos los propietarios** en vez de
+a nadie. El caso que lo destapó ya existía desde el spec 121
+(`BulletinNotificationTest::testRoleCanonicalMapsTheThreeValuesAndNothingElse`
+prueba el valor `0`): pasaba en verde en todas las máquinas de desarrollo y
+fallaba en la versión de producción, que es exactamente lo que este spec existe
+para hacer visible.
+
+El mismo `switch` laxo estaba, y era peor, en `myapi_boletin_recipient_uids()`:
+con `$scope` entero, `0 == 'General'` en 7.4 tomaba la rama General y hacía un
+push a **todas las viviendas publicadas** del sitio — lo contrario exacto de lo
+que promete el docblock de la función («Unknown scope or role degrades to an
+empty set (never an accidental fan-out to everyone)»).
+
+Los dos se corrigen aquí, y no en un spec aparte como se hizo con los siete
+hallazgos del 121, por dos razones: dejan el build rojo, y la corrección es
+estricta en la dirección segura (nada que hoy resuelve a un rol válido cambia de
+respuesta; solo dejan de resolver los valores que nunca debieron resolver). Los
+valores `0` quedan añadidos a los dos bucles de fail-safe de
+`BulletinNotificationTest`, que antes solo probaban `''` y `NULL` — las dos
+únicas formas de «desconocido» que se comportan igual en las dos versiones de
+PHP.
+
+**Los otros cuatro `switch` sobre cadenas del módulo** (`$entry['mode']` en
+`myapi.building_admin.inc` y `myapi.provider_role.inc`, `$key` en
+`myapi_mail()`, `$node->type` en `myapi.module`) comparan valores que el propio
+módulo construye como literales de cadena, no valores de Field API, y quedan
+como están.
+
+**Todo lo demás del cableado estaba bien.** Los 59 items de `hook_menu()`, los 53 endpoints,
 los 90 usos de claves, los 178 archivos: los once casos de contrato pasaron a la
 primera. Eso no los hace inútiles —hacen falta el día que alguien añada el
 recurso número 21— pero conviene decirlo: este spec no encontró un cableado
@@ -148,6 +180,7 @@ el árbol restaurado después:
 | `myapi_error('methd_not_allowed', 405)` | `testEveryKeyUsedByTheModuleExistsInTheCatalogue` |
 | Una clave nueva en los dos catálogos sin usarla | `testEveryCatalogueKeyIsReachedByTheModule` |
 | Un `.inc` con error de sintaxis en staging | El hook de pre-commit, en sus dos puertas |
+| PHP 7.4 real, en CI | `testRoleCanonicalMapsTheThreeValuesAndNothingElse` — el hallazgo de arriba |
 
 ---
 
@@ -167,7 +200,10 @@ el árbol restaurado después:
 
 ## Riesgos identificados
 
-- **La suite nunca ha corrido en PHP 7.4.** El código de producción sí es 7.4
+- **La suite nunca había corrido en PHP 7.4.** Ya lo ha hecho: el primer run
+  encontró el bug del fan-out documentado arriba, y ninguna otra divergencia en
+  los 3.666 casos. El riesgo se ha materializado y se ha cerrado.
+- **El riesgo original, tal como se anotó antes de ese primer run:** El código de producción sí es 7.4
   por política, pero los **tests** se han escrito siempre en 8.x. El primer run
   de CI es el primero que los ejecuta en la versión de destino, y puede sacar
   diferencias 7.4/8.x en la propia suite. *Mitigación:* es exactamente lo que se

@@ -181,19 +181,24 @@ function myapi_notification_field_target_ids($node, $field) {
  *                      unknown value (fail-safe: caller notifies nobody).
  */
 function myapi_boletin_role_canonical($role) {
-  switch ($role) {
-    case 'Propietarios':
-      return 'propietarios';
+  // Strict lookup, and not a switch, because switch compares LOOSELY: under
+  // PHP 7.4 — the version production runs — 0 == 'Propietarios' is TRUE, so an
+  // integer scope reaching this function answered 'propietarios' instead of
+  // NULL and the caller notified every owner instead of nobody. The comparison
+  // changed in PHP 8, which is why it survived every local run: the bug only
+  // exists on the target. Found by the CI of SPEC 123, the first time the suite
+  // ran on 7.4.
+  //
+  // The is_string() guard is what makes the lookup safe for any input: an int
+  // key can never match these string keys, and an array as an offset is a
+  // TypeError rather than a miss.
+  $map = [
+    'Propietarios' => 'propietarios',
+    'Ocupantes'    => 'ocupantes',
+    'Todos'        => 'todos',
+  ];
 
-    case 'Ocupantes':
-      return 'ocupantes';
-
-    case 'Todos':
-      return 'todos';
-
-    default:
-      return NULL;
-  }
+  return (is_string($role) && isset($map[$role])) ? $map[$role] : NULL;
 }
 
 /**
@@ -215,9 +220,18 @@ function myapi_boletin_role_canonical($role) {
 function myapi_boletin_recipient_uids($node) {
   module_load_include('inc', 'myapi', 'includes/myapi.unit_access');
 
-  $scope = myapi_notification_field_value($node, 'field_tipo_de_boletin');
+  $scope_raw = myapi_notification_field_value($node, 'field_tipo_de_boletin');
   $role = myapi_notification_field_value($node, 'field_enviar_a');
   $role_canonical = myapi_boletin_role_canonical($role);
+
+  // The switch below compares loosely, and on PHP 7.4 that means 0 == 'General'
+  // is TRUE: a non-string scope would take the General branch and fan out to
+  // every published unit — the exact opposite of the guarantee in this
+  // function's docblock. Field API returns whatever the field stores (see
+  // myapi_notification_field_value()), so the type is not ours to assume.
+  // Anything that is not a string becomes a value no case can match, on both
+  // PHP versions; the raw one is kept for the log.
+  $scope = is_string($scope_raw) ? $scope_raw : '';
 
   $uids = [];
 
@@ -262,7 +276,7 @@ function myapi_boletin_recipient_uids($node) {
       break;
 
     default:
-      watchdog('myapi', 'Boletin @nid: unknown field_tipo_de_boletin value "@scope"; nobody notified.', ['@nid' => $node->nid, '@scope' => (string) $scope], WATCHDOG_WARNING);
+      watchdog('myapi', 'Boletin @nid: unknown field_tipo_de_boletin value "@scope"; nobody notified.', ['@nid' => $node->nid, '@scope' => is_scalar($scope_raw) ? (string) $scope_raw : ''], WATCHDOG_WARNING);
       return [];
   }
 
