@@ -56,6 +56,10 @@ class ServiceRequestNotificationTest extends TestCase {
 
   protected function setUp(): void {
     myapi_test_db_seed();
+    // SPEC 121: the write side of the fixture database now APPLIES instead of
+    // throwing, so a case that wants a failing insert asks for it by name.
+    myapi_test_db_fail_writes();
+    myapi_test_queue_reset();
     $GLOBALS['myapi_test_watchdog'] = [];
     $GLOBALS['myapi_test_users'] = [];
     $GLOBALS['myapi_test_variables'] = [];
@@ -582,11 +586,17 @@ class ServiceRequestNotificationTest extends TestCase {
 
   /**
    * THE PROMISE THE ENDPOINT RELIES ON. The fan-out fails here on purpose —
-   * db_insert() throws in tests/unit — and the trigger still returns normally,
-   * with the failure in watchdog. Without this, a broken queue would take the
-   * 201 (and the request the resident just created) down with it.
+   * myapi_test_db_fail_writes() breaks the insert into myapi_notifications —
+   * and the trigger still returns normally, with the failure in watchdog.
+   * Without this, a broken queue would take the 201 (and the request the
+   * resident just created) down with it.
+   *
+   * Until SPEC 121 the failure was an accident of the harness (every write
+   * threw); it is now stated out loud, which is what makes it a test of the
+   * try/catch rather than of the stub.
    */
   public function testAFailingFanOutIsLoggedAndNeverPropagates() {
+    myapi_test_db_fail_writes('myapi_notifications');
     myapi_test_db_seed([
       'node' => [$this->providerRow()],
       'field_data_' . MYAPI_PROVIDER_USERS_FIELD => [$this->accountRow()],
@@ -816,6 +826,7 @@ class ServiceRequestNotificationTest extends TestCase {
    * 201 of POST /api/v1/service-requests/{id}/offers.
    */
   public function testAFailingInsertIsLoggedAndNeverPropagates() {
+    myapi_test_db_fail_writes('myapi_notifications');
     $GLOBALS['myapi_test_users'][self::REQUESTER] = [
       'uid'    => self::REQUESTER,
       'name'   => 'residente42',
@@ -997,6 +1008,7 @@ class ServiceRequestNotificationTest extends TestCase {
    * 200 of PUT /api/v1/service-offers/{id}/withdraw.
    */
   public function testAFailingWithdrawnInsertIsLoggedAndNeverPropagates() {
+    myapi_test_db_fail_writes('myapi_notifications');
     $GLOBALS['myapi_test_users'][self::REQUESTER] = [
       'uid'    => self::REQUESTER,
       'name'   => 'residente42',
@@ -1396,6 +1408,7 @@ class ServiceRequestNotificationTest extends TestCase {
    * the 200 of PUT /api/v1/service-offers/{id}/accept.
    */
   public function testAFailingWinnerInsertIsLoggedAndNeverPropagates() {
+    myapi_test_db_fail_writes('myapi_notifications');
     myapi_test_db_seed(['field_data_' . MYAPI_PROVIDER_USERS_FIELD => [$this->accountRow()]]);
 
     myapi_service_request_notify_offer_accepted($this->awardedOfferNode(), [], $this->awardedContext());
@@ -1407,10 +1420,11 @@ class ServiceRequestNotificationTest extends TestCase {
   /**
    * Each loser is looked up by ITS OWN provider_raw, never the winner's and
    * never another loser's — the one thing this fixture layer can prove about
-   * a fan-out whose insert it cannot observe (SPEC 74's stub throws on
-   * db_insert() by design).
+   * a fan-out whose insert is broken on purpose here (SPEC 121:
+   * myapi_test_db_fail_writes()).
    */
   public function testEachLoserIsLookedUpByItsOwnProviderId() {
+    myapi_test_db_fail_writes('myapi_notifications');
     myapi_test_db_seed(['field_data_' . MYAPI_PROVIDER_USERS_FIELD => [
       $this->accountRow(['entity_id' => 602]),
     ]]);
@@ -1730,6 +1744,7 @@ class ServiceRequestNotificationTest extends TestCase {
    * the 200 of PUT /api/v1/service-requests/{id}/cancel.
    */
   public function testAFailingProviderInsertIsLoggedAndNeverPropagates() {
+    myapi_test_db_fail_writes('myapi_notifications');
     myapi_test_db_seed(['field_data_' . MYAPI_PROVIDER_USERS_FIELD => [$this->accountRow()]]);
 
     $providers = [
@@ -1749,6 +1764,7 @@ class ServiceRequestNotificationTest extends TestCase {
    * design).
    */
   public function testEachAffectedProviderIsLookedUpByItsOwnProviderId() {
+    myapi_test_db_fail_writes('myapi_notifications');
     myapi_test_db_seed(['field_data_' . MYAPI_PROVIDER_USERS_FIELD => [
       $this->accountRow(['entity_id' => 602]),
     ]]);
@@ -2084,6 +2100,7 @@ class ServiceRequestNotificationTest extends TestCase {
    * the 200 of PUT /api/v1/service-requests/{id}/close.
    */
   public function testAFailingRatedProviderInsertIsLoggedAndNeverPropagates() {
+    myapi_test_db_fail_writes('myapi_notifications');
     myapi_test_db_seed(['field_data_' . MYAPI_PROVIDER_USERS_FIELD => [$this->accountRow()]]);
 
     myapi_service_request_notify_closed($this->closedNode(), $this->ratingFixture(), $this->closedContext());
@@ -2098,6 +2115,7 @@ class ServiceRequestNotificationTest extends TestCase {
    * it cannot observe (SPEC 74's stub throws on db_insert() by design).
    */
   public function testTheRatedProviderIsLookedUpByItsOwnProviderId() {
+    myapi_test_db_fail_writes('myapi_notifications');
     myapi_test_db_seed(['field_data_' . MYAPI_PROVIDER_USERS_FIELD => [
       $this->accountRow(['entity_id' => self::PROVIDER]),
     ]]);

@@ -774,25 +774,186 @@ class MyapiTestSelectQuery implements IteratorAggregate {
       return $this;
     }
 
-    $pattern = '/^SUBSTR\(\s*([A-Za-z0-9_.]+)\s*,\s*1\s*,\s*(\d+)\s*\)\s*(>=|<=|<>|!=|=|<|>)\s*(:[A-Za-z0-9_]+)\s*$/';
-
-    if (!preg_match($pattern, trim($snippet), $m)) {
-      throw new RuntimeException('MyapiTestSelectQuery: unsupported where() fragment "' . $snippet . '".');
-    }
-    if (!array_key_exists($m[4], $arguments)) {
-      throw new RuntimeException('MyapiTestSelectQuery: where() placeholder ' . $m[4] . ' has no argument.');
-    }
-
-    $this->where[] = [
-      'snippet'   => $snippet,
-      'arguments' => $arguments,
-      'field'     => $m[1],
-      'length'    => (int) $m[2],
-      'operator'  => $m[3] === '!=' ? '<>' : $m[3],
-      'value'     => $arguments[$m[4]],
-    ];
+    $tree = $this->parseWhere(trim($snippet), $arguments);
+    $tree['snippet'] = $snippet;
+    $tree['arguments'] = $arguments;
+    $this->where[] = $tree;
 
     return $this;
+  }
+
+  /**
+   * Parses a where() fragment into a boolean tree (SPEC 121).
+   *
+   * WHY A PARSER AND NOT A THIRD REGEX. Until SPEC 121 this method understood
+   * one shape — a date bound — because that was the only fragment the module
+   * wrote. The reservation resource writes three more, and two of them are
+   * COMPOUND:
+   *
+   *   (SUBSTR(fdate.field_date_value, 1, 10) > :date_from)
+   *     OR (SUBSTR(...) = :date_from_day AND fstart.field_start_time_value >= :time_from)
+   *
+   * That is the ?time_from refinement of SPEC 43 — "from day D at 09:00
+   * onwards", which narrows the boundary day and leaves every later day whole
+   * — and myapi_reservation_has_active_reservation() writes the same shape for
+   * "later than today, or today after now". Recording those and not applying
+   * them would make every time-bound test pass over a filter that never ran,
+   * which is exactly the failure the class docblock warns about; adding one
+   * more regex per shape would go stale on the next one.
+   *
+   * The grammar is small and closed — it is the SQL this module actually
+   * writes:
+   *
+   *   expr  := term (' OR ' term)*
+   *   term  := factor (' AND ' factor)*
+   *   factor := '(' expr ')' | atom
+   *   atom  := SUBSTR(col, 1, N) <op> :ph
+   *          | SUBSTR(col, 1, N) IN (:ph)
+   *          | col <op> :ph
+   *
+   * Anything outside it still THROWS rather than being skipped quietly.
+   */
+  private function parseWhere($snippet, array $arguments) {
+    $operands = $this->splitTop($snippet, 'OR');
+    if (count($operands) > 1) {
+      return ['type' => 'OR', 'operands' => array_map(function ($part) use ($arguments) {
+        return $this->parseWhere($part, $arguments);
+      }, $operands)];
+    }
+
+    $operands = $this->splitTop($snippet, 'AND');
+    if (count($operands) > 1) {
+      return ['type' => 'AND', 'operands' => array_map(function ($part) use ($arguments) {
+        return $this->parseWhere($part, $arguments);
+      }, $operands)];
+    }
+
+    // A fully parenthesised expression: unwrap and parse again.
+    if (strlen($snippet) > 1 && $snippet[0] === '(' && $this->closesAtEnd($snippet)) {
+      return $this->parseWhere(trim(substr($snippet, 1, -1)), $arguments);
+    }
+
+    return $this->parseAtom($snippet, $arguments);
+  }
+
+  /**
+   * Splits a fragment on a top-level ' OR ' / ' AND ', ignoring the ones
+   * inside parentheses.
+   */
+  private function splitTop($snippet, $keyword) {
+    $parts = [];
+    $depth = 0;
+    $buffer = '';
+    $needle = ' ' . $keyword . ' ';
+    $length = strlen($snippet);
+    $needle_length = strlen($needle);
+
+    for ($i = 0; $i < $length; $i++) {
+      $char = $snippet[$i];
+      if ($char === '(') {
+        $depth++;
+      }
+      elseif ($char === ')') {
+        $depth--;
+      }
+
+      if ($depth === 0 && strtoupper(substr($snippet, $i, $needle_length)) === $needle) {
+        $parts[] = trim($buffer);
+        $buffer = '';
+        $i += $needle_length - 1;
+        continue;
+      }
+
+      $buffer .= $char;
+    }
+
+    $parts[] = trim($buffer);
+
+    return array_values(array_filter($parts, 'strlen'));
+  }
+
+  /**
+   * Whether the opening parenthesis at position 0 is the one closed by the
+   * last character — i.e. the whole fragment is wrapped.
+   */
+  private function closesAtEnd($snippet) {
+    $depth = 0;
+    $length = strlen($snippet);
+
+    for ($i = 0; $i < $length; $i++) {
+      if ($snippet[$i] === '(') {
+        $depth++;
+      }
+      elseif ($snippet[$i] === ')') {
+        $depth--;
+        if ($depth === 0) {
+          return $i === $length - 1;
+        }
+      }
+    }
+
+    return FALSE;
+  }
+
+  /**
+   * Parses a single comparison into an ATOM node.
+   */
+  private function parseAtom($snippet, array $arguments) {
+    $snippet = trim($snippet);
+
+    // SUBSTR(col, 1, N) IN (:placeholder) — a whole session's days (SPEC 121).
+    // Drupal expands an array argument into the IN list, so the fragment reads
+    // one placeholder and the argument is the list.
+    $in_pattern = '/^SUBSTR\(\s*([A-Za-z0-9_.]+)\s*,\s*1\s*,\s*(\d+)\s*\)\s+IN\s*\(\s*(:[A-Za-z0-9_]+)\s*\)$/i';
+    if (preg_match($in_pattern, $snippet, $m)) {
+      return [
+        'type'     => 'ATOM',
+        'field'    => $m[1],
+        'length'   => (int) $m[2],
+        'operator' => 'IN',
+        'value'    => (array) $this->placeholder($m[3], $arguments),
+      ];
+    }
+
+    // SUBSTR(col, 1, N) <op> :placeholder — the date bound.
+    $cut_pattern = '/^SUBSTR\(\s*([A-Za-z0-9_.]+)\s*,\s*1\s*,\s*(\d+)\s*\)\s*(>=|<=|<>|!=|=|<|>)\s*(:[A-Za-z0-9_]+)$/i';
+    if (preg_match($cut_pattern, $snippet, $m)) {
+      return [
+        'type'     => 'ATOM',
+        'field'    => $m[1],
+        'length'   => (int) $m[2],
+        'operator' => $m[3] === '!=' ? '<>' : $m[3],
+        'value'    => $this->placeholder($m[4], $arguments),
+      ];
+    }
+
+    // col <op> :placeholder — the plain comparison of the status filter and of
+    // the time half of a boundary-day bound.
+    $plain_pattern = '/^([A-Za-z0-9_.]+)\s*(>=|<=|<>|!=|=|<|>)\s*(:[A-Za-z0-9_]+)$/';
+    if (preg_match($plain_pattern, $snippet, $m)) {
+      return [
+        'type'     => 'ATOM',
+        'field'    => $m[1],
+        'length'   => NULL,
+        'operator' => $m[2] === '!=' ? '<>' : $m[2],
+        'value'    => $this->placeholder($m[3], $arguments),
+      ];
+    }
+
+    throw new RuntimeException('MyapiTestSelectQuery: unsupported where() fragment "' . $snippet . '".');
+  }
+
+  /**
+   * Resolves a placeholder, throwing when the caller forgot its argument —
+   * a mistake Drupal would report as a database error and this stub would
+   * otherwise turn into a silently unfiltered query.
+   */
+  private function placeholder($name, array $arguments) {
+    if (!array_key_exists($name, $arguments)) {
+      throw new RuntimeException('MyapiTestSelectQuery: where() placeholder ' . $name . ' has no argument.');
+    }
+
+    return $arguments[$name];
   }
 
   /**
@@ -1069,13 +1230,32 @@ class MyapiTestSelectQuery implements IteratorAggregate {
       $groups[implode("\0", $key)][] = $row;
     }
 
+    // AN UNGROUPED AGGREGATE OVER ZERO ROWS STILL ANSWERS ONE ROW (SPEC 121).
+    // 'SELECT SUM(x), COUNT(y) FROM ...' with no GROUP BY and no matching row
+    // is one row of (NULL, 0) in SQL, never an empty result — and
+    // myapi_condominium_expense_totals() reads exactly that difference: its
+    // `$row && $row->total !== NULL` branch is what turns the NULL into the
+    // 0.0 the app receives. Answering no rows here would take the `!$row`
+    // branch instead and let the empty-condominium case pass for the wrong
+    // reason. With a GROUP BY, zero rows means zero groups, which is also what
+    // SQL does.
+    if (!$groups && !$this->group_by) {
+      $groups = [[]];
+    }
+
     $aggregated = [];
     foreach ($groups as $group) {
       $projected = [];
       foreach ($this->fields as $field) {
-        $projected[$field] = isset($this->expressions[$field])
-          ? $this->evaluate($this->expressions[$field], $group)
-          : $this->value($group[0], isset($this->field_sources[$field]) ? $this->field_sources[$field] : $field);
+        if (isset($this->expressions[$field])) {
+          $projected[$field] = $this->evaluate($this->expressions[$field], $group);
+          continue;
+        }
+        // A plain column next to an aggregate is only meaningful when the
+        // group has rows; over the empty group SQL answers NULL.
+        $projected[$field] = $group
+          ? $this->value($group[0], isset($this->field_sources[$field]) ? $this->field_sources[$field] : $field)
+          : NULL;
       }
       $aggregated[] = $projected;
     }
@@ -1141,6 +1321,19 @@ class MyapiTestSelectQuery implements IteratorAggregate {
       return (int) $normalized;
     }
 
+    // 'SUBSTR(alias.column, 1, 10)' as a COMPUTED COLUMN (SPEC 121), which is
+    // how myapi_reservation_busy_rows() projects and orders by the clock day of
+    // a stored datetime. Same cut as the where() fragment of the same shape,
+    // and NULL stays NULL — a reservation with no date sorts where SQL puts a
+    // NULL rather than at the epoch.
+    if (preg_match('/^SUBSTR\(\s*([A-Za-z0-9_.]+)\s*,\s*1\s*,\s*(\d+)\s*\)$/i', $normalized, $m)) {
+      $alias = array_search($m[1], $this->field_sources, TRUE);
+      $key = $alias !== FALSE ? $alias : $m[1];
+      $value = $this->value($row, $key);
+
+      return $value === NULL ? NULL : substr((string) $value, 0, (int) $m[2]);
+    }
+
     throw new RuntimeException('MyapiTestSelectQuery: unsupported row expression "' . $expression . '".');
   }
 
@@ -1148,15 +1341,45 @@ class MyapiTestSelectQuery implements IteratorAggregate {
    * Evaluates one aggregate expression over the rows of a group (SPEC 79).
    *
    * Understands COUNT(*), COUNT(alias.column) — which skips NULLs, as SQL
-   * does — and COUNT(DISTINCT alias.column). Anything else throws: a stub that
-   * guessed at SUM() or AVG() would answer a number that looks right and is
-   * not, which is worse than not supporting it.
+   * does — and COUNT(DISTINCT alias.column), plus SUM() and AVG() since SPEC
+   * 121. Anything else throws: a stub that guessed at an aggregate would
+   * answer a number that looks right and is not, which is worse than not
+   * supporting it.
+   *
+   * SUM() AND AVG() ANSWER NULL OVER AN EMPTY SET, and that is the whole
+   * reason they are written here rather than as a convenient 0. SQL's SUM of
+   * no rows — and of rows that are all NULL — is NULL, not zero, and
+   * myapi_condominium_expense_totals() has an explicit `$row->total !== NULL`
+   * branch that turns that NULL into the 0.0 the app receives. A stub summing
+   * to 0 would make that branch unreachable and the test of an empty
+   * condominium pass for the wrong reason.
+   *
+   * The arithmetic runs over floats because every column these two aggregate
+   * is a DECIMAL, which the driver answers as a string.
    */
   private function evaluate($expression, array $rows) {
     $normalized = preg_replace('/\s+/', ' ', trim($expression));
 
     if (preg_match('/^COUNT\(\s*\*\s*\)$/i', $normalized)) {
       return count($rows);
+    }
+
+    if (preg_match('/^(SUM|AVG)\(\s*([A-Za-z0-9_.]+)\s*\)$/i', $normalized, $m)) {
+      $values = [];
+      foreach ($rows as $row) {
+        $value = $this->value($row, $m[2]);
+        if ($value !== NULL) {
+          $values[] = (float) $value;
+        }
+      }
+
+      if (!$values) {
+        return NULL;
+      }
+
+      $sum = array_sum($values);
+
+      return strtoupper($m[1]) === 'SUM' ? $sum : $sum / count($values);
     }
 
     if (preg_match('/^COUNT\(\s*(DISTINCT\s+)?([A-Za-z0-9_.]+)\s*\)$/i', $normalized, $m)) {
@@ -1232,23 +1455,68 @@ class MyapiTestSelectQuery implements IteratorAggregate {
     }
 
     foreach ($this->where as $fragment) {
-      $column = $this->conditionKey($row, $fragment['field']);
-      if (!array_key_exists($column, $row)) {
-        continue;
-      }
-      // NULL is what a LEFT JOIN answers for a node with no row in the joined
-      // field table, and SQL compares it to nothing: a bound always excludes
-      // it, which is the documented behaviour of the date filter.
-      if ($row[$column] === NULL) {
-        return FALSE;
-      }
-      $actual = substr((string) $row[$column], 0, $fragment['length']);
-      if (!$this->compare($actual, $fragment['value'], $fragment['operator'])) {
+      if (!$this->matchesFragment($row, $fragment)) {
         return FALSE;
       }
     }
 
     return TRUE;
+  }
+
+  /**
+   * Evaluates one parsed where() fragment over a row (SPEC 121).
+   *
+   * A fragment is either a single comparison or a boolean tree of them — see
+   * parseWhere() for the grammar and for why the module writes trees at all.
+   * An ATOM whose column the fixture row does not carry is UNKNOWN and does
+   * not participate, the same laxness the plain conditions have; inside a tree
+   * that means an OR is decided by its known half, which is what lets a test
+   * seed only the columns its case is about.
+   */
+  private function matchesFragment(array $row, array $fragment) {
+    $verdict = $this->evaluateFragment($row, $fragment);
+
+    // An entirely unknown fragment does not narrow anything.
+    return $verdict === NULL ? TRUE : $verdict;
+  }
+
+  /**
+   * TRUE, FALSE, or NULL for "this row does not carry the columns involved".
+   */
+  private function evaluateFragment(array $row, array $fragment) {
+    if ($fragment['type'] === 'OR' || $fragment['type'] === 'AND') {
+      $known = FALSE;
+      $result = $fragment['type'] === 'AND';
+
+      foreach ($fragment['operands'] as $operand) {
+        $verdict = $this->evaluateFragment($row, $operand);
+        if ($verdict === NULL) {
+          continue;
+        }
+        $known = TRUE;
+        $result = $fragment['type'] === 'AND' ? ($result && $verdict) : ($result || $verdict);
+      }
+
+      return $known ? $result : NULL;
+    }
+
+    $column = $this->conditionKey($row, $fragment['field']);
+    if (!array_key_exists($column, $row)) {
+      return NULL;
+    }
+    // NULL is what a LEFT JOIN answers for a node with no row in the joined
+    // field table, and SQL compares it to nothing: a bound always excludes it,
+    // which is the documented behaviour of the date filter.
+    if ($row[$column] === NULL) {
+      return FALSE;
+    }
+
+    $actual = (string) $row[$column];
+    if ($fragment['length'] !== NULL) {
+      $actual = substr($actual, 0, $fragment['length']);
+    }
+
+    return $this->compare($actual, $fragment['value'], $fragment['operator']);
   }
 
   /**
@@ -1280,6 +1548,20 @@ class MyapiTestSelectQuery implements IteratorAggregate {
         }
         $known++;
         if ($this->matchesGroup($row, $condition['group'])) {
+          $true++;
+        }
+        continue;
+      }
+
+      // A correlated EXISTS inside the group (SPEC 121). Always KNOWN: unlike
+      // a column condition, it does not depend on the fixture row carrying a
+      // particular key — it asks its own table whether a row correlates to
+      // this one, and "no row" is a real FALSE and not an unknown. Treating it
+      // as unknown would make the 'Personalizado' branch of the bulletin rule
+      // vacuously true and show every custom bulletin to everybody.
+      if ($condition['operator'] === 'EXISTS') {
+        $known++;
+        if ($condition['value']->existsFor($row)) {
           $true++;
         }
         continue;
@@ -1321,6 +1603,11 @@ class MyapiTestSelectQuery implements IteratorAggregate {
         continue;
       }
 
+      // An EXISTS is always answerable (SPEC 121) — see matchesGroup().
+      if ($condition['operator'] === 'EXISTS') {
+        return TRUE;
+      }
+
       if (array_key_exists($this->conditionKey($row, $condition['field']), $row)) {
         return TRUE;
       }
@@ -1334,6 +1621,20 @@ class MyapiTestSelectQuery implements IteratorAggregate {
    * writes 1, and no myapi condition depends on telling the two apart.
    */
   private function compare($actual, $expected, $operator) {
+    // SQL'S THREE-VALUED LOGIC, for the one case that changes an answer (SPEC
+    // 121). A comparison against NULL is UNKNOWN in SQL, and a WHERE that is
+    // UNKNOWN excludes the row — for '<>' just as much as for '='. PHP
+    // disagrees: NULL != 'Nuevo' is TRUE, so a stub comparing loosely would
+    // hand a payments listing every row whose estado column is NULL, which is
+    // precisely what its `<> 'Nuevo'` condition is there to exclude. The
+    // where() fragments already had this rule; conditions now share it.
+    //
+    // 'IS NULL' and 'IS NOT NULL' are the two operators that ASK about the
+    // null, so they are answered below and not here.
+    if ($actual === NULL && $operator !== 'IS NULL' && $operator !== 'IS NOT NULL') {
+      return FALSE;
+    }
+
     switch ($operator) {
       case '=':
         return $actual == $expected;
@@ -1555,6 +1856,29 @@ class MyapiTestStatement implements IteratorAggregate, Countable {
     return $result;
   }
 
+  /**
+   * The first column keyed by the zeroth one (SPEC 121).
+   *
+   * Drupal's fetchAllKeyed() defaults to (0 => 1) — key from the first
+   * projected column, value from the second — which is exactly how the
+   * reservation calendar reads its condominium and area option lists. Keys come
+   * out as the strings the driver answers, the same way they do in production,
+   * so a test that compares them with === sees what a site would.
+   */
+  #[\ReturnTypeWillChange]
+  public function fetchAllKeyed($key_index = 0, $value_index = 1) {
+    $keyed = [];
+    foreach ($this->rows as $row) {
+      $values = array_values((array) $row);
+      if (!array_key_exists($key_index, $values) || !array_key_exists($value_index, $values)) {
+        continue;
+      }
+      $keyed[$values[$key_index]] = $values[$value_index];
+    }
+
+    return $keyed;
+  }
+
   public function fetchCol($index = 0) {
     $column = [];
     foreach ($this->rows as $row) {
@@ -1642,6 +1966,27 @@ class MyapiTestConditionGroup {
 
   public function isNotNull($field) {
     $this->conditions[] = ['field' => $field, 'value' => NULL, 'operator' => 'IS NOT NULL'];
+
+    return $this;
+  }
+
+  /**
+   * A correlated EXISTS sub-select INSIDE a condition group (SPEC 121).
+   *
+   * Drupal's DatabaseCondition carries the same exists() as the query itself,
+   * and the bulletin visibility rule is where that matters: its 'Personalizado'
+   * branch is an OR of two db_and()s, and each of those ANDs a role comparison
+   * with an EXISTS over a reference table. Written on the query instead, the
+   * sub-select would apply to every branch and reveal a neighbour's bulletin.
+   *
+   * Recorded exactly like the query-level one, so matchesGroup() can evaluate
+   * it with existsFor() against the outer row.
+   */
+  public function exists($select) {
+    if (!$select instanceof MyapiTestSelectQuery) {
+      throw new RuntimeException('MyapiTestConditionGroup: exists() takes a fixture sub-select.');
+    }
+    $this->conditions[] = ['field' => NULL, 'value' => $select, 'operator' => 'EXISTS'];
 
     return $this;
   }
@@ -1813,34 +2158,501 @@ if (!function_exists('field_info_cache_clear')) {
  * something that does NOT happen, which is unfalsifiable unless the forbidden
  * calls are observable. Any of them firing is recorded with its table name.
  */
-function myapi_test_record_write($call, $table) {
-  $GLOBALS['myapi_test_db_writes'][] = ['call' => $call, 'table' => $table];
+function myapi_test_record_write($call, $table, array $extra = []) {
+  $GLOBALS['myapi_test_db_writes'][] = ['call' => $call, 'table' => $table] + $extra;
+}
 
-  throw new RuntimeException($call . '(' . $table . ') is not available in tests/unit.');
+/**
+ * The write side, APPLIED to the fixtures since SPEC 121.
+ *
+ * WHAT CHANGED AND WHY. Until SPEC 121 these four threw, and the throw WAS the
+ * observation: three specs assert that a hook tried to write to a given table
+ * and stop there (PasswordChangeRevokesTokensTest, TokenPurgeTest), and two
+ * assert that nothing was written at all. Those assertions are untouched —
+ * every call is still recorded in $GLOBALS['myapi_test_db_writes'] with the
+ * same ['call', 'table'] shape, and a test that reads that array reads the
+ * same thing it always did.
+ *
+ * What the throw made IMPOSSIBLE was the other half of this module: an
+ * endpoint that writes and then ANSWERS. PUT /api/v1/notifications/%/read is
+ * one UPDATE followed by the item it just changed; its whole contract is
+ * idempotence — a second call must not move read_at — and idempotence is a
+ * statement about what the SECOND write sees, which cannot be observed if the
+ * first one never happened. Same for read-all's `marked` count, for the token
+ * rotation of a refresh, and for every 201 that re-reads what it created.
+ *
+ * So the queries now APPLY to $GLOBALS['myapi_test_db'], and the disclaimer of
+ * db_select() applies here word for word: THIS IS NOT A DATABASE. There are no
+ * types, no constraints, no transactions, no auto-increment beyond a naive
+ * max+1, and no cascade. What it makes testable is the PHP half — which rows a
+ * resource decided to touch, with which values, and what it answered
+ * afterwards. Whether MySQL accepts the write, whether a UNIQUE index rejects
+ * it and whether the affected-row count matches under a concurrent write stay
+ * tests/integration's job.
+ *
+ * ONE DELIBERATE DIVERGENCE FROM db_select(): a condition on a column the
+ * fixture row does NOT carry does not match here, where the select stub skips
+ * it. Laxness is safe when reading a fixture that only seeds the columns a case
+ * is about; on a write it would turn a narrow UPDATE into "every row", which is
+ * exactly the bug these tests exist to catch.
+ */
+class MyapiTestWriteQuery {
+
+  protected $table;
+  protected $call;
+  protected $fields = [];
+  protected $conditions = [];
+  protected $keys = [];
+
+  public function __construct($table, $call) {
+    $this->table = $table;
+    $this->call = $call;
+  }
+
+  public function fields(array $fields, array $values = []) {
+    // db_insert()->fields([...columns]) declares the column list; every other
+    // caller passes a column => value map.
+    if ($values) {
+      $this->fields = array_combine($fields, $values);
+    }
+    elseif ($fields && array_keys($fields) === range(0, count($fields) - 1)) {
+      $this->fields = array_fill_keys($fields, NULL);
+      $this->columns = $fields;
+    }
+    else {
+      $this->fields = $fields;
+    }
+
+    return $this;
+  }
+
+  public function key(array $keys) {
+    $this->keys = $keys;
+
+    return $this;
+  }
+
+  public function condition($field, $value = NULL, $operator = NULL) {
+    $this->conditions[] = [
+      'field'    => $field,
+      'value'    => $value,
+      'operator' => $operator !== NULL ? strtoupper($operator) : (is_array($value) ? 'IN' : '='),
+    ];
+
+    return $this;
+  }
+
+  /**
+   * Whether one fixture row satisfies every condition of this write.
+   */
+  protected function matches(array $row) {
+    foreach ($this->conditions as $condition) {
+      $column = $this->column($condition['field']);
+      if (!array_key_exists($column, $row)) {
+        return FALSE;
+      }
+      if (!$this->compare($row[$column], $condition['value'], $condition['operator'])) {
+        return FALSE;
+      }
+    }
+
+    return TRUE;
+  }
+
+  protected function compare($actual, $expected, $operator) {
+    switch ($operator) {
+      case '=':
+        return (string) $actual === (string) $expected;
+
+      case '<>':
+      case '!=':
+        return (string) $actual !== (string) $expected;
+
+      case 'IN':
+        foreach ((array) $expected as $candidate) {
+          if ((string) $actual === (string) $candidate) {
+            return TRUE;
+          }
+        }
+
+        return FALSE;
+
+      case 'NOT IN':
+        foreach ((array) $expected as $candidate) {
+          if ((string) $actual === (string) $candidate) {
+            return FALSE;
+          }
+        }
+
+        return TRUE;
+
+      case '<':
+        return $actual < $expected;
+
+      case '<=':
+        return $actual <= $expected;
+
+      case '>':
+        return $actual > $expected;
+
+      case '>=':
+        return $actual >= $expected;
+
+      case 'IS NULL':
+        return $actual === NULL;
+
+      case 'IS NOT NULL':
+        return $actual !== NULL;
+    }
+
+    throw new RuntimeException('MyapiTestWriteQuery: unsupported operator "' . $operator . '".');
+  }
+
+  protected function column($field) {
+    $position = strpos($field, '.');
+
+    return $position === FALSE ? $field : substr($field, $position + 1);
+  }
+
+  protected function &rows() {
+    if (!isset($GLOBALS['myapi_test_db'][$this->table])) {
+      $GLOBALS['myapi_test_db'][$this->table] = [];
+    }
+
+    return $GLOBALS['myapi_test_db'][$this->table];
+  }
+
+  protected function record($extra = []) {
+    myapi_test_record_write($this->call, $this->table, [
+      'fields'     => $this->fields,
+      'conditions' => $this->conditions,
+    ] + $extra);
+  }
+
+  /**
+   * Fails this write when the test asked for it (SPEC 121).
+   *
+   * THE DELIBERATE REPLACEMENT FOR A SIDE EFFECT. Before SPEC 121 every write
+   * threw, and six cases in ServiceRequestNotificationTest used that to prove
+   * the property that actually matters: the notification fan-out is
+   * BEST EFFORT, wrapped in a try/catch, and a database failure inside it must
+   * never propagate into the 201 the resident is waiting for. Making the
+   * writes work would have quietly deleted those proofs — the code would have
+   * succeeded, no exception would have been caught, and six green tests would
+   * have been asserting nothing.
+   *
+   * So the failure became explicit: a test names the table it wants to break
+   * with myapi_test_db_fail_writes('myapi_notifications'), and every write to
+   * it throws. That is strictly better than the old accident — the case now
+   * says which failure it is simulating, and the same switch covers an UPDATE
+   * or a DELETE failing, which the old blanket throw could not distinguish.
+   */
+  protected function failIfAsked() {
+    $failing = isset($GLOBALS['myapi_test_db_write_failures']) ? $GLOBALS['myapi_test_db_write_failures'] : [];
+    if (in_array($this->table, $failing, TRUE)) {
+      myapi_test_record_write($this->call, $this->table, ['failed' => TRUE]);
+
+      throw new RuntimeException($this->call . '(' . $this->table . ') failed: the test asked for it.');
+    }
+  }
+
+}
+
+/**
+ * An UPDATE over the fixtures (SPEC 121). Answers the number of rows changed,
+ * which is what `marked` and every "did anything happen" branch reads.
+ */
+class MyapiTestUpdateQuery extends MyapiTestWriteQuery {
+
+  public function execute() {
+    $this->failIfAsked();
+
+    $rows = &$this->rows();
+    $changed = 0;
+
+    foreach ($rows as $index => $row) {
+      $row = (array) $row;
+      if (!$this->matches($row)) {
+        continue;
+      }
+      $changed++;
+      foreach ($this->fields as $column => $value) {
+        $row[$column] = $value;
+      }
+      $rows[$index] = $row;
+    }
+
+    $this->record(['changed' => $changed]);
+
+    return $changed;
+  }
+
+}
+
+/**
+ * An INSERT over the fixtures (SPEC 121).
+ *
+ * Answers a naive max+1 of the table's id column, the way Drupal answers the
+ * last insert id — enough for a resource that inserts and then reads back what
+ * it created, and never a claim about the real auto_increment.
+ */
+class MyapiTestInsertQuery extends MyapiTestWriteQuery {
+
+  protected $columns = [];
+  protected $pending = [];
+
+  public function values(array $values) {
+    // Positional values line up with the column list declared by fields().
+    if ($this->columns && array_keys($values) === range(0, count($values) - 1)) {
+      $values = array_combine($this->columns, $values);
+    }
+    $this->pending[] = $values;
+
+    return $this;
+  }
+
+  public function execute() {
+    $this->failIfAsked();
+
+    $rows = &$this->rows();
+
+    // fields() with a value map and no values() call is the single-row form.
+    $pending = $this->pending;
+    if (!$pending && $this->fields && array_filter($this->fields, function ($value) {
+      return $value !== NULL;
+    })) {
+      $pending = [$this->fields];
+    }
+
+    $last = 0;
+    foreach ($pending as $values) {
+      $id = $this->nextId($rows);
+      if ($id !== NULL && !isset($values[$this->idColumn()])) {
+        $values[$this->idColumn()] = (string) $id;
+      }
+      $rows[] = $values;
+      $last = $id !== NULL ? $id : $last;
+    }
+
+    myapi_test_record_write($this->call, $this->table, ['rows' => $pending]);
+
+    return $last;
+  }
+
+  /**
+   * The id column of a myapi table, or NULL when the table has none.
+   */
+  protected function idColumn() {
+    return 'id';
+  }
+
+  protected function nextId(array $rows) {
+    $max = 0;
+    foreach ($rows as $row) {
+      $row = (array) $row;
+      if (isset($row[$this->idColumn()]) && is_numeric($row[$this->idColumn()])) {
+        $max = max($max, (int) $row[$this->idColumn()]);
+      }
+    }
+
+    return $max + 1;
+  }
+
+}
+
+/**
+ * A DELETE over the fixtures (SPEC 121). Answers the number of rows removed.
+ */
+class MyapiTestDeleteQuery extends MyapiTestWriteQuery {
+
+  public function execute() {
+    $this->failIfAsked();
+
+    $rows = &$this->rows();
+    $kept = [];
+    $deleted = 0;
+
+    foreach ($rows as $row) {
+      if ($this->matches((array) $row)) {
+        $deleted++;
+        continue;
+      }
+      $kept[] = $row;
+    }
+
+    $rows = $kept;
+    $this->record(['deleted' => $deleted]);
+
+    return $deleted;
+  }
+
+}
+
+/**
+ * A MERGE over the fixtures (SPEC 121): update the row matching key(), insert
+ * it when there is none. The one caller is the chat field mirror.
+ */
+class MyapiTestMergeQuery extends MyapiTestWriteQuery {
+
+  public function execute() {
+    $this->failIfAsked();
+
+    $rows = &$this->rows();
+    $found = FALSE;
+
+    foreach ($rows as $index => $row) {
+      $row = (array) $row;
+      $matches = TRUE;
+      foreach ($this->keys as $column => $value) {
+        if (!array_key_exists($column, $row) || (string) $row[$column] !== (string) $value) {
+          $matches = FALSE;
+          break;
+        }
+      }
+      if (!$matches) {
+        continue;
+      }
+      $found = TRUE;
+      foreach ($this->fields as $column => $value) {
+        $row[$column] = $value;
+      }
+      $rows[$index] = $row;
+    }
+
+    if (!$found) {
+      $rows[] = $this->fields + $this->keys;
+    }
+
+    myapi_test_record_write($this->call, $this->table, [
+      'keys'   => $this->keys,
+      'fields' => $this->fields,
+      'merged' => $found ? 'update' : 'insert',
+    ]);
+
+    return $found ? 'update' : 'insert';
+  }
+
 }
 
 if (!function_exists('db_insert')) {
   function db_insert($table, array $options = []) {
-    myapi_test_record_write('db_insert', $table);
+    return new MyapiTestInsertQuery($table, 'db_insert');
   }
 }
 
 if (!function_exists('db_update')) {
   function db_update($table, array $options = []) {
-    myapi_test_record_write('db_update', $table);
+    return new MyapiTestUpdateQuery($table, 'db_update');
   }
 }
 
 if (!function_exists('db_delete')) {
   function db_delete($table, array $options = []) {
-    myapi_test_record_write('db_delete', $table);
+    return new MyapiTestDeleteQuery($table, 'db_delete');
   }
 }
 
 if (!function_exists('db_merge')) {
   function db_merge($table, array $options = []) {
-    myapi_test_record_write('db_merge', $table);
+    return new MyapiTestMergeQuery($table, 'db_merge');
   }
+}
+
+/**
+ * The cron queue, as a recorder (SPEC 121).
+ *
+ * The other half of what the applied writes opened up. myapi_notification_create()
+ * inserts the inbox rows and then ENQUEUES the push — deliberately deferred, so
+ * a slow OneSignal never blocks the caller — and with db_insert() throwing,
+ * nothing ever reached that line. Now every trigger in the module runs to its
+ * end, and what it put on the queue is readable: the batching by
+ * MYAPI_ONESIGNAL_MAX_EXTERNAL_IDS, the external ids as strings, and the data
+ * payload the app deep-links from.
+ *
+ * It queues and nothing else: no claim, no lease, no release, no cron. Whether
+ * the worker runs, and what it does when OneSignal answers 500, is
+ * tests/integration's job — myapi_test_http_requests() already covers the
+ * transport itself.
+ */
+if (!class_exists('DrupalQueue')) {
+  class DrupalQueue {
+
+    public static function get($name, $reliable = FALSE) {
+      return new MyapiTestQueue($name);
+    }
+
+  }
+}
+
+if (!class_exists('MyapiTestQueue')) {
+  class MyapiTestQueue {
+
+    private $name;
+
+    public function __construct($name) {
+      $this->name = $name;
+    }
+
+    public function createItem($data) {
+      $GLOBALS['myapi_test_queue_items'][] = ['queue' => $this->name, 'data' => $data];
+
+      return TRUE;
+    }
+
+    public function createQueue() {
+    }
+
+    public function numberOfItems() {
+      return count(myapi_test_queue_items($this->name));
+    }
+
+  }
+}
+
+/**
+ * Every queued item since the last reset, in order (SPEC 121).
+ *
+ * @param string|NULL $queue  Narrow to one queue name, or NULL for all.
+ */
+function myapi_test_queue_items($queue = NULL) {
+  $items = isset($GLOBALS['myapi_test_queue_items']) ? $GLOBALS['myapi_test_queue_items'] : [];
+  if ($queue === NULL) {
+    return $items;
+  }
+
+  return array_values(array_filter($items, function ($item) use ($queue) {
+    return $item['queue'] === $queue;
+  }));
+}
+
+function myapi_test_queue_reset() {
+  $GLOBALS['myapi_test_queue_items'] = [];
+}
+
+/**
+ * Makes every write to the named tables fail (SPEC 121).
+ *
+ * See MyapiTestWriteQuery::failIfAsked() for why this exists. Called with no
+ * argument it clears the list, which is what setUp() does.
+ *
+ * @param string|array $tables  Table name, or list of them.
+ */
+function myapi_test_db_fail_writes($tables = []) {
+  $GLOBALS['myapi_test_db_write_failures'] = array_values((array) $tables);
+}
+
+/**
+ * Every write attempted since the last reset, in order (SPEC 121).
+ */
+function myapi_test_db_writes($table = NULL) {
+  $writes = isset($GLOBALS['myapi_test_db_writes']) ? $GLOBALS['myapi_test_db_writes'] : [];
+  if ($table === NULL) {
+    return $writes;
+  }
+
+  return array_values(array_filter($writes, function ($write) use ($table) {
+    return $write['table'] === $table;
+  }));
 }
 
 if (!function_exists('db_query')) {
@@ -1879,6 +2691,154 @@ if (!function_exists('user_load')) {
  *
  * They return FALSE when nothing matches, exactly as Drupal's do — never NULL.
  */
+if (!function_exists('user_access')) {
+  /**
+   * The permission check, answered from a fixture (SPEC 121).
+   *
+   * The building-admin user filter turns on for an operator who holds the role
+   * and does NOT hold 'administer users' — so the whole decision hangs on this
+   * one call, and it is answered per (permission, uid) so a case can build the
+   * exact operator it is about.
+   */
+  function user_access($permission, $account = NULL) {
+    $uid = is_object($account) && isset($account->uid) ? (int) $account->uid : 0;
+    $key = $permission . ':' . $uid;
+
+    if (isset($GLOBALS['myapi_test_permissions'][$key])) {
+      return (bool) $GLOBALS['myapi_test_permissions'][$key];
+    }
+
+    return isset($GLOBALS['myapi_test_permissions'][$permission])
+      ? (bool) $GLOBALS['myapi_test_permissions'][$permission]
+      : FALSE;
+  }
+}
+
+if (!function_exists('user_view_access')) {
+  /**
+   * Drupal's own gate on a user profile, answered from a fixture (SPEC 121).
+   *
+   * myapi_building_admin_user_view_access() defers to it FIRST and only then
+   * applies its own narrowing — so a stub that always allowed would hide the
+   * order of the two checks.
+   */
+  function user_view_access($account = NULL) {
+    return isset($GLOBALS['myapi_test_user_view_access'])
+      ? (bool) $GLOBALS['myapi_test_user_view_access']
+      : TRUE;
+  }
+}
+
+if (!function_exists('language_default')) {
+  /**
+   * The site language, as an object with the one property drupal_mail() reads
+   * (SPEC 121).
+   */
+  function language_default($property = NULL) {
+    $language = (object) ['language' => 'es', 'name' => 'Spanish', 'prefix' => ''];
+
+    return $property === NULL ? $language : $language->{$property};
+  }
+}
+
+if (!function_exists('drupal_mail')) {
+  /**
+   * Records the send instead of performing it, and answers what the test says
+   * (SPEC 121).
+   *
+   * The mail queue worker is a RETRY POLICY and nothing else: it hands the item
+   * to drupal_mail() and decides, from the boolean that comes back, whether to
+   * requeue it, drop it or let it go. Neither branch is reachable without being
+   * able to make the send fail, so the result is a global a test sets — and the
+   * default is success, so nothing that was already passing changes.
+   *
+   * The message array is shaped like core's: 'result' is what the worker reads.
+   */
+  function drupal_mail($module, $key, $to, $language, $params = [], $from = NULL, $send = TRUE) {
+    $GLOBALS['myapi_test_mails'][] = [
+      'module' => $module,
+      'key'    => $key,
+      'to'     => $to,
+      'params' => $params,
+    ];
+
+    $result = isset($GLOBALS['myapi_test_mail_result']) ? $GLOBALS['myapi_test_mail_result'] : TRUE;
+
+    return ['result' => $result, 'key' => $key, 'to' => $to];
+  }
+}
+
+/**
+ * Every mail handed to drupal_mail() since the last reset (SPEC 121).
+ */
+function myapi_test_mails() {
+  return isset($GLOBALS['myapi_test_mails']) ? $GLOBALS['myapi_test_mails'] : [];
+}
+
+function myapi_test_mail_reset($result = TRUE) {
+  $GLOBALS['myapi_test_mails'] = [];
+  $GLOBALS['myapi_test_mail_result'] = $result;
+}
+
+if (!function_exists('drupal_basename')) {
+  /**
+   * Core's stream-wrapper-aware basename(), reduced to the one shape this
+   * module passes it (SPEC 121): a 'scheme://path/to/file.ext' URI.
+   *
+   * PHP's own basename() is locale-dependent for multibyte names, which is why
+   * core wraps it; for the ASCII and UTF-8 filenames the payment receipts and
+   * the bulletin attachments carry, taking everything after the last slash is
+   * the same answer.
+   */
+  function drupal_basename($uri, $suffix = NULL) {
+    $position = strrpos($uri, '/');
+    $base = $position === FALSE ? $uri : substr($uri, $position + 1);
+
+    if ($suffix !== NULL && $suffix !== '' && substr($base, -strlen($suffix)) === $suffix) {
+      $base = substr($base, 0, -strlen($suffix));
+    }
+
+    return $base;
+  }
+}
+
+if (!function_exists('valid_email_address')) {
+  /**
+   * Core's own, reduced to PHP's own validator (SPEC 121).
+   *
+   * Drupal 7 implements this with a hand-written pattern that is, for every
+   * address this module can produce, equivalent to FILTER_VALIDATE_EMAIL. What
+   * the mail queue asks of it is one decision — enqueue or log-and-skip — and
+   * the two cases that matter, an empty recipient and a syntactically broken
+   * one, answer the same here as there.
+   */
+  function valid_email_address($mail) {
+    return is_string($mail) && (bool) filter_var($mail, FILTER_VALIDATE_EMAIL);
+  }
+}
+
+if (!function_exists('user_load_multiple')) {
+  /**
+   * The batched sibling of user_load(), uid-keyed (SPEC 121).
+   *
+   * Reached for the first time when the applied write side let the notification
+   * triggers run past their db_insert(). Same fixture and same contract as
+   * user_load(): a uid with no fixture account is ABSENT from the answer, never
+   * present as FALSE, which is how Drupal answers for a deleted account and
+   * what the callers check with isset().
+   */
+  function user_load_multiple($uids = [], $conditions = [], $reset = FALSE) {
+    $loaded = [];
+    foreach ((array) $uids as $uid) {
+      if (isset($GLOBALS['myapi_test_users'][$uid])) {
+        $loaded[(int) $uid] = (object) $GLOBALS['myapi_test_users'][$uid];
+      }
+    }
+
+    return $loaded;
+  }
+}
+
 if (!function_exists('myapi_test_user_by_column')) {
   function myapi_test_user_by_column($column, $value) {
     $GLOBALS['myapi_test_user_lookups'][] = ['column' => $column, 'value' => $value];
@@ -2086,6 +3046,14 @@ if (!function_exists('node_save')) {
       $node->nid = $next;
       $GLOBALS['myapi_test_next_nid'] = $next + 1;
     }
+    // created/changed are STAMPED BY node_save() in Drupal, not by the caller
+    // that built the object (SPEC 121). Whoever reads them right after the save
+    // — the payment's backend email prints the creation time — would otherwise
+    // read an undefined property here and nowhere else.
+    if (!isset($node->created)) {
+      $node->created = REQUEST_TIME;
+    }
+    $node->changed = REQUEST_TIME;
     $GLOBALS['myapi_test_node_saves'][] = $node;
 
     return $node;
@@ -2116,6 +3084,7 @@ if (!function_exists('file_delete')) {
  * Everything the write paths recorded since the last reset (SPEC 77).
  */
 function myapi_test_write_reset() {
+  $GLOBALS['myapi_test_file_load_multiple'] = [];
   $GLOBALS['myapi_test_node_saves'] = [];
   $GLOBALS['myapi_test_file_usage'] = [];
   $GLOBALS['myapi_test_file_deletes'] = [];
@@ -2153,6 +3122,43 @@ if (!function_exists('file_load')) {
       ? $GLOBALS['myapi_test_files'][(int) $fid]
       : FALSE;
   }
+}
+
+if (!function_exists('file_load_multiple')) {
+  /**
+   * The batched sibling of file_load(), fid-keyed (SPEC 121).
+   *
+   * Faithful to Drupal in the two things the bulletin listing depends on: the
+   * answer is an associative array KEYED BY fid (which is what lets the mapper
+   * write `isset($files[$row->file_id])` instead of scanning), and a fid with
+   * no managed file is simply ABSENT from the answer rather than present as
+   * FALSE. That absence is a documented response shape of the endpoint — a
+   * bulletin whose attachment was deleted keeps its file_id and answers a null
+   * file_url — and a stub that returned a placeholder would make it
+   * unreachable.
+   *
+   * The call is recorded so a test can prove the page loads its attachments in
+   * ONE batch instead of one query per row.
+   */
+  function file_load_multiple($fids = [], $conditions = []) {
+    $GLOBALS['myapi_test_file_load_multiple'][] = $fids;
+
+    $loaded = [];
+    foreach ((array) $fids as $fid) {
+      if (isset($GLOBALS['myapi_test_files'][(int) $fid])) {
+        $loaded[(int) $fid] = $GLOBALS['myapi_test_files'][(int) $fid];
+      }
+    }
+
+    return $loaded;
+  }
+}
+
+/**
+ * Every batched file load since the last reset, in order (SPEC 121).
+ */
+function myapi_test_file_load_multiple_calls() {
+  return isset($GLOBALS['myapi_test_file_load_multiple']) ? $GLOBALS['myapi_test_file_load_multiple'] : [];
 }
 
 /**

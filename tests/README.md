@@ -16,7 +16,12 @@ request handlers, up to the first `db_select()`.
 
 ## Unit tests
 
-Covers only the functions that don't touch the database or Drupal APIs:
+**Since SPEC 121 this layer covers every resource of the module**; the paragraphs
+below are the historical record of how it got there, spec by spec, and the
+"Scope note" at the end of this file states where it stands today.
+
+Originally it covered only the functions that don't touch the database or
+Drupal APIs:
 token generation/hashing (`includes/myapi.token.inc`), bearer header parsing
 (`includes/myapi.auth.inc`), the length-validation early-returns of
 `myapi_auth_password_reset_execute()` (`resources/auth.resource.inc`), the
@@ -389,6 +394,42 @@ block, which is where the fatal points.
 
 ---
 
+### The harness since SPEC 121
+
+`bootstrap.php` grew in five directions, each documented in its own block inside
+the file:
+
+1. **The write side APPLIES instead of throwing.** `db_insert()`, `db_update()`,
+   `db_delete()` and `db_merge()` now modify `$GLOBALS['myapi_test_db']` and
+   answer the affected-row count, which is what makes an endpoint that *writes
+   and then answers* observable — the idempotence of
+   `PUT /notifications/%/read`, the `marked` counter of `read-all`, the row a
+   fan-out inserted. Every call is still recorded in
+   `$GLOBALS['myapi_test_db_writes']` with the same `['call', 'table']` shape it
+   always had. **It is not a database**: no types, no constraints, no
+   transactions, no cascades, and a naive `max+1` for ids.
+2. **A failing write is now asked for out loud.** `myapi_test_db_fail_writes('<table>')`
+   makes every write to that table throw, which is how the best-effort contract
+   of the notification triggers is proven now that writes succeed by default.
+3. **A parser for compound `where()` fragments**, because the reservation
+   resource writes `(A) OR (B AND C)`. The grammar is closed; anything outside
+   it still throws rather than evaporating.
+4. **`SUM()` / `AVG()`**, and the single row SQL answers for an ungrouped
+   aggregate over zero rows — plus SQL's three-valued logic in every comparison,
+   so `NULL <> 'x'` excludes the row the way MySQL does and not the way PHP
+   does.
+5. **New stubs**: `DrupalQueue` (a recorder), `file_load_multiple()`,
+   `user_load_multiple()`, `drupal_mail()`, `language_default()`,
+   `valid_email_address()`, `drupal_basename()`, `user_access()`,
+   `user_view_access()`, `fetchAllKeyed()`, and `exists()` inside a condition
+   group.
+
+New fixture helpers, all resettable from `setUp()`:
+`myapi_test_db_writes()`, `myapi_test_db_fail_writes()`,
+`myapi_test_queue_items()` / `myapi_test_queue_reset()`,
+`myapi_test_mails()` / `myapi_test_mail_reset()`,
+`myapi_test_file_load_multiple_calls()`.
+
 ## Integration tests
 
 Covers all 5 endpoints end-to-end (success + every documented error) via real
@@ -522,13 +563,27 @@ followed by `node tests/e2e/password-reset-roundtrip.js`.
 
 ## Scope note
 
-`tests/integration/` and `tests/e2e/` cover `auth` only. `tests/unit/` covers
-`auth`, the shared helpers, the reservation and claim logic, since SPEC 74 the
-whole `units` endpoint, and — across the services specs — the marketplace: its
-endpoints and, since SPEC 94, the pure half of its back-office timeline. No
-back-office screen has integration or e2e coverage in any domain. The pattern here (three layers,
-`myapi_test` companion module for integration, Postman + Node for e2e) is meant
-to be replicated for the remaining resources (`receipt`, `extra_fee`, `payment`,
-`expense`) in future specs — see `specs/auth/21-auth-testing.md`, "Fuera de este
-spec", and `specs/units/74-units-unit-tests.md` for what the unit layer can and
-cannot say about a database-backed resource.
+`tests/integration/` and `tests/e2e/` cover `auth` only, and no back-office
+screen has integration or e2e coverage in any domain.
+
+`tests/unit/` covers **every resource of the module** since SPEC 121, which
+closed the eight that had none (`payment`, `receipt`, `extra_fee`, `expense`,
+`condominium`, `bulletin`, `notification`, `payment_method`) plus the reservation
+endpoints, the reservation calendar, the notification fan-outs, the payment
+verification workflow, the HTML email templates and the shared helpers that had
+no owner. Measured over `includes/` + `resources/`: 586 of 731 functions are
+exercised by name, and only 14 are unreachable from the suite — all of them Form
+API callbacks and page callbacks, listed as out of scope in
+`specs/_shared/121-remaining-unit-tests.md`.
+
+What the unit layer can and cannot say about a database-backed resource is
+documented in `specs/units/74-units-unit-tests.md`; what it cannot say about a
+WRITE is in the `MyapiTestWriteQuery` block of `bootstrap.php`. Two limitations
+bound several classes and are restated in each of their docblocks:
+`myapi_request_body()` reads `php://input`, which a unit test cannot write (so a
+JSON-bodied create is only reachable up to its first guard), and
+`file_save_upload()` is Drupal's (so upload branches stop before it).
+
+The three-layer pattern (`myapi_test` companion module for integration, Postman
++ Node for e2e) is still meant to be replicated for the other resources in
+future specs — see `specs/auth/21-auth-testing.md`, "Fuera de este spec".
