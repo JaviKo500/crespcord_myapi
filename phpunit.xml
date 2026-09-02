@@ -8,4 +8,27 @@
             <directory>tests/unit</directory>
         </testsuite>
     </testsuites>
+
+    <!--
+      The scope the coverage gate measures (SPEC 124).
+
+      includes/ and resources/ and nothing else, because they are what the unit
+      suite actually runs: every test requires the production .inc it exercises
+      and calls it under the stubs in tests/unit/bootstrap.php, so a percentage
+      over these two directories means something.
+
+      The two files at the root are deliberately out. myapi.install is 44 update
+      hooks and a schema — they need a live site to execute, and what CAN be
+      asserted about them without one already is, statically, by
+      ServicesInstallTest. myapi.module is hook_menu() plus Drupal hooks that
+      only fire inside a request; the part of it this suite drives is the
+      routing table, and ModuleContractTest and EndpointContractTest read it
+      directly. Counting either would move the number without measuring a test.
+    -->
+    <coverage>
+        <include>
+            <directory suffix=".inc">includes</directory>
+            <directory suffix=".inc">resources</directory>
+        </include>
+    </coverage>
 </phpunit>

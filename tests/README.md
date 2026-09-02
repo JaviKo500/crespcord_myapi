@@ -1,9 +1,10 @@
 # Tests
 
-Three behaviour layers plus a contract layer. The three behaviour ones were all
-built covering the 5 JSON endpoints of `/api/v1/auth` documented in
-[`docs/auth.md`](../docs/auth.md); the contract layer (SPEC 123) is about the
-module's own structure and belongs to no endpoint. The HTML page
+Three behaviour layers, a contract layer and a static one. The three behaviour
+ones were all built covering the 5 JSON endpoints of `/api/v1/auth` documented in
+[`docs/auth.md`](../docs/auth.md); the contract layer (SPEC 123, extended by
+SPEC 124) is about the module's own structure and belongs to no endpoint, and
+the static one (SPEC 124) runs no code at all. The HTML page
 `GET/POST password/reset` was out of scope in `specs/auth/21-auth-testing.md`;
 since SPEC 73 it is unit-tested in full — its four renderers and its three
 request handlers, up to the first `db_select()`.
@@ -11,12 +12,14 @@ request handlers, up to the first `db_select()`.
 | Layer | Location | Framework | Runs against |
 |---|---|---|---|
 | Unit | `tests/unit/` | PHPUnit (standalone) | Nothing — pure functions only |
-| Contract | `tests/unit/ModuleContractTest.php` | PHPUnit (standalone) | The module's own source and `myapi.info` |
+| Contract | `tests/unit/ModuleContractTest.php`, `tests/unit/EndpointContractTest.php` | PHPUnit (standalone) | The module's own source, `myapi.info`, and its routing table |
+| Static | `phpstan.neon` | PHPStan (level 1) | The sources, without running them |
 | Integration | `tests/integration/` | SimpleTest (`DrupalWebTestCase`) | SimpleTest's own sandbox install |
 | E2E | `tests/e2e/` | Postman/Newman + Node | Production (`https://crespcord.lamotora.com`) |
 
 Since SPEC 123 the unit and contract layers run on **every push and pull
-request**, under PHP 7.4 — see "Continuous integration" below.
+request**, under PHP 7.4; SPEC 124 added coverage measurement and the static
+layer to the same trigger — see "Continuous integration" below.
 
 ---
 
@@ -25,12 +28,23 @@ request**, under PHP 7.4 — see "Continuous integration" below.
 `.github/workflows/tests.yml` runs on every push to any branch and on every pull
 request, on **PHP 7.4** — the version production runs, and the reason the job
 exists at all: `php -l` on a developer machine running PHP 8 proves nothing
-about the target, because PHP 8 syntax parses fine there. Three steps:
+about the target, because PHP 8 syntax parses fine there. Two jobs, kept apart
+because they fail for unrelated reasons and which one went red should be
+readable without opening the log.
+
+**`unit`** — lint, suite, coverage:
 
 1. `composer install` (Composer packages cached on `composer.lock`).
 2. `php -l` over every `.php`, `.inc`, `.module`, `.install` and `.test` in the
-   repository — 178 files.
-3. `vendor/bin/phpunit`, the whole unit suite.
+   repository — 181 files.
+3. `vendor/bin/phpunit --coverage-clover coverage.xml`, the whole unit suite,
+   with `pcov` as the driver.
+4. `php scripts/coverage-gate.php`, which decides whether the numbers are still
+   acceptable — see "Coverage gate" below.
+
+**`static`** — `vendor/bin/phpstan analyse` at level 1; see "Static analysis"
+below. Locally, `scripts/run-static-analysis.sh` (or `.ps1`) is the same thing
+with the `composer install` in front.
 
 The integration and e2e layers stay out: they need a live Drupal site, real
 credentials and an IMAP mailbox, and they keep their `scripts/run-*.sh` runners.
@@ -64,6 +78,122 @@ It reads the routing table by requiring `myapi.module` and calling
 `bootstrap.php` is for. `I18nTest` carries the same idea for the message
 catalogue: every key the module passes to a response helper must exist in it,
 and every key in it must be reachable from the module.
+
+`EndpointContractTest` (SPEC 124) is the dynamic half of the same idea: it takes
+that routing table and **calls** every callback in it, once per HTTP method, to
+assert the two things that are true of all of them at once.
+
+**Authentication.** Every route declares `'access callback' => TRUE`, because
+Drupal's permission system knows nothing about bearer tokens: the whole security
+boundary is that each callback calls `myapi_auth_require_access_token()` before
+it does anything, which is 58 hand-written calls across 20 files. An endpoint
+that forgets the line fails no test — every test seeds a token row, so the guard
+is never the thing under test — and it does not 500 in production either. It
+answers, to anyone. The class asserts that all 53 routed path+method pairs answer
+`401 missing_authorization` with no header and `401 invalid_token` with an
+unknown one, against a five-entry allowlist (`ping`, login, refresh, and the two
+password endpoints) that is itself checked for stale entries. Two further cases
+assert that the guard runs *first*: with no header, no table is queried at all;
+with a rejected token, the only table queried is `my_api_tokens`. A resource that
+loads its rows and *then* authenticates answers the same 401 and fails those two.
+
+**The method matrix.** The dispatcher pattern is copied by hand into every
+resource, and the branch that gets lost in the copy is the `else`: a dispatcher
+that forgets it serves its GET handler to a DELETE. 36 test files already assert
+405 for their own resource, which is 36 chances to forget the 37th. The class
+asserts, for every route, that each of the seven HTTP methods it does not
+implement answers `405 method_not_allowed` in the envelope, and that each one it
+does implement is really wired.
+
+Why dynamic when the rest of the contract layer is static: a static walk can
+prove the guard's name appears somewhere under a dispatcher, and that is not the
+question — the question is whether it is on the path the request takes, and a
+dispatcher whose GET branch authenticates and whose POST branch does not passes
+any reasonable grep. What makes calling it possible with no fixtures is that the
+guard bails before it queries anything, which the class asserts rather than
+assumes.
+
+What it cannot say: nothing there proves an *authenticated* request is
+*authorised*. That a token from condominium A cannot read condominium B's rows
+needs real fixtures per resource, and stays with each resource's own test — and,
+for the SQL half, with `tests/integration`.
+
+---
+
+## Static analysis
+
+`vendor/bin/phpstan analyse` (SPEC 124), configured in `phpstan.neon`, at
+**level 1**, over `includes/`, `resources/`, `myapi.module` and `myapi.install`.
+
+It closes a gap that is wider on Drupal 7 than on most stacks. `php -l` proves a
+file parses and the suite proves the lines it reaches behave — and in between
+there is no autoloader and no imports: every call in this module is a bare global
+function name resolved at runtime, across 757 of our own functions in 60 files.
+A renamed helper whose old name survives in one caller, a typo in a function
+name, a variable spelled two ways in the same function: all of them parse, none
+is caught by a test that does not happen to walk that line, and each is a white
+screen on the request that reaches it. Level 1 also checks argument counts
+against our own signatures.
+
+It reports **zero** today, which is what makes it a gate rather than a report:
+the next error it prints is new.
+
+`tests/stubs/drupal7.stub.php` is what makes it possible. Drupal core is not in
+this repository and never will be — the module is deployed into a site that
+already has it — so without help PHPStan reports all 1,453 core calls as unknown
+and the signal is gone. The stub declares the 114 core functions, 5 classes and
+17 constants this module names, and **nothing else about them**: every parameter
+is variadic, every return is `mixed`. It is not a model of Drupal and must not
+become one; a transcribed signature that is wrong is a CI failure on correct
+code. Nothing loads the file — it is named under `scanFiles`, which PHPStan reads
+and never includes.
+
+Adding a Drupal core call therefore means adding a line to that stub, on purpose:
+Drupal 7 has been end-of-life since January 2025, and a deliberate stop to
+confirm a function exists in 7.x — rather than being remembered from a later
+version — is worth the one line.
+
+Level 2 currently reports 260, of which 199 are `SelectQuery` and
+`SelectQueryInterface` — clearing them means modelling core's database layer in
+the stub, against that file's own rule — and the other 61 are one false positive:
+PHPStan does not know `myapi_error()` ends the request, so it reads
+`if (!$row) { myapi_error(...); }` as falling through and reports every
+dereference after it. Raising the level is real work with a real payoff, not a
+knob to turn on a whim.
+
+---
+
+## Coverage gate
+
+`scripts/coverage-gate.php` (SPEC 124) reads the Clover report the suite writes
+and fails the build on two rules. The measured scope is `includes/` and
+`resources/`, declared in `phpunit.xml`: the code the unit suite actually runs.
+`myapi.install` and `myapi.module` are out — update hooks and Drupal hooks need
+a live site to execute, and counting them would move the number without
+measuring a test.
+
+**Rule 1, the sharp one: a file that no test executes at all fails the build, by
+name.** That is the failure a green suite of 3,600 cases is structurally blind
+to — a resource that arrives with no test breaks nothing that exists, and the
+percentage does not catch it either, because one new file among sixty moves the
+total by less than the noise between two commits. The check fires the day the
+file is added, when writing the test is still cheap. `UNCOVERABLE` in the script
+is its allowlist and holds one entry, `includes/myapi.mailsystem.inc`, which
+extends a Drupal core class at file scope and cannot be loaded outside a site at
+all; like the suite's other allowlists it is checked for stale entries in both
+directions.
+
+**Rule 2, the blunt one:** the total may not fall below `COVERAGE_FLOOR`. It is a
+**ratchet**, not a target — deliberately set below where the suite stands so that
+introducing it did not turn CI red, to be raised to whatever CI prints, less a
+point or two of slack. The gate prints the total and the twelve weakest files on
+every run, passing or failing, which is what makes raising it a one-line diff a
+reviewer can argue with.
+
+What neither rule can say: a covered line is a line that **ran**, not a line
+whose behaviour was asserted. 100% here would still be compatible with a suite
+that calls everything and checks nothing. It is a floor under the tests, not a
+measure of them.
 
 ---
 
@@ -628,6 +758,12 @@ no owner. Measured over `includes/` + `resources/`: 586 of 731 functions are
 exercised by name, and only 14 are unreachable from the suite — all of them Form
 API callbacks and page callbacks, listed as out of scope in
 `specs/_shared/121-remaining-unit-tests.md`.
+
+That count was a proxy — a function named in a test file, which is neither
+necessary (a helper reached through its dispatcher is covered without ever being
+named) nor sufficient (naming it is not running it). Since SPEC 124 the real
+figure is measured on every CI run and enforced by `scripts/coverage-gate.php`;
+the proxy above is kept as the historical record of what SPEC 121 closed.
 
 What the unit layer can and cannot say about a database-backed resource is
 documented in `specs/units/74-units-unit-tests.md`; what it cannot say about a

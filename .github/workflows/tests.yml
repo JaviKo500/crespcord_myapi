@@ -1,4 +1,4 @@
-# Continuous integration for the myapi module (SPEC 123).
+# Continuous integration for the myapi module (SPEC 123, extended by SPEC 124).
 #
 # Everything here runs on PHP 7.4, which is the point: production is
 # 7.4.33 and most developer machines are not, so `php -l` on a laptop proves
@@ -10,6 +10,22 @@
 # production .inc files with the stubs in tests/unit/bootstrap.php. The
 # integration (SimpleTest) and e2e (Postman/IMAP) layers need a live site and
 # real credentials, so they stay out of CI and keep their scripts/ runners.
+#
+# SPEC 124 added the two jobs' worth of checking that the suite could not do
+# for itself:
+#
+#   unit    now measures what it covers, and fails on a source file that no
+#           test executes — the one failure a green suite of 3,000 cases is
+#           structurally blind to, because a resource that arrives with no
+#           test at all breaks nothing that exists.
+#   static  runs PHPStan, which is the other half of `php -l`: the linter
+#           proves a file parses, and on Drupal 7 — no autoloader, no imports,
+#           every call a bare global function name resolved at runtime — a
+#           misspelt or renamed callee parses perfectly and is a white screen
+#           on the request that reaches it.
+#
+# They are separate jobs on purpose: they fail for unrelated reasons, and
+# reading which one went red should not require opening the log.
 
 name: tests
 
@@ -20,18 +36,21 @@ on:
 
 jobs:
   unit:
-    name: PHP 7.4 · lint + unit suite
+    name: PHP 7.4 · lint + unit suite + coverage
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # pcov, not xdebug: it only does line coverage, which is all the gate
+      # reads, and it costs a fraction of xdebug's slowdown on a suite this
+      # size.
       - name: Set up PHP 7.4
         uses: shivammathur/setup-php@v2
         with:
           php-version: '7.4'
-          coverage: none
+          coverage: pcov
           tools: composer:v2
 
       - name: Cache Composer packages
@@ -55,5 +74,53 @@ jobs:
             | xargs -0 -n1 -P4 php -l > lint.log \
             || { cat lint.log; exit 1; }
 
+      # The scope measured is includes/ + resources/, declared in phpunit.xml.
       - name: Unit suite
-        run: vendor/bin/phpunit
+        run: vendor/bin/phpunit --coverage-clover coverage.xml
+
+      # Prints the total and the weakest files even when it passes, which is
+      # what makes the ratchet in the script actionable: raise COVERAGE_FLOOR
+      # to what this reports, less a point or two of slack.
+      - name: Coverage gate
+        run: php scripts/coverage-gate.php coverage.xml
+
+      # Kept whatever the gate decided — on a failure it is the thing worth
+      # reading, and on a pass it is what the next ratchet is argued from.
+      - name: Keep the coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-clover
+          path: coverage.xml
+          if-no-files-found: warn
+
+  static:
+    name: PHP 7.4 · static analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up PHP 7.4
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '7.4'
+          coverage: none
+          tools: composer:v2
+
+      - name: Cache Composer packages
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: ${{ runner.os }}-composer-${{ hashFiles('composer.lock') }}
+          restore-keys: ${{ runner.os }}-composer-
+
+      - name: Install dependencies
+        run: composer install --no-interaction --no-progress
+
+      # myapi.install is a single 200 KB file: its AST does not fit in PHP's
+      # default memory limit, and PHPStan aborts with "reached configured PHP
+      # memory limit" rather than with a finding.
+      - name: PHPStan
+        run: vendor/bin/phpstan analyse --no-progress --memory-limit=1G

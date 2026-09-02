@@ -3,7 +3,8 @@
     "description": "Custom Drupal 7 module exposing a REST API for the Flutter app.",
     "type": "project",
     "require-dev": {
-        "phpunit/phpunit": "^9.5"
+        "phpunit/phpunit": "^9.5",
+        "phpstan/phpstan": "^2.2"
     },
     "config": {
         "platform": {

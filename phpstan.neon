@@ -1,0 +1,54 @@
+# Static analysis for the myapi module (SPEC 124).
+#
+# What this adds that CI did not have. `php -l` proves a file PARSES, and the
+# unit suite proves the lines it reaches BEHAVE — and on Drupal 7 there is a
+# gap between the two that is wider than in most stacks. There is no autoloader
+# and no imports: every call in this module is a bare global function name
+# resolved at runtime, across 757 of our own functions in 60 files. A renamed
+# helper whose old name survives in one caller, a typo in a function name, a
+# variable spelled two ways in the same function — all of them parse, none of
+# them is caught by a test that does not happen to walk that line, and each one
+# is a white screen on the request that reaches it.
+#
+# Level 1 is what that gap costs to close: undefined functions, classes,
+# constants and variables, plus wrong argument counts against our own
+# signatures. It reports zero errors today, which is what makes it a gate
+# rather than a report — the next one it prints is new.
+#
+# WHY NOT HIGHER. Level 2 currently reports 260, and 199 of them are one thing:
+# SelectQuery and SelectQueryInterface, Drupal's query builder, which this
+# module passes around and calls methods on. Clearing them means modelling
+# core's database layer in tests/stubs/drupal7.stub.php, and that file's own
+# rule is that it asserts names and never models behaviour — a stub that gets
+# a signature wrong fails CI on correct code. The remaining 61 are all the same
+# false positive too: PHPStan does not know that myapi_error() ends the request,
+# so it reads `if (!$row) { myapi_error(...); }` as a branch that falls through
+# and reports every dereference after it. Raising the level is a real piece of
+# work with a real payoff; it is not a knob to turn on a whim.
+#
+# Both are run in CI on PHP 7.4 — phpVersion below pins the analysis to the
+# version production runs, not the one the developer has.
+
+parameters:
+    level: 1
+    phpVersion: 70433
+
+    paths:
+        - includes
+        - resources
+        - myapi.module
+        - myapi.install
+
+    # Drupal loads .inc/.module/.install as PHP; PHPStan has to be told.
+    fileExtensions:
+        - php
+        - inc
+        - module
+        - install
+
+    # Drupal core, which is not in this repository and never will be: the
+    # module is deployed into a site that already has it. scanFiles (not
+    # stubFiles, which registers no symbols) is what tells PHPStan these names
+    # exist, so that the ones it still cannot find are ours.
+    scanFiles:
+        - tests/stubs/drupal7.stub.php
