@@ -1,0 +1,48 @@
+#!/bin/bash
+#
+# Pre-commit hook for myapi (SPEC 123).
+#
+# Two checks, both under a second: the staged PHP files parse, and the unit
+# suite is green. Install with scripts/install-git-hooks.sh; skip once with
+# `git commit --no-verify`.
+#
+# It lints the STAGED content, not the working tree, so a fix that is written
+# but not added cannot make a broken commit look clean.
+
+set -u
+
+SRC="$(git rev-parse --show-toplevel)"
+cd "$SRC" || exit 1
+
+STAGED="$(git diff --cached --name-only --diff-filter=ACM \
+  -- '*.php' '*.inc' '*.module' '*.install' '*.test')"
+
+STATUS=0
+
+if [ -n "$STAGED" ]; then
+  echo "Comprobando sintaxis de los archivos en staging..."
+  while IFS= read -r file; do
+    if ! git show ":$file" | php -l > /dev/null 2>&1; then
+      echo "  Error de sintaxis en $file:"
+      git show ":$file" | php -l | sed 's/^/    /'
+      STATUS=1
+    fi
+  done <<< "$STAGED"
+fi
+
+if [ ! -x vendor/bin/phpunit ]; then
+  echo "vendor/bin/phpunit no está instalado: se omiten los tests (corre composer install)."
+  exit $STATUS
+fi
+
+echo "Corriendo tests unitarios..."
+if ! vendor/bin/phpunit > /tmp/myapi-pre-commit.log 2>&1; then
+  tail -30 /tmp/myapi-pre-commit.log
+  echo
+  echo "Commit detenido: la suite unitaria falla. Usa 'git commit --no-verify' para saltártelo."
+  STATUS=1
+else
+  tail -1 /tmp/myapi-pre-commit.log
+fi
+
+exit $STATUS

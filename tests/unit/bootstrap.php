@@ -3460,3 +3460,45 @@ if (!function_exists('file_create_url')) {
     return $GLOBALS['base_url'] . '/' . ltrim($uri, '/');
   }
 }
+
+/**
+ * The menu flags and the last watchdog level, so myapi.module can be required.
+ *
+ * Every other test file in this suite requires includes/*.inc and
+ * resources/*.inc, never the .module: there is no logic in it to test, only
+ * hook_menu() and glue. ModuleContractTest (SPEC 123) is the exception — it
+ * asserts the routing table itself, and the only honest way to read that table
+ * is to call myapi_menu() and look at what it returns, instead of parsing the
+ * source with a regex that would go stale the first time a route is written in
+ * a slightly different shape.
+ *
+ * The values are Drupal 7's own (includes/menu.inc): MENU_CALLBACK is
+ * MENU_VISIBLE_IN_BREADCRUMB, MENU_NORMAL_ITEM adds MENU_VISIBLE_IN_TREE, and
+ * MENU_DEFAULT_LOCAL_TASK adds MENU_IS_LOCAL_TASK | MENU_LINKS_TO_PARENT. They
+ * are copied faithfully and not invented, because a test is allowed to assert
+ * that a back-office page is a MENU_NORMAL_ITEM and an endpoint is not.
+ */
+if (!defined('MENU_VISIBLE_IN_TREE')) {
+  define('MENU_VISIBLE_IN_TREE', 0x0002);
+}
+if (!defined('MENU_VISIBLE_IN_BREADCRUMB')) {
+  define('MENU_VISIBLE_IN_BREADCRUMB', 0x0004);
+}
+if (!defined('MENU_LINKS_TO_PARENT')) {
+  define('MENU_LINKS_TO_PARENT', 0x0008);
+}
+if (!defined('MENU_IS_LOCAL_TASK')) {
+  define('MENU_IS_LOCAL_TASK', 0x0080);
+}
+if (!defined('MENU_CALLBACK')) {
+  define('MENU_CALLBACK', MENU_VISIBLE_IN_BREADCRUMB);
+}
+if (!defined('MENU_NORMAL_ITEM')) {
+  define('MENU_NORMAL_ITEM', MENU_VISIBLE_IN_TREE | MENU_VISIBLE_IN_BREADCRUMB);
+}
+if (!defined('MENU_DEFAULT_LOCAL_TASK')) {
+  define('MENU_DEFAULT_LOCAL_TASK', MENU_IS_LOCAL_TASK | MENU_LINKS_TO_PARENT | MENU_VISIBLE_IN_BREADCRUMB);
+}
+if (!defined('WATCHDOG_INFO')) {
+  define('WATCHDOG_INFO', 6);
+}

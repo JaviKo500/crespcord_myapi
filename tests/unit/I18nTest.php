@@ -346,4 +346,245 @@ class I18nTest extends TestCase {
     $this->assertSame('en', myapi_get_lang(), 'the static wins over the new value');
   }
 
+
+  /**
+   * Catalogue keys that no longer exist anywhere else in the module.
+   *
+   * They are leftovers of earlier auth specs whose messages were replaced by
+   * other keys, and they are listed instead of deleted for the same reason
+   * SPEC 121 listed its seven findings instead of fixing them: this is a spec
+   * about tests, and removing a message is a change to what the module ships.
+   * Deleting them is a one-line decision for whichever spec touches the
+   * catalogue next; until then the list is what keeps the case below honest
+   * about how many there are.
+   */
+  const UNREACHED_KEYS = [
+    'unauthorized',
+    'user_not_found',
+    'missing_token',
+  ];
+
+  /**
+   * Every key the module passes to a response helper exists in the catalogue.
+   *
+   * This is the direction the parity case above cannot see. A typo in a key —
+   * or a key invented in a resource and never added to myapi_t() — passes every
+   * test in this suite: myapi_error() answers with the right status, the right
+   * error_code, and an 'error' field containing the raw key. The envelope is
+   * well formed; the message is 'reservaton_overlap' on the resident's screen.
+   *
+   * The three call shapes are the three the module has: the first argument of
+   * myapi_error() and of myapi_t(), and the third of myapi_respond(), which is
+   * its optional message_key. Keys passed as a variable are skipped — they are
+   * counted below so a parse that stops recognising the literal ones fails
+   * instead of quietly asserting nothing.
+   */
+  public function testEveryKeyUsedByTheModuleExistsInTheCatalogue() {
+    $catalogue = $this->catalogueKeys();
+    $used = $this->keysPassedToResponseHelpers();
+
+    $this->assertGreaterThan(50, count($used), 'parse sanity: literal keys found at call sites');
+
+    foreach ($used as $key => $files) {
+      $this->assertContains($key, $catalogue['es'], $key . ' (used in ' . implode(', ', $files) . ') is not in the Spanish catalogue');
+      $this->assertContains($key, $catalogue['en'], $key . ' (used in ' . implode(', ', $files) . ') is not in the English catalogue');
+    }
+  }
+
+  /**
+   * And every catalogue key is reached from somewhere in the module.
+   *
+   * The scan here is deliberately wider than the one above — every string
+   * literal in every production file, not only the ones at a call site —
+   * because a third of the catalogue is used indirectly: returned by a
+   * validator as the name of what failed ('service_offer_expired'), chosen by a
+   * ternary, or used as the key of the status map that turns it into a 409.
+   * A narrower scan would report those as dead and the case would need an
+   * allowlist of thirty.
+   *
+   * What is left over after that is genuinely unreachable text, which is how
+   * UNREACHED_KEYS was measured.
+   */
+  public function testEveryCatalogueKeyIsReachedByTheModule() {
+    $literals = $this->stringLiteralsInSources();
+    $unreached = [];
+
+    foreach (array_unique($this->catalogueKeys()['es']) as $key) {
+      if (!isset($literals[$key])) {
+        $unreached[] = $key;
+      }
+    }
+
+    sort($unreached);
+    $expected = self::UNREACHED_KEYS;
+    sort($expected);
+
+    $this->assertSame($expected, $unreached, 'catalogue keys nothing in the module can produce');
+  }
+
+  /**
+   * Production sources of the module, as relative path => contents.
+   */
+  private function moduleSources() {
+    $root = dirname(__DIR__, 2);
+    $paths = array_merge(
+      glob($root . '/includes/*.inc'),
+      glob($root . '/resources/*.inc'),
+      [$root . '/myapi.module', $root . '/myapi.install']
+    );
+
+    $sources = [];
+    foreach ($paths as $path) {
+      $relative = str_replace($root . '/', '', $path);
+      if ($relative === 'includes/myapi.i18n.inc') {
+        // The catalogue itself: every key is a literal in it, and counting
+        // those would make both cases below tautologies.
+        continue;
+      }
+      $sources[$relative] = file_get_contents($path);
+    }
+
+    return $sources;
+  }
+
+  /**
+   * The literal keys the module passes to myapi_error(), myapi_t() and
+   * myapi_respond().
+   *
+   * @return array  key => [file, ...].
+   */
+  private function keysPassedToResponseHelpers() {
+    $calls = [
+      'myapi_error'   => 0,
+      'myapi_t'       => 0,
+      'myapi_respond' => 2,
+    ];
+
+    $used = [];
+    foreach ($this->moduleSources() as $relative => $source) {
+      foreach ($calls as $function => $index) {
+        foreach ($this->literalArgumentsOf($source, $function, $index) as $key) {
+          if ($key === NULL) {
+            // A variable, a concatenation or a ternary: not readable here, and
+            // covered by the wider scan of the other case.
+            continue;
+          }
+          $used[$key][$relative] = $relative;
+        }
+      }
+    }
+
+    return array_map('array_values', $used);
+  }
+
+  /**
+   * Every single-quoted string literal in the module, as value => TRUE.
+   */
+  private function stringLiteralsInSources() {
+    $literals = [];
+
+    foreach ($this->moduleSources() as $source) {
+      foreach (token_get_all($source) as $token) {
+        if (is_array($token) && $token[0] === T_CONSTANT_ENCAPSED_STRING) {
+          $literals[trim($token[1], "'\"")] = TRUE;
+        }
+      }
+    }
+
+    return $literals;
+  }
+
+  /**
+   * The argument at $index of every call to $function in $source.
+   *
+   * Tokens and not a regex, for the same reason ModuleContractTest uses them:
+   * the third argument of myapi_respond() is often three lines below the call,
+   * behind an array literal with commas of its own, and no regex reads that.
+   * The walk splits the argument list on top-level commas only, so a nested
+   * call or array is one argument, as PHP sees it.
+   *
+   * @return array  One entry per call: the literal string, or NULL when the
+   *                argument is not a literal (or is absent).
+   */
+  private function literalArgumentsOf($source, $function, $index) {
+    $tokens = token_get_all($source);
+    $count = count($tokens);
+    $arguments = [];
+
+    for ($i = 0; $i < $count; $i++) {
+      if (!is_array($tokens[$i]) || $tokens[$i][0] !== T_STRING || $tokens[$i][1] !== $function) {
+        continue;
+      }
+
+      // The declaration of the function is not a call to it.
+      $previous = $i - 1;
+      while ($previous >= 0 && is_array($tokens[$previous]) && in_array($tokens[$previous][0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], TRUE)) {
+        $previous--;
+      }
+      if ($previous >= 0 && is_array($tokens[$previous]) && $tokens[$previous][0] === T_FUNCTION) {
+        continue;
+      }
+
+      $open = $i + 1;
+      while ($open < $count && is_array($tokens[$open]) && $tokens[$open][0] === T_WHITESPACE) {
+        $open++;
+      }
+      if ($open >= $count || $tokens[$open] !== '(') {
+        continue;
+      }
+
+      $arguments[] = $this->argumentAt($tokens, $open, $index);
+    }
+
+    return $arguments;
+  }
+
+  /**
+   * The literal value of the argument at $index of the call whose opening
+   * parenthesis is $tokens[$open], or NULL when it is not a plain literal.
+   */
+  private function argumentAt(array $tokens, $open, $index) {
+    $count = count($tokens);
+    $depth = 0;
+    $position = 0;
+    $current = [];
+
+    for ($i = $open + 1; $i < $count; $i++) {
+      $token = $tokens[$i];
+
+      if (!is_array($token)) {
+        if ($token === '(' || $token === '[' || $token === '{') {
+          $depth++;
+        }
+        elseif ($token === ')' || $token === ']' || $token === '}') {
+          if ($token === ')' && $depth === 0) {
+            break;
+          }
+          $depth--;
+        }
+        elseif ($token === ',' && $depth === 0) {
+          if ($position === $index) {
+            break;
+          }
+          $position++;
+          $current = [];
+          continue;
+        }
+      }
+
+      if ($position === $index && (!is_array($token) || $token[0] !== T_WHITESPACE)) {
+        $current[] = $token;
+      }
+    }
+
+    if ($position !== $index || count($current) !== 1) {
+      return NULL;
+    }
+    if (!is_array($current[0]) || $current[0][0] !== T_CONSTANT_ENCAPSED_STRING) {
+      return NULL;
+    }
+
+    return trim($current[0][1], "'\"");
+  }
+
 }

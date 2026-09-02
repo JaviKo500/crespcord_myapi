@@ -1,7 +1,9 @@
 # Tests
 
-Three independent layers, all covering the 5 JSON endpoints of `/api/v1/auth`
-documented in [`docs/auth.md`](../docs/auth.md). The HTML page
+Three behaviour layers plus a contract layer. The three behaviour ones were all
+built covering the 5 JSON endpoints of `/api/v1/auth` documented in
+[`docs/auth.md`](../docs/auth.md); the contract layer (SPEC 123) is about the
+module's own structure and belongs to no endpoint. The HTML page
 `GET/POST password/reset` was out of scope in `specs/auth/21-auth-testing.md`;
 since SPEC 73 it is unit-tested in full — its four renderers and its three
 request handlers, up to the first `db_select()`.
@@ -9,8 +11,59 @@ request handlers, up to the first `db_select()`.
 | Layer | Location | Framework | Runs against |
 |---|---|---|---|
 | Unit | `tests/unit/` | PHPUnit (standalone) | Nothing — pure functions only |
+| Contract | `tests/unit/ModuleContractTest.php` | PHPUnit (standalone) | The module's own source and `myapi.info` |
 | Integration | `tests/integration/` | SimpleTest (`DrupalWebTestCase`) | SimpleTest's own sandbox install |
 | E2E | `tests/e2e/` | Postman/Newman + Node | Production (`https://crespcord.lamotora.com`) |
+
+Since SPEC 123 the unit and contract layers run on **every push and pull
+request**, under PHP 7.4 — see "Continuous integration" below.
+
+---
+
+## Continuous integration
+
+`.github/workflows/tests.yml` runs on every push to any branch and on every pull
+request, on **PHP 7.4** — the version production runs, and the reason the job
+exists at all: `php -l` on a developer machine running PHP 8 proves nothing
+about the target, because PHP 8 syntax parses fine there. Three steps:
+
+1. `composer install` (Composer packages cached on `composer.lock`).
+2. `php -l` over every `.php`, `.inc`, `.module`, `.install` and `.test` in the
+   repository — 178 files.
+3. `vendor/bin/phpunit`, the whole unit suite.
+
+The integration and e2e layers stay out: they need a live Drupal site, real
+credentials and an IMAP mailbox, and they keep their `scripts/run-*.sh` runners.
+
+**Locally**, `scripts/install-git-hooks.sh` (or `.ps1`) points `core.hooksPath`
+at the versioned `scripts/hooks/`, which adds a pre-commit hook: it lints the
+**staged** content of every PHP file being committed — not the working tree, so
+a fix that is written but not added cannot make a broken commit look clean — and
+then runs the unit suite. About two seconds. `git commit --no-verify` skips it;
+CI does not.
+
+---
+
+## Contract tests
+
+`ModuleContractTest` (SPEC 123) asserts what the module IS, not what a function
+does: that the routing table points at functions that exist **in the files it
+says they are in**, that every `.inc` is declared in `myapi.info` and every
+`files[]` entry exists, that every endpoint lives under `api/v1/` and has a
+section in `docs/`, that no dispatcher is left unrouted, and that the two
+prohibitions a grep can see — raw JSON output and PHP 8 code — still hold.
+
+The reason it is its own class is that none of those failures is visible from a
+unit test of a resource. A route whose `'file'` names one `.inc` while the
+callback lives in another is a green suite and a 404: every test calls its
+dispatcher by name, and the dispatcher is fine. Same for an `.inc` missing from
+`files[]` — it works on the machine where another route already pulled it in.
+
+It reads the routing table by requiring `myapi.module` and calling
+`myapi_menu()`, which is what the constants block at the end of
+`bootstrap.php` is for. `I18nTest` carries the same idea for the message
+catalogue: every key the module passes to a response helper must exist in it,
+and every key in it must be reachable from the module.
 
 ---
 

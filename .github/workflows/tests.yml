@@ -1,0 +1,59 @@
+# Continuous integration for the myapi module (SPEC 123).
+#
+# Everything here runs on PHP 7.4, which is the point: production is
+# 7.4.33 and most developer machines are not, so `php -l` on a laptop proves
+# nothing about the target — PHP 8 syntax parses fine on the machine that
+# wrote it. Linting and running the whole suite under 7.4 is what turns
+# "no PHP 8.0+ syntax" (CLAUDE.md) from a rule into a check.
+#
+# The unit suite needs no database and no Drupal: it runs against the
+# production .inc files with the stubs in tests/unit/bootstrap.php. The
+# integration (SimpleTest) and e2e (Postman/IMAP) layers need a live site and
+# real credentials, so they stay out of CI and keep their scripts/ runners.
+
+name: tests
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  unit:
+    name: PHP 7.4 · lint + unit suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up PHP 7.4
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '7.4'
+          coverage: none
+          tools: composer:v2
+
+      - name: Cache Composer packages
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: ${{ runner.os }}-composer-${{ hashFiles('composer.lock') }}
+          restore-keys: ${{ runner.os }}-composer-
+
+      - name: Install dependencies
+        run: composer install --no-interaction --no-progress
+
+      # xargs exits non-zero if any php -l did, which is what fails the step.
+      # The output is buffered so a green run stays quiet and a red one prints
+      # the offending file and line.
+      - name: Lint every source under PHP 7.4
+        run: |
+          find . -path ./vendor -prune -o \
+            \( -name '*.php' -o -name '*.inc' -o -name '*.module' \
+               -o -name '*.install' -o -name '*.test' \) -print0 \
+            | xargs -0 -n1 -P4 php -l > lint.log \
+            || { cat lint.log; exit 1; }
+
+      - name: Unit suite
+        run: vendor/bin/phpunit
