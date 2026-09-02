@@ -1115,6 +1115,28 @@ class ReservationEndpointTest extends TestCase {
   }
 
   /**
+   * NEITHER VALIDATOR ACCEPTS A TRAILING NEWLINE (SPEC 122). Without the 'D'
+   * modifier PCRE lets '$' match just before one, so "2026-06-15\n" and
+   * "09:00\n" used to pass — and a time bound that carries a newline compares
+   * against a stored '09:00' as a LONGER string, silently excluding the very
+   * hour it names on the boundary day.
+   */
+  public function testNeitherValidatorAcceptsATrailingNewline() {
+    $this->assertNull(myapi_reservation_valid_date("2026-06-15\n"));
+    $this->assertNull(myapi_reservation_valid_time("09:00\n"));
+    $this->assertNull(myapi_reservation_valid_time("09:00\r\n"));
+
+    // And the filter therefore drops the bound instead of applying it broken.
+    $this->seed([
+      ['id' => 800, 'date' => '2026-06-15', 'start' => '09:00'],
+      ['id' => 801, 'date' => '2026-06-15', 'start' => '20:00'],
+    ]);
+    $_GET = ['date_from' => '2026-06-15', 'time_from' => "09:00\n"];
+
+    $this->assertSame([801, 800], $this->ids($this->listRequest()), 'the 09:00 booking is not lost');
+  }
+
+  /**
    * The range parser answers its four keys and applies the three drop rules.
    */
   public function testTheRangeParserAnswersItsFourKeys() {

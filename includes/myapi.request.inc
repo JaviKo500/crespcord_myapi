@@ -229,3 +229,107 @@ function myapi_parse_id_param($name) {
 
   return (int) $raw;
 }
+
+/**
+ * Tells whether a raw query-string value is a positive integer (SPEC 122).
+ *
+ * THE is_scalar() COMES FIRST, AND THAT IS THE WHOLE REASON THIS EXISTS.
+ * '?page[]=1' hands $_GET['page'] an ARRAY, and casting an array to a string
+ * raises "Array to string conversion" — a notice on the PHP 7.4 production runs
+ * — before answering the literal 'Array'. The answer was always right (that is
+ * not all digits, so the caller fell back to its default) but the notice was
+ * emitted in the middle of the request, and on a site with display_errors on it
+ * lands INSIDE the JSON body, where it costs the app the whole response.
+ *
+ * Thirteen resources wrote that test by hand and twelve of them wrote it
+ * without the guard; the thirteenth (service_category, SPEC 118) wrote it with,
+ * which is what made the divergence visible in the first place. This is the
+ * shape that one got right, pulled out so nobody writes the fourteenth.
+ *
+ * @param mixed $value  Raw query-string value.
+ *
+ * @return bool  TRUE for a scalar whose digits spell a number >= 1.
+ */
+function myapi_is_positive_int_param($value) {
+  return is_scalar($value) && ctype_digit((string) $value) && (int) $value > 0;
+}
+
+/**
+ * Reads the 1-based '?page' of a paginated listing (SPEC 122).
+ *
+ * LAX BY CONTRACT: every value that is not a positive integer — absent, zero,
+ * negative, a float, a word, an array — falls back to page 1 silently, never a
+ * 422. That is the criterion every listing of this module has always applied,
+ * and the one documented in docs/*.md; what changed with SPEC 122 is only that
+ * the array case no longer emits a notice on its way to the same answer.
+ *
+ * @return int  The requested page, or 1.
+ */
+function myapi_parse_page_param() {
+  return isset($_GET['page']) && myapi_is_positive_int_param($_GET['page'])
+    ? (int) $_GET['page']
+    : 1;
+}
+
+/**
+ * Reads the '?limit' of a paginated listing, clamped (SPEC 122).
+ *
+ * Same lax contract as the page above: anything that is not a positive integer
+ * falls back to the default, and anything above the cap is capped, both without
+ * a 422.
+ *
+ * THE '-1' SENTINEL IS A PARAMETER AND NOT A DEFAULT, because it is not
+ * universal: SPEC 15 gave it to the twin listings (receipts, extra fees,
+ * payments) and later specs to the notification inbox, the reservations, the
+ * areas, the claims, the expenses and the marketplace — but NOT to the bulletin
+ * or provider listings, which cap at 50 and always paginate. Passing the flag
+ * at the call site keeps each endpoint answering exactly what it answered
+ * before, instead of quietly gaining an unpaginated mode nobody specified.
+ *
+ * The sentinel is matched with a STRICT comparison against the string '-1',
+ * which is what $_GET carries; an array never equals a string, so that branch
+ * needs no guard of its own.
+ *
+ * The clamp is written as min() alone: the caller already required a value >= 1
+ * to get here, so the max(1, ...) the twelve hand-written copies carried could
+ * never fire. Same answer, one operation less, and no reader wondering which
+ * case needed it.
+ *
+ * @param bool $allow_unlimited
+ *   TRUE when this listing honours '?limit=-1' as "every row, unpaginated".
+ * @param int  $default
+ *   Rows per page when nothing usable was asked for.
+ * @param int  $max
+ *   Upper cap.
+ *
+ * @return int  The clamped limit, or -1 for the unpaginated sentinel.
+ */
+function myapi_parse_limit_param($allow_unlimited = FALSE, $default = 20, $max = 50) {
+  if ($allow_unlimited && isset($_GET['limit']) && $_GET['limit'] === '-1') {
+    return -1;
+  }
+
+  return isset($_GET['limit']) && myapi_is_positive_int_param($_GET['limit'])
+    ? min($max, (int) $_GET['limit'])
+    : $default;
+}
+
+/**
+ * Reads an OPTIONAL id from the query string, laxly (SPEC 122).
+ *
+ * The lax sibling of myapi_parse_id_param(): where that one answers 422 for a
+ * malformed value because it gates an access decision, this one answers NULL —
+ * "no filter" — because its callers offer a narrowing the client may simply
+ * omit. The notification inbox's '?condominium' and '?unit' are the two, and
+ * their laxness is deliberate and documented: a client written before SPEC 26
+ * sends neither, and one sending a stale id must still get its inbox.
+ *
+ * @param string $name  The query-string parameter to read.
+ *
+ * @return int|NULL  The positive integer, or NULL when absent or malformed.
+ */
+function myapi_parse_optional_id_param($name) {
+  return isset($_GET[$name]) && myapi_is_positive_int_param($_GET[$name])
+    ? (int) $_GET[$name]
+    : NULL;
+}

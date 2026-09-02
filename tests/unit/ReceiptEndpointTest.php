@@ -669,25 +669,22 @@ class ReceiptEndpointTest extends TestCase {
   }
 
   /**
-   * AN ARRAY page/limit ANSWERS THE DEFAULT — AND EMITS A PHP NOTICE ON THE
-   * WAY. Pinned as it is, because both halves are true.
+   * AN ARRAY page/limit ANSWERS THE DEFAULT, SILENTLY.
    *
-   * '?page[]=2' reaches `ctype_digit((string) $_GET['page'])`, and casting an
-   * array to a string raises "Array to string conversion" (a notice on the PHP
-   * 7.4 production runs, a warning on newer ones) before answering 'Array',
-   * which is not all digits and therefore falls back to the default. So the
-   * ANSWER is correct and the request is never rejected — but a notice is
-   * emitted mid-request, and on a site with display_errors on it would be
-   * printed INSIDE the JSON body.
+   * '?page[]=2' used to reach `ctype_digit((string) $_GET['page'])`, and
+   * casting an array to a string raises "Array to string conversion" (a notice
+   * on the PHP 7.4 production runs) before answering the literal 'Array',
+   * which is not all digits and therefore fell back to the default. The ANSWER
+   * was always right; the notice was the problem, because on a site with
+   * display_errors on it lands INSIDE the JSON body.
    *
-   * myapi_parse_id_param() (includes/myapi.request.inc) guards with is_scalar()
-   * first for exactly this reason; the three twin listings never got that
-   * guard. Recorded as a finding in SPEC 121 rather than fixed here: this is a
-   * tests spec and production is untouched. The error handler below is what
-   * lets the case assert BOTH the notice and the answer instead of dying on
-   * PHPUnit's error-to-exception conversion.
+   * SPEC 121 recorded it as a finding and pinned it; SPEC 122 fixed it by
+   * pulling the parse into myapi_parse_page_param() /
+   * myapi_parse_limit_param(), which guard with is_scalar() first — the shape
+   * myapi_parse_id_param() always had. This case now asserts the same answer
+   * and NO notice; the error handler is what makes the absence assertable.
    */
-  public function testAnArrayPageOrLimitAnswersTheDefaultAndEmitsANotice() {
+  public function testAnArrayPageOrLimitAnswersTheDefaultSilently() {
     $this->seed($this->consecutive(1));
 
     $_GET['page'] = ['2'];
@@ -706,8 +703,7 @@ class ReceiptEndpointTest extends TestCase {
       restore_error_handler();
     }
 
-    $this->assertNotEmpty($notices, 'the string cast of an array is not silent');
-    $this->assertStringContainsString('Array to string conversion', $notices[0]);
+    $this->assertSame([], $notices, 'not one notice');
 
     $this->assertSame(200, $result['status']);
     $this->assertSame(1, $result['json']['data']['pagination']['page']);
@@ -886,23 +882,26 @@ class ReceiptEndpointTest extends TestCase {
   }
 
   /**
-   * THE TRAILING-NEWLINE HOLE, PINNED AS IT IS.
+   * THE TRAILING-NEWLINE HOLE, CLOSED BY SPEC 122.
    *
    * SPEC 73 added the 'D' modifier to the shared myapi_valid_iso_date() so
-   * "2026-06-01\n" stopped passing as a date. This resource carries its own
-   * COPY of that validator, and the copy never got the modifier — so a bound
-   * with a trailing newline is still accepted here, travels into the query
-   * with the newline still in it, and silently excludes the very day it names
-   * (because "2026-06-01\n" sorts after "2026-06-01").
+   * "2026-06-01\n" stopped passing as a date — without it PCRE lets '$' match
+   * just before a trailing newline. This resource carried its own COPY of that
+   * validator, one of six, and none of the copies got the modifier: a bound
+   * with a trailing newline was accepted, travelled into the query with the
+   * newline still in it, and silently excluded the very day it named (because
+   * "2026-06-01\n" sorts after "2026-06-01").
    *
-   * The case is pinned rather than fixed: this is a tests spec, production is
-   * untouched, and a fix belongs in the spec that unifies the five copies (see
-   * SPEC 121, "Los hallazgos"). If somebody adds the 'D' here, this test fails
-   * and points at the decision.
+   * SPEC 121 recorded it and pinned the broken behaviour; SPEC 122 replaced
+   * all six bodies with a one-line delegation to the shared helper. The case
+   * now asserts both halves of the fix: the copy answers exactly what the
+   * shared one answers, and the malformed bound is DROPPED rather than applied
+   * — so the whole set comes back instead of a day going missing.
    */
-  public function testATrailingNewlineIsStillAcceptedByThisResourcesOwnValidator() {
-    $this->assertSame("2026-06-01\n", myapi_receipt_valid_date("2026-06-01\n"), 'the copy has no D modifier');
-    $this->assertNull(myapi_valid_iso_date("2026-06-01\n"), 'the shared helper rejects it');
+  public function testATrailingNewlineBoundIsRejectedLikeTheSharedHelperDoes() {
+    $this->assertNull(myapi_receipt_valid_date("2026-06-01\n"), 'the copy delegates now');
+    $this->assertSame(myapi_valid_iso_date("2026-06-01\n"), myapi_receipt_valid_date("2026-06-01\n"));
+    $this->assertSame('2026-06-01', myapi_receipt_valid_date('2026-06-01'), 'a real date still passes');
 
     $this->seed([['id' => 1, 'period' => '2026-06-01']]);
     $_GET['date_from'] = "2026-06-01\n";
@@ -910,7 +909,7 @@ class ReceiptEndpointTest extends TestCase {
     $result = $this->request();
 
     $this->assertSame(200, $result['status']);
-    $this->assertSame([], $this->ids($result), 'the day the bound names is excluded by its own newline');
+    $this->assertSame([1], $this->ids($result), 'the bound was dropped, not applied with the newline in it');
   }
 
   /* -------------------------------------------------------------------------

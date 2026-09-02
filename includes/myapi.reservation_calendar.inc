@@ -401,14 +401,13 @@ function myapi_calendar_area_color_index($nid) {
  * @return int|NULL  The positive integer, or NULL.
  */
 function myapi_calendar_positive_int($value) {
-  if (!is_scalar($value)) {
-    return NULL;
-  }
-  $value = (string) $value;
-  if (!preg_match('/^\d+$/', $value) || (int) $value < 1) {
-    return NULL;
-  }
-  return (int) $value;
+  // DELEGATES SINCE SPEC 122. The body was a third spelling of "a positive
+  // integer or nothing" — is_scalar(), then a '/^\d+$/' that, without the 'D'
+  // modifier, accepted a trailing newline where the shared ctype_digit() does
+  // not. Same answer for every value a query string can carry, one definition.
+  module_load_include('inc', 'myapi', 'includes/myapi.request');
+
+  return myapi_is_positive_int_param($value) ? (int) $value : NULL;
 }
 
 /**
@@ -1142,11 +1141,15 @@ function myapi_calendar_unit_label($row) {
  *   user_first_name nor user_last_name is set.
  */
 function _myapi_reservation_full_name($row) {
-  $full_name = trim(
-    ($row->user_first_name !== NULL ? $row->user_first_name : '')
-    . ' '
-    . ($row->user_last_name !== NULL ? $row->user_last_name : '')
-  );
+  // EACH HALF IS TRIMMED BEFORE THEY ARE JOINED (SPEC 122). Trimming only the
+  // joined string left the inner padding of a profile stored as ' Pablo ' +
+  // ' Cordero ' — 'Pablo   Cordero' — in the back office and in every email
+  // built from these labels.
+  $parts = array_filter(array(
+    $row->user_first_name !== NULL ? trim($row->user_first_name) : '',
+    $row->user_last_name !== NULL ? trim($row->user_last_name) : '',
+  ), 'strlen');
+  $full_name = implode(' ', $parts);
   if ($full_name === '') {
     return NULL;
   }

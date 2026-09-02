@@ -706,4 +706,83 @@ class ServiceTransactionAdminTest extends TestCase {
 
     $this->assertArrayNotHasKey('redirect', $form_state);
   }
+  /* -------------------------------------------------------------------------
+   * myapi_service_transaction_validate_status_date() (SPEC 94, covered by
+   * SPEC 122).
+   *
+   * The element validator of the status date. It had no test of its own, which
+   * is how its anchored pattern kept the trailing-newline hole SPEC 73 closed
+   * everywhere else: "2026-06-15\n 10:00" used to be a valid instant.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * A well-formed 'YYYY-MM-DD HH:MM' raises nothing — and so does one padded
+   * with whitespace, because the value is trimmed before it is split. That
+   * trim is also why a newline at the END of the whole value is harmless: only
+   * one INSIDE it reaches the date half.
+   */
+  public function testAWellFormedStatusDateRaisesNothing() {
+    $GLOBALS['myapi_test_form_errors'] = [];
+    $element = ['#name' => 'field_status_date', '#value' => '2026-06-15 10:30'];
+    $form_state = [];
+
+    myapi_service_transaction_validate_status_date($element, $form_state);
+
+    $this->assertSame([], $GLOBALS['myapi_test_form_errors']);
+
+    $GLOBALS['myapi_test_form_errors'] = [];
+    $padded = ['#name' => 'field_status_date', '#value' => "  2026-06-15 10:30\n"];
+    myapi_service_transaction_validate_status_date($padded, $form_state);
+    $this->assertSame([], $GLOBALS['myapi_test_form_errors'], 'the value is trimmed first');
+  }
+
+  /**
+   * A BARE DATE FAILS, deliberately: the timeline records the exact instant of
+   * a status change, so the time half is required.
+   */
+  public function testABareDateIsRejected() {
+    $GLOBALS['myapi_test_form_errors'] = [];
+    $element = ['#name' => 'field_status_date', '#value' => '2026-06-15'];
+    $form_state = [];
+
+    myapi_service_transaction_validate_status_date($element, $form_state);
+
+    $this->assertArrayHasKey('field_status_date', $GLOBALS['myapi_test_form_errors']);
+  }
+
+  /**
+   * Every malformed half is rejected — including, since SPEC 122, a date or a
+   * time carrying a trailing newline, which the unanchored '$' used to let
+   * through.
+   */
+  public function testEveryMalformedStatusDateIsRejected() {
+    $invalid = [
+      '15/06/2026 10:30',
+      '2026-13-01 10:30',
+      '2026-02-30 10:30',
+      '2026-06-15 25:00',
+      '2026-06-15 9:00',
+      '2026-6-15 10:30',
+      'ayer 10:30',
+      '',
+      // The newline INSIDE the value survives the trim() and lands on the date
+      // half — the one shape the unanchored '$' used to accept.
+      "2026-06-15\n 10:30",
+    ];
+
+    foreach ($invalid as $value) {
+      $GLOBALS['myapi_test_form_errors'] = [];
+      $element = ['#name' => 'field_status_date', '#value' => $value];
+      $form_state = [];
+
+      myapi_service_transaction_validate_status_date($element, $form_state);
+
+      $this->assertArrayHasKey(
+        'field_status_date',
+        $GLOBALS['myapi_test_form_errors'],
+        json_encode($value)
+      );
+    }
+  }
+
 }

@@ -642,11 +642,10 @@ class PaymentWorkflowTest extends TestCase {
     );
 
     sort($uids);
-    // The uids come back as the STRINGS the driver answers —
-    // myapi_unit_member_uids() does not cast, and myapi_notification_create()
-    // is what intval()s them before the insert. Pinned as it is, because a
-    // caller comparing them with === would be surprised.
-    $this->assertSame(['7', '8'], $uids, 'both occupant fields are read');
+    // The uids come back as INTS since SPEC 122: myapi_unit_member_uids() casts
+    // at the source, where it used to hand over the strings the driver answers
+    // and leave every caller to cast them again on its own.
+    $this->assertSame([7, 8], $uids, 'both occupant fields are read');
   }
 
   /**

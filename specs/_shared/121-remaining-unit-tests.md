@@ -235,9 +235,15 @@ quiere decir— pero no hay entrada que distinga las dos versiones.
 
 ## Los hallazgos
 
-Ninguno se corrigió: este es un spec de tests. Cada uno queda **fijado por un
-caso con nombre propio**, de modo que arreglarlo sea una decisión y no una
-sorpresa.
+> **Nota (spec 122):** los siete quedaron **corregidos** en
+> `specs/_shared/122-input-parsing-unification.md`, que además encontró ocho
+> instancias más del hallazgo 1 escritas en línea. Las descripciones de abajo
+> son las del estado que este spec encontró y fijó; los casos que las fijaban
+> están actualizados en el 122, cada uno con su porqué.
+
+Ninguno se corrigió aquí: este es un spec de tests. Cada uno quedó **fijado por
+un caso con nombre propio**, de modo que arreglarlo fuera una decisión y no una
+sorpresa — que es exactamente lo que ocurrió.
 
 ### 1. Seis copias del validador ISO de fecha, y solo la compartida tiene la `D`
 

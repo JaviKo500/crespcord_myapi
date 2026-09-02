@@ -652,18 +652,21 @@ class PaginationUnlimitedTest extends TestCase {
   }
 
   /**
-   * An array '?limit[]=-1' is not the sentinel and falls back to the default.
+   * An array '?limit[]=-1' is not the sentinel and falls back to the default,
+   * SILENTLY since SPEC 122.
    *
-   * The fallback is correct, but getting there costs a PHP warning: the
-   * detection is a string comparison the array fails, and the next branch
-   * casts it with (string) for ctype_digit(). The warning is asserted rather
-   * than tolerated so the wart is recorded where it can be found — if the
-   * parse is ever hardened with an is_string() guard, this case fails and gets
-   * updated deliberately instead of the warning disappearing unnoticed.
+   * This case used to assert the opposite: the fallback was correct, but
+   * getting there cost a PHP warning, because the sentinel check is a string
+   * comparison the array fails and the next branch cast it with (string) for
+   * ctype_digit(). SPEC 75 asserted that warning rather than tolerating it,
+   * and said out loud that hardening the parse should make this case fail and
+   * be updated deliberately. SPEC 122 hardened it — myapi_parse_limit_param()
+   * guards with is_scalar() first — so this is that deliberate update: same
+   * answer, no warning.
    *
    * @dataProvider endpoints
    */
-  public function testAnArrayLimitIsNotTheSentinelAndWarns($endpoint) {
+  public function testAnArrayLimitIsNotTheSentinelAndIsSilent($endpoint) {
     $this->seedConsecutive($endpoint, 25);
 
     $warnings = [];
@@ -682,7 +685,7 @@ class PaginationUnlimitedTest extends TestCase {
 
     $this->assertSame(20, $this->paginationOf($response)['limit']);
     $this->assertCount(20, $this->idsOf($endpoint, $response));
-    $this->assertNotEmpty($warnings, 'the array-to-string cast is unguarded');
+    $this->assertSame([], $warnings, 'the array-to-string cast is guarded now');
   }
 
   /* -------------------------------------------------------------------------

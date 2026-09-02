@@ -35,7 +35,7 @@
 // not emit a redefinition notice (same pattern as MYAPI_ONESIGNAL_QUEUE in
 // myapi.module). Replaces MYAPI_AREA_TIME_PATTERN of SPEC 46, unchanged.
 if (!defined('MYAPI_TIME_FORMAT_PATTERN')) {
-  define('MYAPI_TIME_FORMAT_PATTERN', '/^([01][0-9]|2[0-3]):[0-5][0-9]$/');
+  define('MYAPI_TIME_FORMAT_PATTERN', '/^([01][0-9]|2[0-3]):[0-5][0-9]$/D');
 }
 
 /**

@@ -637,7 +637,10 @@ class AreaEndpointTest extends TestCase {
     $_GET = ['date' => ['2026-06-15']];
     $this->assertSame('missing_field', $this->availabilityRequest()['json']['error_code'], 'an array is absent');
 
-    foreach (['15-06-2026', '2026-6-15', '2026-13-01', '2026-02-30', 'hoy', '2026-06-15T00:00:00'] as $value) {
+    // "2026-06-15\n" is in the list since SPEC 122: without the 'D' modifier
+    // PCRE let '$' match just before a trailing newline, so the availability
+    // of a whole day was answered for a date that carried one.
+    foreach (['15-06-2026', '2026-6-15', '2026-13-01', '2026-02-30', 'hoy', '2026-06-15T00:00:00', "2026-06-15\n"] as $value) {
       $_GET = ['date' => $value];
 
       $result = $this->availabilityRequest();

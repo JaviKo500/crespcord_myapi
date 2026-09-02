@@ -235,7 +235,7 @@ function myapi_service_transaction_validate_status_date($element, &$form_state) 
   $date = isset($parts[0]) ? $parts[0] : '';
   $time = isset($parts[1]) ? $parts[1] : '';
 
-  $valid = (bool) preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $date, $m)
+  $valid = (bool) preg_match('/^(\d{4})-(\d{2})-(\d{2})$/D', $date, $m)
     && checkdate((int) $m[2], (int) $m[3], (int) $m[1])
     && myapi_time_format_is_valid($time);
 

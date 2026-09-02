@@ -61,15 +61,8 @@ function myapi_expense_list($condominium_id) {
     myapi_error('condominium_access_denied', 403);
   }
 
-  $page = isset($_GET['page']) && ctype_digit((string) $_GET['page']) && (int) $_GET['page'] > 0
-    ? (int) $_GET['page']
-    : 1;
-
-  $limit = isset($_GET['limit']) && $_GET['limit'] === '-1'
-    ? -1
-    : (isset($_GET['limit']) && ctype_digit((string) $_GET['limit']) && (int) $_GET['limit'] > 0
-      ? max(1, min(50, (int) $_GET['limit']))
-      : 20);
+  $page = myapi_parse_page_param();
+  $limit = myapi_parse_limit_param(TRUE);
 
   if ($limit === -1) {
     $page = 1;

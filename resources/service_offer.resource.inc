@@ -564,15 +564,8 @@ function myapi_service_offer_provider_list() {
   // still reports the limit the caller asked for. Same idiom as the two request
   // listings: garbage falls back to the default with no 422, '-1' is
   // "everything on one page" (SPEC 15), and anything above 50 is trimmed.
-  $page = isset($_GET['page']) && ctype_digit((string) $_GET['page']) && (int) $_GET['page'] > 0
-    ? (int) $_GET['page']
-    : 1;
-
-  $limit = isset($_GET['limit']) && $_GET['limit'] === '-1'
-    ? -1
-    : (isset($_GET['limit']) && ctype_digit((string) $_GET['limit']) && (int) $_GET['limit'] > 0
-      ? max(1, min(50, (int) $_GET['limit']))
-      : 20);
+  $page = myapi_parse_page_param();
+  $limit = myapi_parse_limit_param(TRUE);
 
   if ($limit === -1) {
     $page = 1;

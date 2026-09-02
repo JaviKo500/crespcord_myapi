@@ -224,15 +224,8 @@ function myapi_service_request_list() {
 
   // 3. Pagination and sort. Same idiom as claims and payments: garbage falls
   // back to the default, and '-1' means "everything on one page" (SPEC 15).
-  $page = isset($_GET['page']) && ctype_digit((string) $_GET['page']) && (int) $_GET['page'] > 0
-    ? (int) $_GET['page']
-    : 1;
-
-  $limit = isset($_GET['limit']) && $_GET['limit'] === '-1'
-    ? -1
-    : (isset($_GET['limit']) && ctype_digit((string) $_GET['limit']) && (int) $_GET['limit'] > 0
-      ? max(1, min(50, (int) $_GET['limit']))
-      : 20);
+  $page = myapi_parse_page_param();
+  $limit = myapi_parse_limit_param(TRUE);
 
   if ($limit === -1) {
     $page = 1;
@@ -404,15 +397,8 @@ function myapi_service_request_provider_list() {
   // still reports the limit the caller asked for. Same idiom as the resident's
   // listing: garbage falls back to the default, '-1' is "everything on one
   // page" (SPEC 15).
-  $page = isset($_GET['page']) && ctype_digit((string) $_GET['page']) && (int) $_GET['page'] > 0
-    ? (int) $_GET['page']
-    : 1;
-
-  $limit = isset($_GET['limit']) && $_GET['limit'] === '-1'
-    ? -1
-    : (isset($_GET['limit']) && ctype_digit((string) $_GET['limit']) && (int) $_GET['limit'] > 0
-      ? max(1, min(50, (int) $_GET['limit']))
-      : 20);
+  $page = myapi_parse_page_param();
+  $limit = myapi_parse_limit_param(TRUE);
 
   if ($limit === -1) {
     $page = 1;

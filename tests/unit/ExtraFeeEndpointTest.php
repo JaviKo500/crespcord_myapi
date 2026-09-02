@@ -562,11 +562,11 @@ class ExtraFeeEndpointTest extends TestCase {
 
   /**
    * The pure validator of this resource, exercised directly — including the
-   * trailing-newline hole it shares with its twin (see
-   * ReceiptEndpointTest::testATrailingNewlineIsStillAcceptedByThisResourcesOwnValidator
-   * and "Los hallazgos" in SPEC 121).
+   * trailing newline that SPEC 122 closed by delegating all six copies to the
+   * shared myapi_valid_iso_date() (see
+   * ReceiptEndpointTest::testATrailingNewlineBoundIsRejectedLikeTheSharedHelperDoes).
    */
-  public function testTheValidatorAcceptsRealDatesAndTheTrailingNewline() {
+  public function testTheValidatorAcceptsRealDatesAndRejectsTheTrailingNewline() {
     $this->assertSame('2026-06-01', myapi_extra_fee_valid_date('2026-06-01'));
     $this->assertSame('2024-02-29', myapi_extra_fee_valid_date('2024-02-29'));
     $this->assertNull(myapi_extra_fee_valid_date('2026-02-29'));
@@ -574,7 +574,7 @@ class ExtraFeeEndpointTest extends TestCase {
     $this->assertNull(myapi_extra_fee_valid_date(NULL));
     $this->assertNull(myapi_extra_fee_valid_date(['2026-06-01']));
 
-    $this->assertSame("2026-06-01\n", myapi_extra_fee_valid_date("2026-06-01\n"), 'the copy has no D modifier');
+    $this->assertNull(myapi_extra_fee_valid_date("2026-06-01\n"), 'the copy delegates to the shared helper now');
   }
 
   /**

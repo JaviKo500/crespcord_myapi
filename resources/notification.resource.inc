@@ -72,15 +72,8 @@ function myapi_notification_list() {
   $auth = myapi_auth_require_access_token();
   $uid = $auth->uid;
 
-  $page = isset($_GET['page']) && ctype_digit((string) $_GET['page']) && (int) $_GET['page'] > 0
-    ? (int) $_GET['page']
-    : 1;
-
-  $limit = isset($_GET['limit']) && $_GET['limit'] === '-1'
-    ? -1
-    : (isset($_GET['limit']) && ctype_digit((string) $_GET['limit']) && (int) $_GET['limit'] > 0
-      ? max(1, min(50, (int) $_GET['limit']))
-      : 20);
+  $page = myapi_parse_page_param();
+  $limit = myapi_parse_limit_param(TRUE);
 
   if ($limit === -1) {
     $page = 1;
@@ -91,12 +84,8 @@ function myapi_notification_list() {
   // Condominium/unit scope: both lax. Only a positive integer counts; anything
   // else is treated as absent. Unit is meaningless without a condominium, so it
   // is ignored when condominium is absent.
-  $condominium = isset($_GET['condominium']) && ctype_digit((string) $_GET['condominium']) && (int) $_GET['condominium'] > 0
-    ? (int) $_GET['condominium']
-    : NULL;
-  $unit = $condominium !== NULL && isset($_GET['unit']) && ctype_digit((string) $_GET['unit']) && (int) $_GET['unit'] > 0
-    ? (int) $_GET['unit']
-    : NULL;
+  $condominium = myapi_parse_optional_id_param('condominium');
+  $unit = $condominium !== NULL ? myapi_parse_optional_id_param('unit') : NULL;
 
   // Total of the current (possibly filtered) set, for pagination.
   $count_query = db_select('myapi_notifications', 'n')->condition('uid', $uid);
@@ -157,6 +146,16 @@ function myapi_notification_list() {
 function myapi_notification_mark_read($id) {
   $auth = myapi_auth_require_access_token();
   $uid = $auth->uid;
+
+  // A POSITIVE INTEGER AND NOTHING ELSE (SPEC 122). The route wildcard is not
+  // validated by Drupal, and a plain (int) cast reads the leading digits of a
+  // string and stops — so '5abc' used to resolve to notification 5. Never a
+  // hole (the uid condition below still decides whose row it is) but the same
+  // sloppiness every other id of this module refuses, and the shape
+  // myapi_parse_id_param() applies to a query-string id.
+  if (!myapi_is_positive_int_param($id)) {
+    myapi_error('notification_not_found', 404);
+  }
   $id = (int) $id;
 
   $notification = db_select('myapi_notifications', 'n')

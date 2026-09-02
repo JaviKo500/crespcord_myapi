@@ -123,7 +123,10 @@ class CalendarRenderTest extends TestCase {
     $this->assertSame(12, myapi_calendar_positive_int(12));
     $this->assertSame(700, myapi_calendar_positive_int('700'));
 
-    foreach (['0', '-1', '1.5', '01a', 'abc', '', ' 1', '1 ', '+1', ['1'], NULL, FALSE] as $value) {
+    // "12\n" joined the list with SPEC 122, when this parser stopped carrying
+    // its own '/^\d+$/' — which without the 'D' modifier accepted a trailing
+    // newline — and started delegating to myapi_is_positive_int_param().
+    foreach (['0', '-1', '1.5', '01a', 'abc', '', ' 1', '1 ', '+1', "12\n", ['1'], NULL, FALSE] as $value) {
       $this->assertNull(myapi_calendar_positive_int($value), json_encode($value));
     }
 
@@ -780,12 +783,16 @@ class CalendarRenderTest extends TestCase {
    * nothing to show.
    */
   public function testTheFullNameHelper() {
-    // The trim() is applied to the JOINED string and not to each half, so the
-    // inner padding survives. Pinned as it is: no real profile carries it, and
-    // the alternative would change the text the back office already prints.
-    $this->assertSame('Pablo   Cordero', _myapi_reservation_full_name($this->row([
+    // EACH HALF IS TRIMMED BEFORE THEY ARE JOINED since SPEC 122. It used to
+    // trim only the joined string, so ' Pablo ' + ' Cordero ' came out as
+    // 'Pablo   Cordero' in the back office and in every email built from these
+    // labels.
+    $this->assertSame('Pablo Cordero', _myapi_reservation_full_name($this->row([
       'user_first_name' => ' Pablo ', 'user_last_name' => ' Cordero ',
     ])));
+    $this->assertSame('Pablo', _myapi_reservation_full_name($this->row([
+      'user_first_name' => '  Pablo  ', 'user_last_name' => '   ',
+    ])), 'a half made of whitespace adds no separator');
     $this->assertSame('Pablo Cordero', _myapi_reservation_full_name($this->row([
       'user_first_name' => 'Pablo', 'user_last_name' => 'Cordero',
     ])));

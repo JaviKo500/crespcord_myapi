@@ -53,15 +53,8 @@ function myapi_receipt_list($unit_id) {
     myapi_error('unit_access_denied', 403);
   }
 
-  $page = isset($_GET['page']) && ctype_digit((string) $_GET['page']) && (int) $_GET['page'] > 0
-    ? (int) $_GET['page']
-    : 1;
-
-  $limit = isset($_GET['limit']) && $_GET['limit'] === '-1'
-    ? -1
-    : (isset($_GET['limit']) && ctype_digit((string) $_GET['limit']) && (int) $_GET['limit'] > 0
-      ? max(1, min(50, (int) $_GET['limit']))
-      : 20);
+  $page = myapi_parse_page_param();
+  $limit = myapi_parse_limit_param(TRUE);
 
   if ($limit === -1) {
     $page = 1;
@@ -120,19 +113,21 @@ function myapi_receipt_parse_date_range() {
 /**
  * Validates a single 'YYYY-MM-DD' date string.
  *
+ * ONE-LINE DELEGATION SINCE SPEC 122, and the name stays because it is what the
+ * two parsers of this file call. The body used to be a byte-for-byte copy of
+ * myapi_valid_iso_date() — one of six — and copies drift: SPEC 73 added the 'D'
+ * modifier to the shared one so a trailing newline stopped passing as a date,
+ * and none of the six copies got it. Same shape as
+ * myapi_service_request_parse_id_param(), for the same reason (regla 3 de
+ * CLAUDE.md).
+ *
  * @param mixed $value  Raw query-string value, or NULL when absent.
  *
  * @return string|NULL  The value when it is a real ISO calendar date,
  *                       NULL otherwise.
  */
 function myapi_receipt_valid_date($value) {
-  if (!is_string($value) || !preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $value, $m)) {
-    return NULL;
-  }
-  if (!checkdate((int) $m[2], (int) $m[3], (int) $m[1])) {
-    return NULL;
-  }
-  return $value;
+  return myapi_valid_iso_date($value);
 }
 
 /**

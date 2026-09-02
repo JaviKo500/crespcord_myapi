@@ -427,13 +427,13 @@ function myapi_payment_create() {
  * @return string|null  Normalized 'Y-m-d\TH:i:s', or NULL when invalid.
  */
 function myapi_payment_normalize_date($value) {
-  if (preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $value, $m)) {
+  if (preg_match('/^(\d{4})-(\d{2})-(\d{2})$/D', $value, $m)) {
     if (!checkdate((int) $m[2], (int) $m[3], (int) $m[1])) {
       return NULL;
     }
     return $value . 'T00:00:00';
   }
-  if (preg_match('/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/', $value, $m)) {
+  if (preg_match('/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/D', $value, $m)) {
     if (!checkdate((int) $m[2], (int) $m[3], (int) $m[1])) {
       return NULL;
     }
@@ -609,7 +609,13 @@ function myapi_payment_build_created_item($node, $file, $bank_term = NULL) {
     'title'          => $node->title,
     'unit_id'        => (int) $node->field_vivienda[LANGUAGE_NONE][0]['target_id'],
     'payment_date'   => $node->field_fecha_de_pago[LANGUAGE_NONE][0]['value'],
-    'status'         => $node->field_estado_pago[LANGUAGE_NONE][0]['value'],
+    // GUARDED LIKE EVERY OTHER NULLABLE KEY OF THIS MAPPER (SPEC 122). It was
+    // the one read here without an isset(), so a 'pagos' node with no estado
+    // row — which the detail endpoint answers, unlike the listing — emitted an
+    // undefined-property notice on its way to the same null.
+    'status'         => isset($node->field_estado_pago[LANGUAGE_NONE][0]['value'])
+      ? $node->field_estado_pago[LANGUAGE_NONE][0]['value']
+      : NULL,
     'payment_method' => $node->field_forma_de_pago[LANGUAGE_NONE][0]['value'],
     'reference'      => $node->field_referencia[LANGUAGE_NONE][0]['value'],
     'amount'         => (float) $node->field_valor[LANGUAGE_NONE][0]['value'],
@@ -641,15 +647,8 @@ function myapi_payment_list($unit_id) {
     myapi_error('unit_access_denied', 403);
   }
 
-  $page = isset($_GET['page']) && ctype_digit((string) $_GET['page']) && (int) $_GET['page'] > 0
-    ? (int) $_GET['page']
-    : 1;
-
-  $limit = isset($_GET['limit']) && $_GET['limit'] === '-1'
-    ? -1
-    : (isset($_GET['limit']) && ctype_digit((string) $_GET['limit']) && (int) $_GET['limit'] > 0
-      ? max(1, min(50, (int) $_GET['limit']))
-      : 20);
+  $page = myapi_parse_page_param();
+  $limit = myapi_parse_limit_param(TRUE);
 
   if ($limit === -1) {
     $page = 1;
@@ -708,19 +707,21 @@ function myapi_payment_parse_date_range() {
 /**
  * Validates a single 'YYYY-MM-DD' date string.
  *
+ * ONE-LINE DELEGATION SINCE SPEC 122, and the name stays because it is what the
+ * two parsers of this file call. The body used to be a byte-for-byte copy of
+ * myapi_valid_iso_date() — one of six — and copies drift: SPEC 73 added the 'D'
+ * modifier to the shared one so a trailing newline stopped passing as a date,
+ * and none of the six copies got it. Same shape as
+ * myapi_service_request_parse_id_param(), for the same reason (regla 3 de
+ * CLAUDE.md).
+ *
  * @param mixed $value  Raw query-string value, or NULL when absent.
  *
  * @return string|NULL  The value when it is a real ISO calendar date,
  *                       NULL otherwise.
  */
 function myapi_payment_valid_date($value) {
-  if (!is_string($value) || !preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $value, $m)) {
-    return NULL;
-  }
-  if (!checkdate((int) $m[2], (int) $m[3], (int) $m[1])) {
-    return NULL;
-  }
-  return $value;
+  return myapi_valid_iso_date($value);
 }
 
 /**

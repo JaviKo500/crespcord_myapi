@@ -194,6 +194,22 @@ class SharedHelpersTest extends TestCase {
   }
 
   /**
+   * A TRAILING NEWLINE IS NOT A VALID TIME (SPEC 122). The shared HH:MM pattern
+   * carried no 'D' modifier, so "08:00\n" passed and was stored in a
+   * fixed-width column that the reservation code compares and sorts as a
+   * string.
+   */
+  public function testATrailingNewlineIsNotAValidTime() {
+    $this->assertFalse(myapi_time_format_is_valid("08:00\n"));
+    $this->assertTrue(myapi_time_format_is_valid('08:00'));
+
+    $form_state = $this->formState(['field_open_time' => "08:00\n", 'field_close_time' => '22:00']);
+    myapi_area_validate_times(NULL, [], $form_state);
+
+    $this->assertArrayHasKey('field_open_time][und][0][value', $this->formErrors());
+  }
+
+  /**
    * The walk survives the shapes a widget produces around the values: a
    * housekeeping key with no 'value', a non-array delta, and a field that is
    * not an array at all.
@@ -357,6 +373,9 @@ class SharedHelpersTest extends TestCase {
       ],
     ]);
 
+    // These two answer NIDS and not uids, and they are untouched by SPEC 122's
+    // cast: it applies to myapi_unit_member_uids(), which resolves the other
+    // direction. Pinned side by side so the difference is deliberate.
     $this->assertSame(['45', '46'], myapi_user_owned_unit_nids(3), 'deleted rows do not count');
     $this->assertSame(['50', '51'], myapi_user_occupied_unit_nids(3), 'both fields, deduplicated');
     $this->assertSame([], myapi_user_owned_unit_nids(999));
@@ -404,12 +423,14 @@ class SharedHelpersTest extends TestCase {
       ],
     ]);
 
-    $this->assertSame(['3'], myapi_condominium_member_uids([12], 'propietarios'));
-    $this->assertSame(['4'], myapi_condominium_member_uids([12], 'ocupantes'));
+    // INTS, not the strings the driver answers: myapi_unit_member_uids() casts
+    // at the source since SPEC 122, and this resolver hands its result through.
+    $this->assertSame([3], myapi_condominium_member_uids([12], 'propietarios'));
+    $this->assertSame([4], myapi_condominium_member_uids([12], 'ocupantes'));
 
     $all = myapi_condominium_member_uids([12], 'todos');
     sort($all);
-    $this->assertSame(['3', '4'], $all);
+    $this->assertSame([3, 4], $all);
 
     $this->assertSame([], myapi_condominium_member_uids([], 'todos'), 'no building, nobody');
     $this->assertSame([], myapi_condominium_member_uids([12], 'vecinos'), 'an unknown role is fail-safe');

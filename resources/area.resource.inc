@@ -116,15 +116,8 @@ function myapi_area_list($condominium_id) {
     myapi_error('condominium_access_denied', 403);
   }
 
-  $page = isset($_GET['page']) && ctype_digit((string) $_GET['page']) && (int) $_GET['page'] > 0
-    ? (int) $_GET['page']
-    : 1;
-
-  $limit = isset($_GET['limit']) && $_GET['limit'] === '-1'
-    ? -1
-    : (isset($_GET['limit']) && ctype_digit((string) $_GET['limit']) && (int) $_GET['limit'] > 0
-      ? max(1, min(50, (int) $_GET['limit']))
-      : 20);
+  $page = myapi_parse_page_param();
+  $limit = myapi_parse_limit_param(TRUE);
 
   if ($limit === -1) {
     $page = 1;
@@ -260,7 +253,7 @@ function myapi_area_availability($area_id) {
   if (!is_string($date) || $date === '') {
     myapi_error('missing_field', 422, ['@field' => 'date']);
   }
-  if (!preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $date, $date_parts)
+  if (!preg_match('/^(\d{4})-(\d{2})-(\d{2})$/D', $date, $date_parts)
     || !checkdate((int) $date_parts[2], (int) $date_parts[3], (int) $date_parts[1])) {
     myapi_error('invalid_field', 422, ['@field' => 'date']);
   }

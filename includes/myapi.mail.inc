@@ -211,7 +211,7 @@ function myapi_mail_reservation_user_html($params, $cancelled) {
   // SPEC 50: last line of the data block, only when there is a reason. The
   // isset() also covers the items enqueued before that spec, which carry no
   // such key and must keep rendering exactly as they did.
-  if (isset($params['cancel_reason']) && $params['cancel_reason'] !== '') {
+  if ($cancelled && isset($params['cancel_reason']) && $params['cancel_reason'] !== '') {
     $lines['Motivo'] = $params['cancel_reason'];
   }
 

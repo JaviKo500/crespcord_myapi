@@ -586,13 +586,11 @@ class PaymentEndpointTest extends TestCase {
 
     $this->assertSame([], $this->ids($this->listRequest()), 'the listing hides it');
 
-    // AND THE MAPPER EMITS A NOTICE ON THE WAY OUT, which is the second half of
-    // the finding: myapi_payment_build_created_item() reads
-    // field_estado_pago[LANGUAGE_NONE][0]['value'] UNGUARDED, where every other
-    // nullable field of the same mapper is behind an isset(). On the PHP 7.4 of
-    // production that is a notice and a NULL; the answer is still a 200. The
-    // handler below is what lets the case assert both instead of dying on
-    // PHPUnit's error-to-exception conversion.
+    // AND IT ANSWERS SILENTLY SINCE SPEC 122. That read was the one key of
+    // myapi_payment_build_created_item() without an isset(), where every other
+    // nullable field of the same mapper had one — so this exact request used
+    // to emit an undefined-property notice on its way to the same null. The
+    // handler below is what makes the ABSENCE of the notice assertable.
     $notices = [];
     set_error_handler(function ($severity, $message) use (&$notices) {
       $notices[] = $message;
@@ -608,8 +606,7 @@ class PaymentEndpointTest extends TestCase {
 
     $this->assertSame(200, $detail['status'], 'the detail answers it');
     $this->assertNull($detail['json']['data']['payment']['status']);
-    $this->assertNotEmpty($notices, 'the unguarded read is not silent');
-    $this->assertStringContainsString('field_estado_pago', $notices[0]);
+    $this->assertSame([], $notices, 'the read is guarded now');
   }
 
   /**
@@ -1137,6 +1134,11 @@ class PaymentEndpointTest extends TestCase {
     $_POST['payment_date'] = '2026-06-15T13:45:30';
     $this->assertSame('2026-06-15T13:45:30', $this->createRequest()['json']['data']['payment']['payment_date']);
 
+    // The two newline cases are SPEC 122's: myapi_payment_normalize_date()
+    // would otherwise have stored "2026-06-15\nT00:00:00" in
+    // field_fecha_de_pago. Unreachable over HTTP, because
+    // myapi_request_post_field() trims first — which is exactly why it went
+    // unnoticed, and exactly why the validator should not depend on it.
     foreach (['15-06-2026', '2026-13-01', '2026-02-30', '2026-06-15 13:45:30', '2026-06-15T24:00:00', '2026-06-15T13:60:00', 'hoy'] as $value) {
       $this->seedForCreate();
       $_POST['payment_date'] = $value;
@@ -1146,6 +1148,18 @@ class PaymentEndpointTest extends TestCase {
       $this->assertSame(422, $result['status'], $value);
       $this->assertSame('invalid_date', $result['json']['error_code'], $value);
     }
+  }
+
+  /**
+   * The normaliser itself refuses a trailing newline on both of its shapes
+   * (SPEC 122), so a caller that does not trim first cannot store one.
+   */
+  public function testTheNormaliserRefusesATrailingNewlineOnBothShapes() {
+    $this->assertNull(myapi_payment_normalize_date("2026-06-15\n"));
+    $this->assertNull(myapi_payment_normalize_date("2026-06-15T13:45:30\n"));
+
+    $this->assertSame('2026-06-15T00:00:00', myapi_payment_normalize_date('2026-06-15'));
+    $this->assertSame('2026-06-15T13:45:30', myapi_payment_normalize_date('2026-06-15T13:45:30'));
   }
 
   /**

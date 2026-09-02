@@ -124,15 +124,8 @@ function myapi_service_category_list() {
   // cannot mistake a complete result for the first page of one.
   $paginate = (isset($_GET['page']) || isset($_GET['limit'])) && !$searching;
 
-  $page = isset($_GET['page']) && is_scalar($_GET['page'])
-    && ctype_digit((string) $_GET['page']) && (int) $_GET['page'] > 0
-    ? (int) $_GET['page']
-    : 1;
-
-  $limit = isset($_GET['limit']) && is_scalar($_GET['limit'])
-    && ctype_digit((string) $_GET['limit']) && (int) $_GET['limit'] > 0
-    ? min(50, (int) $_GET['limit'])
-    : 20;
+  $page = myapi_parse_page_param();
+  $limit = myapi_parse_limit_param();
 
   $vocabulary = taxonomy_vocabulary_machine_name_load(MYAPI_SERVICES_CATEGORY_VOCABULARY);
   if ($vocabulary === FALSE) {

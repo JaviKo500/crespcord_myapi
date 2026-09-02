@@ -244,15 +244,15 @@ class MailTemplatesTest extends TestCase {
     $without = myapi_mail_reservation_user_html($params, TRUE);
     $this->assertStringNotContainsString('Motivo', $without);
 
-    // THE TEMPLATE DOES NOT GATE THE LINE BY THE VARIANT — it prints a reason
-    // whenever it is given one, and it is the NOTIFIER that passes '' on a
-    // creation (myapi_reservation_enqueue_user_mail()). Pinned as it is, with
-    // the two halves next to each other, so that moving the guard becomes a
-    // decision: today the creation email is clean because of the caller, not
-    // because of the template.
+    // THE TEMPLATE GATES THE LINE BY THE VARIANT since SPEC 122. It used to
+    // print a reason whenever it was given one, and the creation email was
+    // clean only because the NOTIFIER passes '' there
+    // (myapi_reservation_enqueue_user_mail()) — belt without braces. Now a
+    // creation drops the line even when a reason reaches it.
     $params['cancel_reason'] = 'Mantenimiento imprevisto';
     $creation = myapi_mail_reservation_user_html($params, FALSE);
-    $this->assertStringContainsString('Mantenimiento imprevisto', $creation, 'the template prints what it is given');
+    $this->assertStringNotContainsString('Mantenimiento imprevisto', $creation, 'never on a creation');
+    $this->assertStringNotContainsString('Motivo', $creation);
   }
 
   /**

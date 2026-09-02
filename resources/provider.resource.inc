@@ -415,13 +415,8 @@ function myapi_provider_list() {
   // defaults silently (no 422), same as bulletins and payments. limit=-1 is NOT
   // "everything" here — the marketplace is site-wide and has no ceiling, unlike
   // the payments or receipts of a single unit.
-  $page = isset($_GET['page']) && ctype_digit((string) $_GET['page']) && (int) $_GET['page'] > 0
-    ? (int) $_GET['page']
-    : 1;
-
-  $limit = isset($_GET['limit']) && ctype_digit((string) $_GET['limit']) && (int) $_GET['limit'] > 0
-    ? max(1, min(50, (int) $_GET['limit']))
-    : 20;
+  $page = myapi_parse_page_param();
+  $limit = myapi_parse_limit_param();
 
   $order_by = isset($_GET['order_by']) && in_array($_GET['order_by'], ['rating_avg', 'hourly_rate'], TRUE)
     ? $_GET['order_by']

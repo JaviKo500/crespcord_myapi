@@ -147,8 +147,10 @@ read, responds `200` without changing `read_at`.
 |--------|-------|
 | Authorization | Bearer `<access_token>` |
 
-`{id}` is the `myapi_notifications` row id. A non-numeric wildcard casts to `0`,
-matches nothing, and returns `404`.
+`{id}` is the `myapi_notifications` row id and must be a **positive integer**.
+Anything else — a word, `0`, a negative, a decimal, or a number with a suffix
+such as `5abc` — returns `404` without touching a row, exactly like an id that
+does not exist.
 
 **Success response (200)**
 ```json

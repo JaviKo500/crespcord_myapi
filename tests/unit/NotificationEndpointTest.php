@@ -682,29 +682,28 @@ class NotificationEndpointTest extends TestCase {
   }
 
   /**
-   * '5abc' RESOLVES TO NOTIFICATION 5, and that is pinned as it is.
+   * '5abc' IS A 404 SINCE SPEC 122, and marks nothing.
    *
-   * The id is read with a plain `(int)` cast and not with ctype_digit(), and
-   * PHP's cast reads the leading digits of a string and stops — so a client
-   * that appends a suffix to the id still marks the notification. It is not a
-   * hole (the uid scope still decides whose row it is, and the 404 of a
-   * foreign row is unchanged) but it IS the route's behaviour, and a stricter
-   * parse would change what some client already gets away with.
-   *
-   * Recorded as a finding in SPEC 121 rather than fixed here.
+   * The id used to be read with a plain `(int)` cast, and PHP's cast reads the
+   * leading digits of a string and stops — so a client that appended a suffix
+   * still marked notification 5. It was never a hole (the uid condition
+   * decided whose row it was) but it was the one id of this module that did
+   * not require a positive integer. SPEC 121 recorded it; SPEC 122 made the
+   * parse strict, the same shape myapi_parse_id_param() applies to a
+   * query-string id.
    */
-  public function testANumericPrefixResolvesToThatId() {
+  public function testANumericPrefixIsRejectedLikeEveryOtherMalformedId() {
     $this->seed([['id' => 5, 'is_read' => 0]]);
 
     $result = $this->readRequest('5abc');
 
-    $this->assertSame(200, $result['status']);
-    $this->assertSame(5, $result['json']['data']['id']);
-    $this->assertTrue($result['json']['data']['is_read']);
+    $this->assertSame(404, $result['status']);
+    $this->assertSame('notification_not_found', $result['json']['error_code']);
+    $this->assertSame('0', (string) $this->storedRow(5)['is_read'], 'nothing was marked');
+    $this->assertSame([], myapi_test_db_writes());
 
-    // And the uid scope still holds for the same sloppy id.
-    $this->seed([['id' => 5, 'uid' => self::OTHER_UID, 'is_read' => 0]]);
-    $this->assertSame(404, $this->readRequest('5abc')['status']);
+    // And it costs no query at all: the guard runs before the lookup.
+    $this->assertSame([], myapi_test_db_queries('myapi_notifications'));
   }
 
   /* -------------------------------------------------------------------------

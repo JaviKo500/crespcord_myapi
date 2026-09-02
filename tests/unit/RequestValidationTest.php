@@ -23,6 +23,8 @@ require_once __DIR__ . '/../../includes/myapi.i18n.inc';
  *     summary
  *   - myapi_request_method() / myapi_request_post_field(_array)() — the thin
  *     readers over $_SERVER and $_POST
+ *   - myapi_is_positive_int_param() and the three parsers built on it
+ *     (SPEC 122) — the pagination and the optional ids every listing reads
  *
  * myapi_request_body() has no test on purpose: it reads php://input, which
  * cannot be written from PHP, and caches the result in a static that no test
@@ -614,6 +616,168 @@ class RequestValidationTest extends TestCase {
     $_POST['ids'] = [12, '13', 14.5];
 
     $this->assertSame(['12', '13', '14.5'], myapi_request_post_field_array('ids'));
+  }
+
+  /* -------------------------------------------------------------------------
+   * The pagination parsers (SPEC 122).
+   *
+   * Thirteen resources used to write this test by hand and twelve wrote it
+   * without the is_scalar() guard, which is what made '?page[]=1' emit a
+   * notice on its way to the right answer. These are the pulled-out versions,
+   * and the cases below are the ones that guard was missing for.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * A positive integer is one, in every shape a query string can carry it.
+   */
+  public function testIsPositiveIntParamAcceptsPositiveIntegers() {
+    foreach (['1', '20', '007', 1, 50] as $value) {
+      $this->assertTrue(myapi_is_positive_int_param($value), json_encode($value));
+    }
+  }
+
+  /**
+   * And nothing else is: zero, negatives, floats, words, the empty string, and
+   * — the case this function exists for — an ARRAY.
+   */
+  public function testIsPositiveIntParamRejectsEverythingElse() {
+    foreach (['0', '-1', '1.5', '1a', 'abc', '', ' 1', '1 ', '+1', 0, -3, 1.5, NULL, FALSE, ['1'], [], (object) []] as $value) {
+      $this->assertFalse(myapi_is_positive_int_param($value), json_encode($value));
+    }
+  }
+
+  /**
+   * THE ARRAY IS REJECTED WITHOUT A NOTICE. That is the whole point: the cast
+   * happens after is_scalar(), so it never runs on an array.
+   */
+  public function testAnArrayIsRejectedSilently() {
+    $notices = [];
+    set_error_handler(function ($severity, $message) use (&$notices) {
+      $notices[] = $message;
+
+      return TRUE;
+    });
+    try {
+      $verdict = myapi_is_positive_int_param(['1']);
+    }
+    finally {
+      restore_error_handler();
+    }
+
+    $this->assertFalse($verdict);
+    $this->assertSame([], $notices, 'not one notice');
+  }
+
+  /**
+   * The page defaults to 1 and answers what was asked for when it can.
+   */
+  public function testThePageParam() {
+    $_GET = [];
+    $this->assertSame(1, myapi_parse_page_param());
+
+    $_GET = ['page' => '3'];
+    $this->assertSame(3, myapi_parse_page_param());
+
+    $_GET = ['page' => '007'];
+    $this->assertSame(7, myapi_parse_page_param(), 'leading zeros are normalised');
+
+    foreach (['0', '-1', 'abc', '', '1.5', ['2']] as $value) {
+      $_GET = ['page' => $value];
+      $this->assertSame(1, myapi_parse_page_param(), json_encode($value));
+    }
+  }
+
+  /**
+   * The limit defaults to 20, caps at 50, and falls back silently.
+   */
+  public function testTheLimitParamDefaultsAndClamps() {
+    $_GET = [];
+    $this->assertSame(20, myapi_parse_limit_param());
+
+    $_GET = ['limit' => '5'];
+    $this->assertSame(5, myapi_parse_limit_param());
+
+    $_GET = ['limit' => '50'];
+    $this->assertSame(50, myapi_parse_limit_param());
+
+    $_GET = ['limit' => '9999'];
+    $this->assertSame(50, myapi_parse_limit_param(), 'capped');
+
+    foreach (['0', '-5', 'abc', '', ['5']] as $value) {
+      $_GET = ['limit' => $value];
+      $this->assertSame(20, myapi_parse_limit_param(), json_encode($value));
+    }
+  }
+
+  /**
+   * THE '-1' SENTINEL IS A PARAMETER AND NOT A DEFAULT: a listing that does
+   * not honour it reads '-1' as one more malformed value and answers its
+   * default, which is what keeps the bulletin and provider listings paginating
+   * the way they always did.
+   */
+  public function testTheUnlimitedSentinelIsOptIn() {
+    $_GET = ['limit' => '-1'];
+
+    $this->assertSame(-1, myapi_parse_limit_param(TRUE));
+    $this->assertSame(20, myapi_parse_limit_param(FALSE), 'not every listing has it');
+    $this->assertSame(20, myapi_parse_limit_param(), 'and it is off by default');
+  }
+
+  /**
+   * The sentinel is matched STRICTLY against the string $_GET carries, so a
+   * value that merely looks like it — a float, an array — is not it.
+   */
+  public function testOnlyTheExactSentinelStringIsTheSentinel() {
+    foreach (['-1.0', '-01', ' -1', '-2', ['-1']] as $value) {
+      $_GET = ['limit' => $value];
+      $this->assertSame(20, myapi_parse_limit_param(TRUE), json_encode($value));
+    }
+  }
+
+  /**
+   * The default and the cap are parameters, so a listing with its own numbers
+   * does not need its own parser.
+   */
+  public function testTheDefaultAndTheCapAreParameters() {
+    $_GET = [];
+    $this->assertSame(10, myapi_parse_limit_param(FALSE, 10));
+
+    $_GET = ['limit' => '80'];
+    $this->assertSame(80, myapi_parse_limit_param(FALSE, 10, 100));
+    $this->assertSame(50, myapi_parse_limit_param(), 'the module-wide cap is 50');
+  }
+
+  /**
+   * The optional id is the LAX sibling of myapi_parse_id_param(): a malformed
+   * value is NULL — "no filter" — where that one answers 422, because its
+   * callers offer a narrowing the client may simply omit.
+   */
+  public function testTheOptionalIdParamIsLax() {
+    $_GET = [];
+    $this->assertNull(myapi_parse_optional_id_param('condominium'));
+
+    $_GET = ['condominium' => '12'];
+    $this->assertSame(12, myapi_parse_optional_id_param('condominium'));
+
+    foreach (['0', '-1', 'abc', '', '1.5', ['12']] as $value) {
+      $_GET = ['condominium' => $value];
+      $this->assertNull(myapi_parse_optional_id_param('condominium'), json_encode($value));
+    }
+  }
+
+  /**
+   * And it never answers, which is the difference that matters: the strict one
+   * ends the request with a 422 for the very same input.
+   */
+  public function testTheLaxAndStrictIdParsersDisagreeOnPurpose() {
+    $_GET = ['unit_id' => 'abc'];
+
+    $this->assertNull(myapi_parse_optional_id_param('unit_id'));
+
+    $result = myapi_test_capture(function () {
+      myapi_parse_id_param('unit_id');
+    });
+    $this->assertSame(422, $result['status']);
   }
 
 }

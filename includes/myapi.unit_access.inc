@@ -136,7 +136,15 @@ function myapi_unit_member_uids(array $unit_nids, $role) {
     $uids = array_merge($uids, $occupant_uids, $occupants_uids);
   }
 
-  return array_values(array_unique($uids));
+  // CAST AT THE SOURCE (SPEC 122). fetchCol() answers the strings the driver
+  // returns, and every caller that needed integers was casting them again on
+  // its own — myapi_notification_create(), myapi_building_admin_visible_uids()
+  // and the two building-admin decision helpers all carry an array_map('intval')
+  // for exactly this. Casting once here makes those redundant instead of
+  // load-bearing, and stops a caller comparing a uid with === from being wrong
+  // about it. The deduplication happens AFTER the cast, so '7' and 7 collapse
+  // into one recipient instead of two.
+  return array_values(array_unique(array_map('intval', $uids)));
 }
 
 /**
