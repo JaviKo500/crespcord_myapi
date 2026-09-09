@@ -1190,25 +1190,35 @@ class ServiceOfferAcceptTest extends TestCase {
   }
 
   /**
-   * RECEIVING A QUOTE ASSIGNS NOTHING BY ITSELF, and that is the decision this
-   * spec turned down. A 'direct' with an offer sitting on it is still 'direct',
-   * so the resident who has not accepted anything is committed to no amount —
-   * and the provider keeps their way back, because editing and withdrawing both
-   * require the offer to be 'sent'.
+   * RECEIVING A QUOTE ON A 'direct' AWARDS THE JOB (SPEC 120), which is the
+   * decision SPEC 107 turned down and SPEC 120 reversed. On a direct the
+   * resident awarded when they named the company, so there is nothing left for
+   * them to accept: the offer is born 'selected' and the request moves to
+   * 'assigned' in the same pass that creates it.
    *
-   * The proof is structural and it is the strongest available: the ONE function
-   * that writes field_assigned_offer is the award, and the create endpoint does
-   * not touch the field at all.
+   * The proof is structural, and it asserts on the CONSTANT NAMES rather than
+   * on their values. That is not stylistic tidiness — it is the whole
+   * correctness of this test. The values are 'assigned' and 'selected', and
+   * 'assigned' is a substring of 'field_assigned_offer', so a test written
+   * against the values would have gone green on a source that never mentioned
+   * the status at all. This file forbids a status literal anyway: neither a
+   * bundle machine name nor a status key is ever typed out in the resource.
    */
-  public function testQuotingADirectAssignsNothing() {
+  public function testQuotingADirectAwardsIt() {
     $create = $this->functionSource('myapi_service_offer_create');
 
-    $this->assertStringNotContainsString('field_assigned_offer', $create);
-    $this->assertStringNotContainsString('field_assigned_provider', $create);
+    $this->assertStringContainsString('field_assigned_offer', $create);
+    $this->assertStringContainsString('MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED', $create);
+    $this->assertStringContainsString('MYAPI_SERVICES_OFFER_STATUS_SELECTED', $create);
+
+    // field_assigned_provider IS STILL NEVER TOUCHED, and that half of the old
+    // assertion survives unchanged: SPEC 90 wrote it when the request was born
+    // and it already points at this very provider, which condition 5 of the
+    // gate proved. Rewriting it would be a write that changes nothing.
     $this->assertStringNotContainsString(
-      MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED,
+      'field_assigned_provider',
       $create,
-      'creating an offer never moves a request to assigned'
+      'the awarded provider of a direct is written at birth and never rewritten here'
     );
   }
 

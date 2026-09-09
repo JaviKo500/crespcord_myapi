@@ -408,6 +408,35 @@ Cuerpo:  Fuga en el calentador
   texts are fixed in Spanish, same criterion as every other push and email of
   the module.
 
+#### On a `direct` the texts change, and the notice does not (SPEC 120)
+
+When the quote arrives on the `direct` awarded to the very provider sending it,
+[it awards the job](service-offer.md#your-quote-awards-the-job-spec-120) — so
+the resident is told what actually happened:
+
+```
+Título:  Tu proveedor tomó el trabajo
+Cuerpo:  Fuga en el calentador
+         Proveedor: Plomería Sur
+         Monto: 150.00 (Precio cerrado)
+         El proveedor envió su presupuesto y tomó el trabajo.
+```
+
+**One act, one notice.** The provider does one thing — they price the job the
+resident already gave them, and that prices it *and* commits it — so it produces
+**one** inbox row, **one** push and **one** email. There is no separate "request
+awarded" notification, and sending the ordinary offer text followed by an award
+notice would be two alerts for one act.
+
+**Everything else is identical**: the same `type` (`service_offer_received` —
+the inbox groups by type, and what happened is still that an offer arrived), the
+same `source_nid`, the same deep link, the same payload, the same mail key. Only
+the title, the fourth body line and the email's subject and intro differ.
+
+The `Monto` line needs no special case: `A presupuestar en sitio` reads
+correctly under the closing sentence, so an `on_site_quote` direct award is one
+notice like any other.
+
 #### The push payload
 
 ```json
@@ -1230,3 +1259,141 @@ documents — wrapped end to end. A failure — a broken queue, a deleted
 provider account, an invalid address — lands in `watchdog` and never undoes
 the close, the rating or the transaction of
 `PUT /api/v1/service-requests/{id}/close`.
+
+---
+
+## Request rejected by the provider (SPEC 121)
+
+One behaviour hanging off
+[`PUT /api/v1/service-requests/{id}/reject`](service-request-provider.md#put-apiv1service-requestsidreject):
+the awarded provider of a `direct` request says they cannot take the job, and
+the resident who requested it is told — through push, inbox and email, **once
+per rejection**.
+
+It fires from `myapi_service_request_reject()` after the three writes and
+before the `200` is assembled, and **never from a node hook**: a cancellation
+made from the back office notifies nobody, the same criterion every other
+trigger of this file follows.
+
+### Who is notified
+
+| Audience | How it is resolved |
+|----------|--------------------|
+| The resident who created the request (`field_requester`) | Read off the node the endpoint already loaded to write on it — nothing here re-queries the request. |
+
+**Nobody else.** Two absences, both deliberate:
+
+- **Not the provider who rejected it.** The only provider concerned is the one
+  who just performed the act, and telling them what they did is not news.
+- **Not the `backend` role.** Unlike the resident's own cancellation
+  ([SPEC 113](#request-cancelled-spec-113)), which reaches the back office
+  because it can affect several bidding companies at once, a rejection concerns
+  exactly two people.
+
+A requester account deleted between the request and the rejection costs nothing:
+`user_load()` answers `FALSE`, and the trigger returns without writing or
+enqueuing anything.
+
+### Push + inbox
+
+One call to `myapi_notification_create()`:
+
+| Column | Value |
+|--------|-------|
+| `source_type` | `service_request` |
+| `source_nid` | nid of the request |
+| `type` | `service_request_rejected` |
+| `deep_link_target` | `service_request` |
+| `deep_link_id` | nid of the request |
+| `condominium_id` | `field_condominium` of the request |
+| `unit_id` | `field_unit` of the request |
+| `provider_id` | nid of the provider that rejected |
+| `audience` | `resident` |
+
+**A type of its own, and not `service_request_cancelled`.** That one already
+exists and points the other way: it is the *resident* cancelling and the
+*provider* being told, with audience `provider` and the provider deep link.
+Reusing it would file this row under an event with the opposite actor and the
+wrong audience.
+
+#### The texts
+
+```
+Título:  El proveedor canceló tu solicitud
+Cuerpo:  Fuga en el calentador
+         Proveedor: Plomería Sur
+         Motivo: No tengo disponibilidad esta semana.
+```
+
+- **Not `Solicitud cancelada`**, which is what SPEC 113 sends. That title is
+  true of this event too, and it is the exact confusion this spec exists to
+  avoid: the resident did not cancel anything. The title names the actor.
+- **The reason is on the push**, not only in the email. It is the whole point of
+  the notice: a resident who reads *"el proveedor canceló"* and has to open the
+  app to learn whether it was a scheduling clash or work the company does not do
+  has been told half of something. It is mandatory at the endpoint, so it is
+  always there.
+- Any value that does not resolve prints as `—`, never as an empty line.
+
+#### The push payload
+
+```json
+{
+  "target": "service_request",
+  "id": 1420,
+  "unit": 55,
+  "condominium": 87,
+  "notification_type": "service_request_rejected",
+  "audience": "resident",
+  "provider": 553
+}
+```
+
+### Email (`service_request_rejected_resident`)
+
+HTML (same CrespCord shell as every other mail of the module), enqueued already
+resolved and escaped, delivered on the next cron.
+
+Subject: `El proveedor canceló tu solicitud — {asunto}`.
+
+```
+Hola Ana Pérez
+
+El proveedor que habías elegido no puede tomar el trabajo, así que tu
+solicitud quedó cancelada.
+
+  Asunto      Fuga en el calentador
+  Proveedor   Plomería Sur
+  Motivo      No tengo disponibilidad esta semana.
+
+Puedes crear una nueva solicitud desde el botón de abajo.
+
+  [ Ver solicitud ]  →  myapp://service-requests/1420
+```
+
+The key is registered in `myapi_html_mail_keys()` and mapped to
+`MyapiHtmlMailSystem` by `myapi_update_7045()`; without that mapping the body
+would reach the resident with its HTML flattened to plain text.
+
+### Degraded values
+
+| Value | When it cannot be resolved | What is sent |
+|-------|---------------------------|--------------|
+| The provider's name | The node was unpublished or deleted between the award and the rejection | `—` in the push and the email; the timeline sentence falls back to *"El proveedor asignado canceló la solicitud: …"* |
+| The request's title | Never, in practice — it is `NOT NULL` | `—` |
+| The resident's name | The account has no SPEC 54 profile fields | The email greets `Hola` alone |
+
+### What does NOT notify anybody (request rejected)
+
+- **A rejection attempted and refused.** A `403` or a `409` writes nothing and
+  notifies nobody: a second call on an already-rejected request is answered
+  before this trigger is reached.
+- **A request cancelled from the back office**, whatever the operator's reason.
+  This trigger hangs off the endpoint, not off `hook_node_update()`.
+
+### Robustness (request rejected)
+
+Best-effort from end to end, the same discipline as every other trigger here:
+the whole body is wrapped, a failure lands in `watchdog` through
+`watchdog_exception()`, and **none of it undoes the rejection that was just
+saved**. The `200` is never conditional on the notice going out.

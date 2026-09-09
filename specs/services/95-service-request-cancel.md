@@ -721,7 +721,7 @@ paso 4, según la regla del proyecto de que un endpoint sin doc está incompleto
   API.
 - Cualquier notificación al proveedor, y el notificador del marketplace en
   general.
-- La cancelación por parte del proveedor.
+- La cancelación por parte del proveedor. **✅ Resuelto por SPEC 121** — `PUT /api/v1/service-requests/{id}/reject`, solo desde `direct`, con el motivo **obligatorio** donde aquí es opcional, y aterrizando en el mismo `cancelled`. Lo que este spec dio por «probablemente otro estado destino» resultó ser el mismo; lo distinto es el actor y la compuerta.
 - La reapertura de una solicitud cancelada.
 - El borrado de solicitudes.
 

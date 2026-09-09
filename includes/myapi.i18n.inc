@@ -234,6 +234,18 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'service_request_closed'             => 'Service request closed successfully.',
       'service_request_not_closable'       => 'This service request can no longer be closed.',
       'service_request_provider_missing'   => 'This service request has no assigned provider and cannot be rated.',
+      // SPEC 121 — the awarded provider of a 'direct' hands the job back. TWO
+      // keys and no more: not_rejectable is its own 409 and never
+      // not_cancellable, because the two answer different questions to
+      // different people — a resident is told their request can no longer be
+      // cancelled, a provider that this job can no longer be handed back, and
+      // the request that admits one may refuse the other. Everything else this
+      // endpoint answers — missing_field, invalid_field, field_too_long,
+      // service_request_not_found, service_request_forbidden,
+      // provider_role_required, missing_authorization, invalid_token and
+      // method_not_allowed — is reused above, unchanged.
+      'service_request_rejected'           => 'Service request rejected successfully.',
+      'service_request_not_rejectable'     => 'This service request can no longer be rejected.',
       // SPEC 115 — the chat credential. Neither key tells the client WHAT is
       // wrong: whether it is the private key, the client_email or the OpenSSL
       // extension goes to watchdog and nowhere else.
@@ -373,6 +385,9 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'service_request_closed'             => 'Solicitud cerrada correctamente.',
       'service_request_not_closable'       => 'Esta solicitud ya no se puede cerrar.',
       'service_request_provider_missing'   => 'Esta solicitud no tiene proveedor asignado y no se puede calificar.',
+      // SPEC 121 — see the note next to the English block.
+      'service_request_rejected'           => 'Solicitud cancelada correctamente.',
+      'service_request_not_rejectable'     => 'Esta solicitud ya no se puede cancelar.',
       // SPEC 115 — see the note next to the English block.
       'chat_not_configured'                => 'El chat no está disponible en este momento.',
       'chat_token_failed'                  => 'No se pudo iniciar el chat. Intentá de nuevo.',

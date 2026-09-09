@@ -861,9 +861,16 @@ function myapi_mail_service_request_admin_html($params) {
  *                        'amount_text' and 'deep_link_url', already escaped.
  */
 function myapi_mail_format_service_request_offer_resident(&$message, $params) {
+  // SPEC 120: the same key carries the direct award, and the subject is the
+  // first of the two things that change with it. 'Nueva oferta recibida' is
+  // true there and misleading — the job is not being bid for, it is taken.
+  $heading = !empty($params['direct_award'])
+    ? 'Tu proveedor tomó el trabajo'
+    : 'Nueva oferta recibida';
+
   // A subject is plain text, so the escaped title is decoded back — same
   // reason myapi_mail_format_service_request_provider() does it.
-  $message['subject'] = 'Nueva oferta recibida — ' . decode_entities($params['subject']);
+  $message['subject'] = $heading . ' — ' . decode_entities($params['subject']);
   $message['body'][] = myapi_mail_service_request_offer_resident_html($params);
 
   $message['headers']['Content-Type'] = 'text/html; charset=UTF-8';
@@ -873,6 +880,10 @@ function myapi_mail_format_service_request_offer_resident(&$message, $params) {
  * Builds the HTML body of that email.
  *
  * Three lines — the same three the push carries — and a button to the app.
+ *
+ * ONE INTRO SENTENCE CHANGES WITH 'direct_award' (SPEC 120) and nothing else
+ * does: the three lines, the button and the closing sentence say the same
+ * thing whether the quote was one of several or the award of the job.
  *
  * @param array $params  Already-escaped values (see the formatter).
  *
@@ -891,10 +902,14 @@ function myapi_mail_service_request_offer_resident_html($params) {
     'Monto'     => $params['amount_text'],
   );
 
+  $intro = !empty($params['direct_award'])
+    ? 'El proveedor que elegiste envió su presupuesto y tomó el trabajo. Tu solicitud queda adjudicada.'
+    : 'Recibiste una nueva oferta para tu solicitud de servicio.';
+
   return myapi_mail_reservation_html(
     'Solicitud #' . $params['nid'],
     $heading,
-    'Recibiste una nueva oferta para tu solicitud de servicio.',
+    $intro,
     $lines,
     'Puedes ver el detalle completo desde el botón de abajo.',
     array('label' => 'Ver solicitud', 'url' => $params['deep_link_url'])
@@ -1437,4 +1452,74 @@ function myapi_mail_reservation_html($title, $heading, $intro, array $lines, $fo
     . '</td></tr>'
     . '</table>'
     . '</body></html>';
+}
+
+/* ---------------------------------------------------------------------------
+ * Request-rejected email (SPEC 121).
+ *
+ * One key, fired by myapi_service_request_notify_rejected() from
+ * PUT /api/v1/service-requests/{id}/reject, to the resident who created the
+ * request. Same shape as the offer-received and offer-withdrawn emails above —
+ * greeting by name, labelled lines, one button — with the reason in place of
+ * the amount.
+ *
+ * $params arrives ALREADY RESOLVED AND ESCAPED from
+ * myapi_service_request_rejected_resident_mail_params() — nothing here escapes
+ * anything.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Formats the rejection email sent to the resident.
+ *
+ * Called from myapi_mail() (in myapi.module) for the
+ * 'service_request_rejected_resident' key.
+ *
+ * @param array $message  Mail message array, altered by reference.
+ * @param array $params   'nid', 'name', 'subject', 'provider_name', 'reason'
+ *                        and 'deep_link_url', already escaped.
+ */
+function myapi_mail_format_service_request_rejected_resident(&$message, $params) {
+  // A subject is plain text, so the escaped title is decoded back — same reason
+  // every other formatter of this family does it.
+  //
+  // 'El proveedor canceló' and never 'Solicitud cancelada': the resident did
+  // not cancel anything, and a subject line that reads as if they had is the
+  // exact confusion SPEC 121 exists to avoid.
+  $message['subject'] = 'El proveedor canceló tu solicitud — ' . decode_entities($params['subject']);
+  $message['body'][] = myapi_mail_service_request_rejected_resident_html($params);
+
+  $message['headers']['Content-Type'] = 'text/html; charset=UTF-8';
+}
+
+/**
+ * Builds the HTML body of that email.
+ *
+ * Three lines — the same three the push carries, reason included — and a button
+ * to the app.
+ *
+ * @param array $params  Already-escaped values (see the formatter).
+ *
+ * @return string  Full HTML document.
+ */
+function myapi_mail_service_request_rejected_resident_html($params) {
+  // Same greeting rule as every resident-facing email of this module: 'Hola
+  // {name}' when it resolved, 'Hola' alone otherwise.
+  $heading = (isset($params['name']) && $params['name'] !== '')
+    ? 'Hola ' . $params['name']
+    : 'Hola';
+
+  $lines = array(
+    'Asunto'    => $params['subject'],
+    'Proveedor' => $params['provider_name'],
+    'Motivo'    => $params['reason'],
+  );
+
+  return myapi_mail_reservation_html(
+    'Solicitud #' . $params['nid'],
+    $heading,
+    'El proveedor que habías elegido no puede tomar el trabajo, así que tu solicitud quedó cancelada.',
+    $lines,
+    'Puedes crear una nueva solicitud desde el botón de abajo.',
+    array('label' => 'Ver solicitud', 'url' => $params['deep_link_url'])
+  );
 }

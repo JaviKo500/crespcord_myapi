@@ -659,6 +659,146 @@ class ServiceRequestNotificationTest extends TestCase {
     $this->assertSame("—\nProveedor: —\nMonto: —", $body);
   }
 
+  /* -- The direct-award variant (SPEC 120) ----------------------------------- */
+
+  /**
+   * THE TITLE IS WHERE THE DIFFERENCE LIVES. 'Nueva oferta recibida' is true of
+   * a direct award too and useless there: it reads as "somebody is bidding for
+   * your job", when what happened is that the job is now taken at a price. A
+   * push is read as a headline.
+   */
+  public function testTheDirectAwardPushTitleSaysTheJobWasTaken() {
+    $this->assertSame('Tu proveedor tomó el trabajo', myapi_service_offer_direct_push_title());
+    $this->assertNotSame(myapi_service_offer_push_title(), myapi_service_offer_direct_push_title());
+  }
+
+  /**
+   * The same three labelled lines as its sibling, plus the sentence that says
+   * the job is committed. The three lines are not repeated by hand — the
+   * sibling is called — so the two can never drift.
+   */
+  public function testTheDirectAwardPushBodyExtendsTheOrdinaryOne() {
+    $ordinary = myapi_service_offer_push_body('Fuga en el calentador', 'Plomería Sur', '150.00 (Precio cerrado)');
+    $direct = myapi_service_offer_direct_push_body('Fuga en el calentador', 'Plomería Sur', '150.00 (Precio cerrado)');
+
+    $this->assertSame(
+      $ordinary . "\nEl proveedor envió su presupuesto y tomó el trabajo.",
+      $direct
+    );
+  }
+
+  /**
+   * The 'on_site_quote' case reads correctly with no figure: the fourth line
+   * carries no amount of its own, and myapi_service_offer_amount_text() has
+   * already resolved the 'Monto' line to 'A presupuestar en sitio'.
+   */
+  public function testTheDirectAwardPushBodyReadsWithNoAmount() {
+    $body = myapi_service_offer_direct_push_body(
+      'Fuga en el calentador',
+      'Plomería Sur',
+      myapi_service_offer_amount_text(NULL, 'on_site_quote')
+    );
+
+    $this->assertSame(
+      "Fuga en el calentador\nProveedor: Plomería Sur\nMonto: A presupuestar en sitio\nEl proveedor envió su presupuesto y tomó el trabajo.",
+      $body
+    );
+  }
+
+  /**
+   * Unresolvable values degrade to the dash here too, and the closing sentence
+   * survives: a notice with holes in it is still a notice, one that stops
+   * mid-thought is not.
+   */
+  public function testTheDirectAwardPushBodyDrawsUnresolvableValuesAsADash() {
+    $body = myapi_service_offer_direct_push_body(NULL, NULL, '');
+
+    $this->assertSame(
+      "—\nProveedor: —\nMonto: —\nEl proveedor envió su presupuesto y tomó el trabajo.",
+      $body
+    );
+  }
+
+  /* -- The rejection texts (SPEC 121) ---------------------------------------- */
+
+  /**
+   * NOT 'Solicitud cancelada', which is what the resident's own cancellation
+   * sends to the providers. That title is true of this event too and it is the
+   * exact confusion SPEC 121 exists to avoid: the resident did not cancel
+   * anything. The title names the actor.
+   */
+  public function testTheRejectionPushTitleNamesTheProviderAsTheActor() {
+    $this->assertSame('El proveedor canceló tu solicitud', myapi_service_request_rejected_push_title());
+    $this->assertNotSame(
+      myapi_service_request_cancelled_push_title(),
+      myapi_service_request_rejected_push_title()
+    );
+  }
+
+  /**
+   * THE REASON IS ON THE PUSH and not only in the email: it is the whole point
+   * of the notice. A resident who reads "el proveedor canceló" and has to open
+   * the app to learn whether it was a scheduling clash or work the company does
+   * not do has been told half of something.
+   */
+  public function testTheRejectionPushBodyCarriesTheReason() {
+    $body = myapi_service_request_rejected_push_body(
+      'Fuga en el calentador',
+      'Plomería Sur',
+      'No tengo disponibilidad esta semana.'
+    );
+
+    $this->assertSame(
+      "Fuga en el calentador\nProveedor: Plomería Sur\nMotivo: No tengo disponibilidad esta semana.",
+      $body
+    );
+  }
+
+  /**
+   * The reason is never empty when this fires — the endpoint's validator
+   * answers 422 to an absent one — but a programmatic caller must not be able
+   * to produce a hanging line.
+   */
+  public function testTheRejectionPushBodyDrawsUnresolvableValuesAsADash() {
+    $body = myapi_service_request_rejected_push_body(NULL, NULL, NULL);
+
+    $this->assertSame("—\nProveedor: —\nMotivo: —", $body);
+  }
+
+  /**
+   * The resident-facing mail params: escaped once, greeted by name, with the
+   * button's URL resolved. Same shape as the offer-received email's, with
+   * 'reason' in place of 'amount_text'.
+   */
+  public function testTheRejectionMailParamsAreEscapedAndCarryTheDeepLink() {
+    $params = myapi_service_request_rejected_resident_mail_params(128, [
+      'name'          => 'Ana & Luis',
+      'subject'       => 'Fuga <urgente>',
+      'provider_name' => 'Plomería Sur',
+      'reason'        => 'No puedo esta semana.',
+    ]);
+
+    $this->assertSame(128, $params['nid']);
+    $this->assertSame('Ana &amp; Luis', $params['name']);
+    $this->assertSame('Fuga &lt;urgente&gt;', $params['subject']);
+    $this->assertSame('Plomería Sur', $params['provider_name']);
+    $this->assertSame('No puedo esta semana.', $params['reason']);
+    $this->assertSame('myapp://service-requests/128', $params['deep_link_url']);
+  }
+
+  /**
+   * An unresolvable value prints as the placeholder and never as an empty line,
+   * and 'name' stays NULL so the greeting degrades to 'Hola' alone.
+   */
+  public function testTheRejectionMailParamsDegradeToThePlaceholder() {
+    $params = myapi_service_request_rejected_resident_mail_params(128, []);
+
+    $this->assertNull($params['name']);
+    $this->assertSame('—', $params['subject']);
+    $this->assertSame('—', $params['provider_name']);
+    $this->assertSame('—', $params['reason']);
+  }
+
   /* -- The app deep link ----------------------------------------------------- */
 
   public function testTheDeepLinkUsesTheDefaultBaseWhenTheVariableIsNotSet() {

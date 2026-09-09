@@ -548,6 +548,11 @@ function myapi_html_mail_keys() {
     // 'backend' role (always, in either form of closing).
     'myapi_service_request_rated_provider',
     'myapi_service_request_closed_admin',
+    // SPEC 121. The one mail a rejection fires: the notice to the resident
+    // whose awarded provider handed the job back. No provider key and no admin
+    // key — the provider who performed the act is not told what they did, and
+    // the back office is out of this spec's audience.
+    'myapi_service_request_rejected_resident',
   ];
 }
 
@@ -4842,5 +4847,33 @@ function myapi_update_7044() {
   return t('SPEC 118: creado field_last_message_from en @bundle (@count valores permitidos). Sin relleno retroactivo: los hilos con mensajes anteriores a este despliegue responden last_message_from nulo junto a su fecha real hasta que alguien vuelva a escribir.', [
     '@bundle' => $offer_type,
     '@count'  => count(_myapi_chat_message_from_allowed_values()),
+  ]);
+}
+
+/**
+ * SPEC 121: maps the rejection mail key to MyapiHtmlMailSystem.
+ *
+ * myapi_mail_system_register() walks myapi_html_mail_keys(), which SPEC 121 has
+ * just grown by one entry, and rewrites the whole 'mail_system' variable from
+ * it. So this hook re-registers every key of the catalogue and not only the new
+ * one — which is what every mail update hook of this module does, and the
+ * reason SPEC 80's could repair the key SPEC 70 had forgotten without knowing
+ * it was doing so.
+ *
+ * A fresh site never needs this: myapi_install() already calls the same
+ * function. Existing sites do, and without it the rejection email would reach
+ * the resident with its HTML flattened to plain text by DefaultMailSystem.
+ *
+ * NOTHING ELSE TO UPDATE FOR SPEC 121. It adds no field, no bundle and no
+ * status: 'cancelled' was already in myapi_services_request_statuses() and
+ * 'direct' → 'cancelled' was already an edge of
+ * myapi_services_request_transitions(), so the endpoint writes values the
+ * schema has admitted since SPEC 77.
+ */
+function myapi_update_7045() {
+  myapi_mail_system_register();
+
+  return t('SPEC 121: registradas @count claves de correo HTML, incluida la nueva myapi_service_request_rejected_resident. Sin cambios de esquema: el rechazo escribe el estado "cancelled", que ya existía.', [
+    '@count' => count(myapi_html_mail_keys()),
   ]);
 }

@@ -589,3 +589,68 @@ function myapi_service_transaction_close_comment($reason, $stars, $provider_name
     '@estrellas' => (int) $stars,
   ));
 }
+
+/**
+ * The timeline text of a rejection by the awarded provider (SPEC 121).
+ *
+ * THE ONE THING THIS SENTENCE HAS TO DO IS NOT BE MISTAKEN FOR THE RESIDENT'S
+ * OWN CANCELLATION. Both acts land the request on 'cancelled', so the status
+ * pill the app paints says "Cancelada" either way and this comment is the only
+ * place the two are told apart. myapi_service_request_cancel_comment() returns
+ * the resident's words verbatim, with no prefix; this one NAMES THE PROVIDER
+ * and says explicitly that they were the one who cancelled, so the resident
+ * reading their timeline can never take a handed-back job for a decision of
+ * their own.
+ *
+ * THE REASON IS NEVER EMPTY HERE, unlike a cancellation's:
+ * myapi_service_request_validate_reject_reason() answers 422 to an absent or
+ * whitespace-only one, so the endpoint cannot reach this function without it.
+ * The empty branch is written all the same, for the same reason the third case
+ * of myapi_service_transaction_accept_comment() is: a pure function handed an
+ * empty value must answer a whole sentence and not half of one, and SPEC 92
+ * forbids a transaction with no comment whatever created it.
+ *
+ * TWO NAME VARIANTS, like every other builder in this file. An unpublished or
+ * deleted provider node resolves to NULL through
+ * myapi_service_request_node_title(), and "El proveedor  canceló" — with the
+ * hole where the name should be — is exactly the half-sentence SPEC 61 closed
+ * for claims.
+ *
+ * No check_plain(): field_comment is stored raw and escaped by whoever renders
+ * it, exactly as in SPEC 92.
+ *
+ * @param string|null $provider_name
+ *   node.title of the provider that handed the job back. Empty or NULL degrades
+ *   to the nameless variant.
+ * @param string|null $reason
+ *   The validated reason. Empty or NULL degrades to the reasonless variant,
+ *   which the endpoint cannot produce.
+ *
+ * @return string
+ *   Never empty.
+ */
+function myapi_service_request_reject_comment($provider_name, $reason) {
+  $provider_name = ($provider_name === NULL) ? '' : trim((string) $provider_name);
+  $reason = ($reason === NULL) ? '' : trim((string) $reason);
+
+  if ($provider_name === '') {
+    if ($reason === '') {
+      return t('El proveedor asignado canceló la solicitud.');
+    }
+
+    return t('El proveedor asignado canceló la solicitud: @motivo', array(
+      '@motivo' => $reason,
+    ));
+  }
+
+  if ($reason === '') {
+    return t('El proveedor @proveedor canceló la solicitud.', array(
+      '@proveedor' => $provider_name,
+    ));
+  }
+
+  return t('El proveedor @proveedor canceló la solicitud: @motivo', array(
+    '@proveedor' => $provider_name,
+    '@motivo' => $reason,
+  ));
+}

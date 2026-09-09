@@ -943,8 +943,13 @@ function myapi_service_offer_direct_quote_comment($provider_name) {
  *   field_request      The {id} of the route, already validated. It cannot
  *                      contradict a request_id in the body because there is no
  *                      request_id in the body.
- *   field_offer_status Always 'sent'. A `status` in the body is ignored, not
- *                      refused: it is not a field of this request.
+ *   field_offer_status $status, which defaults to 'sent' and is 'selected' on
+ *                      exactly one path — the quote a provider sends on the
+ *                      'direct' awarded to them (SPEC 120), which IS the award
+ *                      of that job. A `status` in the body is ignored on both
+ *                      paths, not refused: it is not a field of this request,
+ *                      and the caller decides this from the request's status
+ *                      and never from what the client sent.
  *   the three chat     field_firebase_path, field_chat_opened_at and
  *   fields             field_last_message_at are never written HERE. Since
  *                      SPEC 117 the chat mirrors them on the offer — the
@@ -966,10 +971,18 @@ function myapi_service_offer_direct_quote_comment($provider_name) {
  * @param mixed $provider_id    The validated provider nid.
  * @param string|NULL $provider_name  The provider's node title, for the title.
  * @param array $values         The 'values' of myapi_service_offer_validate_body().
+ * @param string $status        field_offer_status. Defaults to 'sent', the value
+ *                              every offer of the bidding round is born with;
+ *                              the caller passes 'selected' for the direct
+ *                              quote of SPEC 120. A DEFAULTED PARAMETER and not
+ *                              a second builder: the other seven server-fixed
+ *                              values are identical on both paths, and a second
+ *                              function would be two definitions of what an
+ *                              offer is.
  *
  * @return object  The node, ready for node_save().
  */
-function myapi_service_offer_build_node($uid, $request_nid, $provider_id, $provider_name, array $values) {
+function myapi_service_offer_build_node($uid, $request_nid, $provider_id, $provider_name, array $values, $status = MYAPI_SERVICES_OFFER_STATUS_SENT) {
   $node = new stdClass();
   $node->type = MYAPI_SERVICES_OFFER_TYPE;
   node_object_prepare($node);
@@ -980,7 +993,7 @@ function myapi_service_offer_build_node($uid, $request_nid, $provider_id, $provi
 
   $node->field_request[LANGUAGE_NONE][0]['target_id'] = (int) $request_nid;
   $node->field_provider[LANGUAGE_NONE][0]['target_id'] = (int) $provider_id;
-  $node->field_offer_status[LANGUAGE_NONE][0]['value'] = MYAPI_SERVICES_OFFER_STATUS_SENT;
+  $node->field_offer_status[LANGUAGE_NONE][0]['value'] = $status;
 
   // The twelve values of the body, shared with the PUT of SPEC 105.
   myapi_service_offer_apply_values($node, $values);

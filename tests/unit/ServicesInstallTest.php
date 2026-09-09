@@ -1024,6 +1024,15 @@ class ServicesInstallTest extends TestCase {
     // field_last_message_from and its two tables. It carries no backfill on
     // purpose — nothing on this site knows who sent a message that lives in
     // Firebase — and the hook's own docblock says so.
+    //
+    // 7045 IS SPEC 121's, AND IT CHANGES NO SCHEMA AT ALL — the second kind of
+    // update this file admits, after 7037's. The rejection endpoint writes
+    // 'cancelled' over an edge the graph has had since SPEC 77, so there is no
+    // field to create and nothing to backfill; what the hook does is re-run
+    // myapi_mail_system_register() so the one mail key SPEC 121 adds keeps its
+    // HTML body. SPEC 120 appended NOTHING here and is deliberately absent from
+    // this list: making a direct quote award its own job writes only values the
+    // catalogues already held.
     $this->assertStringContainsString('function myapi_update_7034()', $source);
     $this->assertStringContainsString('function myapi_update_7035()', $source);
     $this->assertStringContainsString('function myapi_update_7036()', $source);
@@ -1035,7 +1044,8 @@ class ServicesInstallTest extends TestCase {
     $this->assertStringContainsString('function myapi_update_7042()', $source);
     $this->assertStringContainsString('function myapi_update_7043()', $source);
     $this->assertStringContainsString('function myapi_update_7044()', $source);
-    $this->assertStringNotContainsString('function myapi_update_7045()', $source);
+    $this->assertStringContainsString('function myapi_update_7045()', $source);
+    $this->assertStringNotContainsString('function myapi_update_7046()', $source);
     // 7028 is still SPEC 81's, not this spec's.
     $this->assertStringContainsString(
       '_myapi_services_install();',

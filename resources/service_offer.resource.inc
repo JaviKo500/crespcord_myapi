@@ -174,7 +174,10 @@ function myapi_service_offer_dispatch($nid = NULL) {
  *
  *   9a. The offer. What the provider asked to create, and the one write that
  *       cannot be missing.
- *   9b. The request, ONLY IF IT MOVES. 'open' → 'offered', asked of
+ *   9b. The request, ONLY IF IT MOVES, on either of TWO edges: 'open' →
+ *       'offered' when this is the first offer of a bidding round, and
+ *       'direct' → 'assigned' when the provider quoting is the one the
+ *       resident already chose (SPEC 120). Both asked of
  *       myapi_services_transition_allowed(). Already 'offered' writes NOTHING.
  *   9c. The transaction, IF THE STATUS MOVED — OR IF A 'direct' WAS QUOTED.
  *       'service_transaction' has been "one entry per status change" since
@@ -184,15 +187,12 @@ function myapi_service_offer_dispatch($nid = NULL) {
  *       about the second and third offers from offers_count and from `offers`,
  *       not from the history.
  *
- *       SPEC 101 RELAXES THAT RULE IN EXACTLY ONE CASE, on purpose. A quote on
- *       a 'direct' writes a transaction whose field_request_status REPEATS the
- *       'direct' the request already had, because the status did not move and
- *       saying otherwise would be a lie. It is written anyway because it is the
- *       one thing the 'open' → 'offered' move gave that would otherwise be
- *       lost: the resident seeing "your provider sent you a quote" in their
- *       timeline. The COMMENT is what tells the two entries apart, which is why
- *       the two are different sentences — see
- *       myapi_service_offer_direct_quote_comment().
+ *       SPEC 101 RELAXED THAT RULE IN EXACTLY ONE CASE and SPEC 120 has very
+ *       nearly closed it again. A quote on a 'direct' now MOVES the request to
+ *       'assigned', so its entry records a real status change like every other
+ *       one. The repeated-'direct' entry survives only where the award could
+ *       not be written — the defensive branch of 9b — because there the status
+ *       genuinely did not move and saying otherwise would be a lie.
  *
  * The order is SPEC 95's: first what the user asked for, then what follows from
  * it. IT IS NOT ATOMIC, and that is accepted: if 9b or 9c failed, an offer
@@ -202,19 +202,32 @@ function myapi_service_offer_dispatch($nid = NULL) {
  * offers instead of trusting the status. The failure is logged rather than
  * swallowed (SPEC 100, risk 5).
  *
- * NEITHER field_assigned_offer NOR field_assigned_provider IS EVER TOUCHED:
- * bidding is not awarding, and awarding is another spec, on the resident's
- * side. That holds for a 'direct' too, and there it means something stronger —
- * the request is NOT SAVED AT ALL. Its status, its awarded provider and its
- * `changed` come out of this endpoint exactly as they went in.
+ * ON THE BIDDING ROUND, NEITHER field_assigned_offer NOR field_assigned_provider
+ * IS EVER TOUCHED: bidding is not awarding, and awarding is the resident's, in
+ * PUT /api/v1/service-offers/{id}/accept. An offer on an 'open' or an 'offered'
+ * request leaves both fields exactly as it found them.
  *
- * A 'direct' STAYS 'direct', AND THAT IS THE CENTRAL DECISION OF SPEC 101, not
- * an omission. Moving it to 'offered' would let it be closed WITHOUT RATING the
- * provider, silently and with no test going red, because
+ * A 'direct' IS THE ONE EXCEPTION, AND IT IS THE CENTRAL DECISION OF SPEC 120.
+ * There the resident awarded when they named the company, so the quote of that
+ * company is the award of that job: the request moves to 'assigned',
+ * field_assigned_offer is written to the offer just created, and the offer
+ * itself is born 'selected' instead of 'sent'. field_assigned_provider is NOT
+ * rewritten — SPEC 90 wrote it when the request was born and it already points
+ * at this very provider, which condition 5 of the gate proved.
+ *
+ * IT IS STILL NEVER 'offered'. Moving a 'direct' there would let it be closed
+ * WITHOUT RATING the provider, silently and with no test going red, because
  * myapi_services_close_requires_rating() answers TRUE for 'assigned' and
- * 'direct' and not for 'offered'. Moving it to 'assigned' would record as
- * agreed a price the resident never accepted. Standing still is the only option
- * that breaks nothing.
+ * 'direct' and not for 'offered'. 'assigned' keeps that promise; SPEC 101's
+ * standing still kept it too, and what SPEC 120 changed is that the price is
+ * now agreed the moment it is named instead of waiting for a second acceptance
+ * that could only ever say yes.
+ *
+ * WHAT THIS COSTS, STATED AND NOT HIDDEN: a 'selected' offer can no longer be
+ * edited or withdrawn (SPEC 105 requires 'sent' for both), so a provider who
+ * quotes a wrong figure on a direct has to have the resident cancel the
+ * request. That is the trade SPEC 107 refused and SPEC 120 accepts — see the
+ * docblock of myapi_services_request_transitions().
  *
  * @param mixed $nid  The request nid, straight off the path.
  */
@@ -297,18 +310,39 @@ function myapi_service_offer_create($nid) {
   // 9a. The offer. myapi_service_offer_build_node() decides its whole shape —
   // including the seven values the server fixes and the client cannot send —
   // and this line is only the save.
+  //
+  // THE STATUS IS DECIDED HERE AND PASSED IN (SPEC 120). A quote sent on the
+  // 'direct' awarded to the very provider sending it IS the award of that job,
+  // so that offer is born 'selected'; every other offer is born 'sent'. The
+  // flag comes off $request_row — the row the gate already decided over — and
+  // never off the body: `status` is not a field of this request.
+  //
+  // Read here and not at 9c, where SPEC 101 computed it: three steps now depend
+  // on it, and computing it once is what keeps them from disagreeing.
+  $direct_quote = ($request_row->status === MYAPI_SERVICES_REQUEST_STATUS_DIRECT);
+  $offer_status = $direct_quote
+    ? MYAPI_SERVICES_OFFER_STATUS_SELECTED
+    : MYAPI_SERVICES_OFFER_STATUS_SENT;
+
   $provider_name = isset($provider_row->title) ? $provider_row->title : NULL;
-  $offer = myapi_service_offer_build_node($uid, $nid, $provider_id, $provider_name, $values);
+  $offer = myapi_service_offer_build_node($uid, $nid, $provider_id, $provider_name, $values, $offer_status);
   node_save($offer);
 
-  // 9b. The request, ONLY IF IT MOVES. The transition is ASKED and never
-  // transcribed, so the graph of services_common stays the single truth. A
-  // request already in 'offered' is not saved at all — not a no-op save, no
-  // save — which is what keeps its `changed` timestamp honest.
+  // 9b. The request, ONLY IF IT MOVES, AND IT MOVES ON TWO DIFFERENT EDGES. The
+  // transitions are ASKED and never transcribed, so the graph of
+  // services_common stays the single truth. A request already in 'offered' is
+  // not saved at all — not a no-op save, no save — which is what keeps its
+  // `changed` timestamp honest.
   //
   // node_load() and not the four columns of $request_row: a write needs the
   // whole entity with its fields, the same argument step 3 of SPEC 95 makes.
+  //
+  // THE TWO BRANCHES ARE EXCLUSIVE BY THE STATUS THEY READ — 'open' for the
+  // first, 'direct' for the second — so $moved and $awarded can never both be
+  // TRUE, and 9c reads them in that knowledge.
   $moved = FALSE;
+  $awarded = FALSE;
+
   if ($request_row->status === MYAPI_SERVICES_REQUEST_STATUS_OPEN
     && myapi_services_transition_allowed(MYAPI_SERVICES_REQUEST_STATUS_OPEN, MYAPI_SERVICES_REQUEST_STATUS_OFFERED)) {
     $request_node = node_load($nid);
@@ -330,50 +364,88 @@ function myapi_service_offer_create($nid) {
       );
     }
   }
+  elseif ($direct_quote
+    && myapi_services_transition_allowed(MYAPI_SERVICES_REQUEST_STATUS_DIRECT, MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED)) {
+    // SPEC 120: the direct quote awards its own job. TWO fields written and not
+    // three — field_assigned_provider was written when the request was born
+    // (SPEC 90) and pointing it at the same provider a second time would be a
+    // write that changes nothing. Condition 5 of the gate already proved the
+    // two are the same company.
+    $request_node = node_load($nid);
+
+    // Defensive, exactly as in the branch above and for the same reason: the
+    // offer is already written and correct, so a race here is logged and never
+    // fatal. The request stays 'direct', which is what 9c then records — a
+    // timeline entry saying 'assigned' over a request that is not would be a
+    // worse lie than the repeated entry SPEC 101 already accepts.
+    if ($request_node && $request_node->type === MYAPI_SERVICES_REQUEST_TYPE) {
+      $request_node->field_request_status[LANGUAGE_NONE][0]['value'] = MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED;
+      $request_node->field_assigned_offer[LANGUAGE_NONE][0]['target_id'] = (int) $offer->nid;
+      node_save($request_node);
+      $awarded = TRUE;
+    }
+    else {
+      watchdog(
+        'myapi',
+        'SPEC 120: la oferta @offer se guardó sobre la solicitud directa @request, pero la solicitud no se pudo cargar para adjudicarla. La oferta es válida y quedó en @offer_status; la adjudicación hay que revisarla a mano.',
+        ['@offer' => $offer->nid, '@request' => $nid, '@offer_status' => MYAPI_SERVICES_OFFER_STATUS_SELECTED],
+        WATCHDOG_ERROR
+      );
+    }
+  }
 
   // 9c. The transaction, IF THE STATUS ACTUALLY MOVED — OR IF THIS WAS THE
-  // QUOTE OF A 'direct' (SPEC 101). See the docblock on why the second and
-  // third offers on an 'offered' request still write nothing here, and on why
-  // the 'direct' is the one case that writes an entry without a status change.
+  // QUOTE OF A 'direct' WHOSE AWARD COULD NOT BE WRITTEN. See the docblock on
+  // why the second and third offers on an 'offered' request still write nothing
+  // here.
   //
-  // $request_row->status and not a re-read: 9b did not save this request — a
-  // 'direct' never enters that branch — so the row still says what the database
-  // says. The two flags are mutually exclusive: $moved is only ever set from
-  // 'open'.
-  $direct_quote = ($request_row->status === MYAPI_SERVICES_REQUEST_STATUS_DIRECT);
-
-  // The four fields of SPEC 92; the title is NOT set,
-  // myapi_service_transaction_set_title() puts it in from hook_node_presave(),
-  // inside the node_save() below.
+  // THREE SHAPES, ONE PER PATH, and the status recorded is ALWAYS the one the
+  // request actually holds after 9b:
+  //
+  //   $awarded   'assigned'. The request was saved FIRST, so
+  //              myapi_service_transaction_sync_request_status() (SPEC 94),
+  //              which fires on the hook_node_insert() of this entry, compares
+  //              two equal statuses and returns WITHOUT saving the request a
+  //              second time. Whoever touches either side has to keep that
+  //              property — the same warning SPECS 95 and 106 carry.
+  //   $moved     'offered', the first offer of a bidding round.
+  //   neither    'direct', REPEATED — SPEC 101's one relaxation of "one entry
+  //              per status change". Since SPEC 120 that path is reachable only
+  //              through the defensive branch of 9b, and it is kept for exactly
+  //              that: the entry has to tell the truth about a request that did
+  //              not move.
+  //
+  // THE AWARD'S SENTENCE IS myapi_service_transaction_accept_comment(), THE
+  // VERY ONE PUT /api/v1/service-offers/{id}/accept WRITES. The two are the
+  // same event — a job committed at a price — and a second sentence for it
+  // would drift from the first within three months.
   if ($moved || $direct_quote) {
-    $transaction = (object) [
-      'type' => MYAPI_SERVICES_TRANSACTION_TYPE,
-      // The ACCOUNT that bid, which is who is behind the token — not the
-      // provider node, and not the requester.
-      'uid' => $uid,
-      'status' => 1,
-    ];
-    node_object_prepare($transaction);
+    if ($awarded) {
+      $entry_status = MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED;
+      $entry_comment = myapi_service_transaction_accept_comment(
+        $provider_name,
+        $values['amount'],
+        $values['amount_type']
+      );
+    }
+    elseif ($moved) {
+      $entry_status = MYAPI_SERVICES_REQUEST_STATUS_OFFERED;
+      $entry_comment = myapi_service_offer_transaction_comment($provider_name);
+    }
+    else {
+      $entry_status = MYAPI_SERVICES_REQUEST_STATUS_DIRECT;
+      $entry_comment = myapi_service_offer_direct_quote_comment($provider_name);
+    }
 
-    $transaction->field_request[LANGUAGE_NONE][0]['target_id'] = $nid;
-    // On a 'direct' this REPEATS the status the request already had, and that
-    // is the truth: the status did not change. The comment below is what makes
-    // the entry legible.
-    $transaction->field_request_status[LANGUAGE_NONE][0]['value'] = $moved
-      ? MYAPI_SERVICES_REQUEST_STATUS_OFFERED
-      : MYAPI_SERVICES_REQUEST_STATUS_DIRECT;
-    // 'Y-m-d H:i:00': the real instant with the seconds pinned, not that day at
-    // midnight. field_status_date is 'datetime' and not 'datestamp' (SPEC 77),
-    // so a string is written and not a timestamp.
-    $transaction->field_status_date[LANGUAGE_NONE][0]['value'] = date('Y-m-d H:i:00');
-    // Only 'value', no 'format': stored raw and escaped by whoever renders it.
-    // Two sentences and not one — on a 'direct' the status column repeats, so
-    // the comment is the ONLY thing that tells this entry from the one before.
-    $transaction->field_comment[LANGUAGE_NONE][0]['value'] = $moved
-      ? myapi_service_offer_transaction_comment($provider_name)
-      : myapi_service_offer_direct_quote_comment($provider_name);
-
-    node_save($transaction);
+    // The four fields of SPEC 92, through the one function that writes a
+    // timeline entry (SPEC 106) — written inline here until SPEC 120, which is
+    // one definition too many of the same four fields. The title is NOT set:
+    // myapi_service_transaction_set_title() puts it in from hook_node_presave(),
+    // inside that node_save().
+    //
+    // The uid is the ACCOUNT that bid — who is behind the token, not the
+    // provider node and not the requester.
+    myapi_service_transaction_record($nid, $entry_status, $uid, $entry_comment);
   }
 
   // 9d. The resident notice (SPEC 110), after the three writes above so
@@ -392,6 +464,10 @@ function myapi_service_offer_create($nid) {
     'provider_name'  => $provider_name,
     'amount'         => $values['amount'],
     'amount_type'    => $values['amount_type'],
+    // SPEC 120: which of the two sentences the resident reads. ONE notice
+    // either way — the provider performed one act, and two pushes for it would
+    // be two pushes for the same thing.
+    'direct_award'   => $awarded,
   ]);
 
   // 10. The answer. THE OBJECT UNDER 'service_offer' IS BYTE FOR BYTE THE
@@ -414,7 +490,7 @@ function myapi_service_offer_create($nid) {
     'provider_logo_uri' => NULL,
     'amount'            => $values['amount'],
     'message'           => $values['message'],
-    'status'            => MYAPI_SERVICES_OFFER_STATUS_SENT,
+    'status'            => $offer_status,
     'created'           => isset($offer->created) ? $offer->created : REQUEST_TIME,
     'amount_type'       => $values['amount_type'],
     'valid_until'       => $values['valid_until'],
@@ -430,16 +506,31 @@ function myapi_service_offer_create($nid) {
 
   // `request` is a SIBLING of 'service_offer' and not a sixteenth key of it. It
   // carries the one thing the provider cannot deduce from what they just sent —
-  // whether their offer was the first, and so whether the request moved — and
-  // it is known in code, with no extra query. Same criterion with which SPEC 95
-  // put 'offers_rejected' next to 'service_request' and not inside it.
+  // whether the request moved, and where to — and it is known in code, with no
+  // extra query. Same criterion with which SPEC 95 put 'offers_rejected' next
+  // to 'service_request' and not inside it.
+  //
+  // THE THREE OUTCOMES ARE READ OFF THE FLAGS AND NEVER OFF $request_row->status
+  // ALONE, which still says what the database said BEFORE 9b: 'assigned' when
+  // the direct quote awarded the job (SPEC 120), 'offered' when this was the
+  // first offer of a round, and the untouched status otherwise — which covers
+  // both the second offer on an 'offered' request and the degraded 'direct' of
+  // 9b, where the request genuinely did not move.
+  if ($awarded) {
+    $request_status = MYAPI_SERVICES_REQUEST_STATUS_ASSIGNED;
+  }
+  elseif ($moved) {
+    $request_status = MYAPI_SERVICES_REQUEST_STATUS_OFFERED;
+  }
+  else {
+    $request_status = $request_row->status;
+  }
+
   myapi_respond([
     'service_offer' => myapi_service_offer_build($offer_row),
     'request'       => [
       'id'     => $nid,
-      'status' => $moved
-        ? MYAPI_SERVICES_REQUEST_STATUS_OFFERED
-        : $request_row->status,
+      'status' => $request_status,
     ],
   ], 201, 'service_offer_created');
 }

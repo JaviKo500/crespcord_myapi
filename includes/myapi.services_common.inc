@@ -113,8 +113,9 @@ if (!defined('MYAPI_SERVICES_OFFER_STATUS_SENT')) {
 // The awarded offer. Named here alongside 'sent' because the two are read
 // together wherever a LIVE offer is what matters — the uniqueness gate of
 // SPEC 100 and the rejection sweep of SPEC 95 — and 'rejected' / 'withdrawn'
-// are dead offers that block nothing. Awarding itself is still another spec:
-// nothing in this module writes this value yet.
+// are dead offers that block nothing. Two places write it: the award of
+// SPEC 106, and the direct quote of SPEC 120 — which is an award too, made by
+// the provider because the resident already made theirs when they chose them.
 if (!defined('MYAPI_SERVICES_OFFER_STATUS_SELECTED')) {
   define('MYAPI_SERVICES_OFFER_STATUS_SELECTED', 'selected');
 }
@@ -278,15 +279,15 @@ function myapi_services_star_values() {
  *                              │                    │
  *                              └────> closed <──────┘
  *                                       ▲    ▲
- *   direct ───(accept the quote)────────┼────┘
- *      └──────────────────────────────> assigned
+ *   direct ─────────────────────────────┼────┘
+ *      └────(its provider quotes)─────> assigned
  *
  *   open | direct | offered | assigned ──> cancelled
  *
  * - open → offered      automatic, on the first offer.
  * - offered → assigned  the resident picks an offer.
- * - direct → assigned   the resident accepts the quote of the provider they
- *                       already chose (SPEC 107). See below.
+ * - direct → assigned   automatic, when the provider the resident already
+ *                       chose quotes their own job (SPEC 120). See below.
  * - offered → closed    closing with no award, allowed by the contract (7.2.4).
  * - assigned → closed   closing after the job; needs a rating (see below).
  * - direct → closed     closing a direct job; needs a rating too (see below).
@@ -300,8 +301,8 @@ function myapi_services_star_values() {
  * with a provider already chosen or it goes through the bidding round, and the
  * two paths never cross — 'open' → 'direct' would leave the offers already
  * received with nothing to resolve them, and 'assigned' → 'direct' would
- * contradict the offer the resident already awarded. What SPEC 107 changed is
- * the way OUT, not the way in.
+ * contradict the offer the resident already awarded. What SPEC 107 opened and
+ * SPEC 120 automated is the way OUT, not the way in.
  *
  * WHY 'direct' → 'assigned' EXISTS SINCE SPEC 107, when SPEC 87 gave 'direct'
  * only the two terminal exits. A 'direct' is born with a provider but WITHOUT
@@ -311,19 +312,34 @@ function myapi_services_star_values() {
  * resident with no verb to close the gap: the quote sat at 'sent' for ever and
  * the agreement happened outside the module.
  *
- * This edge is that verb, and it is the RESIDENT'S ACT and never automatic.
- * Receiving a quote does not assign anything: the provider bidding on a
- * 'direct' still leaves the request in 'direct' with field_assigned_offer
- * empty, exactly as SPEC 101 left it. What moves the request is the resident
- * calling PUT /api/v1/service-offers/{id}/accept — the same endpoint, the same
- * gate and the same four writes as an award off the bidding round, because
- * accepting a price IS awarding: it is the moment the job is committed to.
+ * WHO WALKS THIS EDGE CHANGED IN SPEC 120; THE EDGE ITSELF DID NOT. Between
+ * SPEC 107 and SPEC 120 it was the RESIDENT'S act: the provider quoted, the
+ * request stayed 'direct', and PUT /api/v1/service-offers/{id}/accept was what
+ * committed the job. It is now AUTOMATIC AND THE PROVIDER'S — the offer sent on
+ * the 'direct' awarded to THAT provider moves the request to 'assigned' in the
+ * same pass that creates it, and is born 'selected' instead of 'sent'.
  *
- * DISCARDED: assigning automatically when a 'direct' receives an offer. It
- * would commit the resident to an amount they never accepted, and it would take
- * the provider's way back — editing and withdrawing both require the offer to
- * be 'sent' (SPEC 105), so a wrong zero would be frozen in place, which is the
- * exact damage SPEC 105 was written to repair.
+ * THE REASON IS THAT ON A DIRECT THE RESIDENT HAS ALREADY AWARDED, and they did
+ * it when they named the company. Asking them to award a second time — once by
+ * choosing the provider, once by accepting its price — was a step that carried
+ * no decision: there is one provider, one quote and no round to resolve, so the
+ * second acceptance could only ever say yes to the only thing on offer.
+ *
+ * SPEC 107'S OBJECTION IS ANSWERED BY THE OFFER'S STATUS AND NOT BY THE EDGE.
+ * It refused this because it would freeze a wrong quote in place: editing and
+ * withdrawing both require the offer to be 'sent' (SPEC 105), so a misplaced
+ * zero would be unfixable by the provider. THAT IS STILL TRUE, and it is the
+ * price of this decision — stated here rather than hidden. A provider who
+ * quotes wrong on a direct has to have the resident cancel the request. What
+ * the module buys for it is that the price of a direct job is agreed at the
+ * moment it is named, by the only two parties there are.
+ *
+ * THE BIDDING ROUND IS UNTOUCHED. An offer on an 'open' or an 'offered' request
+ * still moves nothing towards 'assigned' and is still born 'sent': there the
+ * resident has something to choose between, and choosing is theirs.
+ * PUT /api/v1/service-offers/{id}/accept remains the verb of that round — on a
+ * direct it now answers 409 service_offer_not_acceptable, because the offer is
+ * already 'selected' before the resident can reach it.
  *
  * SPEC 77 does not enforce any of this: no endpoint and no form validation
  * reads this catalogue yet. It is written here now so the flow spec has one

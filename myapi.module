@@ -531,6 +531,36 @@ function myapi_menu() {
     'file'             => 'resources/service_request.resource.inc',
   ];
 
+  // The awarded provider of a 'direct' says they cannot take the job
+  // (SPEC 121). The counterpart of '/cancel' above and NOT a branch of it: the
+  // actor is different (the provider, never the requester), the gate is
+  // different (the 'proveedor' role plus field_assigned_provider, never
+  // field_requester) and the reason is MANDATORY here and optional there. One
+  // route per actor is what keeps either of those rules from leaking into the
+  // other.
+  //
+  // IT LANDS ON 'cancelled', THE ARC THAT ALREADY EXISTED. 'direct' →
+  // 'cancelled' has been in myapi_services_request_transitions() since SPEC 77,
+  // so this endpoint invents no status and adds no edge; what it adds is a
+  // second actor allowed to walk that one. DISCARDED: 'direct' → 'open', which
+  // would put the job back on the market — it is not an edge of the graph,
+  // 'direct' is a ROOT that nothing leads to, and releasing a request the
+  // resident addressed to ONE company into the open market is a decision that
+  // belongs to the resident and not to the provider who walked away.
+  //
+  // FIVE COMPONENTS, like '/cancel', '/close' and '/offers', and told apart
+  // from the three of them by the literal in the fifth position — Drupal 7
+  // compares the number of components first, which already separates all four
+  // from the four-part routes and from the six-part file one, and 'reject'
+  // cannot be confused with 'cancel', 'close' or 'offers'.
+  $items['api/v1/service-requests/%/reject'] = [
+    'page callback'    => 'myapi_service_request_reject_dispatch',
+    'page arguments'   => [3],
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/service_request.resource.inc',
+  ];
+
   // A provider bids on a request (SPEC 100). FIVE COMPONENTS, exactly like
   // 'api/v1/service-requests/%/cancel' above, and the two are told apart by the
   // literal in the fifth position — Drupal 7 compares the number of components
@@ -1235,6 +1265,16 @@ function myapi_mail($key, &$message, $params) {
 
     case 'service_request_closed_admin':
       myapi_mail_format_service_request_closed_admin($message, $params);
+      break;
+
+    // SPEC 121. Fires for PUT /api/v1/service-requests/{id}/reject only: the
+    // awarded provider of a 'direct' handed the job back, and a rejection made
+    // from the back office notifies nobody, same criterion as the seven cases
+    // above. Once per rejection, to the resident who requested the service —
+    // and to nobody else: the provider who performed the act is not told what
+    // they just did.
+    case 'service_request_rejected_resident':
+      myapi_mail_format_service_request_rejected_resident($message, $params);
       break;
   }
 }

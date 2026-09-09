@@ -288,16 +288,16 @@ indistinguishable from one stored before SPEC 100 — which is exactly right.
 
 | # | Write | `open` | `offered` | `direct` of your own |
 |---|-------|:---:|:---:|:---:|
-| 1 | **The offer**, always `sent` | ✅ | ✅ | ✅ |
-| 2 | **The request**, to `offered` | ✅ | — | **—** |
+| 1 | **The offer** — `sent`, or **`selected`** on a `direct` | ✅ | ✅ | ✅ |
+| 2 | **The request** — to `offered`, or **to `assigned`** on a `direct` | ✅ | — | **✅** |
 | 3 | **A `service_transaction`** | ✅ | — | **✅** |
 
-**Write 2 happens only if the request moves.** `open` → `offered`, and the
-transition is *asked* of the status graph, never transcribed. A request already
-in `offered` is not saved at all — no no-op save — which is what keeps its
-`changed` timestamp honest. **A `direct` is never saved either**: it comes out
-of this endpoint with the same status, the same awarded provider and the same
-`changed` it went in with.
+**Write 2 happens only if the request moves, and it moves on two different
+edges.** `open` → `offered` when this is the first offer of a bidding round, and
+`direct` → `assigned` when the provider quoting is the one the resident already
+chose (SPEC 120). Both transitions are *asked* of the status graph, never
+transcribed. A request already in `offered` is not saved at all — no no-op save
+— which is what keeps its `changed` timestamp honest.
 
 **Write 3 follows the status change — with one deliberate exception.**
 `service_transaction` has been *one entry per status change* since SPEC 77, and
@@ -306,17 +306,18 @@ write a timeline row whose status repeats the one before it; the resident learns
 about the second and third offers from `offers_count` and from `offers`, not
 from the history.
 
-**The quote of a `direct` is that exception, and it writes an entry anyway.** It
-is the one thing the `open` → `offered` move gives that would otherwise be lost:
-the resident seeing *"your provider sent you a quote"* on their timeline instead
-of having to notice a new element inside an array their screen may not even be
-painting. Its `field_request_status` **repeats** the `direct` the request already
-had, because that is the truth — the status did not change — and the **comment**
-is what tells the two entries apart.
+**On a `direct` the entry records `assigned`**, and it carries the same sentence
+[`PUT /api/v1/service-offers/{id}/accept`](#put-apiv1service-offersidaccept)
+writes — the two are the same event, a job committed at a price. The
+repeated-`direct` entry SPEC 101 introduced survives only where the award could
+not be written at all, which is a logged race and not a path a client can ask
+for.
 
-**Neither `field_assigned_offer` nor `field_assigned_provider` is ever touched:
-bidding is not awarding.** On a `direct`, quoting is not awarding either — the
-award already happened, when the request was created.
+**On the bidding round, neither `field_assigned_offer` nor
+`field_assigned_provider` is ever touched: bidding is not awarding.** On a
+`direct` it is: `field_assigned_offer` is written to the offer just created.
+`field_assigned_provider` is still not rewritten — the resident's own award
+filled it when the request was born, and it already names this very provider.
 
 > **The three writes are not one atomic transaction.** If write 2 or 3 failed,
 > an offer would be left on an `open` request. That is the state the module
@@ -369,10 +370,10 @@ query and a join for a value the bidding app already has; it travels in
 
 **`request` is a sibling of `service_offer`, not a sixteenth key of it**, and it
 carries only `id` and `status`. It is the one thing you cannot deduce from what
-you just sent — whether your offer was the first, and so whether the request
-moved — and `status` is the one **after** the write. On a `direct` it answers
-`"direct"`, which is exactly why the key exists: the client does not have to
-guess whether anything moved.
+you just sent — whether the request moved, and where to — and `status` is the one
+**after** the write. On a `direct` of your own it answers **`"assigned"`**, which
+is exactly why the key exists: the client does not have to guess whether anything
+moved.
 
 **This write notifies the resident (SPEC 110).** After the offer is saved (and
 the request/transaction writes above, when they apply), the resident who
@@ -424,69 +425,78 @@ has no price, and by design it never will have one.
 
 This route is how that price gets written. Same URL, same body, same `201`.
 
-**What is different, and it is only three things:**
+**What is different, and it is only four things:**
 
 | | `open` / `offered` | `direct` of your own |
 |---|---|---|
 | Who may send it | Any active provider of the category | **Only the awarded provider** |
 | The category | Checked | **Not checked** |
-| The request's status afterwards | `offered` | **`direct`, unchanged** |
+| Your offer's status | `sent` | **`selected`** |
+| The request's status afterwards | `offered` | **`assigned`** |
 
-### The status does not move, and that is the point
+### Your quote awards the job (SPEC 120)
 
-A `direct` moved to `offered` could be **closed without rating the provider**:
-the rule that makes a rating compulsory answers *yes* for `assigned` and
-`direct` and *no* for `offered`. It would fail silently, on a real job, with a
-real company left unrated. And `offered` means *not awarded*, which would
-contradict the `field_assigned_provider` the request carries.
+**On a `direct`, quoting *is* awarding.** The resident awarded when they picked
+your company; there is one provider, one quote and no round to resolve, so a
+second acceptance could only ever say yes to the only thing on offer. Asking for
+it was a step that carried no decision, and SPEC 120 removed it.
 
-A `direct` moved to `assigned` **by the mere arrival of your quote** would
-record as *agreed* a price the resident never accepted — and it would take away
-your own way back, because editing and withdrawing both require the offer to be
-`sent`. A wrong zero would be frozen in place.
+So the moment your `201` comes back:
 
-Standing still is the only option that breaks nothing. So after your quote:
+- the request is **`assigned`**;
+- `field_assigned_offer` points at the offer you just sent;
+- your offer is **`selected`**;
+- closing it **still requires rating you** — `assigned` and `direct` both demand
+  a rating, so nothing was lost there;
+- the resident gets **one** notification saying you quoted *and* took the job.
 
-- the request is still `direct`, with its `changed` untouched;
-- closing it **still requires rating you**;
-- `field_assigned_offer` is still empty — quoting is not awarding;
-- your offer is `sent`, and **you can still correct it or take it back**.
+> ⚠️ **You can no longer correct or withdraw that quote.** Editing and
+> withdrawing both require the offer to be `sent`, and yours is `selected`, so
+> both answer `409` — `service_offer_not_editable` and
+> `service_offer_not_withdrawable`. **Send the right figure the first time.** If
+> you get it wrong, the only way out is asking the resident to cancel the
+> request. This is the price SPEC 107 refused to pay and SPEC 120 accepts: a
+> direct job is priced by the two people involved, at the moment it is named.
 
-> **What moves it is the resident, and only the resident.** Since SPEC 107 they
-> can accept your quote with
-> [`PUT /api/v1/service-offers/{id}/accept`](#put-apiv1service-offersidaccept),
-> which takes the request to `assigned` and your offer to `selected`. That is
-> the moment the price is agreed — an act, not a side effect. Until they do it,
-> everything above holds.
+> **It is never moved to `offered`.** That would let the job be **closed without
+> rating you**: the rule that makes a rating compulsory answers *yes* for
+> `assigned` and `direct` and *no* for `offered`. It would fail silently, on a
+> real job, with a real company left unrated.
+
+> **The bidding round is untouched.** An offer on an `open` or an `offered`
+> request still moves nothing towards `assigned` and is still born `sent`: there
+> the resident has several quotes to choose between, and choosing is theirs.
+> [`PUT /api/v1/service-offers/{id}/accept`](#put-apiv1service-offersidaccept)
+> is still the verb of that round — on a `direct` it now answers `409
+> service_offer_not_acceptable`, because your offer is `selected` before the
+> resident can reach it.
 
 ### What the resident sees
 
-- A new entry on the timeline: *"&lt;your company&gt; envió su presupuesto."*,
-  carrying `field_request_status: "direct"` — the status it already had.
-- The offer inside `offers`, with `offers_count` now `1` on a `direct` request.
+- A new entry on the timeline carrying `field_request_status: "assigned"`, with
+  the same sentence an award off the bidding round writes.
+- The offer inside `offers`, with `offers_count` now `1`, and `assigned_offer`
+  filled.
 - **They cannot edit the request any more.** The edit gate allows `open` or
   `direct` **with zero offers**, and it counts offers instead of trusting the
-  status, so your quote closes it. That is the intended rule: the statement of
-  work stops changing the moment there is a price on it.
+  status — so this was already true before SPEC 120, from the first quote.
 
-> ⚠️ **A timeline entry whose status repeats the previous one is new here.** A
-> client that assumed *every entry is a status change* will paint "Directa"
-> twice. The **comment** is the headline; the status is data.
-
-> ⚠️ **`offers_count` on a `direct` can now be `1`.** A client that assumed
+> ⚠️ **`offers_count` on a `direct` can be `1`.** A client that assumed
 > `direct ⇒ 0 offers` breaks — but that assumption was **already false**:
 > nothing has ever stopped an offer being created on a `direct` from the back
-> office, which is precisely why the edit gate counts offers. This endpoint does
-> not create the case; it puts a door on it.
+> office, which is precisely why the edit gate counts offers.
 
 ### What is still missing on a `direct`
 
-- ~~**The resident cannot accept or reject the quote.**~~ **✅ Resuelto por
-  SPEC 107** for accepting: the resident awards the quote with
-  [`PUT /api/v1/service-offers/{id}/accept`](#put-apiv1service-offersidaccept),
-  which is what finally moves a `direct` to `assigned` and fills
-  `field_assigned_offer`. **Rejecting one specific quote is still not here** —
-  the resident's exits are accepting it or cancelling the request.
+- ~~**The resident cannot accept or reject the quote.**~~ **✅ Resuelto**, and by
+  SPEC 120 there is nothing left to accept: the quote awards the job as it
+  arrives. The resident's exits afterwards are closing it with a rating or
+  cancelling the request.
+- ~~**A provider who cannot take the job has no way to say so.**~~ **✅ Resuelto
+  por SPEC 121**:
+  [`PUT /api/v1/service-requests/{id}/reject`](service-request-provider.md#put-apiv1service-requestsidreject)
+  hands it back with a mandatory reason, **before** any price exists. Once you
+  have quoted, the request is `assigned` and that door is closed.
 - **The chat is still closed.** Its three fields have been empty since SPEC 77.
   What changed is that the row they would hang off **now exists** — before this,
   a `direct` had no offer and therefore no possible thread.

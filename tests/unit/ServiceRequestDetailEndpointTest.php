@@ -2664,10 +2664,17 @@ class ServiceRequestDetailEndpointTest extends TestCase {
     // hook_node_presave() resolves the same provider for the rating's title a
     // few lines later, and Drupal 7's entity static cache answers it — while a
     // query would be a second reader of a row the write path already holds.
+    //
+    // SPEC 121 adds the fourth, on the same grounds as the first: the rejection
+    // loads the request it is about to cancel. It reads it with node_load() and
+    // NOT with myapi_service_request_detail_row() for a reason of its own — that
+    // row INNER JOINs the category's taxonomy term, so a request whose term was
+    // deleted would answer 404 over a job the provider genuinely holds.
     $allowed = [
       'myapi_service_request_cancel',
       'myapi_service_request_update',
       'myapi_service_request_close',
+      'myapi_service_request_reject',
     ];
 
     // BOTH halves of the detail: the endpoints left in the resource and the six

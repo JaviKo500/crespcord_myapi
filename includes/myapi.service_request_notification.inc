@@ -369,6 +369,32 @@ define('MYAPI_SERVICE_REQUEST_RATED_PROVIDER_MAIL_KEY', 'service_request_rated_p
 define('MYAPI_SERVICE_REQUEST_CLOSED_ADMIN_MAIL_KEY', 'service_request_closed_admin');
 
 /* ---------------------------------------------------------------------------
+ * SPEC 121 — the awarded provider of a 'direct' hands the job back.
+ *
+ * ONE AUDIENCE AND ONE CHANNEL SET: the resident, who is waiting on a job that
+ * is not going to happen. The provider who performed the act is not told what
+ * they just did, and the 'backend' role is out of scope here — unlike the
+ * cancellation of SPEC 113, which reaches both, because there the actor was the
+ * resident and every provider holding a live offer had to hear about it.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Inbox/push type of the rejection notice sent to the resident.
+ *
+ * A TYPE OF ITS OWN AND NOT MYAPI_NOTIFICATION_TYPE_SERVICE_REQUEST_CANCELLED,
+ * which already exists and points the other way: that one is the resident
+ * cancelling and the PROVIDER being told, with audience 'provider' and the
+ * provider deep link. Reusing it would file this row under an event with the
+ * opposite actor and the wrong audience.
+ */
+define('MYAPI_NOTIFICATION_TYPE_SERVICE_REQUEST_REJECTED', 'service_request_rejected');
+
+/**
+ * drupal_mail() key of the rejection notice sent to the resident.
+ */
+define('MYAPI_SERVICE_REQUEST_REJECTED_RESIDENT_MAIL_KEY', 'service_request_rejected_resident');
+
+/* ---------------------------------------------------------------------------
  * Pure text builders.
  *
  * No database and no node loading: they receive values already resolved by the
@@ -646,6 +672,55 @@ function myapi_service_offer_push_body($subject, $provider_name, $amount_text) {
 }
 
 /**
+ * Title of the push and of the inbox row when the quote AWARDED the job
+ * (SPEC 120).
+ *
+ * A SECOND TITLE, NOT A SECOND NOTIFICATION. On a 'direct' the provider does
+ * one thing — they price the job the resident already gave them, and that
+ * prices it AND commits it — so it produces one notice, one push and one
+ * email, with the text of what actually happened. Sending the SPEC 110 text
+ * and then an award notice would be two alerts for one act.
+ *
+ * THE TITLE IS WHERE THE DIFFERENCE LIVES, and the body stays the three lines
+ * of its sibling below. 'Nueva oferta recibida' is true and useless here: it
+ * reads as "somebody is bidding for your job", when what happened is that the
+ * job is now taken at a price. A push is read as a headline, so the headline
+ * is the part that has to change.
+ *
+ * @return string  Fixed Spanish text.
+ */
+function myapi_service_offer_direct_push_title() {
+  return 'Tu proveedor tomó el trabajo';
+}
+
+/**
+ * Body of the push and of the inbox row when the quote awarded the job
+ * (SPEC 120).
+ *
+ * THE SAME THREE LINES AS myapi_service_offer_push_body(), plus the sentence
+ * that says the job is committed. The three labelled lines are not repeated
+ * from it by hand — it is called — because they are the same three facts and
+ * two copies of them would drift (rule 3 of CLAUDE.md).
+ *
+ * The fourth line carries no amount of its own: 'Monto' above already says it,
+ * and myapi_service_offer_amount_text() already resolves the 'on_site_quote'
+ * case to 'A presupuestar en sitio', so the sentence reads correctly whether
+ * there is a figure or not.
+ *
+ * @param string|null $subject        node.title of the request.
+ * @param string|null $provider_name  node.title of the provider that quoted.
+ * @param string      $amount_text    myapi_service_offer_amount_text()'s answer.
+ *
+ * @return string  Four lines separated by "\n".
+ */
+function myapi_service_offer_direct_push_body($subject, $provider_name, $amount_text) {
+  return implode("\n", [
+    myapi_service_offer_push_body($subject, $provider_name, $amount_text),
+    'El proveedor envió su presupuesto y tomó el trabajo.',
+  ]);
+}
+
+/**
  * URL of the app deep link a service request's detail opens from (SPEC 110).
  *
  * Same pattern as myapi_password_reset_deep_link_base() (SPEC 07,
@@ -669,9 +744,18 @@ function myapi_service_request_app_deep_link_url($request_nid) {
  * The one email of this file with a button: myapi_mail_service_request_offer_resident_html()
  * points it at the URL built here.
  *
+ * 'direct_award' TRAVELS AS A BOOLEAN AND NOT AS TWO MAIL KEYS (SPEC 120). The
+ * two emails carry the same five values, the same three lines and the same
+ * button; what differs is the subject and one sentence of the intro. A second
+ * key would mean a second formatter, a second HTML builder and a second branch
+ * in myapi_mail(), all to say the same thing differently once.
+ *
+ * It is NOT escaped, unlike everything else here: it is a boolean the formatter
+ * branches on and never a value that is printed.
+ *
  * @param int   $nid     nid of the request (not the offer).
  * @param array $values  Already-resolved 'name' (resident's, NULL when
- *   unresolved), 'subject', 'provider_name' and 'amount_text'.
+ *   unresolved), 'subject', 'provider_name', 'amount_text' and 'direct_award'.
  *
  * @return array  Escaped params for
  *   myapi_mail_format_service_request_offer_resident().
@@ -682,6 +766,7 @@ function myapi_service_offer_resident_mail_params($nid, array $values) {
     'subject'       => NULL,
     'provider_name' => NULL,
     'amount_text'   => NULL,
+    'direct_award'  => FALSE,
   ];
 
   return [
@@ -690,6 +775,7 @@ function myapi_service_offer_resident_mail_params($nid, array $values) {
     'subject'       => myapi_service_request_mail_label($values['subject']),
     'provider_name' => myapi_service_request_mail_label($values['provider_name']),
     'amount_text'   => myapi_service_request_mail_label($values['amount_text']),
+    'direct_award'  => !empty($values['direct_award']),
     'deep_link_url' => myapi_service_request_app_deep_link_url($nid),
   ];
 }
@@ -1409,7 +1495,9 @@ function myapi_service_request_enqueue_admin_mail($node, array $context, array $
  * @param array   $context    Values already resolved by
  *   myapi_service_offer_create(): 'request_nid', 'request_title',
  *   'requester_uid', 'condominium_id', 'unit_id', 'provider_id',
- *   'provider_name', 'amount' (NULL on an 'on_site_quote') and 'amount_type'.
+ *   'provider_name', 'amount' (NULL on an 'on_site_quote'), 'amount_type' and
+ *   'direct_award' — TRUE when this quote also awarded the job (SPEC 120),
+ *   which picks the texts and changes nothing else.
  *
  * @return void
  */
@@ -1429,6 +1517,7 @@ function myapi_service_request_notify_offer_received($offer_node, array $context
       'provider_name'  => NULL,
       'amount'         => NULL,
       'amount_type'    => NULL,
+      'direct_award'   => FALSE,
     ];
 
     // A request always has a requester (a mandatory field since the request
@@ -1443,12 +1532,25 @@ function myapi_service_request_notify_offer_received($offer_node, array $context
 
     $amount_text = myapi_service_offer_amount_text($context['amount'], $context['amount_type']);
 
+    // SPEC 120: which of the two pairs of texts this notice carries. The TYPE
+    // does not change with it — 'service_offer_received' is still what
+    // happened, and the inbox groups by type — and neither does the count:
+    // one act of the provider, one row, one push, one email.
+    $direct_award = !empty($context['direct_award']);
+
+    $push_title = $direct_award
+      ? myapi_service_offer_direct_push_title()
+      : myapi_service_offer_push_title();
+    $push_body = $direct_award
+      ? myapi_service_offer_direct_push_body($context['request_title'], $context['provider_name'], $amount_text)
+      : myapi_service_offer_push_body($context['request_title'], $context['provider_name'], $amount_text);
+
     myapi_notification_create([
       'source_type'      => MYAPI_NOTIFICATION_SOURCE_SERVICE_OFFER,
       'source_nid'       => (int) $offer_node->nid,
       'type'             => MYAPI_NOTIFICATION_TYPE_SERVICE_OFFER_RECEIVED,
-      'title'            => myapi_service_offer_push_title(),
-      'body'             => myapi_service_offer_push_body($context['request_title'], $context['provider_name'], $amount_text),
+      'title'            => $push_title,
+      'body'             => $push_body,
       'deep_link_target' => MYAPI_NOTIFICATION_DEEP_LINK_SERVICE_REQUEST,
       'deep_link_id'     => (int) $context['request_nid'],
       // Unlike the provider notice above, this is the resident's OWN request:
@@ -1472,6 +1574,7 @@ function myapi_service_request_notify_offer_received($offer_node, array $context
       'subject'       => $context['request_title'],
       'provider_name' => $context['provider_name'],
       'amount_text'   => $amount_text,
+      'direct_award'  => $direct_award,
     ]);
 
     myapi_mail_queue_enqueue(MYAPI_SERVICE_OFFER_RECEIVED_MAIL_KEY, (string) $account->mail, $params);
@@ -2046,5 +2149,195 @@ function myapi_service_request_enqueue_closed_admin_mail($request_nid, array $co
 
   foreach (user_load_multiple($uids) as $account) {
     myapi_mail_queue_enqueue(MYAPI_SERVICE_REQUEST_CLOSED_ADMIN_MAIL_KEY, (string) $account->mail, $params);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * SPEC 121 — pure text builders for the rejection notice.
+ *
+ * Same two rules as every block above: an unresolvable value degrades to
+ * MYAPI_SERVICE_REQUEST_MAIL_EMPTY rather than an empty line or a thrown error,
+ * and the push/inbox text is plain while the mail params are escaped.
+ *
+ * THE REASON TRAVELS TO THE RESIDENT HERE, where SPEC 113 deliberately kept it
+ * from travelling to the providers. The two are not in tension: there it was
+ * the resident's private text going out to companies who had merely bid, and
+ * here it is the answer to "why is my job not happening", addressed to the one
+ * person entitled to it.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Title of the push and of the inbox row sent to the resident (SPEC 121).
+ *
+ * NOT 'Solicitud cancelada', which is what SPEC 113 sends. That title is true
+ * of this event too and it is the exact confusion this spec exists to avoid:
+ * the resident did not cancel anything, and a headline that reads as if they
+ * had is worse than no notice. The title names the actor.
+ *
+ * @return string  Fixed Spanish text.
+ */
+function myapi_service_request_rejected_push_title() {
+  return 'El proveedor canceló tu solicitud';
+}
+
+/**
+ * Body of the push and of the inbox row sent to the resident (SPEC 121).
+ *
+ * Three lines: the request's own subject, who handed it back, and why. THE
+ * REASON IS ON THE PUSH and not only in the email, because it is the whole
+ * point of the notice — a resident who reads "el proveedor canceló" and has to
+ * open the app to learn whether it was a scheduling clash or a job the company
+ * does not do has been told half of something.
+ *
+ * The reason is never empty when this fires — the endpoint's validator answers
+ * 422 to an absent one — but it goes through the same label helper as every
+ * other value here, so a programmatic caller cannot produce a hanging line.
+ *
+ * @param string|null $subject        node.title of the request.
+ * @param string|null $provider_name  node.title of the provider that rejected.
+ * @param string|null $reason         The reason, already validated.
+ *
+ * @return string  Three lines separated by "\n".
+ */
+function myapi_service_request_rejected_push_body($subject, $provider_name, $reason) {
+  return implode("\n", [
+    myapi_service_request_notification_label($subject),
+    'Proveedor: ' . myapi_service_request_notification_label($provider_name),
+    'Motivo: ' . myapi_service_request_notification_label($reason),
+  ]);
+}
+
+/**
+ * Params of the rejection email sent to the resident (SPEC 121).
+ *
+ * Same shape as myapi_service_offer_resident_mail_params() (SPEC 110) — the
+ * resident-facing emails of this file all greet by name and all carry a button
+ * — with 'reason' in place of 'amount_text'.
+ *
+ * @param int   $nid     nid of the request.
+ * @param array $values  Already-resolved 'name' (resident's, NULL when
+ *   unresolved), 'subject', 'provider_name' and 'reason'.
+ *
+ * @return array  Escaped params for
+ *   myapi_mail_format_service_request_rejected_resident().
+ */
+function myapi_service_request_rejected_resident_mail_params($nid, array $values) {
+  $values += [
+    'name'          => NULL,
+    'subject'       => NULL,
+    'provider_name' => NULL,
+    'reason'        => NULL,
+  ];
+
+  return [
+    'nid'           => (int) $nid,
+    'name'          => $values['name'] !== NULL ? check_plain($values['name']) : NULL,
+    'subject'       => myapi_service_request_mail_label($values['subject']),
+    'provider_name' => myapi_service_request_mail_label($values['provider_name']),
+    'reason'        => myapi_service_request_mail_label($values['reason']),
+    'deep_link_url' => myapi_service_request_app_deep_link_url($nid),
+  ];
+}
+
+/**
+ * Notifies the resident that the awarded provider handed the job back.
+ * SPEC 121'S ENTRY POINT.
+ *
+ * Called from myapi_service_request_reject() right after the three writes and
+ * before the 200 is assembled, so nothing here can undo any of them, and never
+ * from a node hook: a cancellation made from the back office notifies nobody,
+ * the same criterion every orchestrator of this file follows.
+ *
+ * EVERY VALUE IN $context ARRIVES ALREADY RESOLVED, built from $node — the
+ * endpoint loaded it to write on it, so nothing here re-queries the request.
+ * 'provider_name' is resolved by the endpoint too, BEFORE its writes, because
+ * the timeline entry needs the very same string and resolving it twice would
+ * be two queries for one fact.
+ *
+ * ONE AUDIENCE: the resident. See the block comment above on why the provider
+ * and the 'backend' role are both out of scope here.
+ *
+ * Fires once per rejection: a second PUT on the same request is refused with
+ * 409 before this function is ever called, so it cannot produce a duplicate
+ * row.
+ *
+ * Best-effort from end to end, same discipline as the rest of this file: the
+ * whole body is wrapped, a failure lands in watchdog, and none of it undoes the
+ * rejection that was just saved.
+ *
+ * @param object $node     The just-saved (cancelled) 'service_request' node.
+ * @param array  $context  Values already resolved by
+ *   myapi_service_request_reject(): 'request_nid', 'request_title',
+ *   'requester_uid', 'condominium_id', 'unit_id', 'provider_id',
+ *   'provider_name' and 'reason'.
+ *
+ * @return void
+ */
+function myapi_service_request_notify_rejected($node, array $context = []) {
+  try {
+    module_load_include('inc', 'myapi', 'includes/myapi.notification');
+    module_load_include('inc', 'myapi', 'includes/myapi.mail_queue');
+    module_load_include('inc', 'myapi', 'includes/myapi.user');
+
+    $context += [
+      'request_nid'    => NULL,
+      'request_title'  => NULL,
+      'requester_uid'  => NULL,
+      'condominium_id' => NULL,
+      'unit_id'        => NULL,
+      'provider_id'    => NULL,
+      'provider_name'  => NULL,
+      'reason'         => NULL,
+    ];
+
+    // A request always has a requester (a mandatory field since the request was
+    // created), but the account behind it may have since been deleted — the
+    // same defensive floor every other orchestrator of this file applies.
+    $requester_uid = (int) $context['requester_uid'];
+    $account = $requester_uid > 0 ? user_load($requester_uid) : FALSE;
+    if (!$account) {
+      return;
+    }
+
+    myapi_notification_create([
+      'source_type'      => MYAPI_NOTIFICATION_SOURCE_SERVICE_REQUEST,
+      'source_nid'       => (int) $context['request_nid'],
+      'type'             => MYAPI_NOTIFICATION_TYPE_SERVICE_REQUEST_REJECTED,
+      'title'            => myapi_service_request_rejected_push_title(),
+      'body'             => myapi_service_request_rejected_push_body(
+        $context['request_title'],
+        $context['provider_name'],
+        $context['reason']
+      ),
+      'deep_link_target' => MYAPI_NOTIFICATION_DEEP_LINK_SERVICE_REQUEST,
+      'deep_link_id'     => (int) $context['request_nid'],
+      // This is the resident's OWN request, so there is no privacy reason to
+      // withhold either id — the same reading SPEC 110 makes for its own
+      // resident notice, and the opposite of the provider notices, which never
+      // carry the unit.
+      'condominium_id'   => $context['condominium_id'],
+      'unit_id'          => $context['unit_id'],
+      'provider_id'      => $context['provider_id'],
+      'audience'         => MYAPI_NOTIFICATION_AUDIENCE_RESIDENT,
+      'uids'             => [$requester_uid],
+    ]);
+
+    // Same resolution as every 'Hola {name}' of this file: SPEC 54 profile
+    // fields first, the account's own name as the fallback.
+    $profile = myapi_user_fetch_profile_fields($requester_uid);
+    $full_name = trim((string) $profile['first_name'] . ' ' . (string) $profile['last_name']);
+    $name = $full_name !== '' ? $full_name : $account->name;
+
+    $params = myapi_service_request_rejected_resident_mail_params($context['request_nid'], [
+      'name'          => $name,
+      'subject'       => $context['request_title'],
+      'provider_name' => $context['provider_name'],
+      'reason'        => $context['reason'],
+    ]);
+
+    myapi_mail_queue_enqueue(MYAPI_SERVICE_REQUEST_REJECTED_RESIDENT_MAIL_KEY, (string) $account->mail, $params);
+  }
+  catch (Exception $e) {
+    watchdog_exception('myapi', $e);
   }
 }

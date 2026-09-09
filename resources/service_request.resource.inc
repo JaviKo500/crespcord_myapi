@@ -2691,6 +2691,387 @@ function myapi_service_request_cancel_comment($reason) {
   return t('El residente canceló la solicitud.');
 }
 
+/* ---------------------------------------------------------------------------
+ * PUT /api/v1/service-requests/%/reject — the awarded provider of a 'direct'
+ * says they cannot take the job (SPEC 121).
+ *
+ * THE COUNTERPART OF '/cancel' AND NOT A BRANCH OF IT. SPEC 95 wrote down, in
+ * the docblock of myapi_service_request_cancel(), that "the assigned provider
+ * never cancels — 'I quit this job' is another action, with another actor and
+ * probably another target status". This is that action. It turned out to share
+ * the target status and nothing else: the actor is the provider, the gate is
+ * field_assigned_provider instead of field_requester, and the reason is
+ * MANDATORY here where it is optional there.
+ *
+ * WHY THE REASON IS MANDATORY, when the resident's is not. The resident is
+ * cancelling something that is theirs and owes nobody an explanation; the
+ * provider is handing back a job a resident is waiting on, and "no puedo" with
+ * no reason leaves that resident with nothing to act on — they cannot tell a
+ * scheduling clash from a job the company does not do. It is the one asymmetry
+ * between the two endpoints and it is deliberate.
+ *
+ * ONLY FROM 'direct', AND THAT IS THE WHOLE OF WHEN THIS VERB MEANS ANYTHING.
+ * Once the provider has quoted, SPEC 120 has already moved the request to
+ * 'assigned' and the job is committed at a price — "I cannot take it" is said
+ * BEFORE putting a price on it, not after. From any other status this answers
+ * 409 service_request_not_rejectable.
+ *
+ * IT LANDS ON 'cancelled' AND NEVER ON 'open'. 'direct' → 'cancelled' has been
+ * an edge of myapi_services_request_transitions() since SPEC 77, so this
+ * endpoint invents nothing; 'direct' → 'open' is not an edge, 'direct' is a
+ * ROOT that nothing leads to, and putting back on the open market a job the
+ * resident addressed to ONE company is the resident's decision to make, not the
+ * decision of the provider walking away from it.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Routes /api/v1/service-requests/%/reject by HTTP method (SPEC 121).
+ *
+ * PUT AND NOTHING ELSE, and the 405 BEFORE the token — the criterion every
+ * dispatcher of this module follows: the method is wrong whoever is asking.
+ * Byte for byte the shape of myapi_service_request_cancel_dispatch() above.
+ */
+function myapi_service_request_reject_dispatch($nid) {
+  if (myapi_request_method() === 'PUT') {
+    myapi_service_request_reject($nid);
+  }
+  else {
+    myapi_error('method_not_allowed', 405);
+  }
+}
+
+/**
+ * PUT /api/v1/service-requests/%/reject — the provider hands the job back
+ * (SPEC 121).
+ *
+ * EIGHT NUMBERED STEPS, AND THE ORDER IS THE CONTRACT:
+ *
+ *   1. The nid.        404 service_request_not_found, before the token and
+ *                      before any query.
+ *   2. Authentication. 401 missing_authorization / invalid_token.
+ *   3. The role.       403 provider_role_required.
+ *   4. The providers.  403 service_request_forbidden when the account operates
+ *                      none.
+ *   5. The node.       404 service_request_not_found.
+ *   6. The gate.       myapi_service_request_reject_gate(), pure — whose job it
+ *                      is, and whether it may still be handed back.
+ *   7. The reason.     422, and it is REQUIRED.
+ *   8. The three writes, then the notice, then 200.
+ *
+ * STEPS 3 AND 4 RUN BEFORE THE NODE IS LOADED, the criterion SPEC 99 fixed for
+ * the provider's own detail: who you are does not depend on which nid you asked
+ * for, so an account with no standing here answers 403 for a request that does
+ * not exist rather than telling it apart from one that does.
+ *
+ * THE REASON IS VALIDATED AFTER THE 403 AND THE 409, the criterion of step 6 of
+ * SPEC 95: a request with garbage in the body never masks an access or a status
+ * error.
+ *
+ * THE ORDER OF THE THREE WRITES IS SPEC 95'S, INHERITED WITH ITS THREE REASONS:
+ *
+ *   - THE REQUEST FIRST, so myapi_service_transaction_sync_request_status()
+ *     (SPEC 94), which fires on the hook_node_insert() of the transaction,
+ *     compares the two statuses, finds them equal and returns WITHOUT saving
+ *     the request a second time. Whoever touches either side has to keep that
+ *     property.
+ *   - THE MAIN EFFECT IS WRITTEN IN PLAIN SIGHT, in this endpoint, and not
+ *     delegated to the hook.
+ *   - THE OFFERS LAST, AND NOT ATOMICALLY — see
+ *     myapi_service_offer_reject_live().
+ *
+ * THE SWEEP IS DEFENSIVE AND IS EXPECTED TO FIND NOTHING. A request in 'direct'
+ * carries no live offer of this provider: the one they could send moves it to
+ * 'assigned' in the same pass (SPEC 120), and condition 5 of
+ * myapi_service_offer_eligibility() refuses a second one. It is run anyway
+ * because a 'cancelled' request must not be left with a live offer hanging off
+ * it whatever put it there — an offer typed into the back office, for one — and
+ * because leaving out a write that costs one query on the grounds that it
+ * "cannot" be needed is how the two endpoints drift apart.
+ *
+ * field_assigned_provider IS KEPT, exactly as SPEC 95 keeps it on a
+ * cancellation: a request with no trace of who it had been given to is one
+ * nobody can audit. The resident sees WHO said no, not a request that quietly
+ * lost its provider.
+ *
+ * NO PROVIDER NOTICE GOES OUT, unlike the cancellation of SPEC 113. The only
+ * provider concerned is the one who just performed this action, and telling
+ * them what they did is not news. The resident is the audience here, and they
+ * get one notification, one push and one email — see
+ * myapi_service_request_notify_rejected().
+ *
+ * NOT IDEMPOTENT, on purpose, by the literal precedent of SPEC 95: a second PUT
+ * answers 409 rather than 200, which is the truth, and it is what keeps a
+ * duplicate entry off a timeline that is forever.
+ *
+ * THE 200 IS SMALL, AND THAT IS DECIDED AND NOT SAVED EFFORT. The cancellation
+ * answers the resident's whole nineteen-key detail because the resident stays
+ * on that screen; the provider who just handed a job back does not, and the
+ * detail this route could build for them is the PROVIDER's — six queries, with
+ * `my_offers` empty and a job that is no longer theirs. The two keys below are
+ * what the app needs to leave the screen, and the same shape the withdrawal of
+ * SPEC 105 answers for the same actor.
+ *
+ * @param mixed $nid  The route's wildcard, raw.
+ */
+function myapi_service_request_reject($nid) {
+  // 1. The nid, before anything else — including the token. ctype_digit() over
+  // the string form rejects 'abc', '-3', '1.5' and '' alike, and the > 0 then
+  // rejects '0'. Costs no query.
+  if (!is_scalar($nid) || !ctype_digit((string) $nid) || (int) $nid <= 0) {
+    myapi_error('service_request_not_found', 404);
+  }
+  $nid = (int) $nid;
+
+  // 2. Authentication. Answers 401 on its own and never returns on failure.
+  $token = myapi_auth_require_access_token();
+  $uid = (int) $token->uid;
+
+  // 3. The role gate of SPEC 78, shared with every provider route of this
+  // module — same code, same function, decided in one place. The account is
+  // loaded because the gate reads ->roles; the token check already touched the
+  // users table, so Drupal 7 serves this from its static cache.
+  $account = user_load($uid);
+  if (!myapi_provider_role_is($account)) {
+    myapi_error('provider_role_required', 403);
+  }
+
+  // 4. The providers this account operates. A role with no provider behind it
+  // is a 403 and not a 404: over one concrete request there is only "it is
+  // yours" or "it is not", and with no provider to operate there is no gate
+  // that could ever be satisfied. Same decision as SPEC 99's detail.
+  $provider_ids = myapi_provider_role_provider_ids($account);
+  if (empty($provider_ids)) {
+    myapi_error('service_request_forbidden', 403);
+  }
+
+  // 5. The node. node_load() and NOT myapi_service_request_detail_row(), the
+  // same choice myapi_service_request_cancel() makes (decision 9 of SPEC 106
+  // read the other way): what follows is a WRITE, so the whole entity with its
+  // fields is needed anyway, and a request whose category term was deleted must
+  // still be rejectable — that row would resolve to FALSE and answer 404 over a
+  // job the provider genuinely holds.
+  $node = node_load($nid);
+  if (!$node || $node->type !== MYAPI_SERVICES_REQUEST_TYPE || empty($node->status)) {
+    myapi_error('service_request_not_found', 404);
+  }
+
+  // For myapi_building_admin_field_target_id() and
+  // myapi_building_admin_field_value(), the two readers of a single-value field
+  // this module writes once. Loaded here and not at the top of the file, the
+  // same way myapi_service_request_cancel() loads it.
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+
+  // 6. The gate. Pure, so the whole matrix is assertable with no site booted —
+  // and the field is read RAW, through the node's own target_id, never through
+  // a joined provider node: an UNPUBLISHED provider would arrive as NULL from a
+  // join and slip under the ownership check instead of failing it. The same
+  // trap SPEC 106 documents as its decision 15.
+  $assigned_provider_id = myapi_building_admin_field_target_id($node, 'field_assigned_provider');
+  $status = myapi_building_admin_field_value($node, 'field_request_status');
+
+  $error = myapi_service_request_reject_gate($assigned_provider_id, $status, $provider_ids);
+  if ($error !== NULL) {
+    myapi_error($error, $error === 'service_request_forbidden' ? 403 : 409);
+  }
+
+  // 7. The reason, AFTER the 403 and the 409, and REQUIRED — see the docblock
+  // of myapi_service_request_validate_reject_reason() for why this one is not
+  // the optional reason of a cancellation.
+  $reason = myapi_service_request_validate_reject_reason(myapi_request_body());
+  if (!$reason['ok']) {
+    myapi_error($reason['error_code'], 422, $reason['replacements']);
+  }
+
+  // The provider's name, for the timeline entry and for the notice. One query,
+  // and it is read BEFORE the writes so the sentence the resident reads names
+  // the company even if something goes wrong further down.
+  module_load_include('inc', 'myapi', 'includes/myapi.service_request_notification');
+  $provider_name = myapi_service_request_node_title($assigned_provider_id);
+
+  // 8a. The request. Its status and nothing else: field_assigned_provider, the
+  // unit, the category, the description and the files stay exactly as they
+  // were, and the node stays published — see the docblock.
+  $node->field_request_status[LANGUAGE_NONE][0]['value'] = MYAPI_SERVICES_REQUEST_STATUS_CANCELLED;
+  node_save($node);
+
+  // 8b. The transaction. The four fields of SPEC 92, through the one function
+  // that writes a timeline entry (SPEC 106).
+  //
+  // THE uid IS THE PROVIDER'S ACCOUNT, which is who is behind the token — and
+  // it is the second half of what tells this entry from the resident's own
+  // cancellation, the first being the sentence itself. Both land on
+  // 'cancelled', so the timeline is where the two are told apart.
+  myapi_service_transaction_record(
+    $node->nid,
+    MYAPI_SERVICES_REQUEST_STATUS_CANCELLED,
+    $uid,
+    myapi_service_request_reject_comment($provider_name, $reason['value'])
+  );
+
+  // 8c. The offers. Last, defensive, and expected to find nothing — see the
+  // docblock. Not atomic, for the reason its own function documents.
+  $offers_rejected = myapi_service_offer_reject_live($node->nid);
+
+  // The resident's notice. After the three writes, so a failure in here can
+  // never undo any of them, and best-effort end to end: the function swallows
+  // its own failures into watchdog, so the 200 below is never conditional on it.
+  myapi_service_request_notify_rejected($node, [
+    'request_nid'    => $node->nid,
+    'request_title'  => $node->title,
+    'requester_uid'  => myapi_building_admin_field_target_id($node, 'field_requester'),
+    'condominium_id' => myapi_building_admin_field_target_id($node, 'field_condominium'),
+    'unit_id'        => myapi_building_admin_field_target_id($node, 'field_unit'),
+    'provider_id'    => $assigned_provider_id,
+    'provider_name'  => $provider_name,
+    'reason'         => $reason['value'],
+  ]);
+
+  // 9. The answer. Two keys, no query — see the docblock on why this is not the
+  // whole detail. 'offers_rejected' is a SIBLING of 'service_request' and not a
+  // third key inside it, the same criterion SPEC 95 applied to the very same
+  // value: it says what THIS call rejected, which is not deducible from any
+  // later read.
+  myapi_respond(
+    [
+      'service_request' => [
+        'id'     => (int) $node->nid,
+        'status' => MYAPI_SERVICES_REQUEST_STATUS_CANCELLED,
+      ],
+      'offers_rejected' => $offers_rejected,
+    ],
+    200,
+    'service_request_rejected'
+  );
+}
+
+/**
+ * The two conditions of a rejection that need no query (SPEC 121).
+ *
+ * Conditions 6a and 6b of PUT /api/v1/service-requests/{id}/reject:
+ *
+ *   6a. service_request_forbidden      This job is not this account's.
+ *   6b. service_request_not_rejectable It cannot be handed back from where it
+ *                                      stands.
+ *
+ * WHOSE IT IS COMES FIRST, and that ordering is the same one every gate of this
+ * module uses: "not yours" is the first true thing about a request you do not
+ * hold, so a provider poking at somebody else's 'assigned' request learns 403
+ * and never the 409 that would confirm its status.
+ *
+ * THE OWNERSHIP TEST IS field_assigned_provider AND NEVER node.uid, the
+ * criterion SPEC 89 fixed for the resident side and SPEC 105 for the offer: the
+ * domain field rules, not the author. A request an operator registered on a
+ * resident's behalf, awarded to a company with three accounts, is rejectable by
+ * all three of them.
+ *
+ * A REQUEST WITH NO ASSIGNED PROVIDER IS NOBODY'S AND FAILS CLOSED. NULL, 0 and
+ * anything that is not one of $provider_ids all answer the same 403 — there is
+ * no branch for "unassigned" because there is nothing else to say about it.
+ *
+ * THE STATUS IS ASKED TWICE, AND BOTH QUESTIONS ARE REAL. First it must be
+ * 'direct' — this verb means "I cannot take the job", which is only sayable
+ * before a price exists (SPEC 120 moves the request to 'assigned' the moment
+ * one does). Then the graph is asked whether 'cancelled' is reachable from
+ * there, and it is not transcribed: myapi_services_transition_allowed() has
+ * owned that answer since SPEC 77, and asking it is what keeps this file from
+ * becoming a second copy of the graph. The second question cannot fail today
+ * while the first passes; it is there so that the day somebody narrows the
+ * edges of 'direct', this endpoint narrows with them instead of silently
+ * disagreeing.
+ *
+ * Pure, like every other gate of this feature: it reads three values it is
+ * handed and asks nothing of the database, so the whole matrix sits in
+ * tests/unit with no site booted.
+ *
+ * @param mixed $assigned_provider_id
+ *   field_assigned_provider's target_id as the node holds it, or NULL.
+ * @param mixed $status
+ *   field_request_status as the node holds it. An empty, NULL or unknown value
+ *   is not 'direct' and needs no branch of its own.
+ * @param array $provider_ids
+ *   myapi_provider_role_provider_ids()'s answer for the authenticated account.
+ *   Never empty — step 4 already refused that case.
+ *
+ * @return string|NULL
+ *   The error_code of the first condition that fails, or NULL when both pass.
+ */
+function myapi_service_request_reject_gate($assigned_provider_id, $status, array $provider_ids) {
+  $assigned = ($assigned_provider_id === NULL) ? 0 : (int) $assigned_provider_id;
+  $owned = array_map('intval', $provider_ids);
+
+  if ($assigned <= 0 || !in_array($assigned, $owned, TRUE)) {
+    return 'service_request_forbidden';
+  }
+
+  if ($status !== MYAPI_SERVICES_REQUEST_STATUS_DIRECT
+    || !myapi_services_transition_allowed($status, MYAPI_SERVICES_REQUEST_STATUS_CANCELLED)) {
+    return 'service_request_not_rejectable';
+  }
+
+  return NULL;
+}
+
+/**
+ * Validates the REQUIRED 'reason' of a rejection (SPEC 121).
+ *
+ * The sibling of myapi_service_request_validate_cancel_reason() above and
+ * deliberately NOT the same function parameterised by a flag. The two differ in
+ * the one thing that matters — an absent reason is a 200 there and a 422 here —
+ * and a shared helper with a $required argument would be twelve lines of which
+ * eleven are the return contract, which is the very argument that function's own
+ * docblock makes for not reusing the reservation's.
+ *
+ * WHY THIS ONE IS REQUIRED: see the docblock of myapi_service_request_reject().
+ * The resident is left waiting on a job that is not going to happen, and the
+ * only thing that lets them act on it is knowing why.
+ *
+ * FOUR WAYS TO FAIL AND THEY ARE NOT THE SAME ERROR:
+ *   - no body, or no 'reason' key           missing_field
+ *   - present but not a string              invalid_field
+ *   - present, a string, empty once flattened  missing_field
+ *   - longer than 255 characters            field_too_long
+ *
+ * The third is missing_field and not invalid_field on purpose: '   ' and
+ * '<p></p>' are not a malformed value, they are the absence of one dressed up,
+ * and the client that sent either of them has the same bug as the client that
+ * sent no key at all.
+ *
+ * Flattened with myapi_text_to_multiline() BEFORE both checks, exactly as the
+ * cancellation does and for the same two reasons: this string becomes the
+ * field_comment of a transaction that travels back in the request's timeline,
+ * so markup in it would be painted literally by the app; and the 255 has to
+ * count the provider's words rather than their markup.
+ *
+ * Length is measured with drupal_strlen() (characters) and not strlen()
+ * (bytes): a provider writing in Spanish must not see 255 accented characters
+ * rejected for nothing.
+ *
+ * @param mixed $body  Decoded request body, or NULL when there was none.
+ *
+ * @return array  ['ok' => TRUE, 'value' => string] when accepted, or
+ *                ['ok' => FALSE, 'error_code' => '...', 'replacements' => [...]]
+ *                when it must answer 422.
+ */
+function myapi_service_request_validate_reject_reason($body) {
+  if (!is_array($body) || !array_key_exists('reason', $body)) {
+    return ['ok' => FALSE, 'error_code' => 'missing_field', 'replacements' => ['@field' => 'reason']];
+  }
+
+  if (!is_string($body['reason'])) {
+    return ['ok' => FALSE, 'error_code' => 'invalid_field', 'replacements' => ['@field' => 'reason']];
+  }
+
+  $value = myapi_text_to_multiline($body['reason']);
+  if ($value === '') {
+    return ['ok' => FALSE, 'error_code' => 'missing_field', 'replacements' => ['@field' => 'reason']];
+  }
+  if (drupal_strlen($value) > 255) {
+    return ['ok' => FALSE, 'error_code' => 'field_too_long', 'replacements' => ['@field' => 'reason']];
+  }
+
+  return ['ok' => TRUE, 'value' => $value];
+}
+
 /**
  * Whether a request still admits being edited by its requester (SPEC 96).
  *

@@ -721,3 +721,146 @@ images, offers or transactions.
   name and the condominium. Inherited from the listing and not widened.
 - **The back office keeps its own rule**, unchanged by this endpoint. See the
   listing's limits above.
+
+---
+
+## PUT /api/v1/service-requests/{id}/reject
+
+The awarded provider of a `direct` request says **they cannot take the job**.
+The request is cancelled, the resident is told who said no and why, and the
+timeline records it.
+
+**Authentication:** required — Bearer, `proveedor` role, and the request must be
+awarded to one of your providers.
+
+**Headers**
+
+| Header | Value |
+|--------|-------|
+| Authorization | `Bearer <access_token>` |
+| Content-Type | application/json |
+
+**Request body**
+
+```json
+{ "reason": "No tengo disponibilidad esta semana." }
+```
+
+| Field | Type | Required | Rules |
+|-------|------|:---:|-------|
+| `reason` | string | **Yes** | Flattened to plain text, then **1–255 characters**. Whitespace-only counts as absent. |
+
+**Success response (200)**
+
+```json
+{
+  "success": true,
+  "data": {
+    "service_request": { "id": 128, "status": "cancelled" },
+    "offers_rejected": 0
+  },
+  "message": "Solicitud cancelada correctamente."
+}
+```
+
+**Possible errors**
+
+| Code | `error_code` | When |
+|------|--------------|------|
+| 405 | `method_not_allowed` | Any method but `PUT`. Answered before the token and before any query. |
+| 401 | `missing_authorization` | No `Authorization` header. |
+| 401 | `invalid_token` | Invented, revoked or expired token. |
+| 403 | `provider_role_required` | The account does not hold the `proveedor` role. Answered **before** the request is loaded. |
+| 403 | `service_request_forbidden` | The account operates no provider, or the request's `field_assigned_provider` is not one of yours. |
+| 404 | `service_request_not_found` | `{id}` is not a positive integer (answered with no query at all), or names no published `service_request`. |
+| 409 | `service_request_not_rejectable` | The request is not in `direct` — including a second call on one you already rejected. |
+| 422 | `missing_field` | `reason` absent, or empty once flattened. `@field` names it. |
+| 422 | `invalid_field` | `reason` present but not a string. |
+| 422 | `field_too_long` | `reason` longer than 255 characters. |
+
+**A `403` or a `409` always beats a `422`.** The body is validated last, so
+garbage in it never masks an access or a status error.
+
+### Only from `direct`, and that is the whole of when this verb means anything
+
+"I cannot take this job" is said **before** putting a price on it. The moment you
+quote, [SPEC 120](service-offer.md#your-quote-awards-the-job-spec-120) moves the
+request to `assigned` and the job is committed at a price — from there this
+endpoint answers `409 service_request_not_rejectable`, and the only way out is
+asking the resident to cancel.
+
+| The request is… | `PUT …/reject` |
+|---|---|
+| `direct`, awarded to you, no quote sent yet | ✅ `200` |
+| `direct`, awarded to somebody else | `403 service_request_forbidden` |
+| `assigned` — you already quoted | `409 service_request_not_rejectable` |
+| `open`, `offered`, `closed`, `cancelled` | `409 service_request_not_rejectable` |
+
+### It lands on `cancelled`, never back on `open`
+
+`direct` → `cancelled` has been an edge of the status graph since SPEC 77, so
+this endpoint invents no status and adds no edge; what it adds is a **second
+actor** allowed to walk that one.
+
+Putting the job back on the open market was considered and **discarded**:
+`direct` → `open` is not an edge, `direct` is a root that nothing leads to, and
+releasing a request the resident addressed to **one** company into the open
+market is the resident's decision to make — not the decision of the provider
+walking away from it. They can create a new request, open or direct, in one
+screen.
+
+**`field_assigned_provider` is kept.** A cancelled request with no trace of who
+it had been given to is one nobody can audit — and the resident is entitled to
+see *who* said no, not a request that quietly lost its provider.
+
+### The resident's cancellation and yours look the same on `status`
+
+Both land on `cancelled`, so the status pill says **"Cancelada"** either way.
+That is correct and deliberate: the request is off, whoever called it off.
+
+**What tells them apart is the timeline entry.** Yours reads *"El proveedor
+&lt;your company&gt; canceló la solicitud: &lt;your reason&gt;"* — it names the
+actor and carries the reason. The resident's own carries their words with no
+prefix, or an automatic *"El residente canceló la solicitud."* when they gave
+none. The transaction's author is the second signal: yours is the account behind
+your token.
+
+> This is why `reason` is **mandatory** here and optional on
+> [`PUT /api/v1/service-requests/{id}/cancel`](service-request.md). The resident
+> is calling off something that is theirs and owes nobody an explanation; you
+> are handing back a job a resident is waiting on, and *"no puedo"* with no
+> reason leaves them unable to tell a scheduling clash from work your company
+> does not do.
+
+### What it writes, in this order
+
+1. **The request** → `cancelled`. Its status and nothing else: the assigned
+   provider, the unit, the category, the description and the files stay exactly
+   as they were, and the node stays published.
+2. **A `service_transaction`** carrying `cancelled` and the sentence above.
+3. **The live offers** → `rejected`. Defensive and expected to find nothing: a
+   request in `direct` carries no live offer of yours, because the one you could
+   send moves it to `assigned` in the same pass. `offers_rejected` reports what
+   this call actually swept.
+
+**Not atomic**, the same trade every write of this feature makes. **Not
+idempotent**: a second call answers `409`, which is the truth — it did nothing.
+
+### The notice
+
+**One notification, one push and one email, to the resident only.** They carry
+the request's subject, your company's name and **your reason**. The provider who
+performed the act is not told what they just did, and the `backend` role is out
+of this spec's audience — unlike the resident's own cancellation, which reaches
+every provider holding a live offer.
+
+Best-effort: a failure to notify never changes this `200`.
+
+### The response is small, and that is decided
+
+The resident's cancellation answers their whole nineteen-key detail because they
+stay on that screen. You do not: the detail this route could build for you is the
+**provider's**, six queries, with `my_offers` empty and a job that is no longer
+yours. The two keys above are what the app needs to leave the screen — the same
+shape [`PUT /api/v1/service-offers/{id}/withdraw`](service-offer.md) answers for
+the same actor.
