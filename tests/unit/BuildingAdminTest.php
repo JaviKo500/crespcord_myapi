@@ -92,19 +92,26 @@ class BuildingAdminTest extends TestCase {
   /**
    * Visible = editable + read-only. 'condominio' is what keeps the
    * entityreference autocompletes of the node forms from coming up empty;
-   * 'vivienda' is the units the operator consults but never touches.
+   * 'vivienda' is the units the operator consults but never touches, and
+   * 'service_request' joins the two read-only in SPEC 125.
+   *
+   * Every call passes its flag explicitly, here and below: omitted, the
+   * catalogues resolve each bundle with node_type_load(), which needs the
+   * booted site this suite deliberately does not have.
    */
   public function testVisibleTypesAreTheEditableOnesPlusTheReadOnlyOnes() {
     foreach (array(FALSE, TRUE) as $has_claims) {
-      $editable = myapi_building_admin_editable_types($has_claims);
-      $visible = myapi_building_admin_visible_types($has_claims);
+      foreach (array(FALSE, TRUE) as $has_requests) {
+        $editable = myapi_building_admin_editable_types($has_claims);
+        $visible = myapi_building_admin_visible_types($has_claims, $has_requests);
 
-      $this->assertSame(
-        array_merge($editable, myapi_building_admin_readonly_types()),
-        $visible
-      );
-      $this->assertContains('condominio', $visible);
-      $this->assertContains('vivienda', $visible);
+        $this->assertSame(
+          array_merge($editable, myapi_building_admin_readonly_types($has_requests)),
+          $visible
+        );
+        $this->assertContains('condominio', $visible);
+        $this->assertContains('vivienda', $visible);
+      }
     }
   }
 
@@ -121,12 +128,56 @@ class BuildingAdminTest extends TestCase {
       $editable = myapi_building_admin_editable_types($has_claims);
       $permissions = myapi_building_admin_permissions($has_claims);
 
-      foreach (myapi_building_admin_readonly_types() as $type) {
+      foreach (myapi_building_admin_readonly_types(TRUE) as $type) {
         $this->assertNotContains($type, $editable);
         $this->assertNotContains('create ' . $type . ' content', $permissions);
         $this->assertNotContains('edit any ' . $type . ' content', $permissions);
         $this->assertNotContains('edit own ' . $type . ' content', $permissions);
       }
+    }
+  }
+
+  /**
+   * The service-request bundle is READ-ONLY for the role (SPEC 125), and joins
+   * the catalogue only once it exists on the site — the same criterion
+   * myapi_building_admin_editable_types() follows for the claims bundles.
+   *
+   * The order is pinned on purpose: myapi_building_admin_visible_types()
+   * concatenates the two catalogues, and the alter of myapi.module subtracts
+   * the result from the provider's own domain. A reordering there is harmless
+   * today and is exactly the kind of thing that stops being harmless quietly.
+   */
+  public function testReadOnlyTypesWithAndWithoutTheServiceRequestBundle() {
+    $this->assertSame(
+      array('condominio', 'vivienda'),
+      myapi_building_admin_readonly_types(FALSE)
+    );
+    $this->assertSame(
+      array('condominio', 'vivienda', MYAPI_BUILDING_ADMIN_REQUEST_TYPE),
+      myapi_building_admin_readonly_types(TRUE)
+    );
+  }
+
+  /**
+   * GUARD: the role never writes a service request, in any combination.
+   *
+   * This is the whole difference between SPEC 125 and what SPEC 56 did with
+   * 'reclamo': the building admin CONSULTS the requests of its buildings and
+   * administers none of them. The day somebody moves the bundle from the
+   * read-only catalogue to the editable one, the role silently gains 'create'
+   * and 'edit any' over every request of its condominiums — and the state
+   * machine of SPEC 77 stops being the only thing that moves a request
+   * forward. This test is what makes that move deliberate.
+   */
+  public function testNoWritePermissionOverServiceRequestsIsEverGranted() {
+    foreach (array(FALSE, TRUE) as $has_claims) {
+      $editable = myapi_building_admin_editable_types($has_claims);
+      $permissions = myapi_building_admin_permissions($has_claims);
+
+      $this->assertNotContains(MYAPI_BUILDING_ADMIN_REQUEST_TYPE, $editable);
+      $this->assertNotContains('create ' . MYAPI_BUILDING_ADMIN_REQUEST_TYPE . ' content', $permissions);
+      $this->assertNotContains('edit any ' . MYAPI_BUILDING_ADMIN_REQUEST_TYPE . ' content', $permissions);
+      $this->assertNotContains('edit own ' . MYAPI_BUILDING_ADMIN_REQUEST_TYPE . ' content', $permissions);
     }
   }
 
@@ -226,7 +277,7 @@ class BuildingAdminTest extends TestCase {
   }
 
   /**
-   * The map covers exactly the eleven types of the data model, each with the
+   * The map covers exactly the twelve types of the data model, each with the
    * declared mode and field. A twelfth entry, or a changed field name, is a
    * change to the access rule and must be a deliberate edit here too.
    *
@@ -234,8 +285,12 @@ class BuildingAdminTest extends TestCase {
    * condominium is only resolvable by hopping field_claim -> reclamo ->
    * field_condominium, reusing the claim's own map entry rather than
    * hard-coding the field name twice.
+   *
+   * service_request is 'direct' (SPEC 125): field_condominium is REQUIRED on
+   * the bundle since it was created (myapi.install, SPEC 77), so there is no
+   * hop to make and no request without a condominium to fall back for.
    */
-  public function testCondominiumMapCoversTheElevenDeclaredTypes() {
+  public function testCondominiumMapCoversTheTwelveDeclaredTypes() {
     $expected = array(
       'condominio'                            => array('mode' => 'self'),
       'boletin'                               => array('mode' => 'direct',    'field' => 'field_condominio'),
@@ -248,11 +303,12 @@ class BuildingAdminTest extends TestCase {
       'alicuota_extra'                        => array('mode' => 'via_unit',  'field' => 'field_vivienda'),
       MYAPI_BUILDING_ADMIN_CLAIM_TYPE         => array('mode' => 'direct',    'field' => 'field_condominium'),
       MYAPI_BUILDING_ADMIN_TRANSACTION_TYPE   => array('mode' => 'via_claim', 'field' => 'field_claim'),
+      MYAPI_BUILDING_ADMIN_REQUEST_TYPE       => array('mode' => 'direct',    'field' => 'field_condominium'),
     );
 
     $map = myapi_building_admin_condominium_map();
 
-    $this->assertCount(11, $map);
+    $this->assertCount(12, $map);
     $this->assertSame(array_keys($expected), array_keys($map));
     foreach ($expected as $type => $entry) {
       $this->assertSame($entry, $map[$type], 'Map entry for ' . $type);
