@@ -581,3 +581,231 @@ function myapi_service_requests_list_table_rows(array $rows, array $editable) {
 
   return $table_rows;
 }
+
+/* ---------------------------------------------------------------------------
+ * Who may edit what.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Resolves, for the rows of ONE page, whether the reader may edit each node.
+ *
+ * The answer feeds the title cell (see myapi_service_requests_title_link()),
+ * and it is Drupal's own decision — node_access('update', $node) — rather than
+ * a role check of ours: 'edit own' permissions, hook_node_access() and
+ * 'bypass node access' all belong to it, and reimplementing any of them here
+ * would eventually disagree with the 403 the user actually gets.
+ *
+ * TWO FAST PATHS THAT LOAD NO NODE AT ALL, because they answer the same for
+ * every row of every page:
+ *   - 'bypass node access' — an 'administrator'.
+ *   - 'edit any service_request content' — the 'backend' operator this page
+ *     was built for.
+ * Both mean "every row is editable", and short-circuiting them is what keeps
+ * the common reader from paying for 20 node loads per page.
+ *
+ * Anything else — an 'administrador edificio', who holds NO write permission
+ * over this bundle by design (SPEC 125) — falls to the slow path, which loads
+ * the page's nodes in ONE batch and asks Drupal per row. It is one batch and
+ * not 20 node_load() calls because node_load_multiple() runs field_attach_load()
+ * once for the whole set.
+ *
+ * @param array $rows
+ *   Rows fetched from myapi_service_requests_list_rows().
+ *
+ * @return array
+ *   nid => bool. A nid absent from the map is read as "not editable" by
+ *   myapi_service_requests_list_table_rows().
+ */
+function myapi_service_requests_editable_map(array $rows) {
+  if (!$rows) {
+    return array();
+  }
+
+  $nids = array();
+  foreach ($rows as $row) {
+    $nids[] = (int) $row->nid;
+  }
+
+  if (user_access('bypass node access') || user_access('edit any ' . MYAPI_SERVICES_REQUEST_TYPE . ' content')) {
+    return array_fill_keys($nids, TRUE);
+  }
+
+  $map = array();
+  foreach (node_load_multiple($nids) as $nid => $node) {
+    $map[(int) $nid] = (bool) node_access('update', $node);
+  }
+
+  return $map;
+}
+
+/* ---------------------------------------------------------------------------
+ * Filter form.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Builds the filter form of the service-requests listing.
+ *
+ * #method = 'get', same criterion as myapi_claims_list_filter_form() and
+ * myapi_reservation_calendar_filter_form(): every filter ends up in the query
+ * string, so the URL is linkable and the pager keeps the filters across pages.
+ * Drupal's own hidden fields are dropped by the SAME after-build callback the
+ * calendar and the claims listing use — it is entirely generic, it only unsets
+ * three keys — so it is reused rather than copied.
+ *
+ * @param array $form
+ * @param array $form_state
+ * @param array $filters
+ *   Validated filters, used as defaults.
+ * @param array $condominium_options
+ *   nid => title, already narrowed to the reader's scope.
+ * @param array $category_options
+ *   tid => name.
+ */
+function myapi_service_requests_list_filter_form($form, &$form_state, $filters, $condominium_options, $category_options) {
+  $form['#method'] = 'get';
+  // Hook for css/myapi.claims.css, which lays the filters out on one row. The
+  // claims sheet and not one of its own: it is the same row (SPEC 125).
+  $form['#attributes']['class'][] = 'myapi-service-requests-filters';
+  // No CSRF token: a read-only GET filter has nothing to forge, and the token
+  // would show up in the URL.
+  $form['#token'] = FALSE;
+  $form['#after_build'][] = 'myapi_reservation_calendar_filter_form_after_build';
+  $form['#action'] = url('admin/content/service-requests');
+
+  // With clean URLs off the path itself travels in ?q=, and a browser
+  // submitting a GET form replaces the whole query string of the action — see
+  // myapi_reservation_calendar_filter_form() for the same fix.
+  if (!variable_get('clean_url', 0)) {
+    $form['q'] = array(
+      '#type'  => 'hidden',
+      '#value' => 'admin/content/service-requests',
+    );
+  }
+
+  $form['condominium'] = array(
+    '#type'          => 'select',
+    '#title'         => t('Condominio'),
+    '#options'       => array('' => t('- Todos -')) + $condominium_options,
+    '#default_value' => $filters['condominium'] === NULL ? '' : $filters['condominium'],
+  );
+
+  $form['status'] = array(
+    '#type'          => 'select',
+    '#title'         => t('Estado'),
+    '#options'       => array('' => t('- Todos -')) + myapi_service_requests_status_options(),
+    '#default_value' => $filters['status'] === NULL ? '' : $filters['status'],
+  );
+
+  $form['category'] = array(
+    '#type'          => 'select',
+    '#title'         => t('Categoría'),
+    '#options'       => array('' => t('- Todas -')) + $category_options,
+    '#default_value' => $filters['category'] === NULL ? '' : $filters['category'],
+  );
+
+  // Native HTML5 date inputs, written by hand for the same reason the calendar
+  // and the claims listing write theirs: theme_textfield() forces type="text"
+  // and would undo an #attributes override. A browser without support renders
+  // a plain text box, which still submits 'YYYY-MM-DD' if typed by hand.
+  $form['date_from'] = array(
+    '#type'   => 'item',
+    '#title'  => t('Fecha de creación desde'),
+    '#markup' => '<input type="date" name="date_from" value="' . check_plain((string) $filters['date_from']) . '" />',
+  );
+  $form['date_to'] = array(
+    '#type'   => 'item',
+    '#title'  => t('Fecha de creación hasta'),
+    '#markup' => '<input type="date" name="date_to" value="' . check_plain((string) $filters['date_to']) . '" />',
+  );
+
+  $form['submit'] = array(
+    '#type'  => 'submit',
+    '#value' => t('Filtrar'),
+  );
+
+  return $form;
+}
+
+/* ---------------------------------------------------------------------------
+ * Page.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Page callback of admin/content/service-requests.
+ *
+ * Read-only from end to end: it validates the filters, runs ONE paginated
+ * query and renders a table. Nothing here creates, edits or cancels a request
+ * — the row links to Drupal's own node pages and this module owns no screen of
+ * its own for that. There is deliberately no "create" button either, unlike
+ * the claims listing: a service request is born in the app, from a resident,
+ * and the back office has no business inventing one.
+ */
+function myapi_service_requests_list_page() {
+  module_load_include('inc', 'myapi', 'includes/myapi.reservation_calendar');
+
+  drupal_add_css(drupal_get_path('module', 'myapi') . '/css/myapi.claims.css');
+
+  // SPEC 49: NULL for a user who sees every condominium ('administrator',
+  // 'backend'), the assigned list (possibly empty) for an 'administrador
+  // edificio'. Everything below flows from it, same as the calendar and the
+  // claims listing.
+  $scope = myapi_calendar_condominium_scope();
+  $condominium_options = myapi_calendar_condominium_options($scope);
+
+  $requested = isset($_GET['condominium']) ? myapi_calendar_positive_int($_GET['condominium']) : NULL;
+  $condominium = myapi_calendar_effective_condominium($requested, $scope);
+
+  $filters = myapi_service_requests_list_filters();
+  $category_options = myapi_service_requests_category_options();
+
+  // A list (rather than a single nid) means no single condominium of this
+  // user's was named — either none at all or somebody else's — so the select
+  // must show nothing chosen and the query gets no condominium filter of its
+  // own. The rows are still restricted to the assigned set: that is what
+  // ->addTag('node_access') does, not this filter.
+  $filters['condominium'] = is_array($condominium) ? NULL : $condominium;
+  $filters['category'] = myapi_service_requests_effective_category($filters['category'], $category_options);
+
+  $range = myapi_service_requests_created_range($filters['date_from'], $filters['date_to']);
+
+  $query = myapi_service_requests_list_rows(
+    $filters['condominium'],
+    $filters['status'],
+    $filters['category'],
+    $range['from'],
+    $range['to']
+  );
+  $rows = $query->execute()->fetchAll();
+
+  $build = array();
+
+  $build['filters'] = drupal_get_form(
+    'myapi_service_requests_list_filter_form',
+    $filters,
+    $condominium_options,
+    $category_options
+  );
+
+  $build['table'] = array(
+    '#theme'  => 'table',
+    '#header' => array(
+      t('ID'),
+      t('Título'),
+      t('Condominio'),
+      t('Estado'),
+      t('Solicitante'),
+      t('Fecha de creación'),
+      t('Fecha deseada'),
+      t('Categoría'),
+      t('Proveedor adjudicado'),
+    ),
+    '#rows'   => myapi_service_requests_list_table_rows($rows, myapi_service_requests_editable_map($rows)),
+    '#empty'  => t('No hay solicitudes de servicio para mostrar.'),
+  );
+
+  $build['pager'] = array(
+    '#markup' => theme('pager'),
+  );
+
+  return $build;
+}

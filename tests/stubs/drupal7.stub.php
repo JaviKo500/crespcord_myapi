@@ -685,6 +685,13 @@ function node_load(...$arguments) {}
  *
  * @return mixed
  */
+function node_load_multiple(...$arguments) {}
+
+/**
+ * @param mixed ...$arguments
+ *
+ * @return mixed
+ */
 function node_object_prepare(...$arguments) {}
 
 /**

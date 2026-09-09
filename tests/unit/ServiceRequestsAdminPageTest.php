@@ -42,16 +42,23 @@ require_once __DIR__ . '/../../includes/myapi.service_requests_admin.inc';
 class ServiceRequestsAdminPageTest extends TestCase {
 
   protected function setUp(): void {
-    myapi_test_db_seed();
-    myapi_test_static_reset();
-    myapi_test_taxonomy_seed();
-    $_GET = [];
+    $this->reset();
   }
 
   protected function tearDown(): void {
+    $this->reset();
+  }
+
+  private function reset() {
     myapi_test_db_seed();
     myapi_test_static_reset();
     myapi_test_taxonomy_seed();
+    myapi_test_node_seed();
+    $GLOBALS['myapi_test_permissions'] = [];
+    $GLOBALS['myapi_test_node_access'] = [];
+    $GLOBALS['myapi_test_node_access_calls'] = [];
+    $GLOBALS['myapi_test_node_load_multiple'] = [];
+    unset($GLOBALS['myapi_test_node_access_default']);
     $_GET = [];
   }
 
@@ -463,6 +470,73 @@ class ServiceRequestsAdminPageTest extends TestCase {
    */
   public function testNoRowsProduceNoCells() {
     $this->assertSame([], myapi_service_requests_list_table_rows([], []));
+  }
+
+  /* -------------------------------------------------------------------------
+   * Who may edit what.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * An 'administrator' edits everything and the page loads NO node to find
+   * that out: 'bypass node access' answers for every row at once.
+   */
+  public function testBypassNodeAccessSkipsTheNodeLoadEntirely() {
+    $GLOBALS['myapi_test_permissions']['bypass node access'] = TRUE;
+
+    $map = myapi_service_requests_editable_map([$this->listRow(), $this->listRow(['nid' => 313])]);
+
+    $this->assertSame([312 => TRUE, 313 => TRUE], $map);
+    $this->assertSame([], myapi_test_node_load_multiple_calls(), 'no node is loaded on the fast path');
+    $this->assertSame([], $GLOBALS['myapi_test_node_access_calls']);
+  }
+
+  /**
+   * And so does the 'backend' operator this page was built for, through the
+   * bundle permission.
+   */
+  public function testTheEditAnyPermissionAlsoSkipsTheNodeLoad() {
+    $GLOBALS['myapi_test_permissions']['edit any ' . MYAPI_SERVICES_REQUEST_TYPE . ' content'] = TRUE;
+
+    $this->assertSame([312 => TRUE], myapi_service_requests_editable_map([$this->listRow()]));
+    $this->assertSame([], myapi_test_node_load_multiple_calls());
+  }
+
+  /**
+   * A reader with neither permission — an 'administrador edificio', which by
+   * design holds no write permission over this bundle — falls to Drupal's own
+   * per-node decision, resolved in ONE batch and not one load per row.
+   */
+  public function testWithoutAPermissionEachNodeIsAskedInOneBatch() {
+    $GLOBALS['myapi_test_node_access']['update:312'] = FALSE;
+    $GLOBALS['myapi_test_node_access']['update:313'] = TRUE;
+    myapi_test_node_seed([
+      312 => ['nid' => 312, 'type' => MYAPI_SERVICES_REQUEST_TYPE],
+      313 => ['nid' => 313, 'type' => MYAPI_SERVICES_REQUEST_TYPE],
+    ]);
+
+    $map = myapi_service_requests_editable_map([$this->listRow(), $this->listRow(['nid' => 313])]);
+
+    $this->assertSame([312 => FALSE, 313 => TRUE], $map);
+    $this->assertSame([[312, 313]], myapi_test_node_load_multiple_calls(), 'one batch, not one load per row');
+  }
+
+  /**
+   * A nid whose node cannot be loaded is simply absent from the map, which
+   * myapi_service_requests_list_table_rows() reads as "not editable" — the
+   * link that never 403s.
+   */
+  public function testAnUnloadableNodeIsAbsentFromTheMap() {
+    myapi_test_node_seed([]);
+
+    $this->assertSame([], myapi_service_requests_editable_map([$this->listRow()]));
+  }
+
+  /**
+   * An empty listing asks nothing of anybody.
+   */
+  public function testNoRowsResolveNoPermissions() {
+    $this->assertSame([], myapi_service_requests_editable_map([]));
+    $this->assertSame([], myapi_test_node_load_multiple_calls());
   }
 
   /* -------------------------------------------------------------------------

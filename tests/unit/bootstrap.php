@@ -3116,6 +3116,40 @@ if (!function_exists('node_load')) {
   }
 }
 
+if (!function_exists('node_load_multiple')) {
+  /**
+   * The batched sibling of node_load(), nid-keyed (SPEC 125).
+   *
+   * Faithful to Drupal in the two things the back-office listing depends on:
+   * the answer is KEYED BY nid, and a nid with no node is simply ABSENT from
+   * it rather than present as FALSE. Both matter to
+   * myapi_service_requests_editable_map(), which builds a nid => bool map out
+   * of the result and treats a missing nid as "not editable".
+   *
+   * The call is recorded so a test can prove the page resolves its edit links
+   * in ONE batch instead of one node_load() per row.
+   */
+  function node_load_multiple($nids = [], $conditions = [], $reset = FALSE) {
+    $GLOBALS['myapi_test_node_load_multiple'][] = $nids;
+
+    $loaded = [];
+    foreach ((array) $nids as $nid) {
+      if (isset($GLOBALS['myapi_test_nodes'][(int) $nid])) {
+        $loaded[(int) $nid] = $GLOBALS['myapi_test_nodes'][(int) $nid];
+      }
+    }
+
+    return $loaded;
+  }
+}
+
+/**
+ * Every batched node load since the last reset, in order (SPEC 125).
+ */
+function myapi_test_node_load_multiple_calls() {
+  return isset($GLOBALS['myapi_test_node_load_multiple']) ? $GLOBALS['myapi_test_node_load_multiple'] : [];
+}
+
 if (!function_exists('file_load')) {
   function file_load($fid) {
     return isset($GLOBALS['myapi_test_files'][(int) $fid])
