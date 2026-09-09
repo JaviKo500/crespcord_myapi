@@ -30,8 +30,8 @@
  *   user_role_load_by_name(), user_load(), node_load(), node_type_load().
  *
  * The catalogue functions sit in between: they accept an explicit
- * $include_claim_type argument (pure when passed) and only fall back to
- * node_type_load() when it is omitted.
+ * $include_claim_type / $include_request_type argument (pure when passed) and
+ * only fall back to node_type_load() when it is omitted.
  */
 
 // Literal role name, lower case, as agreed with the client. Compared by name
@@ -65,6 +65,21 @@ if (!defined('MYAPI_BUILDING_ADMIN_CLAIM_TYPE')) {
 // a site without the bundle is unaffected.
 if (!defined('MYAPI_BUILDING_ADMIN_TRANSACTION_TYPE')) {
   define('MYAPI_BUILDING_ADMIN_TRANSACTION_TYPE', 'claim_transaction');
+}
+
+// Machine name of the service-request bundle (SPEC 77), which SPEC 125 brings
+// into this role's READ-ONLY domain. Same guard criterion as the two above:
+// isolated in a constant and always crossed against node_type_load() before
+// being listed, so a site without the services bundles is unaffected.
+//
+// It is declared here and not read from MYAPI_SERVICES_REQUEST_TYPE
+// (includes/myapi.services_common.inc) on purpose: this file is required
+// bare by tests/unit/BuildingAdminTest.php with no Drupal and no other
+// include, exactly like MYAPI_BUILDING_ADMIN_CLAIM_TYPE is 'reclamo' here and
+// not a constant borrowed from the claims files. The guard makes the two
+// definitions harmless side by side.
+if (!defined('MYAPI_BUILDING_ADMIN_REQUEST_TYPE')) {
+  define('MYAPI_BUILDING_ADMIN_REQUEST_TYPE', 'service_request');
 }
 
 // The only field_tipo_de_boletin value this role may publish. That field is a
@@ -101,8 +116,8 @@ if (!defined('MYAPI_BUILDING_ADMIN_USER_PERMISSION')) {
 /* ---------------------------------------------------------------------------
  * Catalogues.
  *
- * Pure when $include_claim_type is passed explicitly; they only touch Drupal
- * (node_type_load) when it is omitted.
+ * Pure when $include_claim_type / $include_request_type are passed explicitly;
+ * they only touch Drupal (node_type_load) when one is omitted.
  * ------------------------------------------------------------------------ */
 
 /**
@@ -168,15 +183,44 @@ function myapi_building_admin_editable_types($include_claim_type = NULL) {
  *   building operator needs to consult the units of their building — and who
  *   lives in them — without being able to touch them. It reverses one of the
  *   spec's acceptance criteria; see the note in specs/roles/49-building-admin-role.md.
+ * - 'service_request' joined them in SPEC 125, for the same reason and with the
+ *   same limit: the operator needs to see the service requests of their
+ *   buildings — the back-office listing at admin/content/service-requests is
+ *   built on top of exactly this — and must not move one forward. A request
+ *   advances through myapi_services_request_transitions() (SPEC 77) and the
+ *   endpoints that honour it, never through a node form. THIS IS THE WHOLE
+ *   DIFFERENCE with what SPEC 56 did for 'reclamo', which went to the editable
+ *   catalogue: moving the bundle over there grants 'create service_request
+ *   content' and 'edit any service_request content' without another line
+ *   changing anywhere, and testNoWritePermissionOverServiceRequestsIsEverGranted()
+ *   is what makes that a deliberate act.
  *
- * Both are scoped by the condominium map exactly like the editable types, so a
- * 'vivienda' of another building stays invisible and answers 403.
+ * All three are scoped by the condominium map exactly like the editable types,
+ * so a 'vivienda' of another building stays invisible and answers 403.
+ *
+ * @param bool|null $include_request_type
+ *   TRUE/FALSE to force whether the service-request bundle is included. NULL
+ *   (the default) resolves it with node_type_load(), which is what callers
+ *   inside Drupal want. Same criterion as $include_claim_type in
+ *   myapi_building_admin_editable_types(), and the reason the unit suite —
+ *   which has no site to load a type from — always passes it explicitly.
  *
  * @return array
  *   List of node type machine names.
  */
-function myapi_building_admin_readonly_types() {
-  return ['condominio', 'vivienda'];
+function myapi_building_admin_readonly_types($include_request_type = NULL) {
+  $types = ['condominio', 'vivienda'];
+
+  $include_request = $include_request_type;
+  if ($include_request_type === NULL) {
+    $include_request = (bool) node_type_load(MYAPI_BUILDING_ADMIN_REQUEST_TYPE);
+  }
+
+  if ($include_request) {
+    $types[] = MYAPI_BUILDING_ADMIN_REQUEST_TYPE;
+  }
+
+  return $types;
 }
 
 /**
@@ -185,16 +229,24 @@ function myapi_building_admin_readonly_types() {
  * The editable ones plus the read-only ones. This is the list the query alter
  * narrows every node_access-tagged query to.
  *
+ * SINCE SPEC 125 IT IS ALSO THE LIST myapi_query_node_access_alter() HANDS TO
+ * THE PROVIDER ROLE AS ITS EXEMPT TYPES, and 'service_request' now travels in
+ * it. That is not a side effect to tidy up later: it is what keeps an operator
+ * who holds 'backend' and 'proveedor' at once from seeing the back-office
+ * listing narrowed to the categories they attend. See the call site.
+ *
  * @param bool|null $include_claim_type
  *   See myapi_building_admin_editable_types().
+ * @param bool|null $include_request_type
+ *   See myapi_building_admin_readonly_types().
  *
  * @return array
  *   List of node type machine names.
  */
-function myapi_building_admin_visible_types($include_claim_type = NULL) {
+function myapi_building_admin_visible_types($include_claim_type = NULL, $include_request_type = NULL) {
   return array_merge(
     myapi_building_admin_editable_types($include_claim_type),
-    myapi_building_admin_readonly_types()
+    myapi_building_admin_readonly_types($include_request_type)
   );
 }
 
@@ -353,6 +405,10 @@ function myapi_building_admin_condominium_map() {
     // 'reclamo' node; its condominium field is read from the claim's own
     // entry above rather than hard-coded here a second time.
     MYAPI_BUILDING_ADMIN_TRANSACTION_TYPE => ['mode' => 'via_claim', 'field' => 'field_claim'],
+    // SPEC 125. 'direct' and not a hop: field_condominium is REQUIRED on the
+    // bundle since it was created (myapi.install, SPEC 77), so every request
+    // carries its condominium and there is no legacy row to fall back for.
+    MYAPI_BUILDING_ADMIN_REQUEST_TYPE => ['mode' => 'direct', 'field' => 'field_condominium'],
   ];
 }
 
