@@ -161,15 +161,24 @@ function myapi_service_request_file_fid_by_uri($uri) {
  * this line is where the divergence gets written.
  *
  * The condominium scoping is NOT delegated to
- * myapi_building_admin_node_condominium(): 'service_request' is deliberately
- * absent from myapi_building_admin_condominium_map(), so that resolver answers
- * NULL for this bundle and NULL means "out of the rule" — which would hand a
- * building admin the photos of every request of the site. Adding the bundle to
- * that map would change hook_node_access() for it, which is a permission
- * change and out of SPEC 89's scope. So the condominium is read here from
- * field_condominium — required on this bundle since SPEC 77 — with the same
- * pure helper the map-driven path uses, and handed to the same decision
- * function, so the two cannot answer differently about the same pair.
+ * myapi_building_admin_node_condominium(), and the reason CHANGED under this
+ * function's feet without its answer changing. SPEC 89 wrote it because
+ * 'service_request' was deliberately absent from
+ * myapi_building_admin_condominium_map(): that resolver answered NULL for the
+ * bundle, NULL means "out of the rule", and going through it would have
+ * handed a building admin the photos of every request of the site. SPEC 125
+ * then put the bundle IN that map — as 'direct' over field_condominium, which
+ * is the very field read below — so today the resolver would answer exactly
+ * the same id this code reads by hand.
+ *
+ * The direct read stays, on purpose. It is the ONE thing standing between
+ * this access decision and the map, and the map is a shared catalogue that
+ * changes for reasons that have nothing to do with private files: the day a
+ * bundle is moved, or a mode is changed from 'direct' to a hop, the files of
+ * a request must not silently start answering to somebody else's rule. What
+ * IS shared is what should be — the same pure field reader and the same
+ * decision function — so the two paths cannot disagree about the same pair
+ * while they agree about the field.
  *
  * uid 1 is let in explicitly, same guard and same reason as
  * myapi_claims_file_access(): the superuser bypass lives inside user_access(),

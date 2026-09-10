@@ -809,6 +809,25 @@ function myapi_menu() {
     'file'             => 'includes/myapi.service_requests_admin.inc',
   ];
 
+  // Back-office service-request supervision detail (SPEC 126). A child of the
+  // listing just above and MENU_CALLBACK, not MENU_NORMAL_ITEM: it is only
+  // ever reached from the ID column of that listing, and a menu entry with a
+  // wildcard in it has nothing to point at.
+  //
+  // %node and not %: core's loader answers the 404 of a nid that does not
+  // exist, hands the access callback the object node_access() needs, and
+  // brings field_attachment and field_images already loaded, which is what
+  // makes the attachments block of that screen cost no query at all.
+  $items['admin/content/service-requests/%node'] = [
+    'title'            => 'Solicitud de servicio',
+    'page callback'    => 'myapi_service_request_admin_detail_page',
+    'page arguments'   => [3],
+    'access callback'  => 'myapi_service_request_admin_detail_access',
+    'access arguments' => [3],
+    'type'             => MENU_CALLBACK,
+    'file'             => 'includes/myapi.service_request_detail_admin.inc',
+  ];
+
   // Claim transaction creation page (SPEC 57). Same non-api/v1 pattern as
   // admin/content/claims just above: HTML for an operator, not the JSON
   // envelope. MENU_CALLBACK (not a menu-visible item) since it is only ever
@@ -1056,6 +1075,59 @@ function myapi_service_requests_admin_access() {
   }
 
   return (bool) array_intersect($user->roles, myapi_service_requests_admin_roles());
+}
+
+/**
+ * Access callback of admin/content/service-requests/%node (SPEC 126).
+ *
+ * Three conditions, and none of them written twice:
+ *
+ *   1. The node is a 'service_request'. Without this line the route renders a
+ *      supervision screen over any node id of the site — every field empty,
+ *      but the timeline and the offers of nothing, and the URL readable as a
+ *      directory of node ids.
+ *   2. The reader holds one of the three roles of the listing. It is
+ *      myapi_service_requests_admin_access() ITSELF and not a second list, so
+ *      the day a fourth role may supervise, it is granted in one place. uid 1
+ *      is let in there, by the same guard as every other callback of this
+ *      file.
+ *   3. node_access('view', $node).
+ *
+ * THE THIRD IS THE CONDOMINIUM SCOPE, AND IT IS DELIBERATELY NOT A LIST OF
+ * CONDOMINIUMS WRITTEN HERE. The listing scopes itself with
+ * ->addTag('node_access'), which is the same rule read over a query; a screen
+ * showing ONE record scopes itself with node_access() over that record. Since
+ * SPEC 125 put 'service_request' in myapi_building_admin_condominium_map(),
+ * myapi_node_access() answers it for an 'administrador edificio': their own
+ * condominiums, and 403 for anybody else's. Comparing field_condominium
+ * against the assigned list here would work today and drift the day that rule
+ * moves — decision 2 of SPEC 125, read from the per-node side.
+ *
+ * A 'backend' who also holds 'proveedor' is the known anomaly of SPEC 125's
+ * risk 1: myapi_node_access() consults the provider rule without looking at
+ * any exempt list, so that account sees the row in the listing and receives
+ * 403 here. It is a configuration anomaly, documented in
+ * docs/service-request-admin-detail.md, and it is not fixed by weakening this
+ * callback.
+ *
+ * @param object $node
+ *   The node loaded from the %node wildcard.
+ *
+ * @return bool
+ *   TRUE when the current user may open the supervision detail.
+ */
+function myapi_service_request_admin_detail_access($node) {
+  module_load_include('inc', 'myapi', 'includes/myapi.services_common');
+
+  if (!is_object($node) || empty($node->type) || $node->type !== MYAPI_SERVICES_REQUEST_TYPE) {
+    return FALSE;
+  }
+
+  if (!myapi_service_requests_admin_access()) {
+    return FALSE;
+  }
+
+  return (bool) node_access('view', $node);
 }
 
 /**

@@ -513,6 +513,36 @@ function myapi_service_requests_provider_label($row) {
 }
 
 /**
+ * The link of the ID cell: the supervision detail of SPEC 126.
+ *
+ * THE SAME DESTINATION FOR EVERY READER, unlike the title cell right below:
+ * the detail is read-only and its three roles are exactly the three roles of
+ * this listing, so there is nothing per-reader to decide. An
+ * 'administrador edificio' whose condominium does not own the request never
+ * sees the row in the first place — the node_access tag on the query already
+ * took it out — so the link can never lead to a 403 the listing did not
+ * already prevent.
+ *
+ * THE ID AND NOT A TENTH COLUMN, and not the title either (SPEC 126,
+ * decision 4). The title already means "open the node" and its destination
+ * depends on the reader's permission; repointing it would cost 'backend' the
+ * one-click path to the form where transactions are created. The id is the
+ * record's identity, so linking it to the record's own screen costs a cell
+ * and no column.
+ *
+ * @param object $row
+ *   Row from myapi_service_requests_list_rows().
+ *
+ * @return string
+ *   The rendered link; l() escapes the text.
+ */
+function myapi_service_requests_detail_link($row) {
+  $nid = (int) $row->nid;
+
+  return l((string) $nid, 'admin/content/service-requests/' . $nid);
+}
+
+/**
  * The link of the title cell: node/%nid/edit, or node/%nid for a reader who
  * cannot edit.
  *
@@ -550,6 +580,14 @@ function myapi_service_requests_title_link($row, $can_edit) {
  * one degrades on its own, so a half-filled request keeps its row: this is the
  * screen where a broken request gets found.
  *
+ * TWO OF THE NINE ARE LINKS, and they go to different places on purpose. The
+ * ID opens the read-only supervision detail of SPEC 126, the same screen for
+ * every reader; the title opens the node, and whether that is its editing
+ * form depends on the reader. A request the detail query cannot read — no
+ * category, no requester — still has a working ID link: that screen diagnoses
+ * it instead of answering 404, which is the whole reason the listing may show
+ * a row the detail query cannot.
+ *
  * @param array $rows
  *   Rows fetched from myapi_service_requests_list_rows().
  * @param array $editable
@@ -567,7 +605,7 @@ function myapi_service_requests_list_table_rows(array $rows, array $editable) {
     $nid = (int) $row->nid;
 
     $table_rows[] = array(
-      $nid,
+      myapi_service_requests_detail_link($row),
       myapi_service_requests_title_link($row, !empty($editable[$nid])),
       myapi_service_requests_text_label($row->condominium_title),
       myapi_service_requests_status_label($row->status),

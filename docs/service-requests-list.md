@@ -6,9 +6,16 @@ endpoint: it returns HTML, never the JSON envelope, and **no endpoint under
 `api/v1/` is involved or changed by it** (SPEC 125).
 
 It shows every request visible to the current user with five GET filters and
-Drupal's own pager. It never creates, edits or cancels anything: each row links
-to Drupal's own `node/<nid>/edit` or `node/<nid>`, there is no page of this
-module's own for either, and no AJAX of any kind.
+Drupal's own pager. It never creates, edits or cancels anything: the **title**
+of each row links to Drupal's own `node/<nid>/edit` or `node/<nid>`, there is
+no page of this module's own for either, and no AJAX of any kind.
+
+The **ID** of each row links to the read-only supervision detail of SPEC 126,
+`admin/content/service-requests/<nid>` — see
+[`service-request-admin-detail.md`](service-request-admin-detail.md). Two links
+leave each row on purpose: the detail is the same screen for every reader and
+carries no write control at all, while the title is where the reader who may
+edit reaches the editing form.
 
 **There is deliberately no "create" button**, unlike `admin/content/claims`. A
 service request is born in the app, from a resident, and moves forward through
@@ -250,7 +257,7 @@ The row-level restriction is **not** implemented by this filter: it comes from
 
 | Column | Source | When empty or the reference is deleted |
 |---|---|---|
-| ID | `n.nid` | — always present |
+| ID | `n.nid`, linked to the supervision detail (see below) | — always present |
 | Título | `n.title`, linked (see below) | Empty title: the link text falls back to the nid, so the row stays clickable |
 | Condominio | `field_condominium` → the condominium's title | `—` |
 | Estado | `field_request_status`, labelled from `myapi_services_request_statuses()` | `—`. A value outside the catalogue prints **raw**, on purpose: that is a request edited by hand and the operator has to see it |
@@ -280,6 +287,17 @@ shows an em dash in that cell.
 
 Only **published** requests (`node.status = 1`) of type `service_request` are
 listed.
+
+### The two links of a row
+
+| Cell | Target | Depends on the reader |
+|---|---|---|
+| ID | `admin/content/service-requests/<nid>` — the read-only supervision detail (SPEC 126) | No. The three roles that see the listing are the three roles that see the detail, and a row an `administrador edificio` cannot open is a row the `node_access` tag already removed from their listing |
+| Título | `node/<nid>/edit` or `node/<nid>` | Yes — see below |
+
+The ID and not a tenth column, and not the title: the title already means
+"open the node" and repointing it would cost `backend` the one-click path to
+the form where transactions are created (SPEC 126, decision 4).
 
 ### The title link is per reader
 

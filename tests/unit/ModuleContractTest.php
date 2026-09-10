@@ -51,6 +51,7 @@ class ModuleContractTest extends TestCase {
     'admin/content/reservation-calendar',
     'admin/content/claims',
     'admin/content/service-requests',
+    'admin/content/service-requests/%node',
     'node/%node/claim-transaction/add',
     'node/%node/service-transaction/add',
     'node/%node/service-transaction/%node/delete',

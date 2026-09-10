@@ -386,7 +386,7 @@ class ServiceRequestsAdminPageTest extends TestCase {
 
     $this->assertCount(1, $rows);
     $this->assertCount(9, $rows[0]);
-    $this->assertSame(312, $rows[0][0], 'the id is an int');
+    $this->assertSame('<a href="/admin/content/service-requests/312">312</a>', $rows[0][0], 'the id opens the supervision detail (SPEC 126)');
     $this->assertSame('<a href="/node/312/edit">Cambio de bomba de agua</a>', $rows[0][1]);
     $this->assertSame('Edificio El Sáuco', $rows[0][2]);
     $this->assertSame('Asignada', $rows[0][3]);
@@ -395,6 +395,22 @@ class ServiceRequestsAdminPageTest extends TestCase {
     $this->assertSame('10/09/2026 08:00', $rows[0][6]);
     $this->assertSame('Plomería', $rows[0][7]);
     $this->assertSame('Plomería Sur', $rows[0][8]);
+  }
+
+  /**
+   * The ID cell is the door to the supervision detail (SPEC 126), and it is
+   * the SAME destination whatever the reader may or may not edit — unlike the
+   * title right next to it. The two links leaving the same row on purpose is
+   * what lets the detail stay read-only without costing 'backend' its
+   * one-click path to the editing form.
+   */
+  public function testTheIdOpensTheSupervisionDetailForEveryReader() {
+    $editable = myapi_service_requests_list_table_rows([$this->listRow()], [312 => TRUE]);
+    $read_only = myapi_service_requests_list_table_rows([$this->listRow()], [312 => FALSE]);
+
+    $this->assertSame('<a href="/admin/content/service-requests/312">312</a>', $editable[0][0]);
+    $this->assertSame($editable[0][0], $read_only[0][0], 'the detail link does not depend on the edit permission');
+    $this->assertNotSame($editable[0][1], $read_only[0][1], 'the title link still does');
   }
 
   /**
