@@ -503,6 +503,81 @@ class NotificationEndpointTest extends TestCase {
   }
 
   /**
+   * A PROVIDER notice survives every scope, exactly like a global one.
+   *
+   * THE PRODUCTION BUG THIS RULE EXISTS FOR. The condominium of a provider row
+   * is the condominium of the request — the resident's — and an account that
+   * holds both 'usuario' and 'proveedor' asks for its inbox scoped to the
+   * condominium it LIVES in. Under the plain rule every service notice it
+   * received disappeared from the list, from the total and from the badge,
+   * while the row was in the table and the push had already arrived.
+   */
+  public function testAProviderNoticeSurvivesEveryScope() {
+    $this->seed([
+      [
+        'id'          => 1,
+        'condominium' => self::OTHER_CONDOMINIUM,
+        'target'      => 'service_request_provider',
+        'provider'    => 553,
+      ],
+      ['id' => 2, 'condominium' => self::CONDOMINIUM],
+    ]);
+
+    $_GET = ['condominium' => (string) self::CONDOMINIUM];
+    $this->assertSame([2, 1], $this->ids($this->listRequest()));
+
+    $_GET = ['condominium' => (string) self::OTHER_CONDOMINIUM, 'unit' => (string) self::UNIT];
+    $this->assertSame([1], $this->ids($this->listRequest()));
+  }
+
+  /**
+   * THE DISCRIMINATOR IS THE TARGET, NOT provider_id. The offer-received
+   * notice of SPEC 110 goes to the RESIDENT and carries a provider_id as
+   * context (which provider quoted); it is a condominium notice like any
+   * other and stays scoped. Reading provider_id instead would have made every
+   * resident of a multi-condominium account see it out of context.
+   */
+  public function testAResidentNoticeCarryingAProviderIsStillScoped() {
+    $this->seed([
+      [
+        'id'          => 1,
+        'condominium' => self::OTHER_CONDOMINIUM,
+        'target'      => 'service_request',
+        'provider'    => 553,
+      ],
+      ['id' => 2, 'condominium' => self::CONDOMINIUM],
+    ]);
+    $_GET = ['condominium' => (string) self::CONDOMINIUM];
+
+    $this->assertSame([2], $this->ids($this->listRequest()));
+  }
+
+  /**
+   * The exemption reaches the three queries, like the rest of the scope: a
+   * badge that counted the provider notice out of a list that shows it would
+   * be the same disagreement the scope helper exists to prevent.
+   */
+  public function testTheProviderExemptionReachesTheTotalAndTheBadge() {
+    $this->seed([
+      [
+        'id'          => 1,
+        'condominium' => self::OTHER_CONDOMINIUM,
+        'target'      => 'service_request_provider',
+        'provider'    => 553,
+        'is_read'     => 0,
+      ],
+      ['id' => 2, 'condominium' => self::OTHER_CONDOMINIUM, 'is_read' => 0],
+    ]);
+    $_GET = ['condominium' => (string) self::CONDOMINIUM];
+
+    $result = $this->listRequest();
+
+    $this->assertSame([1], $this->ids($result));
+    $this->assertSame(1, $result['json']['data']['pagination']['total']);
+    $this->assertSame(1, $result['json']['data']['unread_count']);
+  }
+
+  /**
    * Both scope parameters are LAX: a malformed value is treated as absent and
    * never answers a 422 — the back-compatible behaviour for clients that never
    * send them.

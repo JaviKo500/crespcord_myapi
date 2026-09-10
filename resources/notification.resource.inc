@@ -17,6 +17,20 @@ module_load_include('inc', 'myapi', 'includes/myapi.token');
 module_load_include('inc', 'myapi', 'includes/myapi.auth');
 
 /**
+ * Deep link target carried by every notification addressed to a PROVIDER.
+ *
+ * Canonical home: includes/myapi.service_request_notification.inc, where the
+ * five provider-facing triggers write it (SPEC 109, 112, 113, 114). Repeated
+ * here, guarded on both sides, because this resource needs the value to decide
+ * visibility — see myapi_notification_apply_scope() — and loading the whole
+ * trigger include for one string would be waste. The two definitions must move
+ * together.
+ */
+if (!defined('MYAPI_NOTIFICATION_DEEP_LINK_SERVICE_REQUEST_PROVIDER')) {
+  define('MYAPI_NOTIFICATION_DEEP_LINK_SERVICE_REQUEST_PROVIDER', 'service_request_provider');
+}
+
+/**
  * Dispatcher for /api/v1/notifications. Only GET is supported.
  */
 function myapi_notification_dispatch() {
@@ -209,11 +223,28 @@ function myapi_notification_mark_all_read() {
  * The visibility rules (a notification with no context is broader, not hidden):
  *   - A row with condominium_id NULL is always visible (global notification),
  *     regardless of the requested scope.
+ *   - A row addressed to a PROVIDER is always visible too, for the same
+ *     reason and a different cause — see below.
  *   - Otherwise the row must match the requested condominium, and either have no
  *     unit (unit_id NULL, visible to the whole condominium) or match the
  *     requested unit.
  *   - When no unit is requested, the unit constraint is dropped: every unit of
  *     the requested condominium (and the condominium-wide rows) is visible.
+ *
+ * WHY A PROVIDER NOTICE IGNORES THE SCOPE. The condominium of a provider row is
+ * the condominium of the REQUEST — the resident's, never the provider's, who as
+ * a rule does not live there. The scope was designed for a resident switching
+ * between the condominiums they belong to, and applied to these rows it hides
+ * them all: an account holding both the 'usuario' and 'proveedor' roles asks
+ * for its inbox with its own condominium and receives no service notice at all,
+ * while the rows sit in the table and the push already reached the phone. So a
+ * provider row behaves like a row with no condominium: always visible, in the
+ * page, in the total and in the badge.
+ *
+ * The discriminator is the deep link target and NOT provider_id: the
+ * offer-received notice of SPEC 110 goes to the RESIDENT and carries a
+ * provider_id too (context: which provider quoted), and that one is a
+ * condominium notice like any other and must keep being scoped.
  *
  * A NULL $condominium means no scope was requested: the query is left untouched
  * and the full inbox is returned (back-compatible with callers that never send
@@ -240,6 +271,7 @@ function myapi_notification_apply_scope($query, $condominium, $unit) {
   $query->condition(
     db_or()
       ->condition('condominium_id', NULL, 'IS NULL')
+      ->condition('deep_link_target', MYAPI_NOTIFICATION_DEEP_LINK_SERVICE_REQUEST_PROVIDER)
       ->condition($in_condominium)
   );
 }

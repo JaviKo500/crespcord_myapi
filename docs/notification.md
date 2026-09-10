@@ -70,12 +70,28 @@ from that condominium/unit context, following these rules:
 - A notification with **no condominium** (`condominium IS NULL`, e.g. a `General`
   or `Personalizado` bulletin fan-out) is **always visible**, regardless of the
   requested scope.
+- A notification addressed to a **provider** (`deep_link.target =
+  "service_request_provider"`) is **always visible** too. Its `condominium` is
+  the one of the *request* — the resident's — which the provider does not
+  belong to, so scoping it would hide every service notice from an account
+  that is both a resident and a provider. See the note below.
 - Otherwise the notification must belong to the requested `condominium`, and
   either have **no unit** (`unit IS NULL`, condominium-wide) **or** match the
   requested `unit`.
 - When `unit` is absent, the unit constraint is dropped: every notification of
   the requested condominium (plus the always-visible no-condominium ones) is
   returned.
+
+> **Why the provider exemption exists.** An account can hold `usuario` and
+> `proveedor` at once: a resident of condominium A who also works as a
+> provider. Its app asks for the inbox with `?condominium=A`, while every
+> notice it receives as a provider carries the condominium of the requester,
+> B. Without the exemption the list, the `total` and the `unread_count` all
+> came back without them, although the rows were written and the push had
+> already arrived on the phone. The discriminator is the **target** and not
+> `deep_link.provider`: the offer-received notice of SPEC 110 goes to the
+> resident, carries a `provider` as context, and stays scoped like any other
+> condominium notice.
 
 `GET /api/v1/notifications?condominium=333&unit=123` therefore returns: all
 no-condominium notifications, plus condominium `333`'s notifications that are

@@ -94,17 +94,49 @@ class ServiceRequestNotificationTest extends TestCase {
     $this->assertSame('Nueva solicitud directa para ti', myapi_service_request_push_title(TRUE));
   }
 
-  public function testThePushBodyCarriesTheFourLabelledLines() {
+  /**
+   * THE TITLE NEVER NAMES THE PROVIDER. It is the headline of the event, the
+   * same for everybody told about it; what tells two notices of one account
+   * apart is the 'Proveedor' line of the body.
+   */
+  public function testThePushTitleDoesNotNameTheProvider() {
+    $this->assertStringNotContainsString('Plomería Sur', myapi_service_request_push_title(FALSE));
+    $this->assertStringNotContainsString('Plomería Sur', myapi_service_request_push_title(TRUE));
+  }
+
+  public function testThePushBodyCarriesTheFiveLabelledLines() {
     $body = myapi_service_request_push_body(
       'Fuga en el calentador',
+      'Plomería Sur',
       'Plomería',
       'Los Robles',
       myapi_service_request_date_label($this->startTime())
     );
 
     $this->assertSame(
-      "Fuga en el calentador\nCategoría: Plomería\nCondominio: Los Robles\nInicio: 03/09/2026 09:30",
+      "Fuga en el calentador\nProveedor: Plomería Sur\nCategoría: Plomería\nCondominio: Los Robles\nInicio: 03/09/2026 09:30",
       $body
+    );
+  }
+
+  /**
+   * THE REGRESSION THE 'Proveedor' LINE EXISTS FOR. An account that operates
+   * two active providers of the category is notified twice — by design, each
+   * notice carrying its own provider_id — and until the body named the
+   * provider the two were character for character identical, which reads as a
+   * duplicated notification and not as one notice per business.
+   */
+  public function testTheBodiesOfTwoProvidersOfTheSameAccountDoNotReadTheSame() {
+    $arguments = ['Fuga', NULL, 'Plomería', 'Los Robles', '03/09/2026 09:30'];
+
+    $first = $arguments;
+    $first[1] = 'Plomería Sur';
+    $second = $arguments;
+    $second[1] = 'Electro Norte';
+
+    $this->assertNotSame(
+      call_user_func_array('myapi_service_request_push_body', $first),
+      call_user_func_array('myapi_service_request_push_body', $second)
     );
   }
 
@@ -113,7 +145,7 @@ class ServiceRequestNotificationTest extends TestCase {
    * direct request is who is told, not what they are told.
    */
   public function testTheBodyDoesNotDependOnTheKindOfRequest() {
-    $arguments = ['Fuga', 'Plomería', 'Los Robles', '03/09/2026 09:30'];
+    $arguments = ['Fuga', 'Plomería Sur', 'Plomería', 'Los Robles', '03/09/2026 09:30'];
 
     $this->assertSame(
       call_user_func_array('myapi_service_request_push_body', $arguments),
@@ -122,13 +154,13 @@ class ServiceRequestNotificationTest extends TestCase {
   }
 
   /**
-   * A deleted category or a condominium with no title costs a dash, never an
-   * empty line and never an error.
+   * A deleted category, a condominium with no title or a provider whose name
+   * did not resolve costs a dash, never an empty line and never an error.
    */
   public function testAnUnresolvableValueIsDrawnAsADash() {
-    $body = myapi_service_request_push_body('Fuga', NULL, '', myapi_service_request_date_label(NULL));
+    $body = myapi_service_request_push_body('Fuga', NULL, NULL, '', myapi_service_request_date_label(NULL));
 
-    $this->assertSame("Fuga\nCategoría: —\nCondominio: —\nInicio: —", $body);
+    $this->assertSame("Fuga\nProveedor: —\nCategoría: —\nCondominio: —\nInicio: —", $body);
   }
 
   public function testTheDateLabelOfAnEmptyFieldIsADash() {
@@ -141,7 +173,7 @@ class ServiceRequestNotificationTest extends TestCase {
    * request until they open the detail endpoint.
    */
   public function testThePushBodyNamesNeitherTheUnitNorTheRequester() {
-    $body = myapi_service_request_push_body('Fuga', 'Plomería', 'Los Robles', '03/09/2026 09:30');
+    $body = myapi_service_request_push_body('Fuga', 'Plomería Sur', 'Plomería', 'Los Robles', '03/09/2026 09:30');
 
     $this->assertStringNotContainsString('Casa 12', $body);
     $this->assertStringNotContainsString('Ana', $body);
@@ -159,11 +191,12 @@ class ServiceRequestNotificationTest extends TestCase {
       'category'      => 'Plomería',
       'desired_start' => '03/09/2026 09:30',
       'condominium'   => 'Los Robles',
+      'provider_name' => 'Plomería Sur',
       'is_direct'     => FALSE,
     ]);
   }
 
-  public function testTheProviderParamsCarryTheFourValuesEscaped() {
+  public function testTheProviderParamsCarryTheFiveValuesEscaped() {
     $params = $this->providerParams(['title' => 'Fuga en el baño A&B']);
 
     $this->assertSame(self::NID, $params['nid']);
@@ -171,14 +204,30 @@ class ServiceRequestNotificationTest extends TestCase {
     $this->assertSame('Plomería', $params['category']);
     $this->assertSame('03/09/2026 09:30', $params['desired_start']);
     $this->assertSame('Los Robles', $params['condominium']);
+    $this->assertSame('Plomería Sur', $params['provider_name']);
     $this->assertFalse($params['is_direct']);
   }
 
+  /**
+   * The trade name is escaped like every other value: 'Luz & Cía' reaches the
+   * HTML body as an entity and the subject decodes it back.
+   */
+  public function testTheProviderNameIsEscapedLikeEveryOtherValue() {
+    $params = $this->providerParams(['provider_name' => 'Luz & Cía']);
+
+    $this->assertSame('Luz &amp; Cía', $params['provider_name']);
+  }
+
   public function testTheProviderParamsFallBackToTheDash() {
-    $params = $this->providerParams(['category' => NULL, 'condominium' => '']);
+    $params = $this->providerParams([
+      'category'      => NULL,
+      'condominium'   => '',
+      'provider_name' => NULL,
+    ]);
 
     $this->assertSame('—', $params['category']);
     $this->assertSame('—', $params['condominium']);
+    $this->assertSame('—', $params['provider_name']);
   }
 
   public function testTheSubjectOfTheOpenProviderMail() {
@@ -198,6 +247,18 @@ class ServiceRequestNotificationTest extends TestCase {
   }
 
   /**
+   * THE SUBJECT NEVER NAMES THE PROVIDER, the same rule the push title
+   * follows: the trade name is a line of the body and nothing else.
+   */
+  public function testTheProviderSubjectDoesNotNameTheProvider() {
+    $message = ['body' => [], 'headers' => []];
+
+    myapi_mail_format_service_request_provider($message, $this->providerParams());
+
+    $this->assertStringNotContainsString('Plomería Sur', $message['subject']);
+  }
+
+  /**
    * A subject is plain text, so the escaped title is decoded back: a request
    * titled 'A&B' must not read 'A&amp;B' in the inbox list.
    */
@@ -209,18 +270,32 @@ class ServiceRequestNotificationTest extends TestCase {
     $this->assertSame('Nueva solicitud de servicio — Fuga A&B', $message['subject']);
   }
 
-  public function testTheProviderMailDrawsExactlyFourLines() {
+  public function testTheProviderMailDrawsExactlyFiveLines() {
     $html = myapi_mail_service_request_provider_html($this->providerParams());
 
     $this->assertSame(
       [
         'Asunto'          => 'Fuga en el calentador',
+        'Proveedor'       => 'Plomería Sur',
         'Categoría'       => 'Plomería',
         'Fecha de inicio' => '03/09/2026 09:30',
         'Condominio'      => 'Los Robles',
       ],
       $this->lines($html)
     );
+  }
+
+  /**
+   * A queued item from before the param still renders five lines, with the
+   * dash the rest of the body already uses for anything unresolved.
+   */
+  public function testTheProviderLineFallsBackToTheDash() {
+    $params = $this->providerParams();
+    unset($params['provider_name']);
+
+    $lines = $this->lines(myapi_mail_service_request_provider_html($params));
+
+    $this->assertSame('—', $lines['Proveedor']);
   }
 
   /**
@@ -606,6 +681,145 @@ class ServiceRequestNotificationTest extends TestCase {
 
     $this->assertNotSame([], $GLOBALS['myapi_test_watchdog']);
     $this->assertStringContainsString('myapi_notifications', $GLOBALS['myapi_test_watchdog'][0]['text']);
+  }
+
+  /* -- One account, two providers of the same category ---------------------- */
+
+  /**
+   * The fixture of the case reported from production: ONE account listed on
+   * field_provider_users of TWO active providers of the same category. It is
+   * the shape that makes the fan-out send the same person two notices, and
+   * every assertion below is about telling those two apart.
+   */
+  private function seedTwoProvidersOfOneAccount() {
+    myapi_test_db_seed([
+      'node' => [
+        $this->providerRow(),
+        $this->providerRow(['nid' => self::OTHER_PROVIDER, 'title' => 'Electro Norte']),
+      ],
+      'field_data_' . MYAPI_PROVIDER_USERS_FIELD => [
+        $this->accountRow(),
+        $this->accountRow(['entity_id' => self::OTHER_PROVIDER]),
+      ],
+    ]);
+
+    $GLOBALS['myapi_test_users'][7] = [
+      'uid'    => 7,
+      'mail'   => 'dos-negocios@example.com',
+      'status' => 1,
+    ];
+
+    // myapi_test_db_seed() clears the recorded QUERIES, not the recorded
+    // WRITES, and the cases below count rows: without this they would read the
+    // rows of whichever case ran before them. Same line as the one
+    // ChatNotifyTest and PaymentWorkflowTest write for the same reason.
+    $GLOBALS['myapi_test_db_writes'] = [];
+  }
+
+  /**
+   * TWO ROWS IS THE SPEC, NOT THE BUG. The fan-out is per provider, so the
+   * account gets one inbox row for each of its two businesses, each carrying
+   * its own provider_id — that is what lets the app open the right side.
+   */
+  private function insertedNotifications() {
+    $rows = [];
+    foreach (myapi_test_db_writes('myapi_notifications') as $write) {
+      if (empty($write['rows'])) {
+        continue;
+      }
+      foreach ($write['rows'] as $row) {
+        $rows[] = $row;
+      }
+    }
+
+    return $rows;
+  }
+
+  public function testTheSameAccountGetsOneRowPerProviderItOperates() {
+    $this->seedTwoProvidersOfOneAccount();
+
+    $this->notify();
+
+    $rows = $this->insertedNotifications();
+
+    $this->assertCount(2, $rows);
+    $this->assertSame([7, 7], array_column($rows, 'uid'));
+    $this->assertSame(
+      [self::PROVIDER, self::OTHER_PROVIDER],
+      array_map('intval', array_column($rows, 'provider_id'))
+    );
+  }
+
+  /**
+   * THE FIX. Those two rows used to be identical, so the account read two
+   * identical notices and reported a duplicate. Each body now names the
+   * business it belongs to.
+   */
+  public function testTheTwoRowsOfThatAccountNameTheirOwnProvider() {
+    $this->seedTwoProvidersOfOneAccount();
+
+    $this->notify();
+
+    $bodies = array_column($this->insertedNotifications(), 'body');
+
+    $this->assertStringContainsString("Proveedor: Plomería Sur\n", $bodies[0]);
+    $this->assertStringContainsString("Proveedor: Electro Norte\n", $bodies[1]);
+  }
+
+  /**
+   * The push is the channel the complaint came from, so the titles are
+   * asserted where they actually leave the site: the OneSignal queue item.
+   */
+  public function testTheTwoPushesOfThatAccountDoNotReadTheSame() {
+    $this->seedTwoProvidersOfOneAccount();
+
+    $this->notify();
+
+    $bodies = [];
+    foreach (myapi_test_queue_items(MYAPI_ONESIGNAL_QUEUE) as $item) {
+      $bodies[] = $item['data']['body'];
+    }
+
+    $this->assertCount(2, $bodies);
+    $this->assertNotSame($bodies[0], $bodies[1]);
+  }
+
+  /**
+   * The email is fanned out per provider exactly like the push, so the same
+   * address receives two copies and they must not be the same line twice in
+   * an inbox list.
+   */
+  public function testTheTwoMailsOfThatAccountCarryTheirOwnProvider() {
+    $this->seedTwoProvidersOfOneAccount();
+
+    $this->notify();
+
+    $names = [];
+    foreach (myapi_test_queue_items(MYAPI_MAIL_QUEUE) as $item) {
+      if ($item['data']['key'] !== MYAPI_SERVICE_REQUEST_PROVIDER_MAIL_KEY) {
+        continue;
+      }
+      $this->assertSame('dos-negocios@example.com', $item['data']['to']);
+      $names[] = $item['data']['params']['provider_name'];
+    }
+
+    $this->assertSame(['Plomería Sur', 'Electro Norte'], $names);
+  }
+
+  /**
+   * The title is NOT per provider and must not become so: it is the headline
+   * of the event, and the inbox list of an account with two businesses reads
+   * as two notices of the same thing, told apart one line below.
+   */
+  public function testTheTwoRowsOfThatAccountShareTheirTitle() {
+    $this->seedTwoProvidersOfOneAccount();
+
+    $this->notify();
+
+    $rows = $this->insertedNotifications();
+
+    $this->assertSame('Nueva solicitud de servicio', $rows[0]['title']);
+    $this->assertSame($rows[0]['title'], $rows[1]['title']);
   }
 
   /* -------------------------------------------------------------------------

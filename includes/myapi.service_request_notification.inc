@@ -66,8 +66,17 @@ define('MYAPI_NOTIFICATION_TYPE_SERVICE_REQUEST_DIRECT', 'service_request_direct
  * value the app does not know yet — until it does, an unknown target must
  * degrade to opening the inbox, never break. Documented as part of the contract
  * in docs/service-request-notifications.md.
+ *
+ * THIS IS THE CANONICAL HOME, and the value is repeated — guarded, on both
+ * sides — in resources/notification.resource.inc, which needs it to decide
+ * that a provider notice is visible under any condominium scope and must not
+ * load this whole include for one string. The same arrangement
+ * MYAPI_ONESIGNAL_QUEUE has between myapi.module and includes/myapi.notification.inc.
+ * The two definitions must move together.
  */
-define('MYAPI_NOTIFICATION_DEEP_LINK_SERVICE_REQUEST_PROVIDER', 'service_request_provider');
+if (!defined('MYAPI_NOTIFICATION_DEEP_LINK_SERVICE_REQUEST_PROVIDER')) {
+  define('MYAPI_NOTIFICATION_DEEP_LINK_SERVICE_REQUEST_PROVIDER', 'service_request_provider');
+}
 
 /**
  * Role that receives the detail email of every request created from the app.
@@ -474,6 +483,11 @@ function myapi_service_request_date_label($timestamp) {
  * an open one is a race, and the provider decides whether to open the app on
  * the title alone.
  *
+ * THE TRADE NAME IS NOT HERE, it is in the body: two providers of one account
+ * are told apart by the 'Proveedor' line of
+ * myapi_service_request_push_body(), and the title stays the same headline it
+ * has always been.
+ *
  * @param bool $is_direct  TRUE when the request was born with an assigned
  *   provider.
  *
@@ -488,26 +502,37 @@ function myapi_service_request_push_title($is_direct) {
 /**
  * Body of the push and of the inbox row sent to a provider.
  *
- * The same four lines in both cases — subject, category, condominium and start
- * — because what changes between an open and a direct request is who is being
- * told, not what they are told. What is deliberately NOT here: the unit, the
- * requester and the description, which no provider sees until they open the
- * detail endpoint.
+ * The same five lines in both cases — subject, provider, category, condominium
+ * and start — because what changes between an open and a direct request is who
+ * is being told, not what they are told. What is deliberately NOT here: the
+ * unit, the requester and the description, which no provider sees until they
+ * open the detail endpoint.
+ *
+ * WHY THE PROVIDER IS ONE OF THE LINES. SPEC 109 fans one notice out PER
+ * PROVIDER, so an account that operates two active providers of the category
+ * receives two — by design, each carrying its own provider_id, because the app
+ * has to know which side it is entering as. Until this line the two were
+ * character for character the same notice twice, which reads as a duplicate
+ * and not as "one for each of your businesses". Second line and not first: the
+ * request is still the headline, and 'Proveedor' sits where the offer notice
+ * of SPEC 110 already puts it.
  *
  * myapi_onesignal_truncate_body() cuts this to 200 characters for the banner;
  * the inbox keeps the whole text.
  *
  * @param string|null $title           node.title of the request.
+ * @param string|null $provider_name   Trade name of the provider being told.
  * @param string|null $category        Term name of field_category.
  * @param string|null $condominium     node.title of field_condominium.
  * @param string|null $desired_start   Already formatted by
  *   myapi_service_request_date_label().
  *
- * @return string  Four lines separated by "\n".
+ * @return string  Five lines separated by "\n".
  */
-function myapi_service_request_push_body($title, $category, $condominium, $desired_start) {
+function myapi_service_request_push_body($title, $provider_name, $category, $condominium, $desired_start) {
   return implode("\n", [
     myapi_service_request_notification_label($title),
+    'Proveedor: ' . myapi_service_request_notification_label($provider_name),
     'Categoría: ' . myapi_service_request_notification_label($category),
     'Condominio: ' . myapi_service_request_notification_label($condominium),
     'Inicio: ' . myapi_service_request_notification_label($desired_start),
@@ -517,13 +542,17 @@ function myapi_service_request_push_body($title, $category, $condominium, $desir
 /**
  * Params of the heads-up email sent to a notified provider's accounts.
  *
- * The same four values as the push and nothing else: the email is a copy of the
+ * The same values as the push and nothing else: the email is a copy of the
  * notice for the account that does not have the app open, not a richer version
- * of it. 'is_direct' travels because the subject depends on it.
+ * of it. 'is_direct' travels because the subject depends on it, and
+ * 'provider_name' because the email is fanned out per provider exactly like
+ * the push — an account operating two providers of the category receives it
+ * twice, and the trade name is what tells the two copies apart in an inbox
+ * list. Same reasoning as myapi_service_request_push_title().
  *
  * @param int   $nid     nid of the request.
  * @param array $values  Already-resolved 'title', 'category', 'desired_start'
- *   (formatted), 'condominium' and 'is_direct'.
+ *   (formatted), 'condominium', 'provider_name' and 'is_direct'.
  *
  * @return array  Escaped params for myapi_mail_format_service_request_provider().
  */
@@ -533,6 +562,7 @@ function myapi_service_request_provider_mail_params($nid, array $values) {
     'category'      => NULL,
     'desired_start' => NULL,
     'condominium'   => NULL,
+    'provider_name' => NULL,
     'is_direct'     => FALSE,
   ];
 
@@ -542,6 +572,7 @@ function myapi_service_request_provider_mail_params($nid, array $values) {
     'category'      => myapi_service_request_mail_label($values['category']),
     'desired_start' => myapi_service_request_mail_label($values['desired_start']),
     'condominium'   => myapi_service_request_mail_label($values['condominium']),
+    'provider_name' => myapi_service_request_mail_label($values['provider_name']),
     'is_direct'     => (bool) $values['is_direct'],
   ];
 }
@@ -1361,22 +1392,33 @@ function myapi_service_request_notify_created($node, array $context = []) {
         : NULL
     );
 
+    // The title is shared — it is the headline of the event, the same for
+    // everybody told about it. The body and the mail params are NOT: they name
+    // the provider, so they are resolved inside the loop, once per notice.
     $push_title = myapi_service_request_push_title($is_direct);
-    $push_body = myapi_service_request_push_body($node->title, $category, $condominium, $desired_start);
-
-    $provider_params = myapi_service_request_provider_mail_params($nid, [
-      'title'         => $node->title,
-      'category'      => $category,
-      'desired_start' => $desired_start,
-      'condominium'   => $condominium,
-      'is_direct'     => $is_direct,
-    ]);
 
     foreach ($providers as $provider_id => $provider_name) {
       $uids = myapi_service_request_provider_uids($provider_id);
       if (empty($uids)) {
         continue;
       }
+
+      $push_body = myapi_service_request_push_body(
+        $node->title,
+        $provider_name,
+        $category,
+        $condominium,
+        $desired_start
+      );
+
+      $provider_params = myapi_service_request_provider_mail_params($nid, [
+        'title'         => $node->title,
+        'category'      => $category,
+        'desired_start' => $desired_start,
+        'condominium'   => $condominium,
+        'provider_name' => $provider_name,
+        'is_direct'     => $is_direct,
+      ]);
 
       myapi_notification_create([
         'source_type'      => MYAPI_NOTIFICATION_SOURCE_SERVICE_REQUEST,

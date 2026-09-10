@@ -728,6 +728,10 @@ function myapi_mail_format_service_request_provider(&$message, $params) {
     ? 'Nueva solicitud directa'
     : 'Nueva solicitud de servicio';
 
+  // The trade name is NOT in the subject: it is a line of the body, the same
+  // place the push carries it. The subject stays the headline it has always
+  // been.
+  //
   // A subject is plain text, so the escaped title is decoded back: a request
   // titled 'Fuga en el baño A&B' must not read 'A&amp;B' in the inbox list.
   $message['subject'] = $heading . ' — ' . decode_entities($params['title']);
@@ -739,9 +743,12 @@ function myapi_mail_format_service_request_provider(&$message, $params) {
 /**
  * Builds the HTML body of that email.
  *
- * Four lines and not one more: the unit, the requester and the description are
+ * Five lines and not one more: the unit, the requester and the description are
  * deliberately absent from every channel a provider reads (SPEC 109), and the
- * detail endpoint is what decides when they stop being absent.
+ * detail endpoint is what decides when they stop being absent. The fifth is
+ * the provider itself, in the same position the push body gives it: this
+ * email is fanned out per provider, so one address can receive two copies of
+ * it, and the 'Proveedor' line is what tells them apart.
  *
  * No button, unlike the other four admin-facing emails of this module: the
  * provider's next step is the app, and a link into the back office would land
@@ -760,6 +767,9 @@ function myapi_mail_service_request_provider_html($params) {
 
   $lines = array(
     'Asunto'          => $params['title'],
+    // Defaulted, not read straight: a mail item enqueued before the param
+    // existed is still a valid item the queue worker will hand over.
+    'Proveedor'       => isset($params['provider_name']) ? $params['provider_name'] : '—',
     'Categoría'       => $params['category'],
     'Fecha de inicio' => $params['desired_start'],
     'Condominio'      => $params['condominium'],

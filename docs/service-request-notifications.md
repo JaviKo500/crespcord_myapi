@@ -45,9 +45,15 @@ for the endpoint itself.
 inbox row, so an open request makes as many calls to
 `myapi_notification_create()` as its category has active providers, each with
 that provider's own accounts. An account that operates **two** active providers
-of the category therefore gets **two** rows and **two** pushes, with a different
-`provider_id` in each. That is a consequence of the model, not an oversight: the
-app needs to know which provider it is entering as.
+of the category therefore gets **two** rows, **two** pushes and **two** emails,
+with a different `provider_id` in each. That is a consequence of the model, not
+an oversight: the app needs to know which provider it is entering as.
+
+What each of those notices does NOT share is its **body**: the push, the inbox
+row and the email all carry a `Proveedor` line naming the business the notice
+belongs to, so the two notices of such an account read as one per business
+instead of as the same message twice. The title and the subject ARE shared —
+they are the headline of the event, and the event is one.
 
 **The provider never sees the home or the person.** Not in the push, not in the
 inbox row (`unit_id` is `NULL`), not in the email: no unit, no requester, no
@@ -158,26 +164,43 @@ Common to **every** row this feature writes:
 > same nid opens a different screen depending on which side of the marketplace
 > is looking. A client that does not know it **must degrade to opening the
 > inbox**, never break.
+>
+> It is also what makes these rows **exempt from the condominium scope** of
+> `GET /api/v1/notifications`: the `condominium_id` they carry is the
+> requester's, not the provider's, so an account that is a resident somewhere
+> and a provider elsewhere would otherwise never see them. See
+> `docs/notification.md`.
 
 ### The texts
 
 | Case | `title` | `body` |
 |------|---------|--------|
-| Open | `Nueva solicitud de servicio` | four lines, below |
-| Direct | `Nueva solicitud directa para ti` | *identical* |
+| Open | `Nueva solicitud de servicio` | five lines, below |
+| Direct | `Nueva solicitud directa para ti` | *identical shape* |
 
 ```
 Título:  Nueva solicitud de servicio
 Cuerpo:  Fuga en el calentador
+         Proveedor: Plomería Sur
          Categoría: Plomería
          Condominio: Los Robles
          Inicio: 03/09/2026 09:30
 ```
 
-The body is the same in both cases: what changes between an open and a direct
-request is **who** is told, not **what** they are told. The title is what tells
-them apart, and it is the only line read on a locked screen.
+The shape of the body is the same in both cases: what changes between an open
+and a direct request is **who** is told, not **what** they are told. The title
+is what tells those two cases apart, and it is the only line read on a locked
+screen.
 
+**The `Proveedor` line names the business the notice belongs to**, and that is
+not decoration: the fan-out is one notice **per provider** (see above), so an
+account operating two providers of the category receives two notices, and
+without that line they were the same message twice — read as a duplicate,
+reported as a bug. It matches the `provider` of the payload the app is about to
+enter as. It is the second line, not the first: the request is the headline,
+and it sits where the offer notice of SPEC 110 already puts it.
+
+- `Proveedor` is the `title` of the provider node being told.
 - `Categoría` is the `name` of the `field_category` term.
 - `Condominio` is the `title` of the `field_condominium` node.
 - `Inicio` is `field_desired_start` as `d/m/Y H:i`.
@@ -223,9 +246,12 @@ deleted in between must not change or break the message.
 
 ### To the provider (`service_request_provider`)
 
-The same four values as the push and nothing more — the email is a copy of the
+The same values as the push and nothing more — the email is a copy of the
 notice for the account that does not have the app open, not a richer version of
-it.
+it. `Proveedor` is in the table for the same reason it is in the push body:
+this email is fanned out per provider, so one address can receive two copies of
+it, and the trade name is what tells them apart. The **subject does not carry
+it**, exactly like the push title.
 
 ```
 Nueva solicitud de servicio
@@ -233,6 +259,7 @@ Nueva solicitud de servicio
 Un residente creó una solicitud de servicio en una de tus categorías.
 
   Asunto            Fuga en el calentador
+  Proveedor         Plomería Sur
   Categoría         Plomería
   Fecha de inicio   03/09/2026 09:30
   Condominio        Los Robles
@@ -243,6 +270,9 @@ Revisa la solicitud en la app.
 For a direct request the heading and the context sentence read
 `Nueva solicitud directa` and *"Un residente creó una solicitud de servicio y te
 la asignó directamente."*
+
+A mail item enqueued **before** this param existed is still a valid item the
+queue worker will hand over: it prints `Proveedor —`.
 
 **There is no button**, unlike every other admin-facing email of this module: a
 provider has no back office to land on, and a link into it would take them to an
