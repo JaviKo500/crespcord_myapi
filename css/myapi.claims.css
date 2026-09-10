@@ -1,13 +1,21 @@
 /**
  * @file
- * Styles for the back-office claims listing (SPEC 56).
+ * Styles for the back-office claims listing (SPEC 56) and the service-request
+ * listing (SPEC 125).
  *
- * Loaded from myapi_claims_list_page() with drupal_add_css(), never declared
- * in myapi.info: a stylesheets[] entry would ship this file on every page of
- * the site, API responses included.
+ * Loaded from myapi_claims_list_page() and myapi_service_requests_list_page()
+ * with drupal_add_css(), never declared in myapi.info: a stylesheets[] entry
+ * would ship this file on every page of the site, API responses included.
  *
- * Everything is namespaced under .myapi-claims-* so it cannot leak into the
- * admin theme, and no rule targets a bare element selector.
+ * TWO PAGES, ONE SHEET, because it is one rule set: the filter row of both is
+ * the same row of selects and date inputs, and a second file with the same
+ * declarations under another class name would drift the first time one of them
+ * is touched. Each page keeps its own class — .myapi-claims-filters and
+ * .myapi-service-requests-filters — so a rule can still be given to one alone
+ * the day they stop being identical.
+ *
+ * Everything is namespaced under .myapi-* so it cannot leak into the admin
+ * theme, and no rule targets a bare element selector.
  */
 
 /* ---- Filter row ----
@@ -20,7 +28,8 @@
  * shared: the claims page does not load the calendar's CSS just for this one
  * rule set. */
 
-.myapi-claims-filters {
+.myapi-claims-filters,
+.myapi-service-requests-filters {
   margin: 1em 0 0.5em;
   padding: 12px 14px;
   border: 1px solid #e0e0e0;
@@ -31,18 +40,21 @@
 /* theme_form() wraps every child of a form in an anonymous <div> ("to satisfy
  * XHTML compliance"), so the form has exactly one child and the flex row has
  * to go on that div, not on the <form> itself. */
-.myapi-claims-filters > div {
+.myapi-claims-filters > div,
+.myapi-service-requests-filters > div {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
 }
 
-.myapi-claims-filters .form-item {
+.myapi-claims-filters .form-item,
+.myapi-service-requests-filters .form-item {
   margin: 0 14px 0 0;
   padding: 0;
 }
 
-.myapi-claims-filters label {
+.myapi-claims-filters label,
+.myapi-service-requests-filters label {
   display: block;
   margin-bottom: 3px;
   font-size: 0.82em;

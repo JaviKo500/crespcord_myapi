@@ -38,7 +38,7 @@ class ModuleContractTest extends TestCase {
    * Two kinds, and both are the reason the versioning rule is asserted with an
    * allowlist instead of a blanket "every path starts with api/v1": the reset
    * page is the HTML landing the emailed deep link opens (it is not consumed by
-   * the app, it is opened by a browser), and the other five are back-office
+   * the app, it is opened by a browser), and the other six are back-office
    * screens hanging off Drupal's own admin/ and node/ trees, where the path is
    * Drupal's to choose and not ours.
    *
@@ -50,6 +50,7 @@ class ModuleContractTest extends TestCase {
     'password/reset',
     'admin/content/reservation-calendar',
     'admin/content/claims',
+    'admin/content/service-requests',
     'node/%node/claim-transaction/add',
     'node/%node/service-transaction/add',
     'node/%node/service-transaction/%node/delete',

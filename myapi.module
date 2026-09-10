@@ -796,6 +796,19 @@ function myapi_menu() {
     'file'             => 'includes/myapi.claims_admin.inc',
   ];
 
+  // Back-office service-request listing (SPEC 125). Same non-api/v1 pattern as
+  // admin/content/claims just above: HTML for an operator, not the JSON
+  // envelope, so its callback lives in includes/ and not resources/.
+  // MENU_NORMAL_ITEM so it shows up under Contenido in the administration
+  // menu, next to the claims listing and the calendar.
+  $items['admin/content/service-requests'] = [
+    'title'            => 'Solicitudes de servicio',
+    'page callback'    => 'myapi_service_requests_list_page',
+    'access callback'  => 'myapi_service_requests_admin_access',
+    'type'             => MENU_NORMAL_ITEM,
+    'file'             => 'includes/myapi.service_requests_admin.inc',
+  ];
+
   // Claim transaction creation page (SPEC 57). Same non-api/v1 pattern as
   // admin/content/claims just above: HTML for an operator, not the JSON
   // envelope. MENU_CALLBACK (not a menu-visible item) since it is only ever
@@ -994,6 +1007,55 @@ function myapi_claims_admin_roles() {
   module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
 
   return ['administrator', 'backend', MYAPI_BUILDING_ADMIN_ROLE];
+}
+
+/**
+ * The roles allowed into the back-office service-request listing (SPEC 125).
+ *
+ * Single source of truth for that list, same criterion as
+ * myapi_claims_admin_roles(): myapi_service_requests_admin_access() is its
+ * only caller, and names are compared, never rids.
+ *
+ * 'administrador edificio' is here for a DIFFERENT reason than in the claims
+ * list, and the difference is the point of SPEC 125: it does not manage these
+ * nodes and never will — the bundle is in the role's READ-ONLY catalogue
+ * (myapi_building_admin_readonly_types()), so it holds no 'create' and no
+ * 'edit any' over a service request. It is let in to CONSULT the requests of
+ * its own buildings, and the rows it sees are decided by the query's
+ * ->addTag('node_access'), never by this list.
+ *
+ * @return array  Role names.
+ */
+function myapi_service_requests_admin_roles() {
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+
+  return ['administrator', 'backend', MYAPI_BUILDING_ADMIN_ROLE];
+}
+
+/**
+ * Access callback of admin/content/service-requests (SPEC 125).
+ *
+ * By ROLE only, byte for byte the criterion of myapi_claims_admin_access():
+ * an 'administrador edificio' with no condominium assigned still gets in and
+ * sees an empty table. This callback only asks "does the role apply", never
+ * "does this user have anything to see" — that second question belongs to the
+ * query. Conflating the two would answer 403 to an operator whose assignment
+ * is simply pending, which reads as a broken account rather than an empty one.
+ *
+ * uid 1 is let in explicitly, same guard and same reason as the two callbacks
+ * above: the superuser bypass lives inside user_access(), which this callback
+ * never calls.
+ *
+ * @return bool  TRUE when the current user may see the requests listing.
+ */
+function myapi_service_requests_admin_access() {
+  global $user;
+
+  if ((int) $user->uid === 1) {
+    return TRUE;
+  }
+
+  return (bool) array_intersect($user->roles, myapi_service_requests_admin_roles());
 }
 
 /**
