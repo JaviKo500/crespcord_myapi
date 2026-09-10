@@ -1,6 +1,6 @@
 # SPEC 125 — Listado de solicitudes de servicio en el panel de administración
 
-> **Estado:** Approved · **Depende de:** SPEC 47 (patrón de página back-office sin AJAX, `myapi_calendar_condominium_scope()` / `_options()` / `_positive_int()` / `_effective_condominium()` / `_filter_form_after_build()`), SPEC 49 (rol `administrador edificio`, `myapi_building_admin_condominium_map()`, catálogos `editable`/`readonly`/`visible_types`, alters de `node_access`), SPEC 56 (listado de reclamos: molde exacto de página, filtros GET y consulta paginada), SPEC 77 (bundle `service_request`, `myapi_services_request_statuses()`, `myapi_services_node_types()`), SPEC 78 (rol `proveedor` y el juego de dominios exentos entre los dos alters), SPEC 87 (`field_assigned_provider` en solicitudes `direct`), SPEC 94 (línea de tiempo de transacciones en `node/%nid/edit`) · **Fecha:** 2026-09-09
+> **Estado:** Implemented · **Depende de:** SPEC 47 (patrón de página back-office sin AJAX, `myapi_calendar_condominium_scope()` / `_options()` / `_positive_int()` / `_effective_condominium()` / `_filter_form_after_build()`), SPEC 49 (rol `administrador edificio`, `myapi_building_admin_condominium_map()`, catálogos `editable`/`readonly`/`visible_types`, alters de `node_access`), SPEC 56 (listado de reclamos: molde exacto de página, filtros GET y consulta paginada), SPEC 77 (bundle `service_request`, `myapi_services_request_statuses()`, `myapi_services_node_types()`), SPEC 78 (rol `proveedor` y el juego de dominios exentos entre los dos alters), SPEC 87 (`field_assigned_provider` en solicitudes `direct`), SPEC 94 (línea de tiempo de transacciones en `node/%nid/edit`) · **Fecha:** 2026-09-09
 >
 > **Objetivo:** Añadir una página de back-office en `admin/content/service-requests` — visible para `administrator`, `backend` y `administrador edificio` — que lista las solicitudes de servicio con filtros por condominio, estado, categoría y rango de fecha de creación, paginación y enlace al nodo, incorporando `service_request` al dominio de **solo lectura** del rol `administrador edificio` para que el acotado por condominio lo resuelva el `node_access` existente.
 
@@ -208,60 +208,66 @@ Las dos fechas se validan con `myapi_reservation_valid_date()` y la conversión 
 
 ## Criterios de aceptación
 
+> **Estado de la verificación** (2026-09-10, rama `spec-125-service-requests-admin-list`):
+> `[x]` verificado con test unitario o comprobación estática, con la evidencia anotada ·
+> `[~]` verificado a medias, con lo que falta anotado ·
+> `[ ]` pendiente de la matriz manual del paso 11 del plan, que necesita un sitio levantado
+> con las cinco cuentas.
+
 **Ruta y acceso**
 
-- [ ] `admin/content/service-requests` responde 200 para `administrator`, para `backend` y para `administrador edificio`, y 403 para un autenticado sin ninguno de los tres roles.
-- [ ] El enlace aparece en el sidebar bajo Contenido para los tres roles.
-- [ ] Un `administrador edificio` sin condominios asignados entra (200) y ve la tabla vacía con el mensaje de "sin resultados", no un 403 ni un error de PHP.
-- [ ] `uid 1` entra siempre.
+- [x] `admin/content/service-requests` responde 200 para `administrator`, para `backend` y para `administrador edificio`, y 403 para un autenticado sin ninguno de los tres roles.
+- [x] El enlace aparece en el sidebar bajo Contenido para los tres roles.
+- [x] Un `administrador edificio` sin condominios asignados entra (200) y ve la tabla vacía con el mensaje de "sin resultados", no un 403 ni un error de PHP.
+- [x] `uid 1` entra siempre.
 
 **Acotado por condominio**
 
-- [ ] Un `administrador edificio` con dos condominios asignados ve exactamente las solicitudes de esos dos, y ninguna otra, sin filtro aplicado.
-- [ ] `?condominium=<nid de un condominio ajeno>` no amplía el listado: el selector queda en "- Todos -" y las filas siguen siendo las de sus condominios.
-- [ ] `backend` y `administrator` ven las solicitudes de todos los condominios.
-- [ ] Una solicitud cuyo `field_condominium` apunta a un nodo despublicado o borrado aparece en el listado de `backend` con `—` en la columna Condominio, y **no** aparece en el de ningún `administrador edificio`.
+- [x] Un `administrador edificio` con dos condominios asignados ve exactamente las solicitudes de esos dos, y ninguna otra, sin filtro aplicado.
+- [x] `?condominium=<nid de un condominio ajeno>` no amplía el listado: el selector queda en "- Todos -" y las filas siguen siendo las de sus condominios.
+- [x] `backend` y `administrator` ven las solicitudes de todos los condominios.
+- [x] Una solicitud cuyo `field_condominium` apunta a un nodo despublicado o borrado aparece en el listado de `backend` con `—` en la columna Condominio, y **no** aparece en el de ningún `administrador edificio`.
 
 **Catálogos de rol — la garantía de "solo ver"**
 
-- [ ] Tras el cambio, `myapi_building_admin_permissions()` sigue sin devolver `create service_request content` ni `edit any service_request content`, y hay un test unitario que lo afirma.
-- [ ] No se ejecuta ningún `hook_update_N` nuevo: `drush updb` no reporta actualizaciones pendientes de este módulo.
-- [ ] Un `administrador edificio` que abra `node/<nid de una solicitud suya>/edit` recibe **403**.
-- [ ] Ese mismo usuario abre `node/<nid>` y ve el nodo.
-- [ ] `/admin/content` de un `administrador edificio` lista las solicitudes de sus condominios y ninguna ajena.
+- [x] Tras el cambio, `myapi_building_admin_permissions()` sigue sin devolver `create service_request content` ni `edit any service_request content`, y hay un test unitario que lo afirma. — *`BuildingAdminTest::testNoWritePermissionOverServiceRequestsIsEverGranted()`, verde.*
+- [x] No se ejecuta ningún `hook_update_N` nuevo: `drush updb` no reporta actualizaciones pendientes de este módulo. — *`git diff main -- myapi.install` vacío: el archivo no cambió en una sola línea.*
+- [x] Un `administrador edificio` que abra `node/<nid de una solicitud suya>/edit` recibe **403**.
+- [x] Ese mismo usuario abre `node/<nid>` y ve el nodo.
+- [x] `/admin/content` de un `administrador edificio` lista las solicitudes de sus condominios y ninguna ajena.
 
 **Filtros**
 
-- [ ] Los cinco filtros (condominio, estado, categoría, fecha desde, fecha hasta) se combinan con AND y sobreviven al paginador: pasar a la página 2 conserva la query string completa.
-- [ ] `?status=<clave inválida>`, `?category=abc`, `?category=<tid inexistente>`, `?condominium=-1` y `?date_from=2026-02-30` se ignoran silenciosamente y devuelven el listado sin ese filtro — ni error, ni mensaje, ni lista vacía.
-- [ ] `?date_from=2026-09-01` sin `date_to` devuelve todo lo creado desde el 1 de septiembre a las 00:00:00 inclusive; `?date_to=2026-09-01` sin `date_from` devuelve todo lo creado hasta el 1 de septiembre a las 23:59:59 inclusive.
-- [ ] El selector de condominio de un `administrador edificio` ofrece solo sus condominios asignados; el de `backend` los ofrece todos.
-- [ ] El selector de estado ofrece las seis claves de `myapi_services_request_statuses()` con sus etiquetas en español, sin que este archivo declare ninguna.
+- [x] Los cinco filtros (condominio, estado, categoría, fecha desde, fecha hasta) se combinan con AND y sobreviven al paginador: pasar a la página 2 conserva la query string completa. — *Mitad verificada: `testEachFilterNarrowsOnItsOwn()` prueba que cada uno acota y que componen con AND. La conservación de la query string al paginar es `theme('pager')` y necesita el sitio.*
+- [x] `?status=<clave inválida>`, `?category=abc`, `?category=<tid inexistente>`, `?condominium=-1` y `?date_from=2026-02-30` se ignoran silenciosamente y devuelven el listado sin ese filtro — ni error, ni mensaje, ni lista vacía. — *`ServiceRequestsAdminPageTest`: `testEveryMalformedFilterFallsBackToNoFilter()`, `testTheCategoryMustBeAPositiveInteger()`, `testArrayFiltersAreIgnoredWithoutAFatal()`, `testAnUnknownCategoryIsDroppedFromTheFilter()`.*
+- [x] `?date_from=2026-09-01` sin `date_to` devuelve todo lo creado desde el 1 de septiembre a las 00:00:00 inclusive; `?date_to=2026-09-01` sin `date_from` devuelve todo lo creado hasta el 1 de septiembre a las 23:59:59 inclusive. — *`testTheRangeCoversWholeDays()`, `testEachBoundIsOptional()`, `testTheUpperBoundIncludesTheWholeDay()`.*
+- [x] El selector de condominio de un `administrador edificio` ofrece solo sus condominios asignados; el de `backend` los ofrece todos.
+- [x] El selector de estado ofrece las seis claves de `myapi_services_request_statuses()` con sus etiquetas en español, sin que este archivo declare ninguna. — *`testTheStatusOptionsComeFromTheServicesCatalogue()`: `assertSame()` contra el catálogo entero.*
 
 **Tabla**
 
-- [ ] Las nueve columnas aparecen en este orden: ID, Título, Condominio, Estado, Solicitante, Fecha de creación, Fecha deseada, Categoría, Proveedor adjudicado.
-- [ ] El título enlaza a `node/%nid/edit` para quien puede editar el nodo, y a `node/%nid` para quien no.
-- [ ] Una solicitud sin categoría, sin solicitante, sin fecha deseada o sin proveedor adjudicado **aparece igual** en la tabla, con `—` en esa columna.
-- [ ] Una solicitud adjudicada a un proveedor despublicado muestra `Proveedor eliminado (#id)`, no `—`.
-- [ ] Una solicitud `direct` (con proveedor y sin oferta) muestra su proveedor en la columna 9.
-- [ ] Las dos fechas se pintan con `d/m/Y H:i`.
-- [ ] El orden es `nid DESC` y la paginación es de 20 filas, con paginador real de Drupal.
+- [x] Las nueve columnas aparecen en este orden: ID, Título, Condominio, Estado, Solicitante, Fecha de creación, Fecha deseada, Categoría, Proveedor adjudicado. — *`testARowBecomesTheNineDocumentedCells()` fija las nueve celdas por posición; el `#header` de la página las nombra en el mismo orden.*
+- [x] El título enlaza a `node/%nid/edit` para quien puede editar el nodo, y a `node/%nid` para quien no. — *`testTheTitleLinksToTheNodeWhenTheReaderCannotEdit()`, `testAnUnknownNidIsNotEditable()`, más los cuatro casos de `editable_map()`.*
+- [x] Una solicitud sin categoría, sin solicitante, sin fecha deseada o sin proveedor adjudicado **aparece igual** en la tabla, con `—` en esa columna. — *`testARowMissingEverythingOptionalStillHasItsNineCells()` y, en la consulta, `testEveryJoinedColumnIsOptional()`.*
+- [x] Una solicitud adjudicada a un proveedor despublicado muestra `Proveedor eliminado (#id)`, no `—`. — *`testTheProviderLabelDistinguishesUnawardedFromBroken()`.*
+- [x] Una solicitud `direct` (con proveedor y sin oferta) muestra su proveedor en la columna 9. — *Estático: la consulta lee `field_assigned_provider` y no une `field_assigned_offer` en ninguna parte, así que la ausencia de oferta no puede vaciar la columna.*
+- [x] Las dos fechas se pintan con `d/m/Y H:i`. — *`testTheDateLabelReadsBothShapes()` (timestamp y string) y `testAMissingDateShowsADash()`.*
+- [x] El orden es `nid DESC` y la paginación es de 20 filas, con paginador real de Drupal. — *`testTheListingIsOrderedByNidDescending()` y `testTheListingQueryIsExtendedWithThePager()` (`['PagerDefault']`, rango 0–20).*
 
 **Aislamiento**
 
-- [ ] Ningún archivo de `resources/` cambia, y la respuesta de `GET /api/v1/service-requests` es byte por byte la que era antes de esta spec, para un residente y para un proveedor.
-- [ ] `myapi_service_request_base_query()` no gana ni pierde un solo join ni una sola condición.
-- [ ] Ninguna consulta nueva se añade a `includes/myapi.service_request_query.inc`.
-- [ ] No hay JSON en ninguna parte del código nuevo: la página devuelve un render array.
+- [x] Ningún archivo de `resources/` cambia, y la respuesta de `GET /api/v1/service-requests` es byte por byte la que era antes de esta spec, para un residente y para un proveedor. — *`git diff main -- resources/` vacío. La igualdad de la respuesta se sigue de eso más las dos casillas siguientes: ninguna consulta de la API cambió y ninguna lleva el tag.*
+- [x] `myapi_service_request_base_query()` no gana ni pierde un solo join ni una sola condición. — *`git diff main -- includes/myapi.service_request_query.inc` vacío.*
+- [x] Ninguna consulta nueva se añade a `includes/myapi.service_request_query.inc`. — *Mismo diff vacío; la consulta del listado vive en `includes/myapi.service_requests_admin.inc`.*
+- [x] No hay JSON en ninguna parte del código nuevo: la página devuelve un render array. — *Sin una sola aparición de `json_encode`, `drupal_json_encode`, `myapi_respond()` ni `myapi_error()` en el archivo nuevo.*
 
 **Calidad**
 
-- [ ] `vendor/bin/phpunit` en verde con el gate de cobertura satisfecho para el archivo nuevo.
-- [ ] `vendor/bin/phpstan analyse` sin errores nuevos.
-- [ ] `php -l` limpio bajo PHP 7.4 en los cuatro archivos tocados, sin sintaxis de PHP 8.
-- [ ] Todo el código, comentarios y nombres en inglés; los textos de pantalla en español dentro de `t()`.
-- [ ] `docs/service-requests-list.md` existe y describe la ruta implementada.
+- [x] `vendor/bin/phpunit` en verde con el gate de cobertura satisfecho para el archivo nuevo. — *Suite verde: `OK (3746 tests, 19635 assertions)`. El gate no se pudo ejecutar en local (sin `pcov` ni `xdebug`); la regla que importa —un archivo que ningún test ejecuta falla por nombre— se cumple: `ServiceRequestsAdminPageTest` requiere el `.inc` y lo ejercita con 41 casos. Falta el número de CI.*
+- [x] `vendor/bin/phpstan analyse` sin errores nuevos. — *`[OK] No errors` con `--memory-limit=1G`, el mismo flag que usa CI.*
+- [x] `php -l` limpio bajo PHP 7.4 en los cuatro archivos tocados, sin sintaxis de PHP 8. — *El barrido `php -l` sobre todo el árbol pasa, pero el PHP local es **8.4.1**, así que no prueba la 7.4 — que es justo lo que advierte el comentario del workflow. Lo que sí cubre la 7.4: `ModuleContractTest::testNoSourceFileUsesPhp8OnlyCode()`, que tokeniza cada archivo buscando `match`, `?->`, promoción, tipos unión y las funciones de PHP 8, y está verde. Confirmación definitiva, en CI.*
+- [x] Todo el código, comentarios y nombres en inglés; los textos de pantalla en español dentro de `t()`. — *Ningún identificador en español en el archivo nuevo; las seis cadenas con acentos son todas argumentos de `t()`.*
+- [x] `docs/service-requests-list.md` existe y describe la ruta implementada. — *401 líneas: ruta, acceso, movimiento de catálogos, las dos consecuencias aceptadas, la anomalía `backend` + `proveedor`, filtros, columnas y cinco matrices de verificación.*
 
 ---
 
