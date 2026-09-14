@@ -494,17 +494,26 @@ their screen until the next message overwrites them.
 
 **This is the other half of the contract: without these rules the token protects
 nothing.** This module does not deploy them (automating it would need OAuth2
-against the Admin API, which is what this design exists to avoid): they are
-published either by hand from the Firebase console or by CLI from the app's
-repository, **never both for the same change** — two people publishing a full
-ruleset overwrite each other in silence.
+against the Admin API, which is what this design exists to avoid).
 
-**The ruleset below is versioned in the Flutter repository, as
-`database.rules.json` at its root.** That file is the one that gets published;
-this copy is here because the rules and the `threads` claim are one contract and
-neither half is readable without the other. **They drifted apart once already**
-— on 2026-09-14 the app's copy was hardened and this one was not — so whoever
-changes either side copies it across in the same commit.
+**They are published by CLI from the Flutter repository**, where the ruleset is
+versioned as `database.rules.json` at the root, with
+`firebase deploy --only database --project crespcord-app`. **Not by pasting into
+the Firebase console**, which is how this document described it until
+2026-09-14: publishing a ruleset replaces it WHOLE, so a paste and a deploy
+overwrite each other in silence, and the console leaves no diff behind.
+
+The copy below is here because the rules and the `threads` claim are one
+contract and neither half is readable without the other — **but the file in the
+app's repository is the source, and this is the reflection.** They drifted apart
+once already, on 2026-09-14, so whoever changes either side copies it across in
+the same commit.
+
+**Verified against production on 2026-09-14**, with a real ID token traded for a
+custom token: a thread the claim carries answers `200`, and `50198`, `5019`,
+`50200` and `5020` — every prefix of a thread the same token DOES carry — answer
+`401 Permission denied`. Under the previous ruleset those four returned the
+conversation.
 
 **Two things have to exist in the project before the rules mean anything**, and
 neither is a rule: the Realtime Database itself (create it in **locked mode** —

@@ -51,7 +51,7 @@ Cuatro notas que la cabecera fija:
 - **Notificar un mensaje nuevo.** Ni push ni bandeja. Hoy todo el push del módulo sale por OneSignal (`includes/myapi.onesignal.inc`) y un mensaje de chat no aparecerá en `myapi_notifications`. Es el spec hermano, y tiene dos caminos —endpoint `POST .../chat/notify` reusando `myapi_notification_create()`, o Cloud Function con trigger en la RTDB y push por FCM—, que es exactamente por lo que es otro spec y no una viñeta de este. **✅ Resuelto por SPEC 116:** `POST /api/v1/chat/threads/{offer_nid}/notify`, el primero de los dos caminos —el cliente que escribió avisa—, porque el segundo **no sabe a quién avisar**: la pertenencia vive en tres campos de Drupal que un trigger de la RTDB no puede leer, así que acabaría llamando a este mismo endpoint. Del par que esta viñeta anticipaba se cumple **la mitad**: hay push y **no** hay bandeja, y `myapi_notification_create()` **no** se reusa — siempre inserta fila, y el inbox no puede enterarse de que leíste el chat, así que quedaría no leída para siempre. Ver `specs/services/116-chat-message-push.md`.
 - **Adjuntos en el chat.** Firebase Storage tiene sus propias reglas y su propia credencial.
 - **Revocación inmediata.** Un token ya firmado sigue autorizando su hilo hasta una hora. Ver Riesgos.
-- **Desplegar las reglas de la RTDB.** Se documentan en `docs/chat.md` y se publican **o** a mano desde la consola de Firebase **o** por CLI desde `database.rules.json` del repo de la app — **nunca las dos cosas para el mismo cambio**: publicar un ruleset completo pisa el del otro sin avisar (enmienda 2026-09-14). Automatizarlo desde D7 exigiría OAuth2 contra la Admin API, que es justo lo que este diseño evita.
+- **Desplegar las reglas de la RTDB.** Se documentan en `docs/chat.md` y se publican **por CLI desde `database.rules.json` del repo de la app** (`firebase deploy --only database --project crespcord-app`), no pegando en la consola: publicar un ruleset lo reemplaza ENTERO, así que un pegado y un deploy se pisan sin avisar (enmienda 2026-09-14). Automatizarlo desde D7 exigiría OAuth2 contra la Admin API, que es justo lo que este diseño evita.
 - **Firestore.** El spec elige RTDB (Decisión 3) y no deja el otro camino a medio abrir.
 - **Retención, moderación y borrado de mensajes.** Firebase no borra nada solo.
 - **El back office.** Un operador no ve el chat en `node/N`, y este spec no se lo da.
@@ -300,7 +300,7 @@ Todo sin sitio arrancado, sobre las funciones puras y el *fixture* de consultas 
 3. Añadir las dos claves de i18n y las dos de flood.
 4. `drush cc all` — obligatorio: hay ficheros nuevos y una ruta nueva. **No hay `drush updb`**: ni campo, ni tabla, ni `hook_update_N`.
 5. Poner la credencial en `settings.php` del entorno.
-6. Aplicar las reglas de `docs/chat.md` en la consola de Firebase — o publicarlas por CLI desde el repo de la app, acordando antes **quién de los dos lo hace** (enmienda 2026-09-14).
+6. Aplicar las reglas de `docs/chat.md`. **⚠️ Enmienda 2026-09-14:** ya no se pegan en la consola — las publica la app por CLI desde su `database.rules.json`, que es la fuente. Hecho y verificado contra producción ese mismo día: un hilo del claim responde `200` y sus prefijos (`50198`, `5019`, `50200`, `5020`) responden `401`.
 
 ## Criterios de aceptación
 
