@@ -34,7 +34,7 @@ Cuatro notas que la cabecera fija:
 - **`includes/myapi.chat.inc`** (**nuevo**) — el dominio: quién participa en qué hilo. Es la única parte del spec con SQL.
   - `myapi_chat_thread_id($offer_nid)` (pura) — `'service_offers/' . $nid`. Una sola definición de la convención, y el sitio al que apuntar el día que cambie.
   - `myapi_chat_offer_nids_for_uid($uid)` — las dos consultas de la sección «La regla de pertenencia».
-  - `myapi_chat_threads_claim(array $thread_ids)` (pura) — recorta a `MYAPI_CHAT_MAX_THREADS`, une por comas y **garantiza que el claim no pasa de 1000 bytes**.
+  - `myapi_chat_threads_claim(array $thread_ids)` (pura) — recorta a `MYAPI_CHAT_MAX_THREADS`, une por comas y **garantiza que el claim no pasa de 1000 bytes**. **⚠️ Enmienda 2026-09-14:** ya no une por comas, sino que **valla cada hilo con `|` por los dos lados** (`"|service_offers/901|service_offers/88|"`); ver la enmienda de la Decisión 5. La acompaña `myapi_chat_claim_threads($claim)`, su inversa, de la que el cuerpo de la respuesta deriva la lista sin delimitadores.
 - **`resources/chat.resource.inc`** (**nuevo**) — `myapi_chat_token_dispatch()` (solo `POST`; el `405` **antes** del token y antes de cualquier consulta, como todo despachador del módulo) y `myapi_chat_token()`, el endpoint entero en el orden fijo de «La compuerta».
 - **`myapi.module`** (modificar) — **una** ruta: `api/v1/chat/token`, `page callback` `myapi_chat_token_dispatch`, sin `page arguments`, `access callback` `TRUE`, `file` `resources/chat.resource.inc`. Tres componentes literales; no compite con ninguna ruta existente.
 - **`myapi.info`** (modificar) — tres `files[]` nuevos. Es lo que hace obligatorio el `drush cc all`.
@@ -51,7 +51,7 @@ Cuatro notas que la cabecera fija:
 - **Notificar un mensaje nuevo.** Ni push ni bandeja. Hoy todo el push del módulo sale por OneSignal (`includes/myapi.onesignal.inc`) y un mensaje de chat no aparecerá en `myapi_notifications`. Es el spec hermano, y tiene dos caminos —endpoint `POST .../chat/notify` reusando `myapi_notification_create()`, o Cloud Function con trigger en la RTDB y push por FCM—, que es exactamente por lo que es otro spec y no una viñeta de este. **✅ Resuelto por SPEC 116:** `POST /api/v1/chat/threads/{offer_nid}/notify`, el primero de los dos caminos —el cliente que escribió avisa—, porque el segundo **no sabe a quién avisar**: la pertenencia vive en tres campos de Drupal que un trigger de la RTDB no puede leer, así que acabaría llamando a este mismo endpoint. Del par que esta viñeta anticipaba se cumple **la mitad**: hay push y **no** hay bandeja, y `myapi_notification_create()` **no** se reusa — siempre inserta fila, y el inbox no puede enterarse de que leíste el chat, así que quedaría no leída para siempre. Ver `specs/services/116-chat-message-push.md`.
 - **Adjuntos en el chat.** Firebase Storage tiene sus propias reglas y su propia credencial.
 - **Revocación inmediata.** Un token ya firmado sigue autorizando su hilo hasta una hora. Ver Riesgos.
-- **Desplegar las reglas de la RTDB.** Se documentan en `docs/chat.md` y se aplican a mano desde la consola de Firebase. Automatizarlo desde D7 exigiría OAuth2 contra la Admin API, que es justo lo que este diseño evita.
+- **Desplegar las reglas de la RTDB.** Se documentan en `docs/chat.md` y se publican **o** a mano desde la consola de Firebase **o** por CLI desde `database.rules.json` del repo de la app — **nunca las dos cosas para el mismo cambio**: publicar un ruleset completo pisa el del otro sin avisar (enmienda 2026-09-14). Automatizarlo desde D7 exigiría OAuth2 contra la Admin API, que es justo lo que este diseño evita.
 - **Firestore.** El spec elige RTDB (Decisión 3) y no deja el otro camino a medio abrir.
 - **Retención, moderación y borrado de mensajes.** Firebase no borra nada solo.
 - **El back office.** Un operador no ve el chat en `node/N`, y este spec no se lo da.
@@ -171,9 +171,11 @@ Un JWT **RS256**, ~50 líneas, **sin Composer y sin el Admin SDK** (Decisión 3)
 
 **Firma:** `openssl_sign($header_b64 . '.' . $payload_b64, $sig, $private_key, OPENSSL_ALGO_SHA256)`, y `myapi_firebase_base64url_encode()` en los tres segmentos.
 
-**`threads` es un string separado por comas y no un array** (Decisión 5). Las reglas de la RTDB no tienen operador de pertenencia sobre listas: `auth.token.threads.contains(...)` funciona sobre string y no sobre array. Es una limitación del motor de reglas, y es la que decide el formato del claim — por eso la decisión vive aquí y no se descubre depurando reglas.
+**`threads` es un string delimitado y no un array** (Decisión 5). Las reglas de la RTDB no tienen operador de pertenencia sobre listas: `auth.token.threads.contains(...)` funciona sobre string y no sobre array. Es una limitación del motor de reglas, y es la que decide el formato del claim — por eso la decisión vive aquí y no se descubre depurando reglas.
 
-**El tope de 1000 bytes es real y es del producto, no de este spec.** Los custom claims de Firebase no pueden pasar de 1000 bytes en total. Cada hilo ocupa ~22 bytes, así que caben unos 40: `MYAPI_CHAT_MAX_THREADS = 40`, y `myapi_chat_threads_claim()` **mide el resultado y recorta hasta que quepa**, en vez de fiarse de la cuenta. La degradación está documentada y probada: un proveedor con más de 40 trabajos vivos pierde los hilos más quietos hasta que la lista se mueva. Es también el número que decide cuándo hay que pasar al plan B — un nodo `/threads/{id}/members/{uid}` escrito por el backend, que obliga a OAuth2 contra la RTDB y que este spec deja explícitamente sin abrir.
+> **⚠️ Enmienda 2026-09-14 (seguridad).** El separador es `|`, y va también **al principio y al final**: `"|service_offers/901|service_offers/88|"`; `"|"` a secas para una cuenta sin hilos. La coma no bastaba: `contains()` es un match de **subcadena**, así que un claim con `service_offers/9013` también satisfacía la regla escrita para la oferta `901`. Cualquier nid que sea prefijo de otro nid vivo (901/9013, 88/885) era un hilo ajeno legible y escribible. Las vallas convierten la subcadena en comparación exacta. El claim **nunca** puede faltar ni dejar de ser string: una regla que no encuentra string ahí **da error de evaluación y deniega el chat entero**, no un hilo.
+
+**El tope de 1000 bytes es real y es del producto, no de este spec.** Los custom claims de Firebase no pueden pasar de 1000 bytes en total. Cada hilo ocupa ~24 bytes con sus delimitadores (~22 antes de la enmienda de 2026-09-14), así que caben unos 40: `MYAPI_CHAT_MAX_THREADS = 40`, y `myapi_chat_threads_claim()` **mide el resultado y recorta hasta que quepa**, en vez de fiarse de la cuenta. La degradación está documentada y probada: un proveedor con más de 40 trabajos vivos pierde los hilos más quietos hasta que la lista se mueva. Es también el número que decide cuándo hay que pasar al plan B — un nodo `/threads/{id}/members/{uid}` escrito por el backend, que obliga a OAuth2 contra la RTDB y que este spec deja explícitamente sin abrir.
 
 **Una aclaración que conviene tener escrita**, porque es la fuente de confusión número uno: **el custom token no es el que usa la app contra la base de datos**. La app lo canjea por un **ID token** con `signInWithCustomToken()`, y ese se refresca solo cada hora sin volver a pegarle a esta API. Por eso da igual que el access token del módulo dure 30 minutos (`includes/myapi.token.inc:18`) y el de Firebase 60: no tienen por qué cuadrar, y **no hay que llamar a este endpoint en cada arranque de pantalla** — una vez por sesión basta.
 
@@ -204,13 +206,15 @@ Van en `docs/chat.md`. Son la otra mitad del contrato: el token sin ellas no pro
   "rules": {
     "service_offers": {
       "$offer": {
-        ".read":  "auth != null && auth.token.threads.contains('service_offers/' + $offer)",
-        ".write": "auth != null && auth.token.threads.contains('service_offers/' + $offer)",
+        ".read": "auth != null && auth.token.threads.contains('|service_offers/' + $offer + '|')",
         "messages": {
           "$msg": {
-            ".validate": "newData.hasChildren(['from','text','at']) && newData.child('from').val() === auth.uid",
+            ".write": "auth != null && !data.exists() && newData.exists() && auth.token.threads.contains('|service_offers/' + $offer + '|')",
+            ".validate": "newData.hasChildren(['from','text','at'])",
+            "from": { ".validate": "newData.isString() && newData.val() === auth.uid" },
             "text": { ".validate": "newData.isString() && newData.val().length <= 2000" },
-            "at":   { ".validate": "newData.val() === now" }
+            "at":   { ".validate": "newData.val() === now" },
+            "$other": { ".validate": false }
           }
         }
       }
@@ -219,11 +223,16 @@ Van en `docs/chat.md`. Son la otra mitad del contrato: el token sin ellas no pro
 }
 ```
 
-Tres cosas que estas reglas fijan y que el código de la app debe respetar:
+> **⚠️ Enmienda 2026-09-14 (seguridad).** El ruleset de arriba es el endurecido, y **no hay `.write` por encima de `messages/$msg`**. El permiso de escritura en la RTDB **cascadea hacia abajo y no se puede retirar** desde una regla más profunda, así que el `.write` que este spec puso en `$offer` permitía a cualquiera de las dos partes hacer `set(null)` sobre el hilo y **borrar la conversación entera, mensajes de la contraparte incluidos**. Los `.validate` no lo frenaban: **las reglas de validación no se evalúan en los borrados**. En una función que existe para dejar constancia de lo acordado entre residente y proveedor, eso es destrucción de pruebas. Con el permiso en la hoja, un participante puede crear un mensaje y nada más. Los tres arreglos de esta enmienda son **del lado del cliente y no dependen de este backend**; llegaron desde la sesión de la app, que versiona el ruleset en `database.rules.json` en la raíz del repo Flutter — **ese fichero es el que se publica**, y esta copia y aquélla se cambian en el mismo commit o vuelven a divergir.
+
+Seis cosas que estas reglas fijan y que el código de la app debe respetar:
 
 - **`from` tiene que ser `auth.uid`**: nadie puede escribir un mensaje en nombre de otro, ni siquiera dentro de su propio hilo.
 - **`at` es `now` del servidor de Firebase**, no del teléfono: dos móviles con la hora torcida no reordenan la conversación.
+- **⚠️ Enmienda 2026-09-14: los mensajes son de sólo creación.** `!data.exists() && newData.exists()`: un mensaje nace y ya no se edita ni se borra, por ninguna de las dos partes.
+- **⚠️ Enmienda 2026-09-14: ningún hijo fuera de los tres.** `hasChildren()` exige los suyos y no dice nada de los demás, así que sin `"$other": { ".validate": false }` el tope de 2000 caracteres de `text` se esquiva colgando el contenido de una cuarta clave.
 - **`contains()` con el prefijo completo**, no con el `$offer` pelado: sin el prefijo, `'901'` haría match dentro de `'service_offers/9013'`.
+- **⚠️ Enmienda 2026-09-14: `contains()` con las vallas `|`**, no con la ruta pelada — la misma trampa un paso más adentro, y el prefijo solo no la cierra: `'service_offers/901'` es subcadena de `'service_offers/9013'`. **Orden de despliegue: primero el servidor, después las reglas** — el claim nuevo satisface también las reglas viejas, así que no hay ventana de caída; publicar las reglas primero sí la abre. Los tokens viejos que sigan vivos reciben `permission_denied` y la app refirma sola.
 
 ---
 
@@ -260,7 +269,7 @@ Todo sin sitio arrancado, sobre las funciones puras y el *fixture* de consultas 
 2. **Recurso propio (`resources/chat.resource.inc`), no una función más en `auth.resource.inc`.** Regla 2 de `CLAUDE.md`. El endpoint canjea una credencial, sí, pero **su compuerta consulta ofertas y proveedores**: metido en el recurso de auth, ese fichero pasaría a saber qué es una oferta adjudicada.
 3. **JWT a mano con `openssl_sign()`, no `kreait/firebase-php`.** La librería arrastra Guzzle y su árbol dentro de un módulo D7 con `composer.json` que hoy solo tiene PHPUnit en `require-dev`. Y no hace falta: **solo firmamos**, no llamamos a la Admin API. *Descartado:* también, generar el token desde una Cloud Function — acabaría necesitando un endpoint «quién soy» en esta misma API, que hoy **no existe** (no hay `GET /api/v1/auth/me`), así que sería más código, no menos, y repartido en dos repos.
 4. **Los hilos van en los claims, no en un nodo de miembros escrito por el backend.** El plan B —`/threads/{id}/members/{uid}` en la RTDB— obliga a OAuth2 con la service account, a llamadas HTTP salientes desde `node_save()` y a un estado duplicado que puede quedar desincronizado. Los claims no duplican nada: se recalculan en cada firma. **El precio es el tope de 1000 bytes y la revocación diferida**, los dos en Riesgos.
-5. **`threads` es un string separado por comas.** Limitación del motor de reglas de la RTDB: `contains()` no opera sobre arrays.
+5. **`threads` es un string delimitado por `|`.** Limitación del motor de reglas de la RTDB: `contains()` no opera sobre arrays. **⚠️ Enmienda 2026-09-14:** eran comas sin vallas, y eso autorizaba de más — `contains()` es subcadena, así que el hilo `901` casaba dentro de `9013`. Ahora cada entrada va vallada con `|` por los dos lados, y la cuenta sin hilos se firma con `"|"`, nunca con string vacío ni con el claim ausente. El cuerpo de la respuesta **no cambia**: sigue siendo un array de rutas sin delimitadores.
 6. **Una sola regla de pertenencia, no dos ramas.** `field_assigned_provider` + oferta viva cubre adjudicadas y directas, excluye canceladas y sobrevive a cerradas, sin una sola condición sobre el estado de la solicitud. Menos código y, sobre todo, **menos sitios donde olvidarse del `direct`** — que es exactamente el fallo silencioso que este spec estuvo a punto de tener: gatear con `selected` a secas deja **todos** los trabajos directos sin chat, sin error y sin test rojo.
 7. **Cero hilos responde `200`, no `403`.** El token afirma una identidad; la lista de hilos es un dato, y un dato vacío es un dato.
 8. **La ruta del hilo es una convención (`service_offers/{nid}`), no un dato almacenado.** Los tres campos de SPEC 77 siguen vacíos. La app ya tiene el `nid` de la oferta en el detalle que devuelven SPEC 103 y 106, así que almacenarlo sería guardar una función del `nid` en una columna — y una columna editable a mano que, dice el propio `myapi.install:2836`, «rompe el chat sin dar ningún error». *Consecuencia asumida:* el back office no ve el hilo. Cuando eso haga falta, se escribe el campo y esta decisión se revierte **sin tocar la app**, porque el valor será el mismo.
@@ -291,7 +300,7 @@ Todo sin sitio arrancado, sobre las funciones puras y el *fixture* de consultas 
 3. Añadir las dos claves de i18n y las dos de flood.
 4. `drush cc all` — obligatorio: hay ficheros nuevos y una ruta nueva. **No hay `drush updb`**: ni campo, ni tabla, ni `hook_update_N`.
 5. Poner la credencial en `settings.php` del entorno.
-6. Aplicar las reglas de `docs/chat.md` en la consola de Firebase.
+6. Aplicar las reglas de `docs/chat.md` en la consola de Firebase — o publicarlas por CLI desde el repo de la app, acordando antes **quién de los dos lo hace** (enmienda 2026-09-14).
 
 ## Criterios de aceptación
 

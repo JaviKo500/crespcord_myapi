@@ -210,7 +210,9 @@ function myapi_chat_token() {
   // The claim is built ONCE and the response is derived FROM IT, never rebuilt
   // from $thread_ids: what is answered is what was signed, cut included.
   $claim = myapi_chat_threads_claim($thread_ids);
-  $threads = $claim === '' ? [] : explode(',', $claim);
+  // The delimiters are the JWT's business alone: the body publishes plain paths,
+  // which is what the app compares by equality.
+  $threads = myapi_chat_claim_threads($claim);
 
   // 5. The signature. FALSE has already said why in watchdog; the client gets a
   // key of its own and not a recycled server_error, because the app can do

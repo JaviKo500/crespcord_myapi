@@ -377,7 +377,7 @@ is what the notifications of SPEC 109-112 already do; the chat deciding
 otherwise would be incoherent.
 
 **At most 40 threads.** Firebase caps all custom claims at **1000 bytes**
-together, and a thread costs about 22. The list is ordered by the request's last
+together, and a thread costs about 24 once fenced by its delimiters. The list is ordered by the request's last
 activity, newest first, so if threads have to be lost, **the quietest ones go**.
 This is measured, not estimated — see the claim below.
 
@@ -493,9 +493,18 @@ their screen until the next message overwrites them.
 ## The RTDB security rules
 
 **This is the other half of the contract: without these rules the token protects
-nothing.** They are applied by hand from the Firebase console — this module does
-not deploy them (automating it would need OAuth2 against the Admin API, which is
-what this design exists to avoid).
+nothing.** This module does not deploy them (automating it would need OAuth2
+against the Admin API, which is what this design exists to avoid): they are
+published either by hand from the Firebase console or by CLI from the app's
+repository, **never both for the same change** — two people publishing a full
+ruleset overwrite each other in silence.
+
+**The ruleset below is versioned in the Flutter repository, as
+`database.rules.json` at its root.** That file is the one that gets published;
+this copy is here because the rules and the `threads` claim are one contract and
+neither half is readable without the other. **They drifted apart once already**
+— on 2026-09-14 the app's copy was hardened and this one was not — so whoever
+changes either side copies it across in the same commit.
 
 **Two things have to exist in the project before the rules mean anything**, and
 neither is a rule: the Realtime Database itself (create it in **locked mode** —
@@ -514,13 +523,15 @@ data for something else, merge the `service_offers` node into the existing
   "rules": {
     "service_offers": {
       "$offer": {
-        ".read":  "auth != null && auth.token.threads.contains('service_offers/' + $offer)",
-        ".write": "auth != null && auth.token.threads.contains('service_offers/' + $offer)",
+        ".read": "auth != null && auth.token.threads.contains('|service_offers/' + $offer + '|')",
         "messages": {
           "$msg": {
-            ".validate": "newData.hasChildren(['from','text','at']) && newData.child('from').val() === auth.uid",
+            ".write": "auth != null && !data.exists() && newData.exists() && auth.token.threads.contains('|service_offers/' + $offer + '|')",
+            ".validate": "newData.hasChildren(['from','text','at'])",
+            "from": { ".validate": "newData.isString() && newData.val() === auth.uid" },
             "text": { ".validate": "newData.isString() && newData.val().length <= 2000" },
-            "at":   { ".validate": "newData.val() === now" }
+            "at":   { ".validate": "newData.val() === now" },
+            "$other": { ".validate": false }
           }
         }
       }
@@ -529,19 +540,57 @@ data for something else, merge the `service_offers` node into the existing
 }
 ```
 
-Three things these rules fix, and the app's code has to respect all three:
+**There is deliberately no `.write` above `messages/$msg`.** Write permission in
+the RTDB **cascades down and cannot be taken back** by a deeper rule, so a
+`.write` on `$offer` — which is what this document carried until 2026-09-14 —
+let either party `set(null)` over the thread and **delete the whole
+conversation, the other side's messages included**. `.validate` does not save
+you there: **validation rules are not evaluated on deletes**. In a feature that
+exists to settle what was agreed between a resident and a provider, that is
+destruction of evidence. Granting the write at the leaf instead means a
+participant can create a message and can do nothing else.
+
+Six things these rules fix, and the app's code has to respect all six:
 
 - **`from` must be `auth.uid`.** Nobody writes a message in somebody else's
   name, not even inside their own thread.
 - **`at` is Firebase's `now`, not the phone's.** Two devices with skewed clocks
   must not reorder the conversation.
+- **Messages are create-only.** `!data.exists() && newData.exists()` means a
+  message can be born and never edited, never deleted — by either side.
+- **No child other than the three.** `hasChildren()` demands its three and says
+  nothing about the rest, so without `"$other": { ".validate": false }` the
+  2000-character cap on `text` is dodged by hanging the payload off a fourth
+  key.
 - **`contains()` uses the full prefix**, never the bare `$offer`: without it,
   `'901'` would match inside `'service_offers/9013'`.
+- **`contains()` uses the surrounding `|` too**, never the bare path. This is
+  the same trap one step further in, and the prefix alone does not close it:
+  `contains()` is a **substring** match, so a claim carrying
+  `service_offers/9013` also satisfies the rule written for offer `901`. Fencing
+  every entry of the claim with `|` at both ends — which is what the server
+  signs — turns the substring match into an exact comparison:
+  `'|service_offers/901|'` does not occur inside `'|service_offers/9013|'`. Any
+  nid that is a prefix of another live nid (901/9013, 88/885) is the bug this
+  closes.
 
-**Why the claim is a comma-separated string and not an array.** The rule engine
+**Why the claim is a delimited string and not an array.** The rule engine
 has no membership operator over lists: `auth.token.threads.contains(...)` works
 on a string and not on an array. That limitation is what decides the shape of the
-claim.
+claim, and `contains()` being a substring match is what decides the `|` fences
+inside it.
+
+**The claim is always a string, and never absent.** An account with no threads
+is signed with the lone delimiter, `"|"` — a claim that matches nothing and
+still evaluates. Were it missing or not a string, the rule would **error out**,
+and a rule that errors denies the whole chat rather than just one thread.
+
+**Deployment order: server first, rules second.** A token in the new format
+satisfies the old rules too (`'service_offers/901'` still occurs inside
+`'|service_offers/901|'`), so there is no window in which the chat is down.
+Publishing the rules first is what would break it. Tokens signed in the old
+format that are still alive when the rules go up get a `permission_denied`; the
+app resigns once and carries on, with no action from the user.
 
 ---
 
@@ -558,7 +607,7 @@ An **RS256** JWT, signed by the service account. Header
 | `iat` | `REQUEST_TIME` |
 | `exp` | `iat + 3600` — **the maximum Google accepts**; a larger value makes it reject the whole token |
 | `uid` | The Drupal uid, **as a string**, ≤ 128 characters |
-| `claims` | `{"threads":"service_offers/901,service_offers/88"}` |
+| `claims` | `{"threads":"|service_offers/901|service_offers/88|"}` — the delimiters are the JWT's alone; the response body carries plain paths. `"|"` when the account has no threads |
 
 **The number-one confusion, written down:** the custom token is **not** what the
 app uses against the database. The app trades it for an **ID token** through
@@ -648,7 +697,10 @@ Firebase is involved, and a `503` means the credential never reached
 one.** By then the token was accepted: what failed is the rules, and the usual
 reason is a `threads` claim that does not cover the path being read. Decode the
 custom token — its payload is plain base64url — and look at
-`claims.threads` before touching the rules.
+`claims.threads` before touching the rules. It must be a **string**, fenced by
+`|` at both ends and between entries (`"|"` on its own for an account with
+nothing awarded); a rule that hunts for the bare path against a claim without
+fences, or the other way round, is the other half of the same mismatch.
 
 ---
 

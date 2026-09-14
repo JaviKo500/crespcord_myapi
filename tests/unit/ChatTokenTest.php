@@ -281,7 +281,7 @@ class ChatTokenTest extends TestCase {
    * is, and must not reshape what the domain half handed it.
    */
   public function testClaimsTravelVerbatim() {
-    $claims = ['threads' => 'service_offers/901,service_offers/88'];
+    $claims = ['threads' => '|service_offers/901|service_offers/88|'];
     $payload = myapi_firebase_custom_token_payload(412, 'a@b.iam.gserviceaccount.com', $claims, 1756698000);
 
     $this->assertSame($claims, $payload['claims']);
@@ -310,21 +310,50 @@ class ChatTokenTest extends TestCase {
   }
 
   /**
-   * Comma-separated, in the order given. The order is the contract: the caller
+   * Delimiter-fenced, in the order given. The order is the contract: the caller
    * hands them newest-activity-first, so the tail is what a trim throws away.
    */
-  public function testClaimJoinsWithCommasAndPreservesOrder() {
+  public function testClaimFencesEveryThreadAndPreservesOrder() {
     $claim = myapi_chat_threads_claim(['service_offers/901', 'service_offers/88', 'service_offers/7']);
 
-    $this->assertSame('service_offers/901,service_offers/88,service_offers/7', $claim);
+    $this->assertSame('|service_offers/901|service_offers/88|service_offers/7|', $claim);
+    $this->assertSame('|', MYAPI_CHAT_CLAIM_DELIMITER);
   }
 
   /**
-   * No threads is an empty claim, not a malformed one. It is what an account
-   * with no conversations yet is signed with, and it is not an error.
+   * THE REASON THE DELIMITERS EXIST, stated as the only test that would fail if
+   * somebody "simplified" them away. contains() in the RTDB rule language is a
+   * SUBSTRING match, so a claim listing offer 9013 used to authorise offer 901
+   * as well. Fenced at both ends, the rule's needle no longer occurs inside its
+   * longer neighbour — and still occurs in the claim that really carries it.
    */
-  public function testClaimOfNoThreadsIsAnEmptyString() {
-    $this->assertSame('', myapi_chat_threads_claim([]));
+  public function testAThreadDoesNotMatchInsideALongerSiblingOnceFenced() {
+    $claim = myapi_chat_threads_claim(['service_offers/9013']);
+    $needle = '|service_offers/901|';
+
+    $this->assertStringNotContainsString($needle, $claim);
+    $this->assertStringContainsString($needle, myapi_chat_threads_claim(['service_offers/901']));
+  }
+
+  /**
+   * No threads is the LONE DELIMITER, never an empty string and never an absent
+   * claim: a rule that finds no string there does not deny one thread, it errors
+   * out and denies the whole chat. It is what an account with no conversations
+   * yet is signed with, and it is not an error.
+   */
+  public function testClaimOfNoThreadsIsTheLoneDelimiter() {
+    $this->assertSame('|', myapi_chat_threads_claim([]));
+    $this->assertSame([], myapi_chat_claim_threads('|'));
+  }
+
+  /**
+   * The body's list is the claim read back, and it carries no delimiters: the
+   * app deserialises plain paths and compares them by equality.
+   */
+  public function testClaimThreadsReadsTheFenceBackOff() {
+    $threads = ['service_offers/901', 'service_offers/88'];
+
+    $this->assertSame($threads, myapi_chat_claim_threads(myapi_chat_threads_claim($threads)));
   }
 
   /**
@@ -338,7 +367,7 @@ class ChatTokenTest extends TestCase {
     }
 
     $claim = myapi_chat_threads_claim($thread_ids);
-    $kept = explode(',', $claim);
+    $kept = myapi_chat_claim_threads($claim);
 
     $this->assertSame(40, MYAPI_CHAT_MAX_THREADS);
     $this->assertCount(40, $kept);
@@ -361,7 +390,7 @@ class ChatTokenTest extends TestCase {
       $thread_ids[] = myapi_chat_thread_id(999999900 + $i);
     }
 
-    $untrimmed = strlen(drupal_json_encode(['threads' => implode(',', $thread_ids)]));
+    $untrimmed = strlen(drupal_json_encode(['threads' => '|' . implode('|', $thread_ids) . '|']));
     $this->assertGreaterThan(MYAPI_CHAT_CLAIM_MAX_BYTES, $untrimmed, 'fixture precondition: 40 long nids do NOT fit');
 
     $claim = myapi_chat_threads_claim($thread_ids);
@@ -370,8 +399,8 @@ class ChatTokenTest extends TestCase {
       MYAPI_CHAT_CLAIM_MAX_BYTES,
       strlen(drupal_json_encode(['threads' => $claim]))
     );
-    $this->assertCount(37, explode(',', $claim));
-    $this->assertSame(array_slice($thread_ids, 0, 37), explode(',', $claim));
+    $this->assertCount(37, myapi_chat_claim_threads($claim));
+    $this->assertSame(array_slice($thread_ids, 0, 37), myapi_chat_claim_threads($claim));
   }
 
   /**
@@ -387,7 +416,7 @@ class ChatTokenTest extends TestCase {
 
     $claim = myapi_chat_threads_claim($thread_ids);
 
-    $this->assertCount(40, explode(',', $claim));
+    $this->assertCount(40, myapi_chat_claim_threads($claim));
     $this->assertLessThanOrEqual(
       MYAPI_CHAT_CLAIM_MAX_BYTES,
       strlen(drupal_json_encode(['threads' => $claim]))
@@ -517,7 +546,7 @@ class ChatTokenTest extends TestCase {
       'private_key' => $keys['private'],
     ]);
 
-    $jwt = myapi_firebase_sign_custom_token(412, ['threads' => 'service_offers/901']);
+    $jwt = myapi_firebase_sign_custom_token(412, ['threads' => '|service_offers/901|']);
     $this->assertIsString($jwt);
 
     $segments = explode('.', $jwt);
@@ -559,7 +588,7 @@ class ChatTokenTest extends TestCase {
       'private_key' => $keys['private'],
     ]);
 
-    $jwt = myapi_firebase_sign_custom_token(412, ['threads' => 'service_offers/901']);
+    $jwt = myapi_firebase_sign_custom_token(412, ['threads' => '|service_offers/901|']);
     $payload = json_decode($this->base64urlDecode(explode('.', $jwt)[1]), TRUE);
 
     $this->assertSame(
@@ -569,7 +598,7 @@ class ChatTokenTest extends TestCase {
     $this->assertSame('412', $payload['uid']);
     $this->assertSame(3600, $payload['exp'] - $payload['iat']);
     $this->assertSame(REQUEST_TIME, $payload['iat']);
-    $this->assertSame(['threads' => 'service_offers/901'], $payload['claims']);
+    $this->assertSame(['threads' => '|service_offers/901|'], $payload['claims']);
   }
 
   /**
@@ -819,8 +848,8 @@ class ChatTokenTest extends TestCase {
     $thread_ids = array_map('myapi_chat_thread_id', myapi_chat_offer_nids_for_uid(self::RESIDENT_UID));
     $claim = myapi_chat_threads_claim($thread_ids);
 
-    $this->assertSame('service_offers/901,service_offers/88', $claim);
-    $this->assertSame(['service_offers/901', 'service_offers/88'], explode(',', $claim));
+    $this->assertSame('|service_offers/901|service_offers/88|', $claim);
+    $this->assertSame(['service_offers/901', 'service_offers/88'], myapi_chat_claim_threads($claim));
   }
 
 }

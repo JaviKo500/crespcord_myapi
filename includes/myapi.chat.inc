@@ -86,8 +86,8 @@ if (!defined('MYAPI_CHAT_THREAD_PREFIX')) {
 }
 
 // How many threads a token may carry. Firebase caps ALL custom claims at 1000
-// bytes together; a thread costs ~22, so about 40 fit. The number is the
-// starting point, NOT the guarantee: myapi_chat_threads_claim() measures the
+// bytes together; a thread costs ~24 once fenced by its delimiters, so about 40
+// fit. The number is the starting point, NOT the guarantee: myapi_chat_threads_claim() measures the
 // encoded result and keeps cutting until it fits, because trusting the
 // arithmetic is how a provider with long nids gets a token Firebase rejects.
 if (!defined('MYAPI_CHAT_MAX_THREADS')) {
@@ -98,6 +98,20 @@ if (!defined('MYAPI_CHAT_MAX_THREADS')) {
 // A product limit, not one of this spec's making.
 if (!defined('MYAPI_CHAT_CLAIM_MAX_BYTES')) {
   define('MYAPI_CHAT_CLAIM_MAX_BYTES', 1000);
+}
+
+// The character that fences every thread inside the 'threads' claim: one at the
+// start, one between each pair, one at the end. IT IS THE OTHER HALF OF THE
+// RULE, exactly like MYAPI_CHAT_THREAD_PREFIX, and it is what turns the RTDB's
+// substring match into an exact comparison: contains('|service_offers/901|')
+// does NOT match inside '|service_offers/9013|', while the bare
+// 'service_offers/901' did. Whoever edits this character edits the RTDB rules
+// in the same commit — see docs/chat.md.
+//
+// A '|' and not a comma because it cannot appear inside a thread path: the path
+// is MYAPI_CHAT_THREAD_PREFIX plus a nid, digits only.
+if (!defined('MYAPI_CHAT_CLAIM_DELIMITER')) {
+  define('MYAPI_CHAT_CLAIM_DELIMITER', '|');
 }
 
 // The app section the chat push deep-links to (SPEC 116). Same role as
@@ -316,17 +330,32 @@ function myapi_chat_offer_nids_for_uid($uid) {
 }
 
 /**
- * The 'threads' custom claim: the thread paths, comma-separated and within
- * Firebase's byte budget.
+ * The 'threads' custom claim: the thread paths, fenced by
+ * MYAPI_CHAT_CLAIM_DELIMITER and within Firebase's byte budget.
  *
  * PURE.
  *
- * A COMMA-SEPARATED STRING AND NOT AN ARRAY (SPEC 115, decision 5). The RTDB
- * rule engine has no membership operator over lists:
+ * A DELIMITED STRING AND NOT AN ARRAY (SPEC 115, decision 5). The RTDB rule
+ * engine has no membership operator over lists:
  * auth.token.threads.contains(...) works on a string and not on an array. It is
  * a limitation of the engine, and it is what decides the shape of the claim —
  * which is why it is written down here instead of being discovered while
  * debugging rules.
+ *
+ * AND THE DELIMITERS ARE WHAT MAKE THAT CONTAINS() SAFE. contains() is a
+ * SUBSTRING match, so a plain list of paths authorises more than it lists: a
+ * claim carrying 'service_offers/9013' passes the rule written for offer 901,
+ * because 'service_offers/901' is a substring of it. Any nid that is a prefix of
+ * another live nid — 901/9013, 88/885 — is one account reading a stranger's
+ * conversation. Fencing every entry with '|' at BOTH ends is what closes it:
+ * the rule asks for '|service_offers/901|' and that does not occur inside
+ * '|service_offers/9013|'. The rule and this function are one contract, and
+ * docs/chat.md carries the other half.
+ *
+ * NEVER ABSENT, NEVER EMPTY, ALWAYS A STRING. An account with no threads is
+ * signed with the lone delimiter, '|' — a claim that matches nothing and still
+ * evaluates. A missing claim or a non-string one makes the rule ERROR OUT, and
+ * a rule that errors denies the whole chat rather than just the thread.
  *
  * THE 1000 BYTES ARE MEASURED, NOT ESTIMATED. The cap is on the ENCODED claims,
  * so what is weighed is drupal_json_encode(['threads' => …]) and not the raw
@@ -350,8 +379,9 @@ function myapi_chat_offer_nids_for_uid($uid) {
  * @param array $thread_ids  Thread paths, most recently active first.
  *
  * @return string
- *   The claim's value. Empty string when the list is empty — which is a valid
- *   claim for an account with no conversations yet, not an error.
+ *   The claim's value, always delimiter-fenced. The lone delimiter when the list
+ *   is empty — which is a valid claim for an account with no conversations yet,
+ *   not an error.
  */
 function myapi_chat_threads_claim(array $thread_ids) {
   $thread_ids = array_values($thread_ids);
@@ -361,7 +391,9 @@ function myapi_chat_threads_claim(array $thread_ids) {
   }
 
   while ($thread_ids) {
-    $claim = implode(',', $thread_ids);
+    $claim = MYAPI_CHAT_CLAIM_DELIMITER
+      . implode(MYAPI_CHAT_CLAIM_DELIMITER, $thread_ids)
+      . MYAPI_CHAT_CLAIM_DELIMITER;
 
     if (strlen(drupal_json_encode(['threads' => $claim])) <= MYAPI_CHAT_CLAIM_MAX_BYTES) {
       return $claim;
@@ -370,7 +402,30 @@ function myapi_chat_threads_claim(array $thread_ids) {
     array_pop($thread_ids);
   }
 
-  return '';
+  return MYAPI_CHAT_CLAIM_DELIMITER;
+}
+
+/**
+ * The threads a claim carries, back as a list.
+ *
+ * PURE. The inverse of myapi_chat_threads_claim(), and the reason the response
+ * body can be derived FROM THE SIGNED STRING instead of being rebuilt from the
+ * list that went in: what is answered is then what was signed, cut included.
+ *
+ * THE BODY IS NOT THE CLAIM. The app deserialises `threads` as a list of plain
+ * paths and compares them by equality, so the delimiters are an artefact of the
+ * JWT and must not leak into the response — they exist only because the RTDB
+ * rule engine matches substrings.
+ *
+ * @param string $claim  A claim built by myapi_chat_threads_claim().
+ *
+ * @return array
+ *   The thread paths, in the claim's order. Empty for the lone delimiter.
+ */
+function myapi_chat_claim_threads($claim) {
+  $threads = explode(MYAPI_CHAT_CLAIM_DELIMITER, (string) $claim);
+
+  return array_values(array_filter($threads, 'strlen'));
 }
 
 /* ---------------------------------------------------------------------------
