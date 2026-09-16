@@ -323,4 +323,602 @@ class BotUnitsSearchTest extends TestCase {
     $this->assertNull(myapi_bot_match_rank('pradera', 'Edificio Torre Azul', TRUE));
   }
 
+  /* =========================================================================
+   * The endpoint. GET /api/v1/bot/units, called the way hook_menu() calls it.
+   * ====================================================================== */
+
+  /**
+   * The key every fixture request sends, and the one the variable holds.
+   */
+  const API_KEY = 'a-shared-secret-for-the-bot';
+
+  protected function setUp(): void {
+    $this->assertSame('es', myapi_get_lang(), 'suite precondition: language resolves to the default');
+
+    myapi_test_db_seed();
+    $GLOBALS['myapi_test_variables'] = ['myapi_bot_api_key' => self::API_KEY];
+    $GLOBALS['myapi_test_watchdog'] = [];
+    $_SERVER['REQUEST_METHOD'] = 'GET';
+    $_SERVER['HTTP_X_API_KEY'] = self::API_KEY;
+    $_GET = ['q' => 'api/v1/bot/units'];
+  }
+
+  protected function tearDown(): void {
+    myapi_test_db_seed();
+    $GLOBALS['myapi_test_variables'] = [];
+    $GLOBALS['myapi_test_watchdog'] = [];
+    $_SERVER['REQUEST_METHOD'] = 'GET';
+    unset($_SERVER['HTTP_X_API_KEY']);
+    $_GET = [];
+  }
+
+  /**
+   * A published 'condominio' node row.
+   */
+  private function condominiumRow($nid, $title, $status = 1) {
+    return [
+      'nid'    => (string) $nid,
+      'type'   => 'condominio',
+      'status' => (string) $status,
+      'title'  => $title,
+    ];
+  }
+
+  /**
+   * A published 'vivienda' node row.
+   *
+   * It carries the condominium reference TWICE, under the two names the two
+   * queries read it by: field_condominio_target_id is the column
+   * myapi_unit_fetch_unit_nids_by_condominium() filters on, and condominio_nid
+   * is the alias myapi_unit_fetch_units() projects it to. The fixture builder
+   * records joins without resolving them (see the SPEC 74 disclaimer in
+   * bootstrap.php), so the row seeded here is the row each join would have
+   * produced.
+   */
+  private function unitRow($nid, $name, $condominium_nid, array $overrides = []) {
+    return $overrides + [
+      'nid'                        => (string) $nid,
+      'type'                       => 'vivienda',
+      'status'                     => '1',
+      'title'                      => NULL,
+      'name'                       => $name,
+      'category'                   => NULL,
+      'area_m2'                    => NULL,
+      'field_condominio_target_id' => (string) $condominium_nid,
+      'condominio_nid'             => (string) $condominium_nid,
+      'owner_uid'                  => NULL,
+      'saldo_actual'               => '1234.56',
+    ];
+  }
+
+  /**
+   * A users row with both profile fields, as myapi_user_display_names() reads
+   * them.
+   */
+  private function userRow($uid, $first, $last, $name = 'cuenta') {
+    return [
+      'uid'        => (string) $uid,
+      'name'       => $name,
+      'first_name' => $first,
+      'last_name'  => $last,
+    ];
+  }
+
+  /**
+   * Two buildings, one unit each, and an owner on the first.
+   *
+   * 'Edificio Torre Azul' and 'Torre Azul II' are not decoration: they are
+   * risk 2 of the spec — two buildings whose names differ by one word — and
+   * most cases below want a base where more than one answer is possible.
+   */
+  private function seedTwoBuildings(array $extra = []) {
+    myapi_test_db_seed([
+      'node' => array_merge([
+        $this->condominiumRow(12, 'Edificio Torre Azul'),
+        $this->condominiumRow(31, 'Torre Azul II'),
+        $this->unitRow(45, 'Dpto 3-B', 12, ['owner_uid' => '7']),
+        $this->unitRow(46, 'Local 2', 31),
+      ], isset($extra['node']) ? $extra['node'] : []),
+      'users' => isset($extra['users']) ? $extra['users'] : [$this->userRow(7, 'Juan', 'Pérez')],
+    ]);
+  }
+
+  /**
+   * Calls the dispatcher and answers the status and the decoded body.
+   */
+  private function request($condominium = 'torre azul', $unit = '3B', $method = 'GET') {
+    $_SERVER['REQUEST_METHOD'] = $method;
+    $_GET = ['q' => 'api/v1/bot/units'];
+    if ($condominium !== NULL) {
+      $_GET['condominium'] = $condominium;
+    }
+    if ($unit !== NULL) {
+      $_GET['unit'] = $unit;
+    }
+
+    return myapi_test_capture(function () {
+      myapi_bot_units_dispatch();
+    });
+  }
+
+  /* -------------------------------------------------------------------------
+   * The method and the four parameter errors.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * Only GET. The endpoint reads; the bot writes through the endpoints that
+   * already exist.
+   */
+  public function testEveryOtherMethodIs405() {
+    foreach (['POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'] as $method) {
+      $result = $this->request('torre azul', '3B', $method);
+
+      $this->assertSame(405, $result['status'], $method);
+      $this->assertSame('method_not_allowed', $result['json']['error_code'], $method);
+    }
+  }
+
+  /**
+   * An absent or empty parameter is a 422 and not an empty answer: it is a bug
+   * in the n8n flow, and "I found nothing" would hide it behind a WhatsApp
+   * conversation with somebody who typed correctly.
+   */
+  public function testAMissingParameterIs422() {
+    foreach ([NULL, '', '   '] as $value) {
+      $this->assertSame('missing_condominium', $this->request($value, '3B')['json']['error_code']);
+      $this->assertSame('missing_unit', $this->request('torre azul', $value)['json']['error_code']);
+    }
+
+    $this->assertSame(422, $this->request(NULL, '3B')['status']);
+    $this->assertSame(422, $this->request('torre azul', NULL)['status']);
+  }
+
+  /**
+   * A term that survives as fewer than two characters is a 422 of its own.
+   *
+   * Two is the length below which the search stops meaning anything: with one
+   * character "contains" answers with half the building list and the cap of
+   * twenty becomes the real selection criterion.
+   */
+  public function testATooShortParameterIs422() {
+    foreach (['-', 'a', '#'] as $value) {
+      $result = $this->request($value, '3B');
+
+      $this->assertSame(422, $result['status'], $value);
+      $this->assertSame('invalid_condominium', $result['json']['error_code'], $value);
+    }
+
+    $result = $this->request('torre azul', '3');
+
+    $this->assertSame(422, $result['status']);
+    $this->assertSame('invalid_unit', $result['json']['error_code']);
+  }
+
+  /**
+   * Both parameters missing is ONE 422, and it names the condominium: that is
+   * the one validated first.
+   */
+  public function testTheCondominiumIsValidatedFirst() {
+    $this->assertSame('missing_condominium', $this->request(NULL, NULL)['json']['error_code']);
+    $this->assertSame('invalid_condominium', $this->request('a', '3')['json']['error_code']);
+  }
+
+  /**
+   * Not a single table is read on the way to a 422.
+   *
+   * The credential is checked first and the parameters second, both before any
+   * query — the same ordering EndpointContractTest asserts for the 401.
+   */
+  public function testA422ReadsNoTable() {
+    $this->seedTwoBuildings();
+    $this->request(NULL, NULL);
+
+    $this->assertSame([], myapi_test_db_queries());
+  }
+
+  /* -------------------------------------------------------------------------
+   * Finding the unit.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * The case the endpoint exists for: the building without its first word and
+   * without accents, the unit without its separator.
+   */
+  public function testItFindsTheUnitAcrossBothNames() {
+    $this->seedTwoBuildings();
+
+    $result = $this->request('torre azul', '3B');
+
+    $this->assertSame(200, $result['status']);
+    $this->assertTrue($result['json']['success']);
+
+    $data = $result['json']['data'];
+    $this->assertTrue($data['found']);
+    $this->assertSame(1, $data['total']);
+    $this->assertSame(
+      [
+        'unit_id'        => 45,
+        'unit'           => 'Dpto 3-B',
+        'condominium_id' => 12,
+        'condominium'    => 'Edificio Torre Azul',
+        'owner'          => ['uid' => 7, 'name' => 'Juan Pérez'],
+        'match'          => 'exact',
+      ],
+      $data['units'][0]
+    );
+  }
+
+  /**
+   * The words of the building in any order, and the four writings of the unit.
+   */
+  public function testItFindsTheUnitHoweverTheTermIsWritten() {
+    $this->seedTwoBuildings();
+
+    foreach (['torre azul', 'TORRE AZUL', 'Torre Azul', 'torre-azul', 'azul torre'] as $condominium) {
+      $data = $this->request($condominium, '3B')['json']['data'];
+      $this->assertSame(45, $data['units'][0]['unit_id'], $condominium);
+    }
+
+    foreach (['3b', '3-B', '3 B', '# 3B'] as $unit) {
+      $data = $this->request('torre azul', $unit)['json']['data'];
+      $this->assertSame(45, $data['units'][0]['unit_id'], $unit);
+    }
+  }
+
+  /**
+   * A building stored with an accent is found without it.
+   */
+  public function testItFindsABuildingWrittenWithoutItsAccent() {
+    myapi_test_db_seed([
+      'node' => [
+        $this->condominiumRow(12, 'Climatización'),
+        $this->unitRow(45, 'Dpto 3-B', 12),
+      ],
+    ]);
+
+    $data = $this->request('climatizacion', '3B')['json']['data'];
+
+    $this->assertSame(1, $data['total']);
+    $this->assertSame('Climatización', $data['units'][0]['condominium']);
+  }
+
+  /**
+   * One letter wrong in the building name, and the element says so.
+   */
+  public function testAMisspelledBuildingIsFoundAndFlagged() {
+    $this->seedTwoBuildings();
+
+    foreach (['torre asul', 'torrre azul'] as $condominium) {
+      $data = $this->request($condominium, '3B')['json']['data'];
+
+      $this->assertTrue($data['found'], $condominium);
+      $this->assertSame(45, $data['units'][0]['unit_id'], $condominium);
+      $this->assertSame('fuzzy', $data['units'][0]['match'], $condominium);
+    }
+  }
+
+  /**
+   * The approximate pass only runs when the literal one found NOTHING.
+   *
+   * 'Praderia del Sur' is one letter from 'pradera' and does not contain it,
+   * so it is reachable ONLY by similarity — the second half of this case
+   * proves that by removing its rival. With 'Conjunto Pradera' present the
+   * literal pass answers, the approximate one never runs, and the building
+   * that merely looks alike stays out.
+   *
+   * The price, which the spec pays knowingly: a search that already works
+   * never starts offering neighbours.
+   */
+  public function testTheApproximatePassOnlyRunsWhenTheLiteralOneFoundNothing() {
+    $both = [
+      $this->condominiumRow(52, 'Conjunto Pradera'),
+      $this->unitRow(47, 'Dpto 3-B', 52),
+      $this->condominiumRow(53, 'Praderia del Sur'),
+      $this->unitRow(48, 'Dpto 3-B', 53),
+    ];
+    myapi_test_db_seed(['node' => $both]);
+
+    $data = $this->request('pradera', '3B')['json']['data'];
+
+    $this->assertSame([47], array_column($data['units'], 'unit_id'), 'only the literal match');
+    $this->assertSame('exact', $data['units'][0]['match']);
+
+    // The same term, the same building, with the literal rival gone: now the
+    // second pass runs and 'Praderia del Sur' does come back — flagged.
+    myapi_test_db_seed(['node' => array_slice($both, 2)]);
+
+    $data = $this->request('pradera', '3B')['json']['data'];
+
+    $this->assertSame([48], array_column($data['units'], 'unit_id'));
+    $this->assertSame('fuzzy', $data['units'][0]['match']);
+  }
+
+  /**
+   * A literal match by prefix or by containment is still `match: "exact"`.
+   *
+   * "exact" means NOT APPROXIMATED, not "identical": n8n has two behaviours —
+   * charge, or confirm before charging — and a third label would be a field
+   * nobody reads.
+   */
+  public function testALiteralPartialMatchIsReportedAsExact() {
+    $this->seedTwoBuildings();
+
+    // 'torreazul' is contained in 'edificiotorreazul', and '3b' in 'dpto3b':
+    // neither is identical, and neither needed a letter corrected.
+    $this->assertSame('exact', $this->request('torre azul', '3B')['json']['data']['units'][0]['match']);
+  }
+
+  /* -------------------------------------------------------------------------
+   * The guard that protects the neighbour's unit.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * '3b' does NOT reach '3C'. The whole reason the length guard exists.
+   */
+  public function testAShortUnitTermIsNeverApproximated() {
+    myapi_test_db_seed([
+      'node' => [
+        $this->condominiumRow(12, 'Edificio Torre Azul'),
+        $this->unitRow(45, 'Dpto 3-C', 12),
+      ],
+    ]);
+
+    $data = $this->request('torre azul', '3b')['json']['data'];
+
+    $this->assertFalse($data['found']);
+    $this->assertSame(0, $data['total']);
+    $this->assertSame([], $data['units']);
+  }
+
+  /**
+   * 'dpto 3b' does reach 'Dpto 3-C', and it is flagged as approximate.
+   *
+   * The spec asks for this by name. The defence here is not the distance, it
+   * is `match: "fuzzy"` reaching n8n and n8n confirming before it charges.
+   */
+  public function testALongerUnitTermCanBeApproximated() {
+    myapi_test_db_seed([
+      'node' => [
+        $this->condominiumRow(12, 'Edificio Torre Azul'),
+        $this->unitRow(45, 'Dpto 3-C', 12),
+      ],
+    ]);
+
+    $data = $this->request('torre azul', 'dpto 3b')['json']['data'];
+
+    $this->assertTrue($data['found']);
+    $this->assertSame('fuzzy', $data['units'][0]['match']);
+  }
+
+  /* -------------------------------------------------------------------------
+   * What never appears.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * An unpublished unit is not in the answer.
+   */
+  public function testAnUnpublishedUnitNeverAppears() {
+    myapi_test_db_seed([
+      'node' => [
+        $this->condominiumRow(12, 'Edificio Torre Azul'),
+        $this->unitRow(45, 'Dpto 3-B', 12, ['status' => '0']),
+      ],
+    ]);
+
+    $this->assertFalse($this->request('torre azul', '3B')['json']['data']['found']);
+  }
+
+  /**
+   * A unit whose condominium is unpublished is not in the answer either — not
+   * even when the building's exact name is what was typed.
+   *
+   * The nid never enters the map that resolves the term, so the second phase
+   * never asks for its units.
+   */
+  public function testAUnitOfAnUnpublishedCondominiumNeverAppears() {
+    myapi_test_db_seed([
+      'node' => [
+        $this->condominiumRow(12, 'Edificio Torre Azul', 0),
+        $this->unitRow(45, 'Dpto 3-B', 12),
+      ],
+    ]);
+
+    $data = $this->request('Edificio Torre Azul', '3B')['json']['data'];
+
+    $this->assertFalse($data['found']);
+    $this->assertSame(0, $data['total']);
+  }
+
+  /**
+   * The balance and the payment information are within reach of the query and
+   * still never travel, and neither does anything of the owner beyond a uid
+   * and a name.
+   */
+  public function testNoElementCarriesTheBalanceOrPersonalData() {
+    $this->seedTwoBuildings();
+
+    $element = $this->request('torre azul', '3B')['json']['data']['units'][0];
+
+    $this->assertSame(
+      ['unit_id', 'unit', 'condominium_id', 'condominium', 'owner', 'match'],
+      array_keys($element)
+    );
+    $this->assertSame(['uid', 'name'], array_keys($element['owner']));
+
+    $body = json_encode($element);
+    foreach (['1234.56', 'saldo', 'current_balance', 'payment_information', 'telefono', 'email'] as $forbidden) {
+      $this->assertStringNotContainsString($forbidden, $body, $forbidden);
+    }
+  }
+
+  /**
+   * A unit with no owner assigned still appears, with `owner: null`.
+   *
+   * It is not omitted: the bot can charge the payment to it all the same.
+   */
+  public function testAUnitWithoutAnOwnerAppearsWithANullOwner() {
+    $this->seedTwoBuildings();
+
+    $data = $this->request('torre azul', 'local 2')['json']['data'];
+
+    $this->assertSame(46, $data['units'][0]['unit_id']);
+    $this->assertNull($data['units'][0]['owner']);
+  }
+
+  /**
+   * An owner whose account no longer resolves is a null owner too, and the
+   * unit still travels.
+   */
+  public function testAnOwnerWhoseAccountIsGoneIsANullOwner() {
+    $this->seedTwoBuildings(['users' => []]);
+
+    $data = $this->request('torre azul', '3B')['json']['data'];
+
+    $this->assertSame(45, $data['units'][0]['unit_id']);
+    $this->assertNull($data['units'][0]['owner']);
+  }
+
+  /* -------------------------------------------------------------------------
+   * Nothing found, the cut, and the order.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * No match is a 200 with the same shape, never a 404.
+   */
+  public function testNothingFoundIsA200WithTheSameShape() {
+    $this->seedTwoBuildings();
+
+    $result = $this->request('pradera', '3B');
+
+    $this->assertSame(200, $result['status']);
+    $this->assertSame(
+      ['found' => FALSE, 'total' => 0, 'units' => []],
+      $result['json']['data']
+    );
+  }
+
+  /**
+   * A building term that matches nothing does not touch the unit table.
+   *
+   * The performance criterion of the spec, counted rather than argued: one
+   * query — the 150 titles — and no more.
+   */
+  public function testAnUnmatchedBuildingNeverQueriesTheUnitTable() {
+    // seedTwoBuildings() reseeds, and reseeding clears the recorded queries,
+    // so what follows is counted from zero.
+    $this->seedTwoBuildings();
+    $this->request('pradera', '3B');
+
+    $queries = myapi_test_db_queries();
+
+    $this->assertCount(1, $queries, 'only the condominium titles are read');
+    $this->assertTrue($this->queryReads($queries[0], 'condominio'));
+  }
+
+  /**
+   * Over five matches: five elements, and `total` with the real number.
+   */
+  public function testMoreThanFiveMatchesAnswerFiveAndTheRealTotal() {
+    $nodes = [];
+    for ($i = 1; $i <= 8; $i++) {
+      $nodes[] = $this->condominiumRow(100 + $i, 'Torre Azul ' . $i);
+      $nodes[] = $this->unitRow(200 + $i, 'Dpto 3-B', 100 + $i);
+    }
+    myapi_test_db_seed(['node' => $nodes]);
+
+    $data = $this->request('torre azul', '3B')['json']['data'];
+
+    $this->assertTrue($data['found']);
+    $this->assertSame(8, $data['total']);
+    $this->assertCount(5, $data['units']);
+  }
+
+  /**
+   * Two identical calls answer the same five in the same order.
+   */
+  public function testTwoIdenticalCallsAnswerTheSameOrder() {
+    $nodes = [];
+    for ($i = 1; $i <= 8; $i++) {
+      $nodes[] = $this->condominiumRow(100 + $i, 'Torre Azul ' . $i);
+      $nodes[] = $this->unitRow(200 + $i, 'Dpto 3-B', 100 + $i);
+    }
+    myapi_test_db_seed(['node' => $nodes]);
+
+    $first = $this->request('torre azul', '3B')['json']['data']['units'];
+    $second = $this->request('torre azul', '3B')['json']['data']['units'];
+
+    $this->assertSame($first, $second);
+  }
+
+  /**
+   * The five criteria, in order: unit rank, condominium rank, condominium
+   * title, unit name, unit_id.
+   *
+   * The fixture is built so each criterion decides exactly one pair:
+   *   - 45 before everything else: its unit rank is 'exact' ('3b'), the rest
+   *     are 'contains' ('dpto3b').
+   *   - 46 before 47: equal unit rank, and 'Torre Azul II' is a prefix match
+   *     while 'Edificio Torre Azul' only contains the term.
+   *   - 47 before 48: equal ranks, and 'edificiotorreazul' sorts before
+   *     'zetatorreazul'.
+   *   - 48 before 49: equal ranks and the same building, and 'dpto3b' sorts
+   *     before 'dpto3bis'.
+   *   - 49 before 50: everything equal, and 49 is the lower nid.
+   */
+  public function testTheOrderFollowsTheFiveCriteria() {
+    myapi_test_db_seed([
+      'node' => [
+        $this->condominiumRow(31, 'Torre Azul II'),
+        $this->condominiumRow(12, 'Edificio Torre Azul'),
+        $this->condominiumRow(90, 'Zeta Torre Azul'),
+        $this->unitRow(50, 'Dpto 3-Bis', 90),
+        $this->unitRow(49, 'Dpto 3-Bis', 90),
+        $this->unitRow(48, 'Dpto 3-B', 90),
+        $this->unitRow(47, 'Dpto 3-B', 12),
+        $this->unitRow(46, 'Dpto 3-B', 31),
+        $this->unitRow(45, '3B', 31),
+      ],
+    ]);
+
+    $data = $this->request('torre azul', '3B')['json']['data'];
+
+    $this->assertSame(6, $data['total']);
+    $this->assertSame([45, 46, 47, 48, 49], array_column($data['units'], 'unit_id'));
+  }
+
+  /**
+   * The cap: a term matching more than twenty buildings examines exactly
+   * twenty, and `total` counts inside those.
+   *
+   * This is the honest cost of the cap, written down as a test rather than
+   * left to be discovered: with 25 buildings holding one matching unit each,
+   * the answer says 20 and not 25.
+   */
+  public function testOnlyTwentyCondominiumsAreExamined() {
+    $nodes = [];
+    for ($i = 1; $i <= 25; $i++) {
+      $nodes[] = $this->condominiumRow(100 + $i, 'Torre Azul ' . sprintf('%02d', $i));
+      $nodes[] = $this->unitRow(200 + $i, 'Dpto 3-B', 100 + $i);
+    }
+    myapi_test_db_seed(['node' => $nodes]);
+
+    $data = $this->request('torre azul', '3B')['json']['data'];
+
+    $this->assertSame(MYAPI_BOT_SEARCH_CONDOMINIUM_LIMIT, $data['total']);
+    $this->assertCount(5, $data['units']);
+  }
+
+  /**
+   * Whether a recorded query reads rows of a given node type.
+   */
+  private function queryReads(array $query, $type) {
+    foreach ($query['conditions'] as $condition) {
+      if ($condition['field'] === 'n.type' && $condition['value'] === $type) {
+        return TRUE;
+      }
+    }
+
+    return FALSE;
+  }
+
 }
