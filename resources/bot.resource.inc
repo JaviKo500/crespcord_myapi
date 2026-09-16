@@ -24,6 +24,7 @@ module_load_include('inc', 'myapi', 'includes/myapi.bot_auth');
 module_load_include('inc', 'myapi', 'includes/myapi.unit_access');
 module_load_include('inc', 'myapi', 'includes/myapi.unit_query');
 module_load_include('inc', 'myapi', 'includes/myapi.user');
+module_load_include('inc', 'myapi', 'includes/myapi.text');
 
 /**
  * The digits a phone number is compared by.
@@ -261,4 +262,303 @@ function myapi_bot_person_dispatch() {
   else {
     myapi_error('method_not_allowed', 405);
   }
+}
+
+/* ---------------------------------------------------------------------------
+ * GET /api/v1/bot/units — the search by condominium and unit name (SPEC 128).
+ *
+ * The second way to the same unit_id. SPEC 127 answers "who is this phone?";
+ * when it answers `found: false` the bot asks over WhatsApp for the building
+ * and the unit, and these are the functions that turn those two answers into
+ * units.
+ *
+ * Everything from here to myapi_bot_match_condominiums() is PURE: no database,
+ * no site state. That is deliberate — the search either finds what a person
+ * typed with a missing accent, a different separator or a wrong letter, or it
+ * does not, and that is decided entirely by these four functions.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * The shortest search term, in characters after normalising, that either
+ * parameter may carry.
+ *
+ * Below two, "contains" answers with half the building list and the cap of
+ * MYAPI_BOT_SEARCH_CONDOMINIUM_LIMIT becomes the real selection criterion —
+ * which is a way of saying "the first twenty alphabetically".
+ */
+define('MYAPI_BOT_SEARCH_MIN_LENGTH', 2);
+
+/**
+ * How many units travel in one answer.
+ *
+ * `total` carries the real count, so the bot can tell "these are all of them"
+ * from "there are forty, type a better name" instead of showing five as if
+ * they were the whole answer.
+ */
+define('MYAPI_BOT_SEARCH_MAX_RESULTS', 5);
+
+/**
+ * How many condominiums the second phase is allowed to look under.
+ *
+ * A term like 'ed' matches the hundred buildings whose name starts with
+ * "Edificio", and without this cap the next step scans 23.000 units. The best
+ * twenty by rank — and, at equal rank, alphabetically — is where the search
+ * stops being a report and stays a way to narrow down.
+ */
+define('MYAPI_BOT_SEARCH_CONDOMINIUM_LIMIT', 20);
+
+/**
+ * The shortest UNIT term the approximate pass will touch.
+ *
+ * The single asymmetry of the algorithm, and it is on purpose. '3B' and '3C'
+ * are one edit apart: correcting one into the other hands back the neighbour's
+ * unit with a payment receipt behind it. On the condominium a wrong guess costs
+ * one more question; on the unit it costs money. 'dpto 3b' (six characters)
+ * does go through, because there the distance measures the prefix that was
+ * typed and not the number.
+ */
+define('MYAPI_BOT_SEARCH_FUZZY_MIN_LENGTH', 4);
+
+/**
+ * Reduces a name, however it is written, to the form it is compared by.
+ *
+ * myapi_text_fold() (SPEC 119) drops the accents and lowercases; what this adds
+ * is removing the separators — space, '-', '.', ',', '#' and '/' — which is the
+ * half that makes '3b' find 'Dpto 3-B'. Those six are what people put inside
+ * the name of a home.
+ *
+ * Applied to BOTH sides of every comparison, exactly like
+ * myapi_bot_normalize_phone() above: one definition, so the two sides cannot
+ * drift apart.
+ *
+ * The cast is what lets a unit stored as the number 3 through — myapi_text_fold()
+ * answers '' to anything that is not a string.
+ *
+ * @param mixed $value  The name as written or as stored, e.g. 'Dpto 3-B'.
+ *
+ * @return string  The comparable form, e.g. 'dpto3b'.
+ */
+function myapi_bot_search_normalize($value) {
+  return preg_replace('/[\s\-._,#\/]+/', '', myapi_text_fold((string) $value));
+}
+
+/**
+ * Splits a term into its normalised words.
+ *
+ * The separators of myapi_bot_search_normalize() are word boundaries here
+ * rather than noise to delete, and each word is normalised on its own. It is
+ * what lets 'azul torre' find 'Edificio Torre Azul': whoever types to a bot
+ * over WhatsApp does not keep the written order, and the caller matches the
+ * words in any order.
+ *
+ * @param mixed $value  The term or the stored value, e.g. 'Edificio Torre Azul'.
+ *
+ * @return array  The normalised words, empty ones dropped, e.g.
+ *                ['edificio', 'torre', 'azul'].
+ */
+function myapi_bot_search_tokens($value) {
+  $parts = preg_split('/[\s\-._,#\/]+/', myapi_text_fold((string) $value));
+
+  $tokens = [];
+  foreach ($parts as $part) {
+    if ($part !== '') {
+      $tokens[] = $part;
+    }
+  }
+
+  return $tokens;
+}
+
+/**
+ * Whether one name is within the edit thresholds of another.
+ *
+ * The table itself, and nothing else:
+ *
+ *   - under MYAPI_BOT_SEARCH_FUZZY_MIN_LENGTH characters: never. With three
+ *     letters a difference of one is a different thing, not a typo.
+ *   - 4 to 6:  levenshtein <= 1.
+ *   - 7 or more: levenshtein <= 2, or similar_text >= 80%.
+ *
+ * It exists as a function of its own because myapi_bot_fuzzy_match() below
+ * applies it in two places — the whole term, and each word of it — and the
+ * thresholds are the one thing in this file that must not be written twice.
+ *
+ * @param string $term       A normalised term or word.
+ * @param string $candidate  A normalised value or word to compare it against.
+ *
+ * @return bool  TRUE when the two are within the thresholds.
+ */
+function myapi_bot_fuzzy_within_thresholds($term, $candidate) {
+  $length = strlen($term);
+
+  if ($length < MYAPI_BOT_SEARCH_FUZZY_MIN_LENGTH || $candidate === '') {
+    return FALSE;
+  }
+
+  // levenshtein() answers -1 instead of a distance when either side is longer
+  // than 255 bytes, and -1 passes every <= below. A node title that long is
+  // absurd and would match everything, so it is skipped rather than trusted;
+  // similar_text() has no such limit and still gets its say.
+  if (strlen($candidate) <= 255 && levenshtein($term, $candidate) <= ($length <= 6 ? 1 : 2)) {
+    return TRUE;
+  }
+
+  if ($length >= 7) {
+    similar_text($term, $candidate, $percent);
+    if ($percent >= 80) {
+      return TRUE;
+    }
+  }
+
+  return FALSE;
+}
+
+/**
+ * Whether two names are close enough to be the same one typed wrong.
+ *
+ * Three comparisons, in this order, each one wider than the last, and the
+ * thresholds of myapi_bot_fuzzy_within_thresholds() in all three:
+ *
+ *   1. The whole term against the whole value.
+ *   2. The whole term against each WORD of the value. The distance from
+ *      'torreasul' to 'edificiotorreazul' is nine, and the one from 'asul' to
+ *      'azul' is one: without this pass the typo would only be forgiven to
+ *      somebody who typed the building's full name.
+ *   3. Each WORD of the term against the words of the value — every one of
+ *      them, the way the literal pass matches tokens. This is what finds
+ *      'Edificio Torre Azul' from 'torre asul', which neither of the first two
+ *      reaches: nine characters against 'torre' is four edits and 71% of
+ *      similarity, while 'torre' and 'asul' matched one by one are zero edits
+ *      and one.
+ *
+ * THE GUARD HOLDS INSIDE THE THIRD PASS TOO. A word under
+ * MYAPI_BOT_SEARCH_FUZZY_MIN_LENGTH characters has to appear in the value
+ * literally; it is never corrected on its own. Otherwise 'torrre 3b' would
+ * reach 'Torre Azul 3-C' by correcting the unit as well as the typo, and the
+ * cost of that is the neighbour's unit with a payment receipt behind it.
+ *
+ * What that does NOT say is that '3b' can never be approximated at all. A
+ * short term compared AS A WHOLE still can — 'dpto 3b' is six characters and
+ * one edit from 'dpto3c' — and the spec asks for exactly that. The defence
+ * there is not the distance, it is `match: "fuzzy"` reaching n8n and n8n
+ * confirming before it charges anything.
+ *
+ * @param mixed $needle    The term as typed.
+ * @param mixed $haystack  The stored value to compare it against.
+ *
+ * @return bool  TRUE when the two are within the thresholds.
+ */
+function myapi_bot_fuzzy_match($needle, $haystack) {
+  $term = myapi_bot_search_normalize($needle);
+  $value = myapi_bot_search_normalize($haystack);
+
+  if (strlen($term) < MYAPI_BOT_SEARCH_FUZZY_MIN_LENGTH || $value === '') {
+    return FALSE;
+  }
+
+  $value_words = myapi_bot_search_tokens($haystack);
+
+  foreach (array_merge([$value], $value_words) as $candidate) {
+    if (myapi_bot_fuzzy_within_thresholds($term, $candidate)) {
+      return TRUE;
+    }
+  }
+
+  $term_words = myapi_bot_search_tokens($needle);
+  if (count($term_words) < 2) {
+    return FALSE;
+  }
+
+  foreach ($term_words as $word) {
+    // Written as it is: nothing to forgive, whatever its length.
+    if (strpos($value, $word) !== FALSE) {
+      continue;
+    }
+
+    if (strlen($word) < MYAPI_BOT_SEARCH_FUZZY_MIN_LENGTH) {
+      return FALSE;
+    }
+
+    $matched = FALSE;
+    foreach ($value_words as $value_word) {
+      if (myapi_bot_fuzzy_within_thresholds($word, $value_word)) {
+        $matched = TRUE;
+        break;
+      }
+    }
+
+    if (!$matched) {
+      return FALSE;
+    }
+  }
+
+  return TRUE;
+}
+
+/**
+ * How well a term matches a value, or NULL when it does not match at all.
+ *
+ * The four ranks decide both what gets in and the order it comes out in:
+ *
+ *   exact     normalise(term) === normalise(value)
+ *   prefix    normalise(value) starts with normalise(term)
+ *   contains  normalise(term) appears inside it, OR every word of the term does
+ *   fuzzy     within the thresholds of myapi_bot_fuzzy_match()
+ *
+ * $allow_fuzzy is what implements the two passes: the first one is called with
+ * FALSE over the whole set, and only if it found nothing is the second one run
+ * with TRUE. Mixing the two into one ranking was rejected — a search that
+ * already worked must not start answering with similar-looking neighbours, and
+ * the normal path does not pay for the arithmetic.
+ *
+ * An empty term matches nothing. Without that guard strpos() would answer 0 for
+ * it and every value would come back as a prefix match.
+ *
+ * @param mixed $term         The term as typed.
+ * @param mixed $value        The stored value.
+ * @param bool  $allow_fuzzy  Whether this is the approximate pass.
+ *
+ * @return string|null  'exact', 'prefix', 'contains', 'fuzzy' or NULL.
+ */
+function myapi_bot_match_rank($term, $value, $allow_fuzzy = FALSE) {
+  $needle = myapi_bot_search_normalize($term);
+  $haystack = myapi_bot_search_normalize($value);
+
+  if ($needle === '' || $haystack === '') {
+    return NULL;
+  }
+
+  if ($needle === $haystack) {
+    return 'exact';
+  }
+
+  $position = strpos($haystack, $needle);
+  if ($position === 0) {
+    return 'prefix';
+  }
+  if ($position !== FALSE) {
+    return 'contains';
+  }
+
+  // Every word of the term, in any order. AND and not OR: with OR, 'torre'
+  // alone would drag in half the buildings that carry any second word.
+  $tokens = myapi_bot_search_tokens($term);
+  if (count($tokens) > 1) {
+    $all = TRUE;
+    foreach ($tokens as $token) {
+      if (strpos($haystack, $token) === FALSE) {
+        $all = FALSE;
+        break;
+      }
+    }
+    if ($all) {
+      return 'contains';
+    }
+  }
+
+  if ($allow_fuzzy && myapi_bot_fuzzy_match($term, $value)) {
+    return 'fuzzy';
+  }
+
+  return NULL;
 }

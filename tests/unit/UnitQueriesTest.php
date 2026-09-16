@@ -707,4 +707,147 @@ class UnitQueriesTest extends TestCase {
     }
   }
 
+  /* -------------------------------------------------------------------------
+   * myapi_unit_fetch_all_condominiums() — SPEC 128.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * Every published condominium, as the nid => title map the search compares
+   * in memory.
+   */
+  public function testAllCondominiumsAnswersANidToTitleMap() {
+    myapi_test_db_seed([
+      'node' => [
+        ['nid' => '12', 'type' => 'condominio', 'status' => '1', 'title' => 'Edificio Torre Azul'],
+        ['nid' => '31', 'type' => 'condominio', 'status' => '1', 'title' => 'Torre Azul II'],
+      ],
+    ]);
+
+    $titles = myapi_unit_fetch_all_condominiums();
+
+    $this->assertSame(['12', '31'], array_map('strval', array_keys($titles)));
+    $this->assertSame(['Edificio Torre Azul', 'Torre Azul II'], array_values($titles));
+  }
+
+  /**
+   * An unpublished condominium is not in the map, which is what keeps its
+   * units out of the answer — the search never learns its nid, so the second
+   * phase never asks for them.
+   */
+  public function testAllCondominiumsDropsUnpublishedOnes() {
+    myapi_test_db_seed([
+      'node' => [
+        ['nid' => '12', 'type' => 'condominio', 'status' => '1', 'title' => 'Edificio Torre Azul'],
+        ['nid' => '31', 'type' => 'condominio', 'status' => '0', 'title' => 'Torre Azul II'],
+      ],
+    ]);
+
+    $titles = myapi_unit_fetch_all_condominiums();
+
+    $this->assertArrayHasKey(12, $titles);
+    $this->assertArrayNotHasKey(31, $titles);
+  }
+
+  /**
+   * Nothing but condominiums: a 'vivienda' sharing the table is not a
+   * building, and reading one as such would put a unit name in the first
+   * phase of the search.
+   */
+  public function testAllCondominiumsIgnoresOtherNodeTypes() {
+    myapi_test_db_seed([
+      'node' => [
+        ['nid' => '45', 'type' => 'vivienda', 'status' => '1', 'title' => 'Dpto 3-B'],
+      ],
+    ]);
+
+    $this->assertSame([], myapi_unit_fetch_all_condominiums());
+  }
+
+  /**
+   * One query, unfiltered by nid: the whole table of 150 rows on purpose.
+   *
+   * This is the shape the spec chose over a LIKE — the comparison happens in
+   * PHP so it can fold accents and measure distance without depending on the
+   * collation. A nid condition appearing here later would mean somebody turned
+   * it back into a lookup.
+   */
+  public function testAllCondominiumsAsksForTheWholeTableOnce() {
+    myapi_unit_fetch_all_condominiums();
+    $queries = myapi_test_db_queries();
+
+    $this->assertCount(1, $queries);
+    $this->assertSame('node', $queries[0]['table']);
+    $this->assertTrue($this->hasCondition($queries[0], 'n.type', 'condominio'));
+    $this->assertTrue($this->hasCondition($queries[0], 'n.status', 1));
+    $this->assertNull($this->conditionValue($queries[0], 'n.nid'), 'no nid filter: every condominium is wanted');
+  }
+
+  /* -------------------------------------------------------------------------
+   * myapi_unit_fetch_unit_nids_by_condominium() — SPEC 128.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * The nids of the published units hanging from the given condominiums.
+   *
+   * The fixture rows carry field_condominio_target_id alongside the node
+   * columns because the builder records joins without resolving them: the row
+   * seeded here is the row the INNER JOIN would have produced.
+   */
+  public function testUnitNidsByCondominiumNarrowsToTheGivenBuildings() {
+    myapi_test_db_seed([
+      'node' => [
+        ['nid' => '45', 'type' => 'vivienda', 'status' => '1', 'field_condominio_target_id' => '12'],
+        ['nid' => '46', 'type' => 'vivienda', 'status' => '1', 'field_condominio_target_id' => '31'],
+        ['nid' => '47', 'type' => 'vivienda', 'status' => '1', 'field_condominio_target_id' => '99'],
+      ],
+    ]);
+
+    $this->assertSame(['45', '46'], myapi_unit_fetch_unit_nids_by_condominium(['12', '31']));
+  }
+
+  /**
+   * An unpublished unit never comes back, whatever its condominium.
+   */
+  public function testUnitNidsByCondominiumDropsUnpublishedUnits() {
+    myapi_test_db_seed([
+      'node' => [
+        ['nid' => '45', 'type' => 'vivienda', 'status' => '1', 'field_condominio_target_id' => '12'],
+        ['nid' => '46', 'type' => 'vivienda', 'status' => '0', 'field_condominio_target_id' => '12'],
+      ],
+    ]);
+
+    $this->assertSame(['45'], myapi_unit_fetch_unit_nids_by_condominium(['12']));
+  }
+
+  /**
+   * No condominium, no query.
+   *
+   * The early return is not a micro-optimisation: it is the acceptance
+   * criterion that says a search term matching no building must not touch the
+   * 35.000-row unit table at all.
+   */
+  public function testUnitNidsByCondominiumSkipsTheQueryForAnEmptyInput() {
+    $this->assertSame([], myapi_unit_fetch_unit_nids_by_condominium([]));
+    $this->assertSame([], myapi_test_db_queries());
+  }
+
+  /**
+   * The query shape: published 'vivienda' rows, joined to the condominium
+   * field under entity_type = 'node' and deleted = 0, filtered by the nids
+   * asked for.
+   */
+  public function testUnitNidsByCondominiumBuildsAScopedJoin() {
+    myapi_unit_fetch_unit_nids_by_condominium(['12']);
+    $query = myapi_test_db_queries()[0];
+
+    $this->assertSame('node', $query['table']);
+    $this->assertTrue($this->hasCondition($query, 'n.type', 'vivienda'));
+    $this->assertTrue($this->hasCondition($query, 'n.status', 1));
+    $this->assertTrue($this->hasCondition($query, 'fcond.field_condominio_target_id', ['12'], 'IN'));
+
+    $condition = $this->joinCondition($query, 'field_data_field_condominio');
+    $this->assertStringContainsString("entity_type = 'node'", $condition);
+    $this->assertStringContainsString('deleted = 0', $condition);
+  }
+
 }
