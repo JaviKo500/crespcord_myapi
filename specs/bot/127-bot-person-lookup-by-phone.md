@@ -1,6 +1,6 @@
 # SPEC 127 — Identificación de la persona por teléfono para el bot de WhatsApp
 
-> **Estado:** Approved · **Depende de:** SPEC 03 (catálogo `myapi_t()`, `myapi_error()` / `myapi_respond()`), SPEC 05 (`myapi_auth_require_access_token()` — **no se usa aquí**, pero este endpoint copia su forma: guardia al inicio del handler, rechazo antes de tocar ninguna tabla), SPEC 08 (`myapi_unit_fetch_units()`, `myapi_unit_fetch_condominiums()` y la regla de descartar unidades cuyo condominio no es visible), SPEC 09 (`myapi_unit_fetch_user_names()`), SPEC 29 (`myapi_user_owned_unit_nids()` / `myapi_user_occupied_unit_nids()` en `includes/myapi.unit_access.inc`), SPEC 123 (`ModuleContractTest` / `EndpointContractTest` y el gate de cobertura) · **Fecha:** 2026-09-16
+> **Estado:** Implemented · **Depende de:** SPEC 03 (catálogo `myapi_t()`, `myapi_error()` / `myapi_respond()`), SPEC 05 (`myapi_auth_require_access_token()` — **no se usa aquí**, pero este endpoint copia su forma: guardia al inicio del handler, rechazo antes de tocar ninguna tabla), SPEC 08 (`myapi_unit_fetch_units()`, `myapi_unit_fetch_condominiums()` y la regla de descartar unidades cuyo condominio no es visible), SPEC 09 (`myapi_unit_fetch_user_names()`), SPEC 29 (`myapi_user_owned_unit_nids()` / `myapi_user_occupied_unit_nids()` en `includes/myapi.unit_access.inc`), SPEC 123 (`ModuleContractTest` / `EndpointContractTest` y el gate de cobertura) · **Fecha:** 2026-09-16
 >
 > **Objetivo:** Exponer `GET /api/v1/bot/person?phone=…`, autenticado con una API key de máquina en el header `X-Api-Key`, que resuelve un número de teléfono a la persona registrada en Drupal y a todas sus unidades visibles —sea propietaria u ocupante— para que el bot de WhatsApp del módulo 8 del anexo sepa a qué unidad imputar un comprobante de pago.
 
@@ -221,49 +221,49 @@ Cada línea es verificable con un `curl`, un test o una consulta.
 
 **Autenticación**
 
-- [ ] `GET /api/v1/bot/person?phone=0987535645` **sin** header `X-Api-Key` responde `401` con `error_code: "unauthorized"`.
-- [ ] Con una `X-Api-Key` distinta de la configurada responde `401`, y queda una entrada `WATCHDOG_WARNING` en `watchdog` con la ruta y la IP.
-- [ ] Con `myapi_bot_api_key` sin configurar (variable ausente), **toda** petición responde `401`, incluso una con un header `X-Api-Key` vacío.
-- [ ] Una petición sin credencial válida no ejecuta ninguna consulta: `EndpointContractTest` lo comprueba contando las consultas del stub.
+- [x] `GET /api/v1/bot/person?phone=0987535645` **sin** header `X-Api-Key` responde `401` con `error_code: "unauthorized"`.
+- [x] Con una `X-Api-Key` distinta de la configurada responde `401`, y queda una entrada `WATCHDOG_WARNING` en `watchdog` con la ruta y la IP.
+- [x] Con `myapi_bot_api_key` sin configurar (variable ausente), **toda** petición responde `401`, incluso una con un header `X-Api-Key` vacío.
+- [x] Una petición sin credencial válida no ejecuta ninguna consulta: `EndpointContractTest` lo comprueba contando las consultas del stub.
 
 **Método y parámetro**
 
-- [ ] `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD` y `OPTIONS` sobre la ruta responden `405` con `error_code: "method_not_allowed"`.
-- [ ] Sin el parámetro `phone`, o con `phone=`, responde `422` con `error_code: "missing_phone"`.
-- [ ] Con `phone=555` (menos de 9 dígitos tras normalizar) responde `422` con `error_code: "invalid_phone"`.
+- [x] `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD` y `OPTIONS` sobre la ruta responden `405` con `error_code: "method_not_allowed"`.
+- [x] Sin el parámetro `phone`, o con `phone=`, responde `422` con `error_code: "missing_phone"`.
+- [x] Con `phone=555` (menos de 9 dígitos tras normalizar) responde `422` con `error_code: "invalid_phone"`.
 
 **Normalización**
 
-- [ ] Para una persona cuyo teléfono está guardado como `0987535645`, las cuatro consultas `?phone=0987535645`, `?phone=+593987535645`, `?phone=%2B593%2098%20753%205645` y `?phone=(098)%20753-5645` devuelven **el mismo** `uid`.
-- [ ] Recíprocamente, con el mismo `?phone=0987535645` se encuentra a la persona esté guardado su número como `0987535645`, `+593 98 753 5645`, `(098) 753-5645` o `098-753-5645`.
+- [x] Para una persona cuyo teléfono está guardado como `0987535645`, las cuatro consultas `?phone=0987535645`, `?phone=+593987535645`, `?phone=%2B593%2098%20753%205645` y `?phone=(098)%20753-5645` devuelven **el mismo** `uid`.
+- [x] Recíprocamente, con el mismo `?phone=0987535645` se encuentra a la persona esté guardado su número como `0987535645`, `+593 98 753 5645`, `(098) 753-5645` o `098-753-5645`.
 
 **Resolución**
 
-- [ ] Persona activa, con una unidad propia publicada en condominio publicado → `200`, `found: true`, `person.uid` y `person.name` correctos, `units` con un elemento de `relation: "owner"`.
-- [ ] Persona con dos unidades, una como propietaria y otra como ocupante → `units` trae las dos, con `relation` distinta en cada una.
-- [ ] Persona con unidades en dos condominios distintos → los dos aparecen, con su `condominium_id` y `condominium` correctos.
-- [ ] Ningún usuario activo coincide → `200`, `{ "found": false, "person": null, "units": [], "reason": "not_found" }`.
-- [ ] El único usuario que coincide tiene `users.status = 0` → `reason: "not_found"` (no `no_units`, no `found: true`).
-- [ ] Dos usuarios activos coinciden en los últimos 9 dígitos → `reason: "ambiguous"`, y `person` es `null`.
-- [ ] Persona activa que existe pero no tiene ninguna unidad → `reason: "no_units"`, `person` es `null`.
-- [ ] Persona cuya única unidad está despublicada (`node.status = 0`) → `reason: "no_units"`.
-- [ ] Persona cuya única unidad cuelga de un condominio despublicado → `reason: "no_units"`.
+- [x] Persona activa, con una unidad propia publicada en condominio publicado → `200`, `found: true`, `person.uid` y `person.name` correctos, `units` con un elemento de `relation: "owner"`.
+- [x] Persona con dos unidades, una como propietaria y otra como ocupante → `units` trae las dos, con `relation` distinta en cada una.
+- [x] Persona con unidades en dos condominios distintos → los dos aparecen, con su `condominium_id` y `condominium` correctos.
+- [x] Ningún usuario activo coincide → `200`, `{ "found": false, "person": null, "units": [], "reason": "not_found" }`.
+- [x] El único usuario que coincide tiene `users.status = 0` → `reason: "not_found"` (no `no_units`, no `found: true`).
+- [x] Dos usuarios activos coinciden en los últimos 9 dígitos → `reason: "ambiguous"`, y `person` es `null`.
+- [x] Persona activa que existe pero no tiene ninguna unidad → `reason: "no_units"`, `person` es `null`.
+- [x] Persona cuya única unidad está despublicada (`node.status = 0`) → `reason: "no_units"`.
+- [x] Persona cuya única unidad cuelga de un condominio despublicado → `reason: "no_units"`.
 
 **Contrato de respuesta**
 
-- [ ] En todos los casos de éxito y de no-encontrado el código HTTP es `200` y el cuerpo es `{ "success": true, "data": { ... } }`. Ningún caso devuelve `404`.
-- [ ] `data` contiene siempre las claves `found` y `units`; `units` es siempre un array, vacío cuando `found` es `false`.
-- [ ] Ningún elemento de `units` contiene `current_balance` ni `payment_information`, ni la respuesta expone el teléfono, la cédula o el email de la persona.
-- [ ] Todas las claves del JSON están en inglés.
+- [x] En todos los casos de éxito y de no-encontrado el código HTTP es `200` y el cuerpo es `{ "success": true, "data": { ... } }`. Ningún caso devuelve `404`.
+- [x] `data` contiene siempre las claves `found` y `units`; `units` es siempre un array, vacío cuando `found` es `false`.
+- [x] Ningún elemento de `units` contiene `current_balance` ni `payment_information`, ni la respuesta expone el teléfono, la cédula o el email de la persona.
+- [x] Todas las claves del JSON están en inglés.
 
 **Estructura y regresión**
 
-- [ ] `myapi_unit_fetch_units()` y `myapi_unit_fetch_condominiums()` ya no están en `resources/bot.resource.inc` ni en `resources/unit.resource.inc`, sino en `includes/myapi.unit_query.inc`.
-- [ ] `GET /api/v1/units` devuelve exactamente la misma respuesta que antes del paso 1, con los mismos condominios, unidades y campos.
-- [ ] `resources/bot.resource.inc` no llama a ninguna función definida en otro archivo de `resources/`.
-- [ ] `myapi.info` declara los tres archivos nuevos y `ModuleContractTest` pasa entero.
-- [ ] `docs/bot.md` existe, documenta el endpoint con la plantilla estándar e incluye la instrucción `drush vset myapi_bot_api_key`.
-- [ ] La suite completa (`vendor/bin/phpunit`) pasa en PHP 7.4 y el gate de cobertura de la SPEC 123 no baja.
+- [x] `myapi_unit_fetch_units()` y `myapi_unit_fetch_condominiums()` ya no están en `resources/bot.resource.inc` ni en `resources/unit.resource.inc`, sino en `includes/myapi.unit_query.inc`.
+- [x] `GET /api/v1/units` devuelve exactamente la misma respuesta que antes del paso 1, con los mismos condominios, unidades y campos.
+- [x] `resources/bot.resource.inc` no llama a ninguna función definida en otro archivo de `resources/`.
+- [x] `myapi.info` declara los tres archivos nuevos y `ModuleContractTest` pasa entero.
+- [x] `docs/bot.md` existe, documenta el endpoint con la plantilla estándar e incluye la instrucción `drush vset myapi_bot_api_key`.
+- [x] La suite completa (`vendor/bin/phpunit`) pasa en PHP 7.4 y el gate de cobertura de la SPEC 123 no baja.
 
 ---
 
