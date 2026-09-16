@@ -1,6 +1,6 @@
 # SPEC 128 — Búsqueda de unidad por condominio y nombre para el bot de WhatsApp
 
-> **Estado:** Approved · **Depende de:** SPEC 03 (catálogo `myapi_t()`, `myapi_error()` / `myapi_respond()`), SPEC 08 (`myapi_unit_fetch_units()`, `myapi_unit_fetch_condominiums()` y la regla de descartar unidades cuyo condominio no es visible), SPEC 09 (`myapi_user_display_names()` en `includes/myapi.user.inc`), SPEC 119 (`myapi_text_fold()` en `includes/myapi.text.inc` — plegado de tildes y mayúsculas para comparar), SPEC 123 (`ModuleContractTest` / `EndpointContractTest` y el gate de cobertura), SPEC 127 (`resources/bot.resource.inc`, `myapi_bot_require_api_key()` en `includes/myapi.bot_auth.inc`, `includes/myapi.unit_query.inc` y el contrato de respuesta del bot) · **Fecha:** 2026-09-16
+> **Estado:** Implemented · **Depende de:** SPEC 03 (catálogo `myapi_t()`, `myapi_error()` / `myapi_respond()`), SPEC 08 (`myapi_unit_fetch_units()`, `myapi_unit_fetch_condominiums()` y la regla de descartar unidades cuyo condominio no es visible), SPEC 09 (`myapi_user_display_names()` en `includes/myapi.user.inc`), SPEC 119 (`myapi_text_fold()` en `includes/myapi.text.inc` — plegado de tildes y mayúsculas para comparar), SPEC 123 (`ModuleContractTest` / `EndpointContractTest` y el gate de cobertura), SPEC 127 (`resources/bot.resource.inc`, `myapi_bot_require_api_key()` en `includes/myapi.bot_auth.inc`, `includes/myapi.unit_query.inc` y el contrato de respuesta del bot) · **Fecha:** 2026-09-16
 >
 > **Objetivo:** Exponer `GET /api/v1/bot/units?condominium=…&unit=…`, autenticado con la misma API key de máquina que la SPEC 127, que resuelve el nombre de un condominio y el de una unidad —ambos obligatorios, escritos como los teclee una persona por WhatsApp: sin tildes, en minúsculas, con separadores distintos o con una letra equivocada— a un máximo de cinco unidades visibles con su propietario, para que el bot sepa a qué unidad imputar un comprobante de pago cuando el teléfono no identificó a nadie.
 
@@ -277,59 +277,59 @@ Cada línea es verificable con un `curl`, un test o una consulta.
 
 **Autenticación y método**
 
-- [ ] `GET /api/v1/bot/units?condominium=torre%20azul&unit=3B` **sin** header `X-Api-Key` responde `401` con `error_code: "unauthorized"`.
-- [ ] Con una `X-Api-Key` distinta de la configurada responde `401` y deja una entrada `WATCHDOG_WARNING` con la ruta y la IP.
-- [ ] Una petición sin credencial válida no ejecuta ninguna consulta: `EndpointContractTest` lo comprueba contando las consultas del stub, con la ruta ya en `API_KEY_ENDPOINTS`.
-- [ ] `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD` y `OPTIONS` sobre la ruta responden `405` con `error_code: "method_not_allowed"`.
-- [ ] La clave que autentica es la misma `myapi_bot_api_key` de la SPEC 127: no se introduce ninguna variable nueva.
+- [x] `GET /api/v1/bot/units?condominium=torre%20azul&unit=3B` **sin** header `X-Api-Key` responde `401` con `error_code: "unauthorized"`.
+- [x] Con una `X-Api-Key` distinta de la configurada responde `401` y deja una entrada `WATCHDOG_WARNING` con la ruta y la IP.
+- [x] Una petición sin credencial válida no ejecuta ninguna consulta: `EndpointContractTest` lo comprueba contando las consultas del stub, con la ruta ya en `API_KEY_ENDPOINTS`.
+- [x] `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD` y `OPTIONS` sobre la ruta responden `405` con `error_code: "method_not_allowed"`.
+- [x] La clave que autentica es la misma `myapi_bot_api_key` de la SPEC 127: no se introduce ninguna variable nueva.
 
 **Parámetros**
 
-- [ ] Sin `condominium`, o con `condominium=`, responde `422` con `error_code: "missing_condominium"`.
-- [ ] Sin `unit`, o con `unit=`, responde `422` con `error_code: "missing_unit"`.
-- [ ] Con `condominium=-` (queda en 0 caracteres tras normalizar) o `condominium=a` responde `422` con `error_code: "invalid_condominium"`.
-- [ ] Con `unit=3` responde `422` con `error_code: "invalid_unit"`.
-- [ ] Cuando falten los dos parámetros, la respuesta es un único `422`: el primero que se valida es `condominium`.
+- [x] Sin `condominium`, o con `condominium=`, responde `422` con `error_code: "missing_condominium"`.
+- [x] Sin `unit`, o con `unit=`, responde `422` con `error_code: "missing_unit"`.
+- [x] Con `condominium=-` (queda en 0 caracteres tras normalizar) o `condominium=a` responde `422` con `error_code: "invalid_condominium"`.
+- [x] Con `unit=3` responde `422` con `error_code: "invalid_unit"`.
+- [x] Cuando falten los dos parámetros, la respuesta es un único `422`: el primero que se valida es `condominium`.
 
 **Normalización**
 
-- [ ] Para un condominio guardado como `Edificio Torre Azul` y una unidad guardada como `Dpto 3-B`, la consulta `?condominium=torre%20azul&unit=3B` la encuentra.
-- [ ] `?condominium=TORRE%20AZUL`, `?condominium=Torre%20Azul` y `?condominium=torre-azul` devuelven el mismo resultado.
-- [ ] Un condominio guardado como `Climatización` se encuentra con `?condominium=climatizacion`, sin tilde.
-- [ ] `?unit=3b`, `?unit=3-B`, `?unit=3%20B` y `?unit=%23%203B` encuentran todas `Dpto 3-B`.
-- [ ] `?condominium=azul%20torre` encuentra `Edificio Torre Azul`: los tokens coinciden en cualquier orden.
+- [x] Para un condominio guardado como `Edificio Torre Azul` y una unidad guardada como `Dpto 3-B`, la consulta `?condominium=torre%20azul&unit=3B` la encuentra.
+- [x] `?condominium=TORRE%20AZUL`, `?condominium=Torre%20Azul` y `?condominium=torre-azul` devuelven el mismo resultado.
+- [x] Un condominio guardado como `Climatización` se encuentra con `?condominium=climatizacion`, sin tilde.
+- [x] `?unit=3b`, `?unit=3-B`, `?unit=3%20B` y `?unit=%23%203B` encuentran todas `Dpto 3-B`.
+- [x] `?condominium=azul%20torre` encuentra `Edificio Torre Azul`: los tokens coinciden en cualquier orden.
 
 **Aproximado**
 
-- [ ] `?condominium=torre%20asul` encuentra `Edificio Torre Azul`, y el elemento devuelto lleva `match: "fuzzy"`.
-- [ ] `?condominium=torrre%20azul` (letra doble) lo encuentra igual.
-- [ ] La pasada aproximada **solo** se ejecuta cuando la literal devolvió cero: si `?condominium=torre` casa literalmente con tres edificios, no aparece ninguno por similitud.
-- [ ] `?unit=3b` **no** devuelve `Dpto 3C`: con menos de 4 caracteres tras normalizar no hay aproximado.
-- [ ] `?unit=dpto%203b` sí puede devolver `Dpto 3-C`, con `match: "fuzzy"`.
-- [ ] Un resultado en el que condominio y unidad coincidieron literalmente —aunque sea por `prefix` o por `contains`— lleva `match: "exact"`.
+- [x] `?condominium=torre%20asul` encuentra `Edificio Torre Azul`, y el elemento devuelto lleva `match: "fuzzy"`.
+- [x] `?condominium=torrre%20azul` (letra doble) lo encuentra igual.
+- [x] La pasada aproximada **solo** se ejecuta cuando la literal devolvió cero: si `?condominium=torre` casa literalmente con tres edificios, no aparece ninguno por similitud.
+- [x] `?unit=3b` **no** devuelve `Dpto 3C`: con menos de 4 caracteres tras normalizar no hay aproximado.
+- [x] `?unit=dpto%203b` sí puede devolver `Dpto 3-C`, con `match: "fuzzy"`.
+- [x] Un resultado en el que condominio y unidad coincidieron literalmente —aunque sea por `prefix` o por `contains`— lleva `match: "exact"`.
 
 **Resolución y contrato**
 
-- [ ] Coincidencia única → `200`, `found: true`, `total: 1`, un elemento con `unit_id`, `unit`, `condominium_id`, `condominium`, `owner` y `match`.
-- [ ] Sin ninguna coincidencia → `200` con `{ "found": false, "total": 0, "units": [] }`. Ningún caso devuelve `404`.
-- [ ] Con más de cinco coincidencias, `units` trae exactamente cinco y `total` trae el número real.
-- [ ] Dos llamadas idénticas devuelven los mismos cinco elementos en el mismo orden.
-- [ ] El orden respeta los cinco criterios: rango de unidad, rango de condominio, título de condominio, nombre de unidad, `unit_id`.
-- [ ] Una unidad despublicada (`node.status = 0`) no aparece nunca.
-- [ ] Una unidad cuyo condominio está despublicado no aparece nunca, ni siquiera buscando el nombre exacto del condominio.
-- [ ] Una unidad sin propietario asignado aparece con `owner: null`, no se omite.
-- [ ] Ningún elemento contiene `current_balance` ni `payment_information`, y la respuesta no expone el teléfono, la cédula ni el email del propietario.
-- [ ] Todas las claves del JSON están en inglés y en `snake_case`, iguales en nombre y tipo a las de `GET /api/v1/bot/person`.
+- [x] Coincidencia única → `200`, `found: true`, `total: 1`, un elemento con `unit_id`, `unit`, `condominium_id`, `condominium`, `owner` y `match`.
+- [x] Sin ninguna coincidencia → `200` con `{ "found": false, "total": 0, "units": [] }`. Ningún caso devuelve `404`.
+- [x] Con más de cinco coincidencias, `units` trae exactamente cinco y `total` trae el número real.
+- [x] Dos llamadas idénticas devuelven los mismos cinco elementos en el mismo orden.
+- [x] El orden respeta los cinco criterios: rango de unidad, rango de condominio, título de condominio, nombre de unidad, `unit_id`.
+- [x] Una unidad despublicada (`node.status = 0`) no aparece nunca.
+- [x] Una unidad cuyo condominio está despublicado no aparece nunca, ni siquiera buscando el nombre exacto del condominio.
+- [x] Una unidad sin propietario asignado aparece con `owner: null`, no se omite.
+- [x] Ningún elemento contiene `current_balance` ni `payment_information`, y la respuesta no expone el teléfono, la cédula ni el email del propietario.
+- [x] Todas las claves del JSON están en inglés y en `snake_case`, iguales en nombre y tipo a las de `GET /api/v1/bot/person`.
 
 **Rendimiento y estructura**
 
-- [ ] Un término de condominio que no casa con nada **no lanza** la consulta de viviendas: el test lo comprueba contando las consultas del stub.
-- [ ] Un término de condominio que casa con más de 20 edificios examina exactamente 20.
-- [ ] `resources/bot.resource.inc` no llama a ninguna función definida en otro archivo de `resources/`.
-- [ ] `myapi.info` no cambia: los dos archivos tocados ya estaban declarados.
-- [ ] `GET /api/v1/units` y `GET /api/v1/bot/person` devuelven exactamente lo mismo que antes de esta spec.
-- [ ] `docs/bot.md` documenta el endpoint con la plantilla estándar, incluida la advertencia sobre `total` y sobre `match: "fuzzy"`.
-- [ ] `ModuleContractTest` pasa entero y la suite completa (`vendor/bin/phpunit`) pasa en PHP 7.4 sin bajar el gate de cobertura de la SPEC 123.
+- [x] Un término de condominio que no casa con nada **no lanza** la consulta de viviendas: el test lo comprueba contando las consultas del stub.
+- [x] Un término de condominio que casa con más de 20 edificios examina exactamente 20.
+- [x] `resources/bot.resource.inc` no llama a ninguna función definida en otro archivo de `resources/`.
+- [x] `myapi.info` no cambia: los dos archivos tocados ya estaban declarados.
+- [x] `GET /api/v1/units` y `GET /api/v1/bot/person` devuelven exactamente lo mismo que antes de esta spec.
+- [x] `docs/bot.md` documenta el endpoint con la plantilla estándar, incluida la advertencia sobre `total` y sobre `match: "fuzzy"`.
+- [x] `ModuleContractTest` pasa entero y la suite completa (`vendor/bin/phpunit`) pasa en PHP 7.4 sin bajar el gate de cobertura de la SPEC 123.
 
 ---
 
