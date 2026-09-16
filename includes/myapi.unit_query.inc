@@ -91,3 +91,67 @@ function myapi_unit_fetch_condominiums($nids) {
 
   return $condominiums;
 }
+
+/**
+ * Fetches every published 'condominio' as a nid => title map (SPEC 128).
+ *
+ * No argument and no filter: there are around 150 of them, they fit in memory,
+ * and the search of SPEC 128 wants all of them at once. Comparing the titles in
+ * PHP — rather than with a LIKE in SQL — is what lets that search fold accents,
+ * split the term into tokens and measure an edit distance without any of it
+ * depending on the collation the database happens to be running.
+ *
+ * The sibling myapi_unit_fetch_condominiums() above stays for the case it was
+ * written for: a known set of nids, with the payment information attached. This
+ * one is the first phase of a search, and carries nothing but the title.
+ *
+ * @return array  Map of nid => title, for published condominiums only.
+ */
+function myapi_unit_fetch_all_condominiums() {
+  $result = db_select('node', 'n')
+    ->fields('n', ['nid', 'title'])
+    ->condition('n.type', 'condominio')
+    ->condition('n.status', 1)
+    ->execute();
+
+  $titles = [];
+  foreach ($result as $condominium) {
+    $titles[$condominium->nid] = $condominium->title;
+  }
+
+  return $titles;
+}
+
+/**
+ * Fetches the nids of the published units that belong to a set of condominiums
+ * (SPEC 128).
+ *
+ * This is what keeps the search of SPEC 128 off the 35.000-row unit table: it
+ * narrows the candidates to the couple of hundred units of the condominiums
+ * already resolved, and myapi_unit_fetch_units() above then returns the detail
+ * of those and only those. Nothing about which fields a unit carries is
+ * duplicated here — this decides WHICH nids to ask for, not what to bring back.
+ *
+ * An empty input returns an empty array without running a query: an IN () with
+ * no values is both meaningless and, on the caller's side, the normal case when
+ * no condominium matched the term.
+ *
+ * @param array $condominium_nids  'condominio' nids to look under.
+ *
+ * @return array  A flat list of 'vivienda' nids.
+ */
+function myapi_unit_fetch_unit_nids_by_condominium(array $condominium_nids) {
+  if (empty($condominium_nids)) {
+    return [];
+  }
+
+  $query = db_select('node', 'n')
+    ->fields('n', ['nid'])
+    ->condition('n.type', 'vivienda')
+    ->condition('n.status', 1);
+
+  $query->innerJoin('field_data_field_condominio', 'fcond', "fcond.entity_id = n.nid AND fcond.entity_type = 'node' AND fcond.deleted = 0");
+  $query->condition('fcond.field_condominio_target_id', $condominium_nids, 'IN');
+
+  return $query->execute()->fetchCol();
+}
