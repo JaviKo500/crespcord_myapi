@@ -268,6 +268,16 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       // and collapsing both into invalid_field would hide which.
       'missing_phone'                      => 'The phone parameter is required.',
       'invalid_phone'                      => 'The phone number is not valid.',
+      // SPEC 128 — the four ways the bot can get the unit search parameters
+      // wrong. Same criterion as the SPEC 127 pair above: the caller is n8n,
+      // so missing_* means the flow forgot to send the parameter and invalid_*
+      // means it sent something too short to search with. All four are bugs in
+      // the workflow, never a message a resident reads over WhatsApp, so the
+      // Spanish wording targets whoever debugs the flow.
+      'missing_condominium'                => 'The condominium parameter is required.',
+      'missing_unit'                       => 'The unit parameter is required.',
+      'invalid_condominium'                => 'The condominium search term is too short.',
+      'invalid_unit'                       => 'The unit search term is too short.',
     ],
     'es' => [
       'invalid_credentials'    => 'Usuario o contraseña incorrectos.',
@@ -402,6 +412,11 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       // SPEC 127 — ver la nota junto al bloque en inglés.
       'missing_phone'                      => 'El parámetro phone es obligatorio.',
       'invalid_phone'                      => 'El número de teléfono no es válido.',
+      // SPEC 128 — ver la nota junto al bloque en inglés.
+      'missing_condominium'                => 'El parámetro condominium es obligatorio.',
+      'missing_unit'                       => 'El parámetro unit es obligatorio.',
+      'invalid_condominium'                => 'El término de búsqueda de condominium es demasiado corto.',
+      'invalid_unit'                       => 'El término de búsqueda de unit es demasiado corto.',
     ],
   ];
 
