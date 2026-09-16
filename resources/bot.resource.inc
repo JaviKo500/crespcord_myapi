@@ -97,7 +97,9 @@ function myapi_bot_phone_like_pattern($digits) {
  *
  * @param string $digits  Normalised digits to look for.
  *
- * @return array  Unique uids, as strings, of the active users that match.
+ * @return array  Unique uids of the active users that match. Integers: they
+ *                come back as the array keys the rows were deduped by, and
+ *                PHP casts a numeric string key to int.
  */
 function myapi_bot_find_uids_by_phone($digits) {
   $query = db_select('field_data_field_telefono', 'p')
