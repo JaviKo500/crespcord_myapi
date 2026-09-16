@@ -359,7 +359,6 @@ class I18nTest extends TestCase {
    * about how many there are.
    */
   const UNREACHED_KEYS = [
-    'unauthorized',
     'user_not_found',
     'missing_token',
     // SPEC 127, step 2 — the catalogue half of the bot endpoint arrives before

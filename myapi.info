@@ -79,3 +79,4 @@ files[] = includes/myapi.service_request_notification.inc
 files[] = includes/myapi.firebase.inc
 files[] = includes/myapi.chat.inc
 files[] = resources/chat.resource.inc
+files[] = includes/myapi.bot_auth.inc

@@ -381,6 +381,19 @@ if (!function_exists('ip_address')) {
   }
 }
 
+if (!function_exists('current_path')) {
+  /**
+   * Core's current_path(), which in Drupal 7 is $_GET['q'] and nothing else
+   * (SPEC 127).
+   *
+   * The bot guard names the rejected path in its watchdog entry, so a test
+   * asserting the log reads what a reader of the log would read.
+   */
+  function current_path() {
+    return isset($_GET['q']) ? $_GET['q'] : '';
+  }
+}
+
 if (!function_exists('flood_is_allowed')) {
   /**
    * Answers what the test told it to, and records how it was asked.
