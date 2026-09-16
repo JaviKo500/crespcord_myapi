@@ -362,6 +362,11 @@ class I18nTest extends TestCase {
     'unauthorized',
     'user_not_found',
     'missing_token',
+    // SPEC 127, step 2 — the catalogue half of the bot endpoint arrives before
+    // the resource that produces these. Both leave this list in step 4, when
+    // resources/bot.resource.inc starts passing them to myapi_error().
+    'missing_phone',
+    'invalid_phone',
   ];
 
   /**

@@ -260,6 +260,14 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       // and invalid_token — is reused above, unchanged.
       'chat_not_configured'                => 'Chat is not available right now.',
       'chat_token_failed'                  => 'Could not start the chat. Please try again.',
+      // SPEC 127 — the two ways the bot can get the `phone` query parameter
+      // wrong. They are separate keys because the caller is n8n, not a person:
+      // missing_phone means the flow forgot to send the parameter at all, and
+      // invalid_phone means it sent something that is not a phone number. One
+      // is a bug in the workflow wiring and the other is bad data reaching it,
+      // and collapsing both into invalid_field would hide which.
+      'missing_phone'                      => 'The phone parameter is required.',
+      'invalid_phone'                      => 'The phone number is not valid.',
     ],
     'es' => [
       'invalid_credentials'    => 'Usuario o contraseña incorrectos.',
@@ -391,6 +399,9 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       // SPEC 115 — see the note next to the English block.
       'chat_not_configured'                => 'El chat no está disponible en este momento.',
       'chat_token_failed'                  => 'No se pudo iniciar el chat. Intentá de nuevo.',
+      // SPEC 127 — ver la nota junto al bloque en inglés.
+      'missing_phone'                      => 'El parámetro phone es obligatorio.',
+      'invalid_phone'                      => 'El número de teléfono no es válido.',
     ],
   ];
 
