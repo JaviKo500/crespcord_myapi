@@ -90,6 +90,26 @@ class EndpointContractTest extends TestCase {
   ];
 
   /**
+   * The endpoints authenticated by the machine API key, as "path [METHOD]" =>
+   * why.
+   *
+   * One, and it is not an exemption from authentication but a different
+   * credential: the bot lives in n8n, has no session, and the Bearer flow
+   * would make it log in before every call. What guards it is
+   * myapi_bot_require_api_key(), and the two cases at the bottom of this file
+   * assert for it exactly what the four above assert for the access token — it
+   * answers 401 without a credential, and it reaches no table on the way.
+   *
+   * So a line here does NOT make an endpoint public. It says "guarded by the
+   * other credential", and the tests that come with it are the proof. What it
+   * does exempt the route from is the four Bearer cases, which would otherwise
+   * demand a missing_authorization it has no reason to answer.
+   */
+  const API_KEY_ENDPOINTS = [
+    'api/v1/bot/person [GET]' => 'the WhatsApp bot authenticates with X-Api-Key, not with an access token',
+  ];
+
+  /**
    * The table the guard reads, and the only one an unauthenticated request may
    * touch.
    */
@@ -123,12 +143,15 @@ class EndpointContractTest extends TestCase {
     $GLOBALS['myapi_test_users'] = [];
     $_GET = [];
     $_SERVER['REQUEST_METHOD'] = 'GET';
-    unset($_SERVER['HTTP_AUTHORIZATION']);
+    unset($_SERVER['HTTP_AUTHORIZATION'], $_SERVER['HTTP_X_API_KEY']);
+    $GLOBALS['myapi_test_variables'] = [];
+    $GLOBALS['myapi_test_watchdog'] = [];
   }
 
   protected function tearDown(): void {
     $_SERVER['REQUEST_METHOD'] = 'GET';
-    unset($_SERVER['HTTP_AUTHORIZATION']);
+    unset($_SERVER['HTTP_AUTHORIZATION'], $_SERVER['HTTP_X_API_KEY']);
+    $GLOBALS['myapi_test_variables'] = [];
   }
 
   /**
@@ -278,7 +301,7 @@ class EndpointContractTest extends TestCase {
   public function testEveryEndpointDemandsAnAccessToken() {
     foreach ($this->routedEndpoints() as $label => $endpoint) {
       list($callback, $args, $method) = $endpoint;
-      if (isset(self::PUBLIC_ENDPOINTS[$label])) {
+      if (isset(self::PUBLIC_ENDPOINTS[$label]) || isset(self::API_KEY_ENDPOINTS[$label])) {
         continue;
       }
 
@@ -299,7 +322,7 @@ class EndpointContractTest extends TestCase {
   public function testEveryEndpointRejectsAnUnknownAccessToken() {
     foreach ($this->routedEndpoints() as $label => $endpoint) {
       list($callback, $args, $method) = $endpoint;
-      if (isset(self::PUBLIC_ENDPOINTS[$label])) {
+      if (isset(self::PUBLIC_ENDPOINTS[$label]) || isset(self::API_KEY_ENDPOINTS[$label])) {
         continue;
       }
 
@@ -326,7 +349,7 @@ class EndpointContractTest extends TestCase {
   public function testAnUnauthenticatedRequestReachesNoTable() {
     foreach ($this->routedEndpoints() as $label => $endpoint) {
       list($callback, $args, $method) = $endpoint;
-      if (isset(self::PUBLIC_ENDPOINTS[$label])) {
+      if (isset(self::PUBLIC_ENDPOINTS[$label]) || isset(self::API_KEY_ENDPOINTS[$label])) {
         continue;
       }
 
@@ -350,7 +373,7 @@ class EndpointContractTest extends TestCase {
   public function testARejectedTokenReachesNoTableButTheTokenTable() {
     foreach ($this->routedEndpoints() as $label => $endpoint) {
       list($callback, $args, $method) = $endpoint;
-      if (isset(self::PUBLIC_ENDPOINTS[$label])) {
+      if (isset(self::PUBLIC_ENDPOINTS[$label]) || isset(self::API_KEY_ENDPOINTS[$label])) {
         continue;
       }
 
@@ -399,6 +422,66 @@ class EndpointContractTest extends TestCase {
 
       $this->assertNotSame(401, $result['status'], $label . ': public but demands a token — ' . $reason);
       $this->assertNotSame(405, $result['status'], $label);
+    }
+  }
+
+  /**
+   * No key, no answer: 401 unauthorized on every API-key endpoint.
+   *
+   * The machine-credential twin of testEveryEndpointDemandsAnAccessToken(),
+   * and it exists for the same reason: the allowlist above exempts these
+   * routes from the Bearer cases, so without this one an endpoint listed there
+   * would be exempt from being guarded at all.
+   *
+   * The variable is deliberately left unset — that is the shipped state of a
+   * site nobody ran `drush vset myapi_bot_api_key` on, and the answer must
+   * still be 401. Reading the label out of routedEndpoints() is what keeps the
+   * allowlist from going stale: a route removed from hook_menu() and left in
+   * the constant fails here.
+   */
+  public function testTheApiKeyEndpointsDemandTheApiKey() {
+    foreach (self::API_KEY_ENDPOINTS as $label => $reason) {
+      $this->assertArrayHasKey($label, $this->routedEndpoints(), $label . ': allowlisted but no longer routed');
+      list($callback, $args, $method) = $this->routedEndpoints()[$label];
+
+      foreach ([NULL, '', 'not-the-configured-key'] as $key) {
+        if ($key === NULL) {
+          unset($_SERVER['HTTP_X_API_KEY']);
+        }
+        else {
+          $_SERVER['HTTP_X_API_KEY'] = $key;
+        }
+
+        $result = $this->request($callback, $args, $method);
+
+        $this->assertSame(401, $result['status'], $label . ': answers without the API key — ' . $reason);
+        $this->assertSame('unauthorized', $result['json']['error_code'], $label);
+      }
+    }
+  }
+
+  /**
+   * And a request without the key reads nothing at all.
+   *
+   * The same invariant testAnUnauthenticatedRequestReachesNoTable() asserts
+   * for the Bearer, restated for the credential that replaced it: the guard
+   * runs before the resource resolves anything, so the correct number of
+   * queries is zero. A handler that looked the phone number up and THEN
+   * checked the key would answer the same 401 and pass the case above.
+   */
+  public function testAnUnkeyedRequestReachesNoTable() {
+    foreach (self::API_KEY_ENDPOINTS as $label => $reason) {
+      list($callback, $args, $method) = $this->routedEndpoints()[$label];
+
+      $_GET['phone'] = '0987535645';
+      $this->request($callback, $args, $method);
+      unset($_GET['phone']);
+
+      $tables = [];
+      foreach (myapi_test_db_queries() as $query) {
+        $tables[$query['table']] = TRUE;
+      }
+      $this->assertSame([], array_keys($tables), $label . ': queried a table before authenticating');
     }
   }
 

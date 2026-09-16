@@ -874,6 +874,21 @@ function myapi_menu() {
     'file'             => 'includes/myapi.service_transaction_admin.inc',
   ];
 
+  // The WhatsApp bot's person lookup (SPEC 127). The first route of the module
+  // authenticated by a machine API key instead of the access token: the bot
+  // lives in n8n, has no session, and the guard it calls is
+  // myapi_bot_require_api_key() in includes/myapi.bot_auth.inc.
+  //
+  // 'access callback' => TRUE like every other api/v1 route — Drupal's
+  // permission system knows nothing about either credential, and the whole
+  // boundary is the guard at the top of the handler.
+  $items['api/v1/bot/person'] = [
+    'page callback'    => 'myapi_bot_person_dispatch',
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/bot.resource.inc',
+  ];
+
   return $items;
 }
 
