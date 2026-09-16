@@ -8,6 +8,7 @@ require_once __DIR__ . '/../../includes/myapi.i18n.inc';
 require_once __DIR__ . '/../../includes/myapi.token.inc';
 require_once __DIR__ . '/../../includes/myapi.auth.inc';
 require_once __DIR__ . '/../../includes/myapi.unit_access.inc';
+require_once __DIR__ . '/../../includes/myapi.unit_query.inc';
 require_once __DIR__ . '/../../resources/unit.resource.inc';
 
 /**
