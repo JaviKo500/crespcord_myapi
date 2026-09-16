@@ -889,6 +889,17 @@ function myapi_menu() {
     'file'             => 'resources/bot.resource.inc',
   ];
 
+  // The bot's unit search (SPEC 128). The second way to the same unit_id: when
+  // the lookup above answers `found: false`, the bot asks over WhatsApp for the
+  // building and the unit, and this resolves those two names. Same file, same
+  // credential and same guard as the route above — one consumer, one key.
+  $items['api/v1/bot/units'] = [
+    'page callback'    => 'myapi_bot_units_dispatch',
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/bot.resource.inc',
+  ];
+
   return $items;
 }
 

@@ -1,4 +1,4 @@
-# Bot endpoints (SPEC 127)
+# Bot endpoints (SPECS 127, 128)
 
 Machine endpoints consumed by the WhatsApp bot that runs in n8n. They are not
 part of the Flutter app's surface and they do **not** use the Bearer access
@@ -119,6 +119,194 @@ according to the `Accept-Language` header (`es`/`en`, default `es`). See
 
 No table is written, and no table is read at all until the API key has been
 accepted.
+
+---
+
+## GET /api/v1/bot/units
+
+Resolves the name of a condominium and the name of a unit — both written as a
+person types them over WhatsApp: without accents, in lower case, with different
+separators or with one letter wrong — to at most five visible units and their
+owner, so the bot knows which unit a payment receipt should be charged to when
+the phone number identified nobody.
+
+The second road to the same `unit_id`. When `GET /api/v1/bot/person` answers
+`found: false`, the bot asks over WhatsApp for the building and the unit, and
+this is what it calls with those two answers in hand.
+
+Read-only, like its sibling. It does **not** register the payment.
+
+**Authentication:** required (`X-Api-Key` machine key — the **same** key as
+`/bot/person`; SPEC 128 introduced no second credential)
+
+**Headers**
+| Header | Value |
+|--------|-------|
+| X-Api-Key | `<the key set with drush vset myapi_bot_api_key>` |
+
+**Query parameters**
+| Param | Required | Notes |
+|-------|----------|-------|
+| `condominium` | **yes** | The building name as the person wrote it. At least 2 characters once normalised. |
+| `unit` | **yes** | The unit name as the person wrote it. At least 2 characters once normalised. |
+
+Both are required, and that is not an oversight. `?unit=3b` on its own walks a
+table of 35.000 units and `3B` exists in nearly every one of the 150 buildings:
+five results out of a hundred-odd real matches is noise, not an answer.
+`?condominium=torre azul` on its own is the whole building listed and cut to
+five, which no branch of the conversation needs. The conversational flow always
+asks for both, so the endpoint demands both.
+
+**How the names are compared**
+
+Both sides of every comparison — what arrives in the query string and what is
+stored in Drupal — go through one definition: accents and case are folded away,
+and the separators ` `, `-`, `.`, `,`, `#` and `/` are removed.
+
+| Written / stored | Compared as |
+|------------------|-------------|
+| `torre azul`, `TORRE AZUL`, `Torre-Azul` | `torreazul` |
+| `Edificio Torre Azul` | `edificiotorreazul` |
+| `3B`, `3-B`, `3 B`, `# 3B` | `3b` |
+| `Dpto 3-B` | `dpto3b` |
+| `Climatización` | `climatizacion` |
+
+The term is also split into words, and they match **in any order**: `azul torre`
+finds `Edificio Torre Azul`. All of them have to appear — `torre verde` does
+not find it.
+
+If a term matches **nothing** literally, a second, approximate pass runs and
+forgives a wrong letter: `torre asul` and `torrre azul` both find
+`Edificio Torre Azul`. That pass only runs when the literal one found zero, so
+a search that already works never starts answering with similar-looking
+neighbours: if `torre` matches three buildings by name, no fourth one appears
+by similarity.
+
+**The approximate pass never touches a unit term shorter than 4 characters.**
+`?unit=3b` does not return `Dpto 3C`: those two are one letter apart, and
+correcting one into the other hands back the neighbour's unit with a payment
+receipt behind it. `?unit=dpto 3b` (6 characters) can return `Dpto 3-C`, and it
+is flagged — see `match` below.
+
+**Request body**
+
+None — `GET` only.
+
+**Success response (200), with results**
+```json
+{
+  "success": true,
+  "data": {
+    "found": true,
+    "total": 2,
+    "units": [
+      {
+        "unit_id": 456,
+        "unit": "Dpto 3B",
+        "condominium_id": 12,
+        "condominium": "Edificio Torre Azul",
+        "owner": { "uid": 123, "name": "Juan Pérez" },
+        "match": "exact"
+      },
+      {
+        "unit_id": 789,
+        "unit": "Dpto 3B",
+        "condominium_id": 31,
+        "condominium": "Torre Azul II",
+        "owner": null,
+        "match": "fuzzy"
+      }
+    ]
+  }
+}
+```
+
+> **Two warnings the bot has to act on, not just read.**
+>
+> **`match: "fuzzy"` means at least one of the two names needed a letter
+> corrected. Confirm over WhatsApp before charging anything to that unit.**
+> Drupal marks the guess; deciding for the resident is not its job. A flow that
+> treats the five results alike turns the approximate pass into a silent
+> generator of misposted payments.
+>
+> **When `total > 1`, confirm too, whatever `match` says.** `Torre Azul`,
+> `Torre Azul II` and `Torres Azules` can coexist in a base of 150 buildings,
+> and `torre azul` matches all three literally. The endpoint hands over the data
+> to decide with; it does not decide.
+
+| Field | What it is |
+|-------|------------|
+| `found` | `true` when `units` is not empty. It exists for symmetry with `/bot/person`, not because it adds anything. |
+| `total` | The real number of matches **before** the cut to five. `total > 5` means "narrow the term down", and the bot can say so instead of showing five as if they were all of them. See the caveat below. |
+| `owner` | `{ uid, name }`, or `null` when the unit has no owner assigned or the uid no longer resolves. The unit still travels either way. Never the phone, the national id or the email. |
+| `match` | `"exact"` when unit **and** condominium were resolved without approximating — that includes a prefix or a partial match, since both are literal. `"fuzzy"` when either of the two needed the second pass. |
+
+**`total` counts inside the 20 condominiums examined, not inside the 150.** A
+term like `ed` matches the hundred buildings whose name begins with "Edificio",
+and scanning their 23.000 units to produce a number is not what this endpoint is
+for: the search keeps the best 20 buildings and counts within them. With a very
+short term the bot may say "there are 12" when there really are 60. Do not build
+a count on this number — it is a search made to narrow things down, not a
+report.
+
+Only published units whose condominium is also published are returned. Neither
+the balance (`current_balance`) nor the condominium's payment information is
+included, exactly as in `/bot/person`.
+
+**Success response (200), no results**
+```json
+{
+  "success": true,
+  "data": { "found": false, "total": 0, "units": [] }
+}
+```
+
+Same shape always, so n8n has a single branch. There is **no `404`**: a 404
+reads like a mistyped URL, and n8n could not tell "that building does not exist"
+from "the route moved".
+
+**Possible errors**
+| Code | `error_code` | When |
+|------|--------------|------|
+| 401  | `unauthorized` | `X-Api-Key` absent, empty, or different from the configured key. Also when `myapi_bot_api_key` is not configured at all. |
+| 405  | `method_not_allowed` | Any HTTP method other than `GET`. |
+| 422  | `missing_condominium` | `condominium` is absent or empty. |
+| 422  | `missing_unit` | `unit` is absent or empty. |
+| 422  | `invalid_condominium` | `condominium` is shorter than 2 characters once normalised (e.g. `a`, or `-`). |
+| 422  | `invalid_unit` | `unit` is shorter than 2 characters once normalised (e.g. `3`). |
+
+`condominium` is validated first, so a request missing both parameters answers
+one `422`, not two. A malformed parameter is a `422` and not an empty result for
+the same reason as in `/bot/person`: it is a bug in the n8n flow, and answering
+"I found nothing" would hide it.
+
+**Examples**
+
+```bash
+# 200 — the building written without accents, the unit without its separator
+curl -i -H 'X-Api-Key: <the secret>' \
+  'https://<host>/api/v1/bot/units?condominium=torre%20azul&unit=3B'
+
+# 200 — the words in any order, and one letter wrong
+curl -i -H 'X-Api-Key: <the secret>' \
+  'https://<host>/api/v1/bot/units?condominium=asul%20torre&unit=dpto%203b'
+
+# 422 missing_unit
+curl -i -H 'X-Api-Key: <the secret>' \
+  'https://<host>/api/v1/bot/units?condominium=torre%20azul'
+```
+
+**Tables read**
+| Table | Columns | Use |
+|-------|---------|-----|
+| `node` (condominio) | `nid`, `title`, `type`, `status` | The 150 published titles, loaded whole and compared in PHP. First phase of the cascade. |
+| `node` (vivienda) + `field_data_field_condominio` | `nid`, `status`, `field_condominio_target_id` | The nids of the published units of the resolved condominiums. Narrows the second phase to a few hundred rows instead of 35.000. |
+| `field_data_field_nombre_vivienda` | `entity_id`, `field_nombre_vivienda_value` | The unit name, via `myapi_unit_fetch_units()`. |
+| `field_data_field_propietario` | `entity_id`, `field_propietario_target_id` | The owner's uid. |
+| `users`, `field_data_field_nombre`, `field_data_field_apellidos` | — | The owner's display name, via `myapi_user_display_names()`, for the five that travel only. |
+
+No table is written, no table is read until the API key has been accepted, and
+the unit table is not touched at all when the condominium term matches nothing.
 
 ---
 

@@ -562,3 +562,366 @@ function myapi_bot_match_rank($term, $value, $allow_fuzzy = FALSE) {
 
   return NULL;
 }
+
+/**
+ * The sort weight of a match rank.
+ *
+ * The four ranks are an order, not a set: a unit whose name was typed in full
+ * must come out above one that merely contains the term, and both above one
+ * that needed a letter corrected. This is that order, and it is a function so
+ * the numbers live once.
+ *
+ * @param string|null $rank  As myapi_bot_match_rank() returns it.
+ *
+ * @return int  0 for 'exact' … 3 for 'fuzzy'; 4 for anything unknown, which
+ *              sorts last rather than first.
+ */
+function myapi_bot_match_weight($rank) {
+  $weights = ['exact' => 0, 'prefix' => 1, 'contains' => 2, 'fuzzy' => 3];
+
+  return isset($weights[$rank]) ? $weights[$rank] : 4;
+}
+
+/**
+ * Resolves a term to the condominiums it names — the first phase of the
+ * cascade.
+ *
+ * Two passes, and the second only runs if the first found nothing: a search
+ * that already works must not start answering with similar-looking neighbours,
+ * and the normal path does not pay for the arithmetic.
+ *
+ * The result is capped at MYAPI_BOT_SEARCH_CONDOMINIUM_LIMIT, best rank first
+ * and, at equal rank, by normalised title. Without the cap a term like 'ed'
+ * matches the hundred buildings whose name starts with "Edificio" and the next
+ * phase scans 23.000 units. The cap is why `total` counts inside the twenty
+ * examined and not inside the hundred and fifty, and the documentation says so
+ * in those words.
+ *
+ * @param mixed $term           The condominium term as typed.
+ * @param array $condominiums   Map of nid => title, as
+ *                              myapi_unit_fetch_all_condominiums() returns it.
+ *
+ * @return array  Map of nid => rank, at most MYAPI_BOT_SEARCH_CONDOMINIUM_LIMIT
+ *                entries, in the order described above.
+ */
+function myapi_bot_match_condominiums($term, array $condominiums) {
+  $matched = [];
+
+  foreach ([FALSE, TRUE] as $allow_fuzzy) {
+    foreach ($condominiums as $nid => $title) {
+      $rank = myapi_bot_match_rank($term, $title, $allow_fuzzy);
+      if ($rank !== NULL) {
+        $matched[$nid] = $rank;
+      }
+    }
+
+    if ($matched) {
+      break;
+    }
+  }
+
+  if (!$matched) {
+    return [];
+  }
+
+  $order = [];
+  foreach ($matched as $nid => $rank) {
+    $order[] = [
+      'nid'    => $nid,
+      'rank'   => $rank,
+      'weight' => myapi_bot_match_weight($rank),
+      'title'  => myapi_bot_search_normalize($condominiums[$nid]),
+    ];
+  }
+
+  usort($order, function ($a, $b) {
+    if ($a['weight'] !== $b['weight']) {
+      return $a['weight'] < $b['weight'] ? -1 : 1;
+    }
+    $title = strcmp($a['title'], $b['title']);
+    if ($title !== 0) {
+      return $title;
+    }
+
+    // The final tie-break, so two identical calls cannot come out in two
+    // different orders because the map arrived in a different order.
+    return (int) $a['nid'] < (int) $b['nid'] ? -1 : ((int) $a['nid'] > (int) $b['nid'] ? 1 : 0);
+  });
+
+  $ranks = [];
+  foreach (array_slice($order, 0, MYAPI_BOT_SEARCH_CONDOMINIUM_LIMIT) as $entry) {
+    $ranks[$entry['nid']] = $entry['rank'];
+  }
+
+  return $ranks;
+}
+
+/**
+ * Resolves a term to the units it names — the second phase of the cascade.
+ *
+ * The same two passes as the phase above, over the rows of the condominiums
+ * already resolved, with ONE difference: the approximate pass is skipped
+ * entirely unless the term is at least MYAPI_BOT_SEARCH_FUZZY_MIN_LENGTH
+ * characters long. See that constant for why the asymmetry is deliberate.
+ *
+ * @param mixed $term   The unit term as typed.
+ * @param array $units  Rows as myapi_unit_fetch_units() returns them.
+ *
+ * @return array  Map of unit nid => rank.
+ */
+function myapi_bot_match_units($term, array $units) {
+  $allow_fuzzy_pass = strlen(myapi_bot_search_normalize($term)) >= MYAPI_BOT_SEARCH_FUZZY_MIN_LENGTH;
+
+  $matched = [];
+  foreach ([FALSE, TRUE] as $allow_fuzzy) {
+    if ($allow_fuzzy && !$allow_fuzzy_pass) {
+      break;
+    }
+
+    foreach ($units as $unit) {
+      $rank = myapi_bot_match_rank($term, $unit->name, $allow_fuzzy);
+      if ($rank !== NULL) {
+        $matched[$unit->nid] = $rank;
+      }
+    }
+
+    if ($matched) {
+      break;
+    }
+  }
+
+  return $matched;
+}
+
+/**
+ * The `owner` block of one unit, or NULL.
+ *
+ * NULL — and the unit still travels — in the three cases that mean the same
+ * thing to the bot: no owner assigned, a uid that no longer resolves to an
+ * account, and a name that was not asked for. The payment can be charged
+ * either way; what it must never carry is the owner's phone, national id or
+ * email, and the only two fields here are the two the bot needs to confirm
+ * over WhatsApp ("are you Juan Pérez, from Dpto 3B?").
+ *
+ * It exists as a function because two callers build this block — the element
+ * builder below and the handler, which fills the names in after the cut — and
+ * the shape must not be written twice.
+ *
+ * @param mixed $uid    The unit's owner_uid, possibly NULL.
+ * @param array $names  Map of uid => display name.
+ *
+ * @return array|null  ['uid' => int, 'name' => string] or NULL.
+ */
+function myapi_bot_search_owner($uid, array $names) {
+  if ($uid === NULL || !isset($names[$uid])) {
+    return NULL;
+  }
+
+  return ['uid' => (int) $uid, 'name' => $names[$uid]];
+}
+
+/**
+ * Builds the answer's elements, ordered, and ALL of them.
+ *
+ * The cap belongs to the caller, which is the only one that needs `total`: the
+ * real number of matches is the length of what this returns, and slicing it
+ * here would throw that away.
+ *
+ * `match` collapses the four internal ranks into the two behaviours n8n has.
+ * 'exact' means NOT APPROXIMATED — prefix and contains are literal matches and
+ * belong on that side — and 'fuzzy' means at least one of the two names needed
+ * a letter corrected, which is when the bot must confirm before charging
+ * anything.
+ *
+ * The order is the five criteria of the spec, and the last of them is the
+ * unit's nid so that two identical calls cannot answer in two different orders.
+ *
+ * @param array $units                Rows as myapi_unit_fetch_units() returns.
+ * @param array $unit_ranks           Map of unit nid => rank.
+ * @param array $condominium_ranks    Map of condominium nid => rank.
+ * @param array $condominium_titles   Map of condominium nid => title.
+ * @param array $owner_names          Map of uid => display name; a uid that is
+ *                                    missing answers a null owner.
+ *
+ * @return array  Every matching unit, ordered, with unit_id, unit,
+ *                condominium_id, condominium, owner and match.
+ */
+function myapi_bot_build_search_results(array $units, array $unit_ranks, array $condominium_ranks, array $condominium_titles, array $owner_names) {
+  $built = [];
+
+  foreach ($units as $unit) {
+    if (!isset($unit_ranks[$unit->nid])) {
+      continue;
+    }
+
+    // A unit whose condominium did not match is not in the answer, and neither
+    // is one whose condominium is no longer visible: the nid never reached the
+    // map that resolved the term.
+    if ($unit->condominio_nid === NULL || !isset($condominium_ranks[$unit->condominio_nid])) {
+      continue;
+    }
+
+    $unit_rank = $unit_ranks[$unit->nid];
+    $condominium_rank = $condominium_ranks[$unit->condominio_nid];
+
+    $built[] = [
+      'element' => [
+        'unit_id'        => (int) $unit->nid,
+        'unit'           => $unit->name,
+        'condominium_id' => (int) $unit->condominio_nid,
+        'condominium'    => $condominium_titles[$unit->condominio_nid],
+        'owner'          => myapi_bot_search_owner($unit->owner_uid, $owner_names),
+        'match'          => ($unit_rank === 'fuzzy' || $condominium_rank === 'fuzzy') ? 'fuzzy' : 'exact',
+      ],
+      'unit_weight'        => myapi_bot_match_weight($unit_rank),
+      'condominium_weight' => myapi_bot_match_weight($condominium_rank),
+      'condominium_title'  => myapi_bot_search_normalize($condominium_titles[$unit->condominio_nid]),
+      'unit_name'          => myapi_bot_search_normalize($unit->name),
+      'unit_id'            => (int) $unit->nid,
+    ];
+  }
+
+  usort($built, function ($a, $b) {
+    foreach (['unit_weight', 'condominium_weight'] as $weight) {
+      if ($a[$weight] !== $b[$weight]) {
+        return $a[$weight] < $b[$weight] ? -1 : 1;
+      }
+    }
+    foreach (['condominium_title', 'unit_name'] as $name) {
+      $comparison = strcmp($a[$name], $b[$name]);
+      if ($comparison !== 0) {
+        return $comparison;
+      }
+    }
+
+    return $a['unit_id'] < $b['unit_id'] ? -1 : ($a['unit_id'] > $b['unit_id'] ? 1 : 0);
+  });
+
+  return array_column($built, 'element');
+}
+
+/**
+ * GET /api/v1/bot/units — resolves a condominium and a unit name to units.
+ *
+ * The second way to the same unit_id. SPEC 127 answers "who is this phone?";
+ * when it cannot, the bot asks over WhatsApp for the building and the unit, and
+ * this is what it calls with those two answers in hand.
+ *
+ * BOTH parameters are required. `?unit=3b` alone walks a table of 35.000 rows
+ * and '3B' exists in nearly every one of the 150 buildings — five results out
+ * of a hundred-odd real matches is noise, not an answer — and
+ * `?condominium=torre azul` alone is the whole building listed and cut to five,
+ * which no branch of the conversation needs.
+ *
+ * The credential is checked first, before any table is read; that ordering is
+ * the invariant EndpointContractTest asserts by counting queries. A malformed
+ * parameter is a 422 and not an empty answer, for the same reason as in
+ * /bot/person: it is a bug in the n8n flow, and answering "I found nothing"
+ * would hide it behind a conversation with somebody who typed correctly.
+ *
+ * Everything past that is a 200, including finding nothing at all. One shape,
+ * one branch in n8n, and never a 404 — a 404 reads like a mistyped URL.
+ */
+function myapi_bot_units_search() {
+  myapi_bot_require_api_key();
+
+  $condominium_term = isset($_GET['condominium']) ? trim((string) $_GET['condominium']) : '';
+  if ($condominium_term === '') {
+    myapi_error('missing_condominium', 422);
+  }
+
+  $unit_term = isset($_GET['unit']) ? trim((string) $_GET['unit']) : '';
+  if ($unit_term === '') {
+    myapi_error('missing_unit', 422);
+  }
+
+  if (strlen(myapi_bot_search_normalize($condominium_term)) < MYAPI_BOT_SEARCH_MIN_LENGTH) {
+    myapi_error('invalid_condominium', 422);
+  }
+
+  if (strlen(myapi_bot_search_normalize($unit_term)) < MYAPI_BOT_SEARCH_MIN_LENGTH) {
+    myapi_error('invalid_unit', 422);
+  }
+
+  $empty = ['found' => FALSE, 'total' => 0, 'units' => []];
+
+  $titles = myapi_unit_fetch_all_condominiums();
+  $condominium_ranks = myapi_bot_match_condominiums($condominium_term, $titles);
+
+  // No building, no second phase. The table of 35.000 units is never touched
+  // when the term names nothing, which is the point of the cascade.
+  if (empty($condominium_ranks)) {
+    myapi_respond($empty);
+  }
+
+  $nids = myapi_unit_fetch_unit_nids_by_condominium(array_keys($condominium_ranks));
+  if (empty($nids)) {
+    myapi_respond($empty);
+  }
+
+  $units = myapi_unit_fetch_units($nids);
+  $unit_ranks = myapi_bot_match_units($unit_term, $units);
+  if (empty($unit_ranks)) {
+    myapi_respond($empty);
+  }
+
+  // Built with no names at all: what the order and the count need is the
+  // ranks, and a name is only worth a query for the units that survive the
+  // cut. Every `owner` is NULL at this point.
+  $results = myapi_bot_build_search_results($units, $unit_ranks, $condominium_ranks, $titles, []);
+  if (empty($results)) {
+    myapi_respond($empty);
+  }
+
+  // Counted BEFORE the cut: `total` is what tells the bot "these are all of
+  // them" from "there are forty, ask for a better name".
+  $total = count($results);
+  $results = array_slice($results, 0, MYAPI_BOT_SEARCH_MAX_RESULTS);
+
+  $owner_uids = [];
+  foreach ($units as $unit) {
+    if ($unit->owner_uid !== NULL) {
+      $owner_uids[$unit->nid] = $unit->owner_uid;
+    }
+  }
+
+  // The owners' names, for the five that travel and not for all the matches.
+  // With a total of forty that is the difference between a query of five rows
+  // and one of forty, for a value that was never going to be answered.
+  $wanted = [];
+  foreach ($results as $result) {
+    if (isset($owner_uids[$result['unit_id']])) {
+      $wanted[$owner_uids[$result['unit_id']]] = TRUE;
+    }
+  }
+
+  if ($wanted) {
+    $names = myapi_user_display_names(array_keys($wanted));
+    foreach ($results as $index => $result) {
+      $uid = isset($owner_uids[$result['unit_id']]) ? $owner_uids[$result['unit_id']] : NULL;
+      $results[$index]['owner'] = myapi_bot_search_owner($uid, $names);
+    }
+  }
+
+  myapi_respond([
+    'found' => TRUE,
+    'total' => $total,
+    'units' => $results,
+  ]);
+}
+
+/**
+ * Dispatcher for /api/v1/bot/units.
+ *
+ * Routes by HTTP method. Only GET is supported: the endpoint reads, and the bot
+ * writes through the endpoints that already exist.
+ */
+function myapi_bot_units_dispatch() {
+  $method = myapi_request_method();
+  if ($method === 'GET') {
+    myapi_bot_units_search();
+  }
+  else {
+    myapi_error('method_not_allowed', 405);
+  }
+}

@@ -361,14 +361,6 @@ class I18nTest extends TestCase {
   const UNREACHED_KEYS = [
     'user_not_found',
     'missing_token',
-    // SPEC 128, step 1 — same shape as SPEC 127 above: the catalogue half of
-    // the unit search arrives before the resource that produces these. All
-    // four leave this list in step 4, when myapi_bot_units_search() starts
-    // passing them to myapi_error().
-    'missing_condominium',
-    'missing_unit',
-    'invalid_condominium',
-    'invalid_unit',
   ];
 
   /**
