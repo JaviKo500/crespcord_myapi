@@ -4913,6 +4913,27 @@ function myapi_update_7045() {
  * blob is third-party content produced by a model from a photo anybody sent
  * over WhatsApp, and it is read in the node edit form's textarea, which escapes
  * by construction.
+ *
+ * THEN IT BACKFILLS EVERY PAYMENT THAT PREDATES THE FIELD AS 'backoffice', IN
+ * BATCHES OF 200 AND WITHOUT node_save(). That last part is the whole reason
+ * this update looks the way it does: myapi.module hooks hook_node_update() for
+ * the payment verification workflow (SPEC 22) and for the approved and
+ * cancelled emails (SPEC 27, 30). Saving every historical payment in bulk would
+ * fire that workflow over payments closed months ago — recalculating unit and
+ * cash balances, and possibly avalanching emails at residents nobody touched. A
+ * direct db_insert() into the field's two tables writes the datum and wakes
+ * nothing.
+ *
+ * REANUDABLE BY CONSTRUCTION. The batch query selects payments that have NO row
+ * in field_data_field_canal, so each pass advances on its own and an update cut
+ * in half resumes exactly where it stopped, without duplicating rows.
+ *
+ * ONLY THE CURRENT REVISION (node.vid) GETS A ROW. Older revisions of a payment
+ * are dead history that nothing reads; filling them would multiply the length
+ * of the update for no reader.
+ *
+ * THE OTHER THREE FIELDS STAY EMPTY on historical payments: nobody read those
+ * receipts, and only SPEC 130 writes them.
  */
 function myapi_update_7046(&$sandbox) {
   module_load_include('inc', 'myapi', 'includes/myapi.payment_workflow');
@@ -5000,9 +5021,53 @@ function myapi_update_7046(&$sandbox) {
     }
 
     $sandbox['progress'] = 0;
+    $sandbox['max'] = (int) db_query("
+      SELECT COUNT(n.nid)
+      FROM {node} n
+      LEFT JOIN {field_data_field_canal} c
+        ON c.entity_type = 'node' AND c.entity_id = n.nid AND c.deleted = 0
+      WHERE n.type = 'pagos' AND c.entity_id IS NULL
+    ")->fetchField();
   }
 
-  $sandbox['#finished'] = 1;
+  $rows = db_query_range("
+    SELECT n.nid, n.vid
+    FROM {node} n
+    LEFT JOIN {field_data_field_canal} c
+      ON c.entity_type = 'node' AND c.entity_id = n.nid AND c.deleted = 0
+    WHERE n.type = 'pagos' AND c.entity_id IS NULL
+    ORDER BY n.nid
+  ", 0, 200)->fetchAll();
 
-  return t('SPEC 129: creados los cuatro campos del canal y del comprobante en el bundle «pagos».');
+  foreach ($rows as $row) {
+    foreach (['field_data_field_canal', 'field_revision_field_canal'] as $table) {
+      db_insert($table)
+        ->fields([
+          'entity_type'       => 'node',
+          'bundle'            => 'pagos',
+          'deleted'           => 0,
+          'entity_id'         => (int) $row->nid,
+          'revision_id'       => (int) $row->vid,
+          'language'          => LANGUAGE_NONE,
+          'delta'             => 0,
+          'field_canal_value' => MYAPI_PAYMENT_CHANNEL_BACKOFFICE,
+        ])
+        ->execute();
+    }
+
+    $sandbox['progress']++;
+  }
+
+  $sandbox['#finished'] = $sandbox['max'] ? ($sandbox['progress'] / $sandbox['max']) : 1;
+
+  if ($sandbox['#finished'] >= 1) {
+    // The entities already in cache_field / cache_entity_node were built before
+    // these rows existed and would keep answering without a channel.
+    field_cache_clear();
+
+    return t('SPEC 129: creados los cuatro campos del canal y del comprobante en el bundle «pagos». Canal «@channel» asignado a @count pagos ya existentes.', [
+      '@channel' => MYAPI_PAYMENT_CHANNEL_BACKOFFICE,
+      '@count'   => $sandbox['progress'],
+    ]);
+  }
 }

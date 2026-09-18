@@ -543,6 +543,12 @@ function myapi_payment_save_file() {
  * unsaved so the caller controls node_save() ordering relative to
  * file_usage_add().
  *
+ * field_canal is forced to 'app' for the same reason and with the same
+ * strictness (SPEC 129): the channel is decided by the door the request came
+ * in through and never by the caller. The endpoint accepts no 'channel' input —
+ * a channel the client could pick would not be traceability, it would be a
+ * statement of intent. The field is not exposed in any response.
+ *
  * @param int         $uid           Author (authenticated user) id.
  * @param int         $vivienda_nid  Target unit nid.
  * @param string      $referencia    Sanitized reference.
@@ -570,6 +576,7 @@ function myapi_payment_build_node($uid, $vivienda_nid, $referencia, $valor, $for
   $node->field_forma_de_pago[LANGUAGE_NONE][0]['value'] = $forma;
   $node->field_fecha_de_pago[LANGUAGE_NONE][0]['value'] = $fecha;
   $node->field_estado_pago[LANGUAGE_NONE][0]['value']   = 'Pendiente de verificar';
+  $node->field_canal[LANGUAGE_NONE][0]['value']         = MYAPI_PAYMENT_CHANNEL_APP;
 
   if ($banco_tid !== NULL) {
     $node->field_banco[LANGUAGE_NONE][0]['tid'] = $banco_tid;

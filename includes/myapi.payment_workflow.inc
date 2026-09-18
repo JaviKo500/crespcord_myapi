@@ -513,6 +513,7 @@ function myapi_payment_backend_mail_params($node, $unit = NULL, $bank_term = NUL
     'reference'   => $reference,
     'amount'      => number_format((float) myapi_payment_field_value($node, 'field_valor'), 2),
     'method'      => myapi_payment_method_label(myapi_payment_field_value($node, 'field_forma_de_pago')),
+    'channel'     => myapi_payment_channel_label(myapi_payment_field_value($node, MYAPI_PAYMENT_CHANNEL_FIELD)),
     'bank'        => $bank_term ? check_plain($bank_term->name) : MYAPI_PAYMENT_MAIL_EMPTY,
     'date'        => myapi_payment_date_label(myapi_payment_field_value($node, 'field_fecha_de_pago')),
     'unit'        => $unit ? check_plain($unit->title) : MYAPI_PAYMENT_MAIL_EMPTY,

@@ -634,10 +634,10 @@ function myapi_mail_claim_closed_admin_html($params) {
  * never collapse into one thread.
  *
  * @param array $message  Mail message array, altered by reference.
- * @param array $params   'nid', 'reference', 'amount', 'method', 'bank',
- *                        'date', 'unit', 'condominium', 'resident', 'email',
- *                        'file', 'status', 'created' and 'edit_url', already
- *                        escaped.
+ * @param array $params   'nid', 'reference', 'amount', 'method', 'channel',
+ *                        'bank', 'date', 'unit', 'condominium', 'resident',
+ *                        'email', 'file', 'status', 'created' and 'edit_url',
+ *                        already escaped.
  */
 function myapi_mail_format_payment_admin(&$message, $params) {
   $message['subject'] = 'Nuevo pago #' . $params['nid'] . ' — Ref. '
@@ -668,6 +668,10 @@ function myapi_mail_payment_admin_html($params) {
     'Referencia'     => $params['reference'],
     'Monto'          => $params['amount'],
     'Forma de pago'  => $params['method'],
+    // isset() and not a plain read: a payment enqueued before SPEC 129 was
+    // deployed is formatted by this code when cron drains the queue, and its
+    // stored params have no 'channel' key. Same fallback as 'Proveedor' below.
+    'Canal'          => isset($params['channel']) ? $params['channel'] : '—',
     'Banco'          => $params['bank'],
     'Fecha del pago' => $params['date'],
     'Vivienda'       => $params['unit'],
