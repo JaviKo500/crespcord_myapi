@@ -77,6 +77,33 @@ if (!defined('MYAPI_PAYMENT_METHOD_FIELD')) {
 }
 
 /**
+ * The 'field_canal' field, which records the door a payment came in through
+ * (SPEC 129). Its allowed_values map a stored key to the label the email
+ * prints, the same shape as MYAPI_PAYMENT_METHOD_FIELD.
+ */
+define('MYAPI_PAYMENT_CHANNEL_FIELD', 'field_canal');
+
+/**
+ * Channel of a payment registered by the WhatsApp bot (SPEC 130). Defined here
+ * and not in a resource file because resources/bot.resource.inc must not reach
+ * into resources/payment.resource.inc for it.
+ */
+define('MYAPI_PAYMENT_CHANNEL_BOT', 'bot');
+
+/**
+ * Channel of a payment registered from the app (POST /api/v1/payments).
+ */
+define('MYAPI_PAYMENT_CHANNEL_APP', 'app');
+
+/**
+ * Channel of a payment typed by an operator in the Drupal back office. Also
+ * the value myapi_update_7046() writes on every payment that predates the
+ * field: there is no reliable way to tell an app payment from a hand-typed one
+ * after the fact, and a made-up label is worse than a conservative one.
+ */
+define('MYAPI_PAYMENT_CHANNEL_BACKOFFICE', 'backoffice');
+
+/**
  * Reads the first value of a single-value Field API field on a node.
  *
  * Centralizes the LANGUAGE_NONE[0]['value'] access so callers do not repeat
@@ -522,6 +549,32 @@ function myapi_payment_method_label($key) {
   }
 
   $field_info = field_info_field(MYAPI_PAYMENT_METHOD_FIELD);
+  $allowed = ($field_info && isset($field_info['settings']['allowed_values']))
+    ? $field_info['settings']['allowed_values']
+    : array();
+
+  return check_plain(isset($allowed[$key]) ? $allowed[$key] : $key);
+}
+
+/**
+ * Human label of a 'field_canal' key (SPEC 129).
+ *
+ * Resolved exactly like myapi_payment_method_label(): from the field's own
+ * allowed_values, so the catalogue lives in one place. A payment created
+ * before the field existed has no key and gets the empty placeholder; a key
+ * that is no longer in allowed_values falls back to the raw value rather than
+ * to an empty cell.
+ *
+ * @param string|null $key  The stored key, or NULL when the field is empty.
+ *
+ * @return string  Already escaped.
+ */
+function myapi_payment_channel_label($key) {
+  if ($key === NULL || $key === '') {
+    return MYAPI_PAYMENT_MAIL_EMPTY;
+  }
+
+  $field_info = field_info_field(MYAPI_PAYMENT_CHANNEL_FIELD);
   $allowed = ($field_info && isset($field_info['settings']['allowed_values']))
     ? $field_info['settings']['allowed_values']
     : array();

@@ -4877,3 +4877,132 @@ function myapi_update_7045() {
     '@count' => count(myapi_html_mail_keys()),
   ]);
 }
+
+/**
+ * SPEC 129: creates the payment channel and receipt fields on 'pagos'.
+ *
+ * FOUR FIELDS, ONE UPDATE. field_canal records the door a payment came in
+ * through; field_banco_emisor and field_banco_destino hold the two bank names
+ * the OCR read off a transfer receipt; field_comprobante_ocr keeps the raw JSON
+ * of that reading as internal evidence. None of the four is exposed by any
+ * endpoint — this update changes the site's schema, not the API contract.
+ *
+ * IDEMPOTENT. Creation goes through _myapi_reservations_ensure_field() and
+ * _myapi_reservations_ensure_instance(), which create only what is missing, so
+ * a deployment cut in half and re-run finds nothing pending and a site where
+ * the field exists but the instance does not gets repaired instead of fatalled
+ * on.
+ *
+ * NONE OF THE FOUR IS REQUIRED. A required field would break every programmatic
+ * node_save() that does not fill it — the app's own, during the window between
+ * this update and the code deploy, and the back office's in the middle of
+ * drush updb. The guarantee that a payment always carries its channel is given
+ * by the code that creates it, not by the Field API.
+ *
+ * field_canal DEFAULTS TO 'backoffice', AND IN D7 A DEFAULT VALUE IS APPLIED BY
+ * THE FORM (field_attach_form) AND NEVER BY node_save(). That is exactly the
+ * split this spec wants: a payment typed into node/add/pagos arrives at the
+ * form already marked, while the API — which never goes through the form — is
+ * still obliged to set the channel explicitly, with no silent default covering
+ * up an omission.
+ *
+ * text_processing = 0 ON THE OCR FIELD IS NOT DECORATIVE. With text processing
+ * on, Drupal stores a 'format' alongside the value and runs it through an input
+ * filter on display, which peppers the JSON with HTML entities and ruins it as
+ * evidence. The field is 'hidden' in both displays for the same reason: the
+ * blob is third-party content produced by a model from a photo anybody sent
+ * over WhatsApp, and it is read in the node edit form's textarea, which escapes
+ * by construction.
+ */
+function myapi_update_7046(&$sandbox) {
+  module_load_include('inc', 'myapi', 'includes/myapi.payment_workflow');
+
+  if (!isset($sandbox['progress'])) {
+    $fields = [
+      'field_canal' => [
+        'field' => [
+          'type'        => 'list_text',
+          'cardinality' => 1,
+          'settings'    => [
+            'allowed_values' => [
+              MYAPI_PAYMENT_CHANNEL_BOT        => 'Bot de WhatsApp',
+              MYAPI_PAYMENT_CHANNEL_APP        => 'App',
+              MYAPI_PAYMENT_CHANNEL_BACKOFFICE => 'Back office',
+            ],
+          ],
+        ],
+        'instance' => [
+          'label'         => 'Canal',
+          'required'      => 0,
+          'default_value' => [['value' => MYAPI_PAYMENT_CHANNEL_BACKOFFICE]],
+          'widget'        => ['type' => 'options_select'],
+        ],
+      ],
+      'field_banco_emisor' => [
+        'field' => [
+          'type'        => 'text',
+          'cardinality' => 1,
+          'settings'    => ['max_length' => 255],
+        ],
+        'instance' => [
+          'label'    => 'Banco emisor',
+          'required' => 0,
+          'settings' => ['text_processing' => 0],
+          'widget'   => ['type' => 'text_textfield'],
+        ],
+      ],
+      'field_banco_destino' => [
+        'field' => [
+          'type'        => 'text',
+          'cardinality' => 1,
+          'settings'    => ['max_length' => 255],
+        ],
+        'instance' => [
+          'label'    => 'Banco destino',
+          'required' => 0,
+          'settings' => ['text_processing' => 0],
+          'widget'   => ['type' => 'text_textfield'],
+        ],
+      ],
+      'field_comprobante_ocr' => [
+        'field' => [
+          'type'        => 'text_long',
+          'cardinality' => 1,
+        ],
+        'instance' => [
+          'label'    => 'Lectura del comprobante (OCR)',
+          'required' => 0,
+          'settings' => ['text_processing' => 0],
+          'widget'   => ['type' => 'text_textarea', 'settings' => ['rows' => 10]],
+        ],
+      ],
+    ];
+
+    foreach ($fields as $field_name => $definition) {
+      _myapi_reservations_ensure_field(
+        $field_name,
+        ['field_name' => $field_name] + $definition['field']
+      );
+
+      _myapi_reservations_ensure_instance(
+        $field_name,
+        'pagos',
+        [
+          'field_name'  => $field_name,
+          'entity_type' => 'node',
+          'bundle'      => 'pagos',
+          'display'     => [
+            'default' => ['type' => 'hidden'],
+            'teaser'  => ['type' => 'hidden'],
+          ],
+        ] + $definition['instance']
+      );
+    }
+
+    $sandbox['progress'] = 0;
+  }
+
+  $sandbox['#finished'] = 1;
+
+  return t('SPEC 129: creados los cuatro campos del canal y del comprobante en el bundle «pagos».');
+}
