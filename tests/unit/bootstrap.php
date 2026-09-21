@@ -102,9 +102,33 @@
  * (hierarchy, weight order, access) is correct, which stays out of this layer.
  */
 
+/**
+ * The real thing, resolved against the module root instead of DRUPAL_ROOT.
+ *
+ * It used to be a no-op, on the assumption that every file-scope
+ * module_load_include() only pulled in something the test file had already
+ * required itself. SPEC 130 broke that assumption: the payment write helpers
+ * moved to includes/myapi.payment_write.inc, and resources/payment.resource.inc
+ * now reaches them exclusively through this call. With a no-op, PaymentEndpointTest
+ * passed only because EndpointContractTest happens to require the whole tree in
+ * setUpBeforeClass() and 'E' sorts before 'P' — the suite was green by load
+ * order, and the same test run alone fataled on an undefined function.
+ *
+ * Loading the file for real is both the faithful stub and the end of that class
+ * of accident: a resource declares its dependencies at file scope, and the test
+ * that requires the resource gets them, in any order and alone. Drupal's own
+ * implementation is an include_once too, so a file already required by the test
+ * is not loaded twice.
+ */
 if (!function_exists('module_load_include')) {
   function module_load_include($type, $module, $name = NULL) {
-    // No-op: unit tests require the relevant includes/*.inc files themselves.
+    if (!isset($name)) {
+      $name = $module;
+    }
+    $file = dirname(__DIR__, 2) . '/' . $name . '.' . $type;
+    if (is_file($file)) {
+      include_once $file;
+    }
   }
 }
 

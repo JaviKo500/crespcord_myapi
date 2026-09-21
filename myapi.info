@@ -24,6 +24,7 @@ files[] = includes/myapi.unit_access.inc
 files[] = includes/myapi.unit_query.inc
 files[] = resources/receipt.resource.inc
 files[] = resources/extra_fee.resource.inc
+files[] = includes/myapi.payment_write.inc
 files[] = resources/payment.resource.inc
 files[] = resources/expense.resource.inc
 files[] = resources/condominium.resource.inc
