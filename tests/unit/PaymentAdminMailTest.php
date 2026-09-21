@@ -9,8 +9,8 @@ require_once __DIR__ . '/../../includes/myapi.payment_workflow.inc';
  * Unit tests for the payment detail email sent to the 'backend' role (SPEC 80).
  *
  * myapi_mail_format_payment_admin() and myapi_mail_payment_admin_html() are
- * where a mail key stops being a string and becomes a subject, twelve labelled
- * lines and a button, so they are the seam worth testing. The enqueue side,
+ * where a mail key stops being a string and becomes a subject, thirteen
+ * labelled lines and a button, so they are the seam worth testing. The enqueue side,
  * myapi_payment_notify_created(), resolves the role with a query and loads the
  * recipients with user_load_multiple(), so it stays out of tests/unit for the
  * same documented reason as myapi_reservation_enqueue_admin_mails() (SPEC 48);
@@ -20,6 +20,13 @@ require_once __DIR__ . '/../../includes/myapi.payment_workflow.inc';
  * and it is the one value of the email that could silently drift by a day.
  * myapi_payment_method_label() is not: it reads the field's allowed_values
  * through field_info_field(), which has no meaning outside a site.
+ *
+ * myapi_payment_channel_label() (SPEC 129) reads allowed_values the same way,
+ * but it IS tested here: SPEC 77 added the field_info_field() stub and
+ * myapi_test_field_seed_allowed_values() to bootstrap.php after SPEC 80 wrote
+ * the paragraph above, so a test can now hand it the catalogue the update
+ * creates and assert the three labels, the empty placeholder and the raw
+ * fallback without a site.
  */
 class PaymentAdminMailTest extends TestCase {
 
@@ -33,6 +40,7 @@ class PaymentAdminMailTest extends TestCase {
       'reference'   => 'TRF-99811',
       'amount'      => '1,250.00',
       'method'      => 'Transferencia',
+      'channel'     => 'App',
       'bank'        => 'Banco Pichincha',
       'date'        => '11/08/2026',
       'unit'        => 'Casa 12',
@@ -96,17 +104,18 @@ class PaymentAdminMailTest extends TestCase {
 
   /* -- Body --------------------------------------------------------------- */
 
-  public function testHtmlPrintsTheTwelveLinesInOrder() {
+  public function testHtmlPrintsTheThirteenLinesInOrder() {
     $lines = $this->lines(myapi_mail_payment_admin_html($this->params()));
 
     $this->assertSame([
-      'Referencia', 'Monto', 'Forma de pago', 'Banco', 'Fecha del pago',
-      'Vivienda', 'Condominio', 'Residente', 'Email', 'Comprobante', 'Estado',
-      'Registrado el',
+      'Referencia', 'Monto', 'Forma de pago', 'Canal', 'Banco',
+      'Fecha del pago', 'Vivienda', 'Condominio', 'Residente', 'Email',
+      'Comprobante', 'Estado', 'Registrado el',
     ], array_keys($lines));
 
     $this->assertSame('TRF-99811', $lines['Referencia']);
     $this->assertSame('1,250.00', $lines['Monto']);
+    $this->assertSame('App', $lines['Canal']);
     $this->assertSame('Banco Pichincha', $lines['Banco']);
     $this->assertSame('Casa 12', $lines['Vivienda']);
     $this->assertSame('comprobante.pdf', $lines['Comprobante']);
@@ -125,7 +134,7 @@ class PaymentAdminMailTest extends TestCase {
       'method' => 'Efectivo',
     ])));
 
-    $this->assertCount(12, $lines);
+    $this->assertCount(13, $lines);
     $this->assertSame('—', $lines['Banco']);
     $this->assertSame('—', $lines['Comprobante']);
     $this->assertSame('Efectivo', $lines['Forma de pago']);
@@ -165,6 +174,85 @@ class PaymentAdminMailTest extends TestCase {
     $this->assertSame('—', myapi_payment_date_label(NULL));
     $this->assertSame('—', myapi_payment_date_label(''));
     $this->assertSame('—', myapi_payment_date_label('11/08/2026'));
+  }
+
+  /* -- The 'Canal' line --------------------------------------------------- */
+
+  /**
+   * The mail queue survives a deploy: a payment enqueued before SPEC 129 is
+   * formatted by this code when cron drains the queue, and its stored params
+   * carry no 'channel' key. The line is still drawn, with the placeholder,
+   * rather than emitting a PHP notice or collapsing the table by one row.
+   */
+  public function testChannelLineFallsBackWhenTheParamIsMissing() {
+    $params = $this->params();
+    unset($params['channel']);
+
+    $lines = $this->lines(myapi_mail_payment_admin_html($params));
+
+    $this->assertCount(13, $lines);
+    $this->assertSame('—', $lines['Canal']);
+  }
+
+  /* -- myapi_payment_channel_label() -------------------------------------- */
+
+  /**
+   * Seeds field_canal with exactly the allowed_values myapi_update_7046()
+   * creates, so the labels asserted below are the ones a real site answers.
+   */
+  private function seedChannelField() {
+    myapi_test_field_seed_allowed_values([
+      MYAPI_PAYMENT_CHANNEL_FIELD => [
+        MYAPI_PAYMENT_CHANNEL_BOT        => 'Bot de WhatsApp',
+        MYAPI_PAYMENT_CHANNEL_APP        => 'App',
+        MYAPI_PAYMENT_CHANNEL_BACKOFFICE => 'Back office',
+      ],
+    ]);
+  }
+
+  public function testChannelLabelResolvesTheThreeKnownKeys() {
+    $this->seedChannelField();
+
+    $this->assertSame('Bot de WhatsApp', myapi_payment_channel_label('bot'));
+    $this->assertSame('App', myapi_payment_channel_label('app'));
+    $this->assertSame('Back office', myapi_payment_channel_label('backoffice'));
+  }
+
+  /**
+   * Every payment created before the field existed reaches the email with an
+   * empty field_canal. It gets the same mark 'bank' and 'file' already use, so
+   * the row keeps its shape instead of showing an empty cell.
+   */
+  public function testChannelLabelFallsBackToThePlaceholder() {
+    $this->seedChannelField();
+
+    $this->assertSame('—', myapi_payment_channel_label(NULL));
+    $this->assertSame('—', myapi_payment_channel_label(''));
+  }
+
+  /**
+   * A key dropped from allowed_values after the fact falls back to the raw
+   * value rather than to an empty cell — same behaviour as
+   * myapi_payment_method_label() — and goes out escaped, because by then it is
+   * a string nobody validated.
+   */
+  public function testChannelLabelFallsBackToTheRawEscapedKey() {
+    $this->seedChannelField();
+
+    $this->assertSame('cualquier_cosa', myapi_payment_channel_label('cualquier_cosa'));
+    $this->assertSame('&lt;b&gt;x&lt;/b&gt;', myapi_payment_channel_label('<b>x</b>'));
+  }
+
+  /**
+   * A site where the field does not exist yet — the window between deploying
+   * the code and running drush updb — answers NULL from field_info_field().
+   * The label must still resolve to something printable.
+   */
+  public function testChannelLabelSurvivesAMissingField() {
+    myapi_test_field_seed_allowed_values([]);
+
+    $this->assertSame('app', myapi_payment_channel_label('app'));
+    $this->assertSame('—', myapi_payment_channel_label(NULL));
   }
 
 }

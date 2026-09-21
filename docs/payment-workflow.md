@@ -177,7 +177,7 @@ verify it.
 
 **Subject:** `Nuevo pago #{nid} — Ref. {reference}, {amount}`.
 
-**Body** — the twelve lines, in display order, built by
+**Body** — the thirteen lines, in display order, built by
 `myapi_payment_backend_mail_params()` and already escaped when they are
 enqueued (the queue runs on cron, so the message describes what was true at
 the instant of the trigger):
@@ -187,6 +187,7 @@ the instant of the trigger):
 | Referencia | `field_referencia` (already `check_plain()`-ed at creation time, so it is **not** escaped twice). |
 | Monto | `field_valor`, 2 decimals (`number_format`). |
 | Forma de pago | Label of `field_forma_de_pago` from the field's `allowed_values`; the raw key when the label is gone. |
+| Canal | Label of `field_canal` from the field's `allowed_values` — «Bot de WhatsApp», «App» or «Back office» — resolved the same way as `Forma de pago`: the raw key when the label is gone, and `—` when the field is empty (a payment registered before the field existed, or one saved without a channel). The field itself is never exposed by the API; see [payment.md](payment.md#internal-node-fields-not-exposed-by-any-endpoint). |
 | Banco | Name of the `bancos` term, or `—` (cash). |
 | Fecha del pago | `field_fecha_de_pago` reformatted as `d/m/Y` by string, never through `strtotime()`/`format_date()`, so a timezone can never shift it by a day. |
 | Vivienda / Condominio | Title of the `vivienda` node and of its `field_condominio`. |
@@ -196,7 +197,14 @@ the instant of the trigger):
 | Registrado el | `$node->created`, as `d/m/Y H:i`. |
 
 Any value that cannot be resolved renders as `—` (`MYAPI_PAYMENT_MAIL_EMPTY`)
-rather than as an empty cell.
+rather than as an empty cell. `Canal` also renders `—` for a payment that was
+**enqueued before the channel existed** and formatted afterwards: the queue
+survives a deploy, and its stored params have no `channel` key.
+
+**Only this email names the channel.** The approval and cancellation
+notifications above are unchanged — neither their body nor their params
+mention it. The channel matters to whoever receives a payment to verify; to
+whoever confirms an approval, it does not.
 
 **Button:** `Revisar pago`, pointing at `node/{nid}/edit` (absolute URL) —
 the **edit form**, not the node view, because the operator's next action is

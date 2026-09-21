@@ -823,6 +823,13 @@ class PaymentEndpointTest extends TestCase {
   private function seedForCreate(array $tables = []) {
     myapi_test_field_seed_allowed_values([
       MYAPI_PAYMENT_METHOD_FIELD => ['transferencia' => 'Transferencia', 'efectivo' => 'Efectivo'],
+      // A real site has both catalogues from myapi_update_7046() onwards, and
+      // the backend email reads this one to label the channel.
+      MYAPI_PAYMENT_CHANNEL_FIELD => [
+        MYAPI_PAYMENT_CHANNEL_BOT        => 'Bot de WhatsApp',
+        MYAPI_PAYMENT_CHANNEL_APP        => 'App',
+        MYAPI_PAYMENT_CHANNEL_BACKOFFICE => 'Back office',
+      ],
     ]);
     myapi_test_taxonomy_seed(['bancos' => [['tid' => '9', 'name' => 'Banco Pichincha', 'description' => '']]]);
     myapi_test_node_seed([
@@ -1253,6 +1260,40 @@ class PaymentEndpointTest extends TestCase {
   }
 
   /**
+   * The channel is decided by the door the request came in through (SPEC 129):
+   * every payment this endpoint creates is 'app', and the field never reaches
+   * the response.
+   */
+  public function testTheSavedNodeIsMarkedAsComingFromTheApp() {
+    $this->seedForCreate();
+
+    $result = $this->createRequest();
+    $saved = myapi_test_node_saves()[0];
+
+    $this->assertSame('app', $saved->field_canal[LANGUAGE_NONE][0]['value']);
+    $this->assertArrayNotHasKey('channel', $result['json']['data']['payment']);
+  }
+
+  /**
+   * A client that sends its own channel is ignored rather than obeyed. A
+   * channel the caller could pick would not be traceability, it would be a
+   * statement of intent: anybody holding the bot's key could mark its payments
+   * as coming from the app.
+   */
+  public function testAChannelSentByTheClientIsIgnored() {
+    $this->seedForCreate();
+
+    $_POST['channel'] = 'bot';
+    $_POST['field_canal'] = 'backoffice';
+
+    $result = $this->createRequest();
+    $saved = myapi_test_node_saves()[0];
+
+    $this->assertSame(201, $result['status']);
+    $this->assertSame('app', $saved->field_canal[LANGUAGE_NONE][0]['value']);
+  }
+
+  /**
    * With nobody holding the 'backend' role the creation still answers 201 and
    * enqueues no mail — the email is best effort and never a precondition.
    */
@@ -1290,6 +1331,27 @@ class PaymentEndpointTest extends TestCase {
     $this->assertCount(2, $items);
     $this->assertSame(MYAPI_PAYMENT_CREATED_ADMIN_MAIL_KEY, $items[0]['data']['key']);
     $this->assertSame(['op1@example.com', 'op2@example.com'], array_column(array_column($items, 'data'), 'to'));
+  }
+
+  /**
+   * The enqueued params carry the channel already resolved to its label
+   * (SPEC 129). It is resolved HERE and not when cron drains the queue because
+   * the message must describe what was true when the resident pressed send.
+   */
+  public function testTheBackendEmailParamsCarryTheChannel() {
+    $this->seedForCreate([
+      'users' => [
+        ['uid' => '10', 'status' => '1', 'name' => 'op1', 'mail' => 'op1@example.com', 'r.name' => MYAPI_PAYMENT_NOTIFY_ROLE],
+      ],
+    ]);
+    $GLOBALS['myapi_test_users'][10] = ['uid' => 10, 'name' => 'op1', 'status' => 1, 'mail' => 'op1@example.com'];
+
+    $this->createRequest();
+
+    $params = myapi_test_queue_items(MYAPI_MAIL_QUEUE)[0]['data']['params'];
+
+    $this->assertArrayHasKey('channel', $params);
+    $this->assertSame('App', $params['channel']);
   }
 
   /**

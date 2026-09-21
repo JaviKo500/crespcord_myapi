@@ -202,6 +202,20 @@ function db_or(...$arguments) {}
  *
  * @return mixed
  */
+function db_query(...$arguments) {}
+
+/**
+ * @param mixed ...$arguments
+ *
+ * @return mixed
+ */
+function db_query_range(...$arguments) {}
+
+/**
+ * @param mixed ...$arguments
+ *
+ * @return mixed
+ */
 function db_select(...$arguments) {}
 
 /**
@@ -371,6 +385,13 @@ function entity_get_controller(...$arguments) {}
  * @return mixed
  */
 function entity_load(...$arguments) {}
+
+/**
+ * @param mixed ...$arguments
+ *
+ * @return mixed
+ */
+function field_cache_clear(...$arguments) {}
 
 /**
  * @param mixed ...$arguments
