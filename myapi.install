@@ -960,11 +960,14 @@ function _myapi_reservations_ensure_instance($field_name, $bundle, array $instan
  * the first deployment of SPEC 129 left it half done.
  *
  * NO node_save(), AND THAT IS THE POINT. myapi.module hooks hook_node_update()
- * for the payment verification workflow (SPEC 22) and for the approved and
- * cancelled emails (SPEC 27, 30). Saving every historical payment in bulk would
- * fire that workflow over payments closed months ago — recalculating unit and
- * cash balances, and possibly avalanching emails at residents nobody touched.
- * Writing the field's two tables directly stores the datum and wakes nothing.
+ * for the payment verification workflow (SPEC 22) and for the approval and
+ * cancellation notices (SPEC 27, 30). Those notices are NOT email: they are a
+ * row per recipient in {myapi_notifications} — the in-app inbox — plus an item
+ * in the OneSignal queue, i.e. a push on the resident's phone. Saving every
+ * historical payment in bulk would fire that workflow over payments closed
+ * months ago: recalculating unit and cash balances, and buzzing hundreds of
+ * residents about payments nobody touched. Writing the field's two tables
+ * directly stores the datum and wakes nothing.
  *
  * db_merge() AND NOT db_insert(), because this runs against a LIVE SITE. The
  * row may already be there: field_canal defaults to 'backoffice' and a default
