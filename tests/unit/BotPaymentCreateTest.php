@@ -382,7 +382,6 @@ class BotPaymentCreateTest extends TestCase {
   public function testEveryRequiredFieldReportsItsDottedPath() {
     $cases = [
       'message.message_key'           => ['message' => ['message_key' => NULL]],
-      'identity.person.uid'           => ['identity' => ['person' => ['uid' => NULL]]],
       'identity.unit.unit_id'         => ['identity' => ['unit' => ['unit_id' => NULL]]],
       'identity.unit.condominium_id'  => ['identity' => ['unit' => ['condominium_id' => NULL]]],
       'receipt.reference'             => ['receipt' => ['reference' => NULL]],
@@ -400,11 +399,15 @@ class BotPaymentCreateTest extends TestCase {
   /**
    * A whole branch missing reports the same way as the leaf missing: n8n gets
    * the deepest path it failed to provide, not "identity is absent".
+   *
+   * The leaf it names is identity.unit.unit_id and NOT identity.person.uid,
+   * because the uid became optional when the contract was revised: with the
+   * whole identity block gone, the missing thing is the unit.
    */
   public function testAMissingBranchStillReportsALeafPath() {
     $result = $this->validate($this->payload(['identity' => NULL]));
 
-    $this->assertError($result, 422, 'missing_field', 'identity.person.uid');
+    $this->assertError($result, 422, 'missing_field', 'identity.unit.unit_id');
   }
 
   /**
@@ -1285,5 +1288,224 @@ class BotPaymentCreateTest extends TestCase {
     // Foreign unit AND a wrong condominium AND no file: the condominium check
     // comes first, so that is what comes back.
     $this->assertError($this->create(), 422, 'invalid_field', 'identity.unit.condominium_id');
+  }
+
+  /* -------------------------------------------------------------------------
+   * Quién firma el pago — the revision that made the uid optional.
+   *
+   * The bot reaches a unit two ways. By phone (SPEC 127) it holds a real uid;
+   * by the names the person dictated (SPEC 128) it holds none, and that road
+   * exists precisely for when the phone identified NOBODY. Demanding a uid
+   * left it unable to register a payment at all, which is the hole these
+   * tests close.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * Omitted, explicitly null, and present: the three shapes validate() has to
+   * tell apart. The first two are the same thing; the third is not.
+   */
+  public function testTheUidIsOptionalAndNullMeansAbsent() {
+    $omitted = myapi_bot_payment_validate($this->payload(['identity' => ['person' => NULL]]));
+    $this->assertNull($omitted['uid'], 'the whole person block absent');
+
+    $explicit = myapi_bot_payment_validate($this->payload(['identity' => ['person' => ['uid' => NULL]]]));
+    $this->assertNull($explicit['uid'], 'an explicit null is not a 422');
+
+    $given = myapi_bot_payment_validate($this->payload());
+    $this->assertSame(3, $given['uid']);
+  }
+
+  /**
+   * A uid that IS sent is still validated exactly as before: the revision made
+   * it optional, not unchecked.
+   */
+  public function testAUidThatIsSentIsStillValidated() {
+    $result = $this->validate($this->payload(['identity' => ['person' => ['uid' => 'tres']]]));
+
+    $this->assertError($result, 422, 'invalid_field', 'identity.person.uid');
+  }
+
+  /**
+   * Seeds an occupant, an owner, or both, for the resolution tests.
+   */
+  private function seedUnitMembers(array $occupants, array $owners) {
+    $tables = ['field_data_field_propietario' => [], 'field_data_field_ocupante' => [], 'field_data_field_ocupantes' => []];
+    foreach ($owners as $uid) {
+      $tables['field_data_field_propietario'][] = [
+        'entity_id' => '45', 'field_propietario_target_id' => (string) $uid,
+        'deleted' => '0', 'entity_type' => 'node',
+      ];
+    }
+    foreach ($occupants as $uid) {
+      $tables['field_data_field_ocupantes'][] = [
+        'entity_id' => '45', 'field_ocupantes_target_id' => (string) $uid,
+        'deleted' => '0', 'entity_type' => 'node',
+      ];
+    }
+    myapi_test_db_seed($tables);
+  }
+
+  /**
+   * THE OCCUPANT SIGNS, not the owner. Whoever lives in the unit is who pays
+   * the maintenance fee month after month; the history of a rented flat ends
+   * up split between successive tenants, and that is the correct outcome —
+   * each payment signed by whoever made it.
+   */
+  public function testTheOccupantSignsBeforeTheOwner() {
+    $this->seedUnitMembers([7], [3]);
+
+    $this->assertSame(7, myapi_bot_payment_resolve_payer(45));
+  }
+
+  /**
+   * No occupant: the owner signs.
+   */
+  public function testTheOwnerSignsWhenThereIsNoOccupant() {
+    $this->seedUnitMembers([], [3]);
+
+    $this->assertSame(3, myapi_bot_payment_resolve_payer(45));
+  }
+
+  /**
+   * Several occupants: THE LOWEST uid, and the same one every time.
+   *
+   * The criterion is arbitrary and says so. What is not arbitrary is that it
+   * be stable — a retry has to produce the same node as the first attempt, and
+   * "whichever the database returns first" does not guarantee that across two
+   * executions. So the assertion that matters is the second one.
+   */
+  public function testTheLowestUidWinsAndTheChoiceIsStable() {
+    $this->seedUnitMembers([31, 7, 19], []);
+
+    $this->assertSame(7, myapi_bot_payment_resolve_payer(45));
+    $this->assertSame(
+      myapi_bot_payment_resolve_payer(45),
+      myapi_bot_payment_resolve_payer(45),
+      'two calls, one answer'
+    );
+  }
+
+  /**
+   * The lowest is decided NUMERICALLY, not as text: '9' must not beat '31'
+   * because it does alphabetically. fetchCol() hands back strings.
+   */
+  public function testTheLowestUidIsNumericAndNotAlphabetical() {
+    $this->seedUnitMembers([31, 9], []);
+
+    $this->assertSame(9, myapi_bot_payment_resolve_payer(45));
+  }
+
+  /**
+   * Neither occupant nor owner: nobody to attribute the payment to.
+   */
+  public function testAUnitWithNobodyResolvesToNull() {
+    $this->seedUnitMembers([], []);
+
+    $this->assertNull(myapi_bot_payment_resolve_payer(45));
+  }
+
+  /**
+   * End to end over the create path: no uid in the payload, and the occupant
+   * ends up signing the node.
+   */
+  public function testAPayloadWithoutAUidIsSignedByTheOccupant() {
+    $this->seedValidSite();
+    $this->seedUnitMembers([7], [3]);
+    $GLOBALS['myapi_test_users'] = [
+      3 => ['uid' => 3, 'status' => 1, 'name' => 'dueno'],
+      7 => ['uid' => 7, 'status' => 1, 'name' => 'inquilino'],
+    ];
+    $_POST = ['payload' => json_encode($this->payload(['identity' => ['person' => NULL]]))];
+
+    // It gets past identity and access and stops at the file, which is the
+    // last check before anything is written — so reaching missing_file is the
+    // proof that the resolution succeeded.
+    $this->assertError($this->create(), 422, 'missing_file');
+  }
+
+  /**
+   * A published unit with nobody attached is INCOMPLETE SITE DATA, not a bad
+   * payload: 500 and a watchdog entry, never a 422 that would send n8n hunting
+   * for an error in a JSON that has none.
+   */
+  public function testAUnitWithNobodyIs500AndNotA422() {
+    $this->seedValidSite();
+    $this->seedUnitMembers([], []);
+    $_POST = ['payload' => json_encode($this->payload(['identity' => ['person' => NULL]]))];
+
+    $result = $this->create();
+
+    $this->assertError($result, 500, 'server_error');
+    $this->assertNotEmpty($GLOBALS['myapi_test_watchdog']);
+    $this->assertSame([], $GLOBALS['myapi_test_db_writes']);
+  }
+
+  /**
+   * A RESOLVED uid that is blocked is 500 too, and does NOT fall through to
+   * the owner: "if there is no occupant" means there is none, and a blocked
+   * one is there.
+   *
+   * The asymmetry with the 422 of a SENT uid is the whole point — there the
+   * bot chose wrong, here the site is incoherent.
+   */
+  public function testABlockedResolvedOccupantIs500AndDoesNotFallToTheOwner() {
+    $this->seedValidSite();
+    $this->seedUnitMembers([7], [3]);
+    $GLOBALS['myapi_test_users'] = [
+      3 => ['uid' => 3, 'status' => 1, 'name' => 'dueno'],
+      7 => ['uid' => 7, 'status' => 0, 'name' => 'inquilino-bloqueado'],
+    ];
+    $_POST = ['payload' => json_encode($this->payload(['identity' => ['person' => NULL]]))];
+
+    $result = $this->create();
+
+    $this->assertError($result, 500, 'server_error');
+    $this->assertNotEmpty($GLOBALS['myapi_test_watchdog']);
+  }
+
+  /**
+   * And the contrast: the very same blocked user, but SENT by the bot, is a
+   * 422 naming the field. Same account, two answers, because the question
+   * "who got this wrong?" has two answers.
+   */
+  public function testTheSameBlockedUserSentByTheBotIsA422() {
+    $this->seedValidSite();
+    $this->seedUnitMembers([7], [3]);
+    $GLOBALS['myapi_test_users'] = [7 => ['uid' => 7, 'status' => 0, 'name' => 'bloqueado']];
+    $_POST = ['payload' => json_encode($this->payload(['identity' => ['person' => ['uid' => 7]]]))];
+
+    $this->assertError($this->create(), 422, 'invalid_field', 'identity.person.uid');
+  }
+
+  /**
+   * The resolution runs AFTER the unit is validated. Resolving against a nid
+   * that is not a published 'vivienda' would answer whoever happens to hang
+   * off some other node, so an unknown unit must still be a 422 about the
+   * unit — not a 500 about nobody being attached to it.
+   */
+  public function testAnUnknownUnitIs422EvenWithoutAUid() {
+    $this->seedValidSite();
+    myapi_test_node_seed([]);
+    $_POST = ['payload' => json_encode($this->payload(['identity' => ['person' => NULL]]))];
+
+    $this->assertError($this->create(), 422, 'invalid_field', 'identity.unit.unit_id');
+  }
+
+  /**
+   * The ledger carries the flag, and the schema declares it with a default of
+   * 0 — so a row written by the sent-uid path says so without the writer
+   * having to remember.
+   */
+  public function testTheLedgerRecordsWhetherTheServerResolvedTheUid() {
+    $source = $this->installSource();
+
+    $this->assertStringContainsString("'uid_resolved' => [", $source);
+    $this->assertStringContainsString("'default'     => 0,", $source);
+    $this->assertStringContainsString("db_field_exists('myapi_bot_payments', 'uid_resolved')", $source);
+    $this->assertStringContainsString(
+      '\'uid_resolved\'    => $uid_resolved,',
+      file_get_contents(dirname(__DIR__, 2) . '/resources/bot.resource.inc'),
+      'the ledger INSERT carries the flag'
+    );
   }
 }

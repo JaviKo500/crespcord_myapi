@@ -333,6 +333,21 @@ function myapi_schema() {
         'unsigned'    => TRUE,
         'not null'    => TRUE,
       ],
+      // The one column here that exists for a security reason and not for
+      // convenient auditing. It is 1 when the payload omitted
+      // identity.person.uid and the server resolved it from the unit — that
+      // is, when the payment came in through the path where the identity
+      // revalidation checks nothing, because the uid is taken FROM the unit it
+      // is then compared against. Counting those without this column would
+      // mean parsing the evidence JSON of every node, which is another way of
+      // saying nobody would ever do it. With it: WHERE uid_resolved = 1.
+      'uid_resolved' => [
+        'description' => '1 when the server resolved the uid from the unit because the payload omitted it.',
+        'type'        => 'int',
+        'size'        => 'tiny',
+        'not null'    => TRUE,
+        'default'     => 0,
+      ],
       'created' => [
         'description' => 'Unix timestamp when the payment was registered.',
         'type'        => 'int',
@@ -5265,6 +5280,19 @@ function myapi_update_7048() {
     db_create_table('myapi_bot_payments', $schema);
 
     return t('SPEC 130: tabla myapi_bot_payments creada.');
+  }
+
+  // The uid_resolved column arrived with the revision that made
+  // identity.person.uid optional, after this hook was already written but
+  // before it had run anywhere. Adding it here instead of in a 7049 keeps one
+  // update per table; the branch below is what makes that safe if some site
+  // did run the first version — it is the same hook, idempotent, and a site
+  // that already has the column falls through to the last line.
+  if (!db_field_exists('myapi_bot_payments', 'uid_resolved')) {
+    $schema = drupal_get_schema_unprocessed('myapi', 'myapi_bot_payments');
+    db_add_field('myapi_bot_payments', 'uid_resolved', $schema['fields']['uid_resolved']);
+
+    return t('SPEC 130: columna uid_resolved añadida a myapi_bot_payments.');
   }
 
   return t('SPEC 130: la tabla myapi_bot_payments ya existía; nada que hacer.');

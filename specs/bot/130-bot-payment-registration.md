@@ -19,7 +19,8 @@
   - `myapi_bot_payment_create()` — exige la API key, parsea el `multipart/form-data`, valida el payload, revalida identidad y unidad, resuelve la idempotencia, guarda el archivo y crea el nodo.
   - Helpers propios: lectura y validación del JSON, armado del sobre de evidencia y del nodo con los campos de la SPEC 129.
 - **`myapi.module`** (modificar) — `api/v1/bot/payments` en `hook_menu()`, `MENU_CALLBACK`, `access callback => TRUE`, `file => resources/bot.resource.inc`, igual que las rutas de las SPEC 127 y 128.
-- **`myapi.install`** (modificar) — `hook_schema()` para la tabla **`myapi_bot_payments`** (el libro de idempotencia) y **`myapi_update_7047()`** que la crea en sitios ya instalados.
+- **`myapi.install`** (modificar) — `hook_schema()` para la tabla **`myapi_bot_payments`** (el libro de idempotencia, con su columna `uid_resolved`) y el `hook_update_N()` que la crea en sitios ya instalados.
+- **`includes/myapi.unit_access.inc`** — **sin cambios**: la resolución inversa unidad → personas ya existe ahí (`myapi_unit_member_uids()`), y es la que se usa para resolver quién firma cuando el bot no manda `uid`. Se reutiliza, no se reescribe.
 - **`myapi.info`** (modificar) — `files[] = includes/myapi.payment_write.inc`.
 - **`includes/myapi.i18n.inc`** y **`docs/i18n.md`** (modificar) — las claves de error nuevas.
 - **`tests/`** (modificar/añadir) — cobertura de la validación del payload, del sobre de evidencia, del mapeo a nodo y del dispatcher.
@@ -77,7 +78,7 @@ Las claves son las que manda n8n tras renombrar su JSON. Los `@field` de los err
 | `message.sender.id`, `.local_phone`, `.name` | string | No | **No se validan contra el `uid`** (ver alcance). | Evidencia |
 | `message.button.id`, `.title` | string | No | — | Evidencia |
 | `message.received_at` | string | No | — | Evidencia |
-| `identity.person.uid` | int | **Sí** | Entero > 0; el usuario debe existir y estar **activo** (`users.status = 1`). | `node->uid` |
+| `identity.person.uid` | int | **No** | Si viene: entero > 0, y el usuario debe existir y estar **activo** (`users.status = 1`). Si **se omite**: lo resuelve el servidor desde la unidad (ver «Quién firma el pago»). Un `null` explícito se trata como ausente. | `node->uid` |
 | `identity.person.name` | string | No | Informativo; el nombre real sale de Drupal. | Evidencia |
 | `identity.unit.unit_id` | int | **Sí** | Entero > 0; nodo existente, tipo `vivienda`, publicado; y el `uid` debe ser propietario u ocupante (`myapi_unit_related_nids()`). | `field_vivienda` |
 | `identity.unit.condominium_id` | int | **Sí** | Entero > 0, y debe ser **exactamente** el `field_condominio` de esa vivienda. Si no coincide → `422 invalid_field`. | Solo evidencia |
@@ -98,13 +99,30 @@ Las claves son las que manda n8n tras renombrar su JSON. Los `@field` de los err
 
 Una clave desconocida en el payload **no es un error**: se ignora para el nodo y viaja entera a la evidencia. Que el bot añada un campo mañana no debe tumbar el endpoint.
 
+### Quién firma el pago
+
+`identity.person.uid` es **opcional**, y esa es la revisión que la SPEC 04 de n8n obligó a hacer sobre este spec. El bot llega a la unidad por dos caminos: el de la SPEC 127, donde el teléfono identificó a una persona de Drupal y el `uid` es un dato real; y el de la SPEC 128, donde la persona dictó el edificio y la unidad porque su teléfono **no identificó a nadie** — y ahí no hay `uid` que mandar. Exigirlo dejaba ese segundo camino sin poder registrar un pago, que es justamente para lo que se escribió la 128.
+
+| El bot manda `uid` | Qué hace el servidor |
+|---|---|
+| Sí | Lo revalida: existe, activo, y propietario u ocupante de la unidad. Si algo falla → `422`/`403` como siempre. |
+| No | Lo **resuelve desde la unidad**: el **ocupante**; si no hay ocupante, el **propietario**. |
+
+**Ocupante antes que propietario**, y no al revés: quien vive en la unidad es quien paga el mantenimiento mes a mes. El histórico de una vivienda alquilada queda repartido entre inquilinos sucesivos, y eso es lo correcto — cada pago lo firma quien lo hizo, no el dueño que no lo hizo.
+
+**Los ocupantes salen de dos campos**, `field_ocupante` (heredado, un valor) y `field_ocupantes` (actual, multivalor), y `myapi_unit_member_uids()` los une. Cuando hay varios firma **el `uid` más bajo**. Es un criterio arbitrario y se declara como tal: lo que importa no es cuál se elige sino que la elección sea **estable**, porque un reintento tiene que producir el mismo nodo que el primer intento, y «el primero que devuelva la base» no lo garantiza entre dos ejecuciones.
+
+**Si el servidor no puede resolver a nadie —ni ocupante ni propietario— responde `500 server_error` y lo registra en `watchdog`.** Y lo mismo si el `uid` que resolvió está **bloqueado**: un ocupante bloqueado *sí está*, así que no hay caída al propietario. Los dos casos son **datos incompletos o incoherentes del sitio**, no errores del payload de n8n, y el criterio es el mismo que ya se aplica cuando `"Transferencia"` desapareció de los `allowed_values`: un `422` mandaría al bot a buscar en su JSON un fallo que no está ahí.
+
+La asimetría con el camino del `uid` mandado es deliberada: ahí un usuario bloqueado es `422 invalid_field`, porque **el bot eligió ese uid** y se equivocó. Aquí lo eligió el servidor, y si lo que eligió no sirve, el que se equivocó es el sitio.
+
 ### Lo que fija el servidor
 
 | Campo Drupal | Valor | Por qué |
 |---|---|---|
 | `node->type` | `pagos` | El mismo nodo que crea la app. |
 | `node->title` | `"Pago {reference} - {YYYY-MM-DD}"` | Idéntico a la SPEC 20. |
-| `node->uid` | `identity.person.uid` | El pago es del residente, no de una cuenta de servicio. |
+| `node->uid` | `identity.person.uid`, o el ocupante/propietario de la unidad cuando se omite | El pago es del residente, no de una cuenta de servicio. Además `myapi_payment_resident_label()` (SPEC 80) lo usa para nombrar a quién pagó en el correo al `backend`. |
 | `node->status` | `1` | — |
 | `field_estado_pago` | `"Pendiente de verificar"` | Forzado, igual que la app. |
 | `field_forma_de_pago` | `"Transferencia"` | Un comprobante bancario nunca es efectivo. |
@@ -140,6 +158,8 @@ $schema['myapi_bot_payments'] = [
     'nid'         => ['type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE],
     'uid'         => ['type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE],
     'unit_nid'    => ['type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE],
+    'uid_resolved' => ['type' => 'int', 'size' => 'tiny', 'not null' => TRUE, 'default' => 0,
+      'description' => '1 when the server resolved the uid from the unit because the payload omitted it.'],
     'created'     => ['type' => 'int', 'not null' => TRUE],
   ],
   'primary key' => ['idempotency_key'],
@@ -155,6 +175,7 @@ $schema['myapi_bot_payments'] = [
 - **Es un sha256 hexadecimal**, de 64 caracteres fijos, y no la concatenación en claro: `message_key` y `media_ref` tienen longitud incierta, y una clave primaria `varchar` en MySQL con `utf8mb4` no puede pasar de 191 caracteres (límite de 767 bytes del índice en InnoDB antiguo). El hash elimina de un golpe el problema de longitud y el de juego de caracteres.
 - **`message_key` y `media_ref` se guardan además en claro**, con índice el primero: el hash sirve para la unicidad, no para auditar. Un operador que pregunte «¿qué pagos entraron por este mensaje de WhatsApp?» necesita leer el `wamid`.
 - `uid`, `unit_nid` y `created` no participan en la idempotencia: están para auditar desde SQL cuántos pagos entró el bot, de quién y cuándo, sin recorrer nodos.
+- **`uid_resolved` es la única columna que existe por una razón de seguridad y no de auditoría cómoda.** Vale `1` cuando el payload omitió `identity.person.uid` y el servidor lo resolvió desde la unidad — es decir, cuando el pago entró por el camino en el que la revalidación de identidad **no comprueba nada** (ver riesgos). Sin esta columna, contar cuántos pagos entraron por esa puerta obligaría a parsear el JSON de la evidencia de cada nodo, que es tanto como decir que nadie lo haría nunca. Con ella es un `WHERE uid_resolved = 1`.
 
 ### Por qué la clave es compuesta
 
@@ -219,6 +240,7 @@ La única diferencia entre un pago nuevo y un reintento es el **código HTTP**: 
 | 403 | `unit_access_denied` | El `uid` no es propietario ni ocupante de esa unidad. | Reutilizado (20) |
 | 409 | `duplicate_reference` | Esa referencia ya existe en esa vivienda **con otra clave de idempotencia**. | Reutilizado (20) |
 | 500 | `server_error` | `"Transferencia"` no está en los `allowed_values` del campo, o los campos de la SPEC 129 no existen. Se registra en `watchdog`. | Revisar catálogo |
+| 500 | `server_error` | `identity.person.uid` omitido y la unidad **no tiene ni ocupante ni propietario**, o el que resuelve está bloqueado o no existe. Se registra en `watchdog`. | Reutilizado |
 
 **El `403` frente al `409` marca la diferencia de intención:** el `403` dice «el bot se equivocó de persona o de unidad» y manda a n8n a repreguntar; el `409` dice «este comprobante ya está registrado» y es una conversación terminada.
 
@@ -271,7 +293,9 @@ Las validaciones que ya existen se **reutilizan**, no se reescriben: `myapi_paym
 5. **Idempotencia, primera pasada:** `$key = hash('sha256', $message_key . '#' . $media_ref);` y `SELECT nid FROM myapi_bot_payments WHERE idempotency_key = :key`.
    - Fila con nodo vivo → `myapi_respond(['payment' => …], 200, 'payment_created')`. **Fin, sin tocar nada más.**
    - Fila huérfana (nodo borrado) → `DELETE` de la fila y seguir.
-6. **Persona:** `user_load($uid)`; debe existir y tener `status = 1` → si no, `422 invalid_field` con `@field = identity.person.uid`.
+6. **Persona.** Dos ramas, y la diferencia entre ellas es quién eligió el `uid`:
+   - **Mandado por el bot:** `user_load($uid)`; debe existir y tener `status = 1` → si no, `422 invalid_field` con `@field = identity.person.uid`.
+   - **Omitido:** se resuelve desde la unidad con `myapi_unit_member_uids([$unit_nid], 'ocupantes')` y, si viene vacío, `'propietarios'`; de la lista se toma el `uid` **más bajo**. Si no hay nadie, o el resuelto no existe o está bloqueado → `watchdog(WATCHDOG_ERROR)` y `500 server_error`. Se marca `uid_resolved = 1` para el libro.
 7. **Unidad:** `node_load($unit_nid)`; existente, tipo `vivienda`, publicada → si no, `422 invalid_field`. Su `field_condominio` debe ser igual a `identity.unit.condominium_id` → si no, `422 invalid_field` con `@field = identity.unit.condominium_id`.
 8. **Acceso:** `in_array($unit_nid, myapi_unit_related_nids($uid))` → si no, `403 unit_access_denied`.
 9. **Forma de pago:** `"Transferencia"` debe estar en los `allowed_values` de `field_forma_de_pago` → si no, `watchdog(WATCHDOG_ERROR)` y `500 server_error`.
@@ -401,6 +425,16 @@ Y con `curl -F 'payload=@caso.json' -F 'file=@comprobante.jpg'`: caso feliz, **e
 - [x] `message.sender.local_phone` que no corresponde al `uid` **no** provoca error: el teléfono no se valida (la SPEC 128 llega a la unidad sin él). — `testThePhoneAndTheNamesAreNotValidated`.
 - [x] `identity.unit.unit` e `identity.unit.condominium` (los nombres) no se comparan con nada. — mismo test, con nombres que no existen en el sitio.
 
+**Quién firma el pago (revisión del contrato)**
+- [ ] `identity.person.uid` **omitido** con una unidad que tiene ocupante → el nodo lo firma el ocupante, y la fila del libro lleva `uid_resolved = 1`.
+- [ ] `identity.person.uid` omitido con una unidad **sin ocupante pero con propietario** → lo firma el propietario.
+- [ ] Un `null` explícito en `identity.person.uid` se trata igual que la ausencia, no como un `422`.
+- [ ] Varios ocupantes → firma **el `uid` más bajo**, y dos llamadas idénticas eligen al mismo.
+- [ ] 🔴 Unidad **sin ocupante y sin propietario** → `500 server_error` y entrada en `watchdog`, **no** un `422` y **no** un pago sin dueño.
+- [ ] 🔴 El `uid` resuelto existe pero está **bloqueado** → `500 server_error` y `watchdog`; **no** cae al propietario.
+- [ ] Cuando el bot **sí** manda el `uid`, nada cambia: se revalida como antes y `uid_resolved` queda en `0`.
+- [ ] La respuesta no gana ninguna clave: el `201` y el `200` siguen teniendo exactamente las mismas que el `201` de la app.
+
 **Validación del payload**
 - [x] Sin parte `payload`, vacía, mayor de 64 KB, o que no parsea a objeto JSON → `422 invalid_payload`. — `testAnAbsentOrEmptyPayloadIs422`, `testAPayloadOverTheCapIs422` (y `testAPayloadUnderTheCapParses`, para que el tope no sea un off-by-one).
 - [x] Un `payload` que parsea a escalar o a lista (`[1,2,3]`) → `422 invalid_payload`, no un error de PHP. — `testJsonThatIsNotAnObjectIs422`, diez formas.
@@ -441,6 +475,10 @@ Y con `curl -F 'payload=@caso.json' -F 'file=@comprobante.jpg'`: caso feliz, **e
 | Idioma del contrato de entrada | **Inglés** (`receipt.amount`, `identity.person.uid`…); n8n renombra su JSON | Aceptar el español del bot tal cual | Elección del usuario, y el CLAUDE.md: el contrato público del módulo es inglés. Renombrar claves en n8n es un nodo de mapeo. |
 | Idioma de la evidencia guardada | Lo que llega, es decir **inglés** | Español, como el JSON original del bot | Consecuencia de la anterior. La evidencia es «lo que entró por el cable»; traducirla al guardarla la dejaría de ser evidencia. |
 | ¿Confiar en la identidad que manda el bot? | **Revalidar**: usuario activo, unidad publicada, y propietario u ocupante | Confiar y guardar lo que llegue | Elección del usuario. La API key es una credencial de **máquina**, no de persona: sin esta comprobación, cualquiera que tuviera la clave imputaría pagos a cualquier unidad. |
+| ¿`identity.person.uid` obligatorio? | **Opcional**: si falta, lo resuelve el servidor desde la unidad | Obligatorio siempre (como nació este spec); un usuario de servicio del bot; que el bot mandara el propietario que le devuelve `/bot/units` | **Revisión posterior a la aprobación**, forzada por la SPEC 04 de n8n. Con `uid` obligatorio, el camino de la SPEC 128 —llegar a la unidad cuando el teléfono no identificó a nadie— no podía registrar ningún pago, que es exactamente para lo que existe la 128. Se descartó que lo mandara el bot porque **quién firma un pago es una regla de Drupal y debe vivir en Drupal**, no en un nodo de n8n que puede cambiarse sin que este repositorio se entere. Un usuario de servicio se descartó porque el correo al `backend` diría que pagó «el bot» y el pago desaparecería de la lista del residente. |
+| ¿Ocupante o propietario, al resolver? | **Ocupante y, si no hay, propietario** | Propietario siempre; propietario y si no hay, ocupante | Elección del usuario. Quien vive en la unidad es quien paga el mantenimiento. El histórico de una vivienda alquilada queda repartido entre inquilinos sucesivos, y eso es lo correcto: cada pago lo firma quien lo hizo. |
+| Varios ocupantes (`field_ocupante` + `field_ocupantes`) | **El `uid` más bajo** | El primero que devuelva la consulta; `500` por ambigüedad; preferir el campo actual | Elección del usuario. El criterio es arbitrario y se declara como tal; lo que no es arbitrario es que sea **estable**: un reintento tiene que producir el mismo nodo que el primer intento, y «el primero que devuelva la base» no lo garantiza entre dos ejecuciones. `500` por ambigüedad dejaría sin registrar pagos a una pareja con dos fichas de ocupante. |
+| Ocupante resuelto pero **bloqueado** | `500 server_error` + `watchdog` | Caer al propietario; usarlo igualmente | Elección del usuario. Lectura literal de la regla: «si no hay ocupante» significa que no hay, y un bloqueado sí está. Y como el `uid` lo eligió el servidor, que no sirva es incoherencia del sitio, no fallo de n8n. La asimetría con el `422` del `uid` mandado es el punto: ahí se equivocó el bot, aquí el sitio. |
 | Coherencia unidad ↔ condominio | `identity.unit.condominium_id` **obligatorio** y debe ser el `field_condominio` de esa vivienda; si no, `422` | Ignorarlo (solo evidencia) | Elección del usuario. Un par incoherente es un bug del flujo de n8n, y sin esta comprobación se guardaría en silencio durante meses. Se comparan **ids**, nunca los nombres. |
 | Verificar el teléfono del remitente | **No** | Comprobar que `sender.local_phone` es del `uid` (lógica de la SPEC 127) | Elección del usuario. La SPEC 128 existe precisamente para llegar a la unidad **cuando el teléfono no identificó a nadie**; exigir que coincidan cerraría ese camino. El teléfono se guarda en la evidencia. |
 | `node->uid` | `identity.person.uid`, el residente | Un usuario de servicio del bot, o `uid` 1 | El pago es del residente. Además `myapi_payment_resident_label()` de la SPEC 80 lo usa para nombrar a quién pagó en el correo. |
@@ -474,6 +512,7 @@ Y con `curl -F 'payload=@caso.json' -F 'file=@comprobante.jpg'`: caso feliz, **e
 | Riesgo | Mitigación |
 |---|---|
 | **La API key deja de ser de solo lectura.** Hasta ahora abría dos consultas (SPEC 127, 128); ahora crea nodos, sube archivos y escribe en la base. Si se filtra, alguien registra pagos falsos a nombre de residentes reales. | Cuatro capas, ninguna suficiente sola: HTTPS obligatorio; la revalidación de identidad impide imputar a unidades que no son de esa persona; el pago nace `"Pendiente de verificar"` y **nadie cobra nada** hasta que un humano lo verifica en el back office; y cada rechazo de la clave ya queda en `watchdog` desde la SPEC 127. Conviene además registrar cada creación con su `message_key`, para poder barrer lo que entró en una ventana si la clave se compromete, y rotarla con `drush vset`. |
+| **La revalidación de identidad es OPCIONAL desde que `uid` lo es.** Con `identity.person.uid` omitido, el servidor resuelve el `uid` desde la propia unidad, así que la comprobación «¿es esta persona propietaria u ocupante de esta unidad?» **siempre pasa**: es tautológica. Dicho de otro modo, quien tenga la API key puede colgar un pago de **cualquier** unidad, a nombre de su ocupante, sin más que no mandar el `uid`. Esto reintroduce, para ese camino, justo lo que la decisión de revalidar existía para evitar. | Se asume conscientemente, y queda escrito aquí en vez de asumido. Lo que sostiene la decisión: el pago nace `"Pendiente de verificar"` y **nadie cobra nada** hasta que un humano lo verifica en el back office, así que el daño alcanzable no es «se movió dinero» sino «ruido en la bandeja del backend». Encima de eso: HTTPS obligatorio, cada rechazo de la clave ya queda en `watchdog` desde la SPEC 127, y **`myapi_bot_payments.uid_resolved` hace contable desde SQL cuántos pagos entraron por esta puerta** — `WHERE uid_resolved = 1` es la consulta que hay que mirar si la clave se compromete, y junto con `message_key` y `created` acota la ventana a barrer. Si el número crece sin que el flujo de n8n lo explique, eso es la señal. |
 | **Desplegar la 130 sin la 129 aplicada.** Si `field_canal` y compañía no existen, `node_save()` **ignora esas propiedades en silencio**: los pagos del bot se crearían sin canal y **sin evidencia**, sin un solo error visible. | Guardia de esquema al arrancar `myapi_bot_payment_create()` (paso 6.2): si `field_info_field('field_comprobante_ocr')` no devuelve nada, `watchdog(WATCHDOG_ERROR)` y `500 server_error`. Es preferible un endpoint que no funciona a uno que guarda pagos mutilados. Y en el despliegue, `drush updb` antes del código. |
 | **El refactor toca el endpoint que usa la app en producción.** Mover cinco funciones de `payment.resource.inc` a un `includes/` puede romper el registro de pagos de todos los residentes. | Es un movimiento mecánico, sin tocar cuerpos ni firmas, y se hace **como primer paso y aislado**, con los tests de la SPEC 20 en verde antes de escribir el endpoint nuevo. Hay un criterio de aceptación explícito: esos tests deben pasar **sin modificarse**. |
 | **Archivo huérfano cuando la transacción revierte.** El comprobante se guarda como managed file **antes** de la transacción; si el `INSERT` choca y se revierte, el archivo queda en disco sin nodo ni `file_usage`. | `file_usage_add()` va después del commit, así que el huérfano queda como managed sin uso y el cron de Drupal lo recoge. Es el mismo compromiso que ya acepta la SPEC 20 y la ventana es estrecha: solo en la carrera de dos reintentos simultáneos. |

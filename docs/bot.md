@@ -358,7 +358,7 @@ so a failure reads directly in the n8n log.
 | `message.sender.id`, `.local_phone`, `.name` | string | no | Kept as evidence. **The phone is not checked against the uid** — see below. |
 | `message.button.id`, `.title` | string | no | Kept as evidence. |
 | `message.received_at` | string | no | Kept as evidence. |
-| `identity.person.uid` | int | **yes** | > 0. The user must exist and be **active** (`users.status = 1`). |
+| `identity.person.uid` | int | no | If sent: > 0, and the user must exist and be **active** (`users.status = 1`). If **omitted**, the server resolves it from the unit — see [Who signs the payment](#who-signs-the-payment). Send no key at all; do not send `null`. |
 | `identity.person.name` | string | no | Informative; the real name comes from Drupal. |
 | `identity.unit.unit_id` | int | **yes** | > 0. Must be an existing, published `vivienda`, and the uid must own or occupy it. |
 | `identity.unit.condominium_id` | int | **yes** | > 0, and must be **exactly** that unit's condominium. |
@@ -393,6 +393,42 @@ here having to change first.
 - **The confidences are not read.** No threshold, no different state, no
   automatic rejection. Deciding whether a `0.3` deserves asking again belongs
   to the bot, which is the one holding the conversation open.
+
+### Who signs the payment
+
+`identity.person.uid` is **optional**, and which user ends up owning the node
+depends on whether you send it:
+
+| You send `uid` | What the server does |
+|----------------|----------------------|
+| yes | Revalidates it: the user exists, is active, and owns or occupies the unit. Anything wrong → `422` / `403`. |
+| no  | **Resolves it from the unit**: the **occupant**; if the unit has no occupant, the **owner**. |
+
+Why the occupant first: whoever lives in the unit is who pays the maintenance
+fee month after month. The history of a rented flat ends up split between
+successive tenants, and that is the intended outcome — each payment is signed
+by whoever made it, not by a landlord who did not.
+
+**If the unit has several occupants**, the one with the **lowest uid** signs.
+The criterion is arbitrary and declared as such; what matters is that it is
+stable, because a retry has to produce the same payment as the first attempt.
+
+**If the unit has neither occupant nor owner, or the resolved user is blocked,
+the answer is `500 server_error`** and a `watchdog` entry — not a `422`. A
+published unit with nobody attached is incomplete data on the site, not an
+error in your payload. Note there is no fall through to the owner when the
+occupant is blocked: a blocked occupant is still an occupant.
+
+> **For the operator.** When the bot sends no `uid` — which happens when the
+> sender's phone number matched nobody in Drupal and the person identified
+> their unit by dictating the building and unit names — the payment is
+> attributed to the unit's **occupant**, or to its **owner** when there is no
+> occupant on file. So a payment can appear under the owner's name even though
+> a tenant sent it. Who actually wrote over WhatsApp is kept in the evidence
+> (`field_comprobante_ocr`, at `payload.message.sender.local_phone`), and the
+> ledger row in `myapi_bot_payments` carries `uid_resolved = 1` for every
+> payment that came in this way — `SELECT * FROM myapi_bot_payments WHERE
+> uid_resolved = 1` lists them all.
 
 **What the server decides, whatever the payload says**
 
@@ -482,6 +518,7 @@ never has to branch — it always reads `data.payment`.
 | 403  | `unit_access_denied` | The uid is neither owner nor occupant of that unit. |
 | 409  | `duplicate_reference` | That reference already exists in that unit under **another** idempotency key. |
 | 500  | `server_error` | Site misconfiguration: SPEC 129 not applied, or `"Transferencia"` missing from the `allowed_values` of `field_forma_de_pago`. Logged to `watchdog`. |
+| 500  | `server_error` | `uid` omitted and the unit has **no active occupant or owner** to attribute the payment to. Incomplete site data, not a payload error. Logged to `watchdog`. |
 
 **`403` and `409` say two different things to the bot.** The `403` means "you
 got the person or the unit wrong" and sends the flow back to ask again. The
@@ -539,7 +576,7 @@ A minimal `caso.json`:
 |-------|-----|
 | `node` + the `pagos` field tables | The payment itself, through `node_save()`. |
 | `file_managed`, `file_usage` | The receipt, as a permanent managed file tied to the node. |
-| `myapi_bot_payments` | The idempotency ledger: one row per message attachment, with `message_key` and `media_ref` in the clear for auditing. |
+| `myapi_bot_payments` | The idempotency ledger: one row per message attachment, with `message_key` and `media_ref` in the clear for auditing, and `uid_resolved` flagging the payments whose owner the server resolved. |
 
 `node_save()` and the ledger `INSERT` share one transaction: either the payment
 and its row both exist, or neither does. The `backend` email is sent **after**

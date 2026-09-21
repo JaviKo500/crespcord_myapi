@@ -1159,7 +1159,8 @@ function myapi_bot_payment_optional_text(array $payload, $path, $max_length = 25
  *
  * @return array  Normalized values, keyed: message_key, media_ref, uid,
  *                unit_nid, condominium_id, reference, amount, date,
- *                issuing_bank, destination_bank.
+ *                issuing_bank, destination_bank. 'uid' is NULL when the
+ *                payload omitted it, which the caller resolves from the unit.
  */
 function myapi_bot_payment_validate(array $payload) {
   // 1. message.message_key — the wamid, and the first half of the idempotency
@@ -1182,7 +1183,16 @@ function myapi_bot_payment_validate(array $payload) {
   // 2-4. The identity the bot resolved with SPEC 127 or 128. Only the shape is
   // checked here; whether they exist and belong together is revalidated
   // against the site by the caller.
-  $uid            = myapi_bot_payment_required_id($payload, 'identity.person.uid');
+  //
+  // uid is OPTIONAL. The bot reaches a unit two ways: by phone (SPEC 127),
+  // where it holds a real uid, and by the names the person dictated (SPEC 128),
+  // which exists precisely for when the phone identified NOBODY — and there is
+  // no uid to send there. Demanding one left that second road unable to
+  // register a payment at all. Absent, the caller resolves it from the unit.
+  $uid = NULL;
+  if (myapi_bot_payload_get($payload, 'identity.person.uid') !== NULL) {
+    $uid = myapi_bot_payment_required_id($payload, 'identity.person.uid');
+  }
   $unit_nid       = myapi_bot_payment_required_id($payload, 'identity.unit.unit_id');
   $condominium_id = myapi_bot_payment_required_id($payload, 'identity.unit.condominium_id');
 
@@ -1418,6 +1428,42 @@ function myapi_bot_payment_resolve_existing($key) {
 }
 
 /**
+ * Resolves who signs a payment whose payload carried no uid.
+ *
+ * THE OCCUPANT FIRST, the owner only when there is no occupant. Whoever lives
+ * in the unit is who pays the maintenance fee month after month. The history
+ * of a rented flat ends up split between successive tenants, and that is the
+ * correct outcome: each payment is signed by whoever made it, not by a
+ * landlord who did not.
+ *
+ * Occupants come from two fields — field_ocupante (legacy, single) and
+ * field_ocupantes (current, multi) — which myapi_unit_member_uids() already
+ * merges; this reuses that rather than writing a third copy of those queries.
+ *
+ * WHEN THERE ARE SEVERAL, THE LOWEST uid WINS. The criterion is arbitrary and
+ * says so. What is not arbitrary is that it be STABLE: a retry has to produce
+ * the same node as the first attempt, and "whichever the database returns
+ * first" does not guarantee that across two executions.
+ *
+ * @param int $unit_nid  The 'vivienda' nid to resolve against.
+ *
+ * @return int|null  The uid that signs, or NULL when the unit has neither an
+ *                   occupant nor an owner.
+ */
+function myapi_bot_payment_resolve_payer($unit_nid) {
+  foreach (['ocupantes', 'propietarios'] as $role) {
+    $uids = myapi_unit_member_uids([$unit_nid], $role);
+    if (!empty($uids)) {
+      sort($uids, SORT_NUMERIC);
+
+      return (int) $uids[0];
+    }
+  }
+
+  return NULL;
+}
+
+/**
  * Handles POST /api/v1/bot/payments.
  *
  * Creates the same 'pagos' node the app creates, from the reading the bot made
@@ -1466,11 +1512,15 @@ function myapi_bot_payment_create() {
   $key = myapi_bot_payment_idempotency_key($values['message_key'], $values['media_ref']);
   myapi_bot_payment_resolve_existing($key);
 
-  // 6. The person. Blocked is refused like non-existent: a deactivated account
-  // does not get payments registered in its name.
-  $account = user_load($values['uid']);
-  if (!$account || (int) $account->status !== 1) {
-    myapi_error('invalid_field', 422, ['@field' => 'identity.person.uid']);
+  // 6. The person, WHEN THE BOT NAMED ONE. The bot chose this uid, so anything
+  // wrong with it is the bot's mistake and answers 422. Blocked is refused
+  // like non-existent: a deactivated account does not get payments registered
+  // in its name.
+  if ($values['uid'] !== NULL) {
+    $account = user_load($values['uid']);
+    if (!$account || (int) $account->status !== 1) {
+      myapi_error('invalid_field', 422, ['@field' => 'identity.person.uid']);
+    }
   }
 
   // 7. The unit, and the condominium it really belongs to. IDS are compared,
@@ -1486,8 +1536,41 @@ function myapi_bot_payment_create() {
     myapi_error('invalid_field', 422, ['@field' => 'identity.unit.condominium_id']);
   }
 
+  // 7b. The person, WHEN THE BOT NAMED NOBODY. It has to run here and not up
+  // at step 6: resolving against a nid that is not a published 'vivienda'
+  // would answer whoever happens to hang off some other node.
+  //
+  // The server chooses this uid, so anything wrong with it is the SITE's
+  // problem and answers 500 — a 422 would send n8n hunting for an error in a
+  // payload that has none. A published unit with neither occupant nor owner is
+  // incomplete data; a resolved uid that is blocked is incoherent data. Note
+  // there is NO fall through to the owner when the occupant is blocked: "if
+  // there is no occupant" means there is none, and a blocked one is there.
+  $uid_resolved = 0;
+  if ($values['uid'] === NULL) {
+    $values['uid'] = myapi_bot_payment_resolve_payer($values['unit_nid']);
+    $account = $values['uid'] === NULL ? FALSE : user_load($values['uid']);
+    if (!$account || (int) $account->status !== 1) {
+      watchdog(
+        'myapi',
+        'Bot payment refused: unit @nid has no active occupant or owner to attribute the payment to, and the payload carried no identity.person.uid.',
+        ['@nid' => $values['unit_nid']],
+        WATCHDOG_ERROR
+      );
+      myapi_error('server_error', 500);
+    }
+    $uid_resolved = 1;
+  }
+
   // 8. Access. Non-strict in_array() like the app's create, because
   // myapi_unit_related_nids() returns nids as strings.
+  //
+  // TAUTOLOGICAL ON THE RESOLVED PATH, and knowingly so: the uid came FROM
+  // this unit, so of course it belongs to it. It stays because it costs one
+  // query and it is the only thing standing between a bug in
+  // myapi_bot_payment_resolve_payer() and a payment attributed to a stranger.
+  // The security consequence of that tautology is in the spec's risk table,
+  // and myapi_bot_payments.uid_resolved is what makes it countable.
   if (!in_array($values['unit_nid'], myapi_unit_related_nids($values['uid']))) {
     myapi_error('unit_access_denied', 403);
   }
@@ -1560,6 +1643,7 @@ function myapi_bot_payment_create() {
         'nid'             => (int) $node->nid,
         'uid'             => $values['uid'],
         'unit_nid'        => $values['unit_nid'],
+        'uid_resolved'    => $uid_resolved,
         'created'         => REQUEST_TIME,
       ])
       ->execute();
