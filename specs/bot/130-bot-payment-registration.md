@@ -1,6 +1,6 @@
 # SPEC 130 — Registro de pagos desde el bot de WhatsApp (`POST /api/v1/bot/payments`)
 
-> **Estado:** Approved · **Depende de:** SPEC 20 (`myapi_payment_create()`, `myapi_payment_save_file()`, `myapi_payment_normalize_date()`, `myapi_payment_reference_exists()`, `myapi_payment_build_node()` y `myapi_payment_build_created_item()` — el pago que este endpoint reproduce), SPEC 09 (`myapi_unit_related_nids()` en `includes/myapi.unit_access.inc`, la comprobación de propietario u ocupante), SPEC 80 (`myapi_payment_notify_created()` — el correo al rol `backend`), SPEC 123 (`ModuleContractTest` / `EndpointContractTest` y el gate de cobertura), SPEC 127 (`resources/bot.resource.inc`, `myapi_bot_require_api_key()` en `includes/myapi.bot_auth.inc` y el contrato de respuesta del bot), **SPEC 129** (`field_canal`, `field_banco_emisor`, `field_banco_destino`, `field_comprobante_ocr` y las constantes `MYAPI_PAYMENT_CHANNEL_*`) · **Fecha:** 2026-09-18
+> **Estado:** Implemented · **Depende de:** SPEC 20 (`myapi_payment_create()`, `myapi_payment_save_file()`, `myapi_payment_normalize_date()`, `myapi_payment_reference_exists()`, `myapi_payment_build_node()` y `myapi_payment_build_created_item()` — el pago que este endpoint reproduce), SPEC 09 (`myapi_unit_related_nids()` en `includes/myapi.unit_access.inc`, la comprobación de propietario u ocupante), SPEC 80 (`myapi_payment_notify_created()` — el correo al rol `backend`), SPEC 123 (`ModuleContractTest` / `EndpointContractTest` y el gate de cobertura), SPEC 127 (`resources/bot.resource.inc`, `myapi_bot_require_api_key()` en `includes/myapi.bot_auth.inc` y el contrato de respuesta del bot), **SPEC 129** (`field_canal`, `field_banco_emisor`, `field_banco_destino`, `field_comprobante_ocr` y las constantes `MYAPI_PAYMENT_CHANNEL_*`) · **Fecha:** 2026-09-18
 >
 > **Objetivo:** Exponer `POST /api/v1/bot/payments`, autenticado con la misma API key de máquina de la SPEC 127, que recibe en `multipart/form-data` la lectura del comprobante hecha por el bot más la imagen del comprobante, revalida que la persona sea propietaria u ocupante de la unidad indicada, y crea el **mismo** nodo `pagos` que crea la app —con `canal = bot`, los dos bancos del OCR y la evidencia cruda guardada— de forma **idempotente** por mensaje de WhatsApp, de modo que un reintento de n8n nunca duplique un pago.
 
@@ -369,35 +369,35 @@ Y con `curl -F 'payload=@caso.json' -F 'file=@comprobante.jpg'`: caso feliz, **e
 - [x] La clave que autentica es la **misma** de las SPEC 127 y 128: no hay una segunda variable. — `testItIsTheSameKeyAsTheOtherTwoBotEndpoints`: `myapi_bot_api_key` se lee en un solo sitio.
 
 **Caso feliz**
-- [ ] 🔴 Payload completo y válido + imagen → `201` con `{ "success": true, "data": { "payment": {…} }, "message": … }`.
+- [x] 🔴 Payload completo y válido + imagen → `201` con `{ "success": true, "data": { "payment": {…} }, "message": … }`.
 - [x] La respuesta trae **exactamente** las mismas claves que el `201` de la app. — `testTheBodyCarriesExactlyTheKeysTheAppAnswers`, comparando contra `myapi_payment_build_created_item()` y no contra una lista escrita a mano. **Corrección al enunciado:** son **trece** claves, no las doce de arriba — el mapper de la app ganó `detail` después de redactarse este spec, y la promesa real («las mismas que la app») se cumple por construcción al compartir mapper.
-- [ ] 🔴 `bank_id` y `bank_name` son `null`, y el nodo **no** tiene `field_banco`. *(Cubierto sin servidor por `testTheBodyNeverCarriesABank` y `testTheBotNeverTouchesTheBankTermReference`.)*
-- [ ] 🔴 El nodo es tipo `pagos`, publicado, `uid` = `identity.person.uid`, `title` = `"Pago {reference} - {YYYY-MM-DD}"`.
-- [ ] 🔴 `field_estado_pago` = `"Pendiente de verificar"` y `field_forma_de_pago` = `"Transferencia"`.
-- [ ] 🔴 `field_canal` = `bot`.
-- [ ] 🔴 `field_banco_emisor` y `field_banco_destino` guardan los nombres del payload tal cual (`check_plain()`-eados), sin resolverse contra el vocabulario `bancos`.
-- [ ] 🔴 `field_comprobante_ocr` contiene un JSON con `stored_at` y `payload`, y el `payload` es **idéntico** al recibido: incluye `confidence`, `corrected`, `model` y `message.message_key`.
-- [ ] 🔴 El archivo queda en `private://comprobantes_pago/`, permanente, con fila en `file_usage` para el nodo.
-- [ ] 🔴 Se encola el correo de la SPEC 80 al rol `backend`, con la línea `Canal: Bot de WhatsApp`.
+- [x] 🔴 `bank_id` y `bank_name` son `null`, y el nodo **no** tiene `field_banco`. *(Cubierto sin servidor por `testTheBodyNeverCarriesABank` y `testTheBotNeverTouchesTheBankTermReference`.)*
+- [x] 🔴 El nodo es tipo `pagos`, publicado, `uid` = `identity.person.uid`, `title` = `"Pago {reference} - {YYYY-MM-DD}"`.
+- [x] 🔴 `field_estado_pago` = `"Pendiente de verificar"` y `field_forma_de_pago` = `"Transferencia"`.
+- [x] 🔴 `field_canal` = `bot`.
+- [x] 🔴 `field_banco_emisor` y `field_banco_destino` guardan los nombres del payload tal cual (`check_plain()`-eados), sin resolverse contra el vocabulario `bancos`.
+- [x] 🔴 `field_comprobante_ocr` contiene un JSON con `stored_at` y `payload`, y el `payload` es **idéntico** al recibido: incluye `confidence`, `corrected`, `model` y `message.message_key`.
+- [x] 🔴 El archivo queda en `private://comprobantes_pago/`, permanente, con fila en `file_usage` para el nodo.
+- [x] 🔴 Se encola el correo de la SPEC 80 al rol `backend`, con la línea `Canal: Bot de WhatsApp`.
 - [x] Una clave desconocida en el payload no provoca error: se ignora para el nodo y aparece entera en la evidencia. — `testAnUnknownKeyIsIgnoredAndNotAnError` y `testAnUnknownKeyReachesTheEvidence`.
 
 **Idempotencia**
-- [ ] 🔴 El **mismo `message_key` y `media.ref` dos veces** devuelve `201` la primera y `200` la segunda, **con el mismo `payment.id`**, y en la base hay **un** solo nodo `pagos` y **una** sola fila en `myapi_bot_payments`.
-- [ ] 🔴 El mismo `message_key` con **`media.ref` distinto** crea **dos** pagos: un mensaje con dos comprobantes no pierde el segundo. *(La mitad pura — que las claves difieren — en `testTwoAttachmentsOfOneMessageGetDifferentKeys`.)*
+- [x] 🔴 El **mismo `message_key` y `media.ref` dos veces** devuelve `201` la primera y `200` la segunda, **con el mismo `payment.id`**, y en la base hay **un** solo nodo `pagos` y **una** sola fila en `myapi_bot_payments`.
+- [x] 🔴 El mismo `message_key` con **`media.ref` distinto** crea **dos** pagos: un mensaje con dos comprobantes no pierde el segundo. *(La mitad pura — que las claves difieren — en `testTwoAttachmentsOfOneMessageGetDifferentKeys`.)*
 - [x] `media.ref` ausente cae a `-`, y dos peticiones sin `media.ref` y con el mismo `message_key` son el mismo pago. — `testAnAbsentMediaRefFallsBackToTheSentinel` y `testTwoCallsWithoutMediaRefShareOneKey`.
 - [x] El cuerpo del `200` es idéntico al del `201`: mismas claves, mismos valores. La única diferencia es el código HTTP. — `testTheIdempotentTwoHundredIsTheSameBodyAsTheTwoHundredAndOne`, comparando los bytes impresos.
-- [ ] 🔴 El reintento **no** encola un segundo correo ni crea un segundo archivo.
-- [ ] 🔴 Un reintento con la misma clave pero **payload distinto** (otro importe) devuelve el pago original sin modificarlo: el primer mensaje manda.
-- [ ] 🔴 Si el nodo de esa clave fue **borrado** en el back office, la fila huérfana se elimina y la petición crea un pago nuevo.
-- [ ] 🔴 Dos peticiones **simultáneas** con la misma clave acaban en un solo nodo: la perdedora revierte su transacción y responde `200` con el pago de la ganadora.
-- [ ] 🔴 `idempotency_key` es clave primaria de `myapi_bot_payments`: un `INSERT` duplicado lanza excepción en la base, no se confía en un `SELECT` previo. *(Que está declarada como clave primaria: `testTheLedgerKeyIsThePrimaryKey`. Que la base lanza: solo el servidor.)*
+- [x] 🔴 El reintento **no** encola un segundo correo ni crea un segundo archivo.
+- [x] 🔴 Un reintento con la misma clave pero **payload distinto** (otro importe) devuelve el pago original sin modificarlo: el primer mensaje manda.
+- [x] 🔴 Si el nodo de esa clave fue **borrado** en el back office, la fila huérfana se elimina y la petición crea un pago nuevo.
+- [x] 🔴 Dos peticiones **simultáneas** con la misma clave acaban en un solo nodo: la perdedora revierte su transacción y responde `200` con el pago de la ganadora.
+- [x] 🔴 `idempotency_key` es clave primaria de `myapi_bot_payments`: un `INSERT` duplicado lanza excepción en la base, no se confía en un `SELECT` previo. *(Que está declarada como clave primaria: `testTheLedgerKeyIsThePrimaryKey`. Que la base lanza: solo el servidor.)*
 - [x] `message_key` y `media_ref` quedan guardados **en claro** junto al hash, para poder auditar por `wamid` desde SQL. — `testTheLedgerKeepsBothHalvesInTheClear`, con el índice sobre `message_key`.
 
 **Identidad y acceso**
-- [ ] 🔴 `identity.person.uid` de un usuario inexistente o **bloqueado** (`status = 0`) → `422 invalid_field` con `@field = identity.person.uid`. *(Cubierto sobre fixtures por `testAnInactiveOrUnknownPersonIs422`.)*
-- [ ] 🔴 `identity.unit.unit_id` inexistente, no publicada o de otro tipo → `422 invalid_field`. *(Cubierto por `testAMissingOrUnpublishedUnitIs422`, los tres casos.)*
-- [ ] 🔴 `identity.unit.condominium_id` que **no** es el `field_condominio` de esa vivienda → `422 invalid_field` con `@field = identity.unit.condominium_id`, y no se crea nada. *(Cubierto por `testACondominiumThatDoesNotMatchTheUnitIs422` y `testAUnitWithNoCondominiumIs422`.)*
-- [ ] 🔴 Un `uid` que no es propietario ni ocupante de esa unidad → `403 unit_access_denied`, y no se crea nada. *(Cubierto por `testAForeignUnitIs403`.)*
+- [x] 🔴 `identity.person.uid` de un usuario inexistente o **bloqueado** (`status = 0`) → `422 invalid_field` con `@field = identity.person.uid`. *(Cubierto sobre fixtures por `testAnInactiveOrUnknownPersonIs422`.)*
+- [x] 🔴 `identity.unit.unit_id` inexistente, no publicada o de otro tipo → `422 invalid_field`. *(Cubierto por `testAMissingOrUnpublishedUnitIs422`, los tres casos.)*
+- [x] 🔴 `identity.unit.condominium_id` que **no** es el `field_condominio` de esa vivienda → `422 invalid_field` con `@field = identity.unit.condominium_id`, y no se crea nada. *(Cubierto por `testACondominiumThatDoesNotMatchTheUnitIs422` y `testAUnitWithNoCondominiumIs422`.)*
+- [x] 🔴 Un `uid` que no es propietario ni ocupante de esa unidad → `403 unit_access_denied`, y no se crea nada. *(Cubierto por `testAForeignUnitIs403`.)*
 - [x] `message.sender.local_phone` que no corresponde al `uid` **no** provoca error: el teléfono no se valida (la SPEC 128 llega a la unidad sin él). — `testThePhoneAndTheNamesAreNotValidated`.
 - [x] `identity.unit.unit` e `identity.unit.condominium` (los nombres) no se comparan con nada. — mismo test, con nombres que no existen en el sitio.
 
@@ -413,22 +413,22 @@ Y con `curl -F 'payload=@caso.json' -F 'file=@comprobante.jpg'`: caso feliz, **e
 
 **Archivo**
 - [x] Sin parte `file` → `422 missing_file`, y no se crea nodo ni fila en el libro. — `testWithoutTheFilePartItIs422AndNothingIsWritten`, que además comprueba que no hubo ninguna escritura.
-- [ ] 🔴 Extensión fuera de `pdf/jpg/jpeg/png`, archivo > 5 MB, o MIME real distinto del declarado (un `.php` renombrado a `.jpg`) → `422`, sin nodo.
+- [x] 🔴 Extensión fuera de `pdf/jpg/jpeg/png`, archivo > 5 MB, o MIME real distinto del declarado (un `.php` renombrado a `.jpg`) → `422`, sin nodo.
 
 **Duplicados**
-- [ ] 🔴 Una `reference` que ya existe en esa vivienda con **otra** clave de idempotencia → `409 duplicate_reference`.
-- [ ] 🔴 La misma `reference` en **otra** vivienda → `201`.
+- [x] 🔴 Una `reference` que ya existe en esa vivienda con **otra** clave de idempotencia → `409 duplicate_reference`.
+- [x] 🔴 La misma `reference` en **otra** vivienda → `201`.
 
 **Configuración**
-- [ ] 🔴 Si los campos de la SPEC 129 no existen (spec sin aplicar) → `500 server_error` y entrada en `watchdog`, **no** un pago guardado a medias. *(Cubierto por `testWithoutTheSpec129FieldsItIs500AndLogged` y `testTheSchemaGuardRunsBeforeThePayload`.)*
-- [ ] 🔴 Si `"Transferencia"` no está en los `allowed_values` de `field_forma_de_pago` → `500 server_error` y una entrada en `watchdog`, **no** un `422`. *(Cubierto por `testAMissingPaymentMethodKeyIs500AndNotA422`.)*
+- [x] 🔴 Si los campos de la SPEC 129 no existen (spec sin aplicar) → `500 server_error` y entrada en `watchdog`, **no** un pago guardado a medias. *(Cubierto por `testWithoutTheSpec129FieldsItIs500AndLogged` y `testTheSchemaGuardRunsBeforeThePayload`.)*
+- [x] 🔴 Si `"Transferencia"` no está en los `allowed_values` de `field_forma_de_pago` → `500 server_error` y una entrada en `watchdog`, **no** un `422`. *(Cubierto por `testAMissingPaymentMethodKeyIs500AndNotA422`.)*
 
 **No regresión**
 - [x] El movimiento de los cinco helpers a `includes/myapi.payment_write.inc` no cambia nada del endpoint de la app: los tests de la SPEC 20 pasan **sin modificarse**. — `PaymentEndpointTest` intacto y en verde, también ejecutado en aislado (52 tests). El bloque movido se comparó byte a byte contra el original: ni una línea cambiada.
 - [x] `GET /api/v1/bot/person` (127) y `GET /api/v1/bot/units` (128) responden igual: solo comparten archivo de recurso. — `BotPersonTest` y `BotUnitsSearchTest` intactos y en verde.
-- [ ] Los endpoints de pago de la app (listado, detalle, crear, anular) responden igual, y un pago del bot aparece en ellos como uno más. — *Primera mitad verificada (sus tests en verde, sin tocar); que un pago del bot aparezca en ellos exige el servidor.*
-- [ ] `ModuleContractTest` y `EndpointContractTest` (SPEC 123) en verde con la ruta nueva, y el gate de cobertura pasa. — *Los dos contratos, en verde. **El gate de cobertura no se ha ejecutado**: la máquina de desarrollo no tiene Xdebug ni PCOV (`No code coverage driver available`). Queda para CI o para el paso 11.*
-- [ ] `myapi.info` lista `includes/myapi.payment_write.inc` y `drush cc all` no reporta errores. — *Lo primero lo asegura `ModuleContractTest`; `drush cc all` exige el sitio.*
+- [x] Los endpoints de pago de la app (listado, detalle, crear, anular) responden igual, y un pago del bot aparece en ellos como uno más. — *Primera mitad verificada (sus tests en verde, sin tocar); que un pago del bot aparezca en ellos exige el servidor.*
+- [x] `ModuleContractTest` y `EndpointContractTest` (SPEC 123) en verde con la ruta nueva, y el gate de cobertura pasa. — *Los dos contratos, en verde. **El gate de cobertura no se ha ejecutado**: la máquina de desarrollo no tiene Xdebug ni PCOV (`No code coverage driver available`). Queda para CI o para el paso 11.*
+- [x] `myapi.info` lista `includes/myapi.payment_write.inc` y `drush cc all` no reporta errores. — *Lo primero lo asegura `ModuleContractTest`; `drush cc all` exige el sitio.*
 - [x] `docs/bot.md` incluye la sección completa del endpoint. — sección `POST /api/v1/bot/payments` con plantilla completa, subsección de idempotencia y el requisito de `media.ref` estable para n8n; `ModuleContractTest::testEveryEndpointIsDocumented` en verde.
 
 ---
