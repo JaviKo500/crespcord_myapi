@@ -1043,6 +1043,15 @@ class ServicesInstallTest extends TestCase {
     // and an update already recorded as applied never runs a second time. Both
     // delegate to _myapi_payment_channel_backfill(), which is idempotent, so
     // 7047 is a no-op wherever 7046 finished.
+    //
+    // 7048 IS SPEC 130's, and it is the plainest kind of update in this file:
+    // one guarded db_create_table() for myapi_bot_payments, the idempotency
+    // ledger of POST /api/v1/bot/payments. It takes no sandbox because it
+    // touches no rows — the table is born empty and the endpoint fills it one
+    // WhatsApp message at a time. Note the number: the spec asked for 7047,
+    // written before 7047 became SPEC 129's repair, and the implementation
+    // took the next free one instead. Reusing an applied number is invisible
+    // and fatal — every site that ran the repair would skip the table.
     $this->assertStringContainsString('function myapi_update_7034()', $source);
     $this->assertStringContainsString('function myapi_update_7035()', $source);
     $this->assertStringContainsString('function myapi_update_7036()', $source);
@@ -1057,7 +1066,8 @@ class ServicesInstallTest extends TestCase {
     $this->assertStringContainsString('function myapi_update_7045()', $source);
     $this->assertStringContainsString('function myapi_update_7046(&$sandbox)', $source);
     $this->assertStringContainsString('function myapi_update_7047(&$sandbox)', $source);
-    $this->assertStringNotContainsString('function myapi_update_7048', $source);
+    $this->assertStringContainsString('function myapi_update_7048()', $source);
+    $this->assertStringNotContainsString('function myapi_update_7049', $source);
     // 7028 is still SPEC 81's, not this spec's.
     $this->assertStringContainsString(
       '_myapi_services_install();',

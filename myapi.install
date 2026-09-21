@@ -277,6 +277,76 @@ function myapi_schema() {
     ],
   ];
 
+  // SPEC 130. The idempotency ledger of POST /api/v1/bot/payments: one row per
+  // WhatsApp message attachment that became a payment.
+  //
+  // WHY A TABLE AND NOT A DRUPAL FIELD. The Field API does not index the value
+  // of a text field, so looking a key up would scan, and two simultaneous n8n
+  // retries would both find nothing and both create a payment. Uniqueness has
+  // to be the database's job, and here it is the primary key itself: the
+  // second INSERT throws, its transaction rolls back, and the loser answers
+  // 200 with the winner's payment.
+  //
+  // WHY THE KEY IS A HASH. message_key (a wamid) and media_ref are of
+  // uncertain length, and a varchar primary key cannot exceed 191 characters
+  // under utf8mb4 (the 767-byte index limit of older InnoDB). A sha256 hex is
+  // 64 fixed characters and sidesteps both the length and the charset problem.
+  // Both halves are stored in the clear beside it because the hash gives
+  // uniqueness, not auditability: an operator asking "which payments came in
+  // through this WhatsApp message?" needs to read the wamid.
+  $schema['myapi_bot_payments'] = [
+    'description' => 'Maps a WhatsApp message attachment to the payment node it created.',
+    'fields' => [
+      'idempotency_key' => [
+        'description' => 'sha256 hex of "<message_key>#<media_ref>".',
+        'type'        => 'char',
+        'length'      => 64,
+        'not null'    => TRUE,
+      ],
+      'message_key' => [
+        'description' => 'The wamid of the WhatsApp message, in the clear, for auditing.',
+        'type'        => 'varchar',
+        'length'      => 255,
+        'not null'    => TRUE,
+      ],
+      'media_ref' => [
+        'description' => 'The payload media.ref, or "-" when absent.',
+        'type'        => 'varchar',
+        'length'      => 64,
+        'not null'    => TRUE,
+      ],
+      'nid' => [
+        'description' => 'Logical FK to the created payment node (nid).',
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'not null'    => TRUE,
+      ],
+      'uid' => [
+        'description' => 'Logical FK to dr_users.uid. The resident the payment belongs to.',
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'not null'    => TRUE,
+      ],
+      'unit_nid' => [
+        'description' => 'Logical FK to the unit (vivienda) node the payment was charged to.',
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'not null'    => TRUE,
+      ],
+      'created' => [
+        'description' => 'Unix timestamp when the payment was registered.',
+        'type'        => 'int',
+        'not null'    => TRUE,
+      ],
+    ],
+    'primary key' => ['idempotency_key'],
+    'indexes' => [
+      'message_key' => ['message_key'],
+      'nid'         => ['nid'],
+      'created'     => ['created'],
+    ],
+  ];
+
   return $schema;
 }
 
@@ -5169,4 +5239,33 @@ function myapi_update_7047(&$sandbox) {
       '@count'   => $migrated,
     ]);
   }
+}
+
+/**
+ * SPEC 130: creates the myapi_bot_payments idempotency ledger.
+ *
+ * The table POST /api/v1/bot/payments writes one row to per WhatsApp message
+ * attachment it turns into a payment, so that a retried n8n call answers 200
+ * with the payment it already created instead of creating a second one. See
+ * the schema comment in myapi_schema() for why the key is a hash and why
+ * uniqueness lives in the database and not in a SELECT.
+ *
+ * THE NUMBER IS 7048 AND NOT THE 7047 THE SPEC NAMES. 7047 was taken between
+ * the spec being written and this being implemented, by SPEC 129's repair of
+ * its own backfill. hook_update_N numbers are a site's applied-updates log:
+ * reusing one would make every site that already ran the repair skip this
+ * table silently, and the endpoint would fatal on its first request.
+ *
+ * Guarded by db_table_exists() like every other table-creating update here, so
+ * it is a no-op on a site installed from hook_schema() after this point.
+ */
+function myapi_update_7048() {
+  if (!db_table_exists('myapi_bot_payments')) {
+    $schema = drupal_get_schema_unprocessed('myapi', 'myapi_bot_payments');
+    db_create_table('myapi_bot_payments', $schema);
+
+    return t('SPEC 130: tabla myapi_bot_payments creada.');
+  }
+
+  return t('SPEC 130: la tabla myapi_bot_payments ya existía; nada que hacer.');
 }

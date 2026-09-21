@@ -900,6 +900,23 @@ function myapi_menu() {
     'file'             => 'resources/bot.resource.inc',
   ];
 
+  // The bot's payment registration (SPEC 130). Where the two routes above stop
+  // being questions: they end at a uid and a unit_id, and this is what the bot
+  // calls holding both plus the receipt the model already read. It creates the
+  // same 'pagos' node the app creates, told apart only by its channel.
+  //
+  // THE FIRST BOT ROUTE THAT WRITES. The machine key stops being a read-only
+  // credential here, which is why the handler revalidates the identity it is
+  // handed instead of trusting it, and why the payment is born "Pendiente de
+  // verificar" like every other: nobody is paid until a human verifies it.
+  // Same file, same credential and same guard as the two above.
+  $items['api/v1/bot/payments'] = [
+    'page callback'    => 'myapi_bot_payment_dispatch',
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'resources/bot.resource.inc',
+  ];
+
   return $items;
 }
 

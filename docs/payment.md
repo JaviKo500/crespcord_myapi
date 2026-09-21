@@ -194,6 +194,18 @@ what the client sends.
 Out of scope of this endpoint: editing, deleting or verifying a payment, and
 serving/downloading the attached receipt.
 
+> **This is not the only door a payment can come in through.** Since SPEC 130
+> there is a second one: `POST /api/v1/bot/payments`, which the WhatsApp bot in
+> n8n calls with the reading it made of a receipt. It creates the **same**
+> `pagos` node as this endpoint — same helpers, same forced
+> `"Pendiente de verificar"`, same email to the `backend` role — and the two
+> are told apart only by `field_canal` (`app` vs `bot`), which no response
+> exposes. Both share the write helpers in
+> `includes/myapi.payment_write.inc`, so a change to how a payment node is
+> built affects both; see [bot.md](bot.md) for its contract. The listing, the
+> detail and the cancel endpoints below do **not** distinguish the channel: a
+> bot payment appears in them as one more.
+
 **Authentication:** required (Bearer access token). The authenticated user must
 be the **owner or occupant** of `unit_id` (same rule as
 `GET /api/v1/units/{unit_id}/payments`).

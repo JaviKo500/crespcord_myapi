@@ -2,12 +2,21 @@
 
 /**
  * @file
- * Bot resource for the myapi module (SPEC 127).
+ * Bot resource for the myapi module (SPECS 127, 128 and 130).
  *
- * The read-only half of what the WhatsApp bot in n8n needs: given a phone
- * number, who that is and which units the payment can be charged to. It
- * registers nothing — creating the payment is the existing payment endpoint's
- * job; this one answers WHO and WHERE.
+ * Everything the WhatsApp bot in n8n talks to, in the order a conversation
+ * uses it. Given a phone number, who that is and which units a payment can be
+ * charged to (SPEC 127); when the phone identified nobody, the same unit
+ * reached by the building and unit names the person dictated (SPEC 128); and
+ * finally, holding a uid, a unit_id and a receipt the model already read, the
+ * payment itself (SPEC 130).
+ *
+ * THE FIRST TWO READ, THE THIRD WRITES, and that is the line worth keeping in
+ * mind while reading this file: the same machine key that opened two harmless
+ * lookups now creates payment nodes. Which is why the write path revalidates
+ * every identity it is handed instead of trusting it, and why the payment it
+ * creates is born "Pendiente de verificar" like every other one — nobody is
+ * paid until a human verifies it in the back office.
  *
  * One file per consumer, one dispatcher per route: the bot will grow more
  * endpoints, and this follows the same shape myapi.module already uses for
@@ -25,6 +34,13 @@ module_load_include('inc', 'myapi', 'includes/myapi.unit_access');
 module_load_include('inc', 'myapi', 'includes/myapi.unit_query');
 module_load_include('inc', 'myapi', 'includes/myapi.user');
 module_load_include('inc', 'myapi', 'includes/myapi.text');
+// The write half of a payment (SPEC 130). The bot's create reuses the app's
+// helpers rather than reimplementing them: the same date normalization, the
+// same duplicate-reference lookup, the same upload and the same node builder,
+// because a payment registered from WhatsApp and one registered from the app
+// are the same 'pagos' node. It also brings in includes/myapi.payment_workflow
+// with it, which is where MYAPI_PAYMENT_CHANNEL_BOT and the backend email live.
+module_load_include('inc', 'myapi', 'includes/myapi.payment_write');
 
 /**
  * The digits a phone number is compared by.
@@ -924,4 +940,663 @@ function myapi_bot_units_dispatch() {
   else {
     myapi_error('method_not_allowed', 405);
   }
+}
+
+/* ---------------------------------------------------------------------------
+ * POST /api/v1/bot/payments — the payment registration (SPEC 130).
+ *
+ * Where the conversation stops being a question. The two routes above end at a
+ * uid and a unit_id; this is what the bot calls holding both, plus the receipt
+ * image and whatever the model read off it, and it creates the SAME 'pagos'
+ * node the app creates — same helpers, same forced estado, same email to the
+ * 'backend' role — told apart only by its channel and by the raw reading kept
+ * beside it as evidence.
+ *
+ * Two things make it unlike anything else in this file. It WRITES, so the
+ * machine key stops being a read-only credential: the identity the bot hands
+ * over is revalidated rather than trusted, because a leaked key must not be
+ * able to charge a payment to a unit that is not that person's. And it is
+ * IDEMPOTENT per WhatsApp message attachment, because n8n retries: the ledger
+ * in myapi_bot_payments turns a retry into a 200 carrying the payment that
+ * already exists instead of a second payment nobody asked for.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Dispatcher for /api/v1/bot/payments.
+ *
+ * Routes by HTTP method. Only POST is supported: the endpoint creates, and
+ * reading, listing or voiding a payment is the app's payment endpoints' job —
+ * they do not distinguish the channel, so a payment the bot registered shows
+ * up there as one more.
+ */
+function myapi_bot_payment_dispatch() {
+  $method = myapi_request_method();
+  if ($method === 'POST') {
+    myapi_bot_payment_create();
+  }
+  else {
+    myapi_error('method_not_allowed', 405);
+  }
+}
+
+/**
+ * The biggest 'payload' part this endpoint will parse, in bytes.
+ *
+ * 64 KB, which is orders of magnitude more than a structured reading of one
+ * receipt needs. The cap is not about the bot: it is about what a
+ * drupal_json_decode() of an arbitrarily large body costs on an EOL Drupal 7,
+ * which without a ceiling is a very cheap denial of service against a route
+ * whose credential is a shared machine key.
+ */
+define('MYAPI_BOT_PAYMENT_MAX_PAYLOAD', 65536);
+
+/**
+ * What the second half of the idempotency key is when media.ref is absent.
+ *
+ * A single character that cannot be confused with a real reference, so that a
+ * bot that never sends media.ref behaves exactly as if the key were the wamid
+ * alone — which is the right behaviour when a message carries one attachment.
+ */
+define('MYAPI_BOT_PAYMENT_MEDIA_REF_FALLBACK', '-');
+
+/**
+ * Reads a dot-separated path out of the decoded payload.
+ *
+ * The payload is four levels of nested objects, and the alternative to this is
+ * a staircase of isset() per field that gets one level wrong exactly once and
+ * emits a notice into the JSON response. Here a missing step, or a step that
+ * holds a scalar where an object was expected, is simply NULL.
+ *
+ * It also hands the caller the error message for free: the path it was asked
+ * for IS the '@field' of the 422, so a failure reads as 'receipt.amount' in
+ * the n8n log instead of an 'amount' that could be three different fields.
+ *
+ * @param array  $payload  The decoded payload.
+ * @param string $path     Dot-separated path, e.g. 'identity.person.uid'.
+ *
+ * @return mixed  The value at that path, or NULL when any step is missing or
+ *                is not an array.
+ */
+function myapi_bot_payload_get(array $payload, $path) {
+  $current = $payload;
+  foreach (explode('.', $path) as $step) {
+    if (!is_array($current) || !array_key_exists($step, $current)) {
+      return NULL;
+    }
+    $current = $current[$step];
+  }
+
+  return $current;
+}
+
+/**
+ * Reads and decodes the 'payload' part of the multipart request.
+ *
+ * The JSON travels in a text field rather than as the request body because the
+ * receipt image forces multipart — the same decision SPEC 20 made, and what
+ * lets this endpoint reuse myapi_payment_save_file() untouched.
+ *
+ * Everything that can go wrong here is one error, invalid_payload: absent,
+ * empty, over the cap, malformed, or well-formed JSON that is not an object.
+ * They are all the same failure from n8n's point of view — "what you put in
+ * the payload field is not a reading" — and splitting them into codes would
+ * give the bot four branches where it needs none.
+ *
+ * A list and an empty array both fail here. PHP cannot tell `{}` from `[]`
+ * after decoding, so the empty case has to pick a side, and invalid_payload is
+ * the honest one: an empty object is not a reading of a receipt either.
+ *
+ * Aborts with 422 invalid_payload; returns only on success.
+ *
+ * @return array  The decoded payload as an associative array.
+ */
+function myapi_bot_payment_parse_payload() {
+  $raw = myapi_request_post_field('payload');
+  if ($raw === NULL || $raw === '') {
+    myapi_error('invalid_payload', 422);
+  }
+  if (strlen($raw) > MYAPI_BOT_PAYMENT_MAX_PAYLOAD) {
+    myapi_error('invalid_payload', 422);
+  }
+
+  $decoded = drupal_json_decode($raw);
+  if (!is_array($decoded) || $decoded === []) {
+    myapi_error('invalid_payload', 422);
+  }
+  // A JSON list decodes to an array too, and every read below is by name, so
+  // a list would answer NULL to all of them and report a missing message_key
+  // for what is really a malformed payload.
+  if (array_keys($decoded) === range(0, count($decoded) - 1)) {
+    myapi_error('invalid_payload', 422);
+  }
+
+  return $decoded;
+}
+
+/**
+ * Reads a required positive integer out of the payload.
+ *
+ * Absent is missing_field and malformed is invalid_field, because they send
+ * n8n to two different places: the first says a mapping node never wrote the
+ * key, the second that it wrote something that is not an id.
+ *
+ * @param array  $payload  The decoded payload.
+ * @param string $path     Dot-separated path, used verbatim as '@field'.
+ *
+ * @return int  The value as a positive integer.
+ */
+function myapi_bot_payment_required_id(array $payload, $path) {
+  $value = myapi_bot_payload_get($payload, $path);
+  if ($value === NULL || $value === '') {
+    myapi_error('missing_field', 422, ['@field' => $path]);
+  }
+  // JSON gives a real int, but n8n mapping nodes routinely stringify, so both
+  // are accepted and nothing else is: a float, a bool or an array is not an id.
+  if (!is_int($value) && !(is_string($value) && ctype_digit($value))) {
+    myapi_error('invalid_field', 422, ['@field' => $path]);
+  }
+  if ((int) $value <= 0) {
+    myapi_error('invalid_field', 422, ['@field' => $path]);
+  }
+
+  return (int) $value;
+}
+
+/**
+ * Reads an optional free-text field, length-checked and sanitized.
+ *
+ * Absent, empty and whitespace-only all collapse to NULL so the caller has one
+ * "there is nothing here" to test. Over the limit is invalid_field rather than
+ * a silent truncation: the two bank names are what a human reads when
+ * verifying the payment, and half a bank name is worse than a rejected call.
+ *
+ * check_plain() runs AFTER the length check, exactly as the app's create does,
+ * so the two doors sanitize the same string the same way.
+ *
+ * @param array  $payload     The decoded payload.
+ * @param string $path        Dot-separated path, used verbatim as '@field'.
+ * @param int    $max_length  Maximum length before sanitizing.
+ *
+ * @return string|null  The sanitized value, or NULL when absent.
+ */
+function myapi_bot_payment_optional_text(array $payload, $path, $max_length = 255) {
+  $value = myapi_bot_payload_get($payload, $path);
+  if ($value === NULL) {
+    return NULL;
+  }
+  if (!is_scalar($value)) {
+    myapi_error('invalid_field', 422, ['@field' => $path]);
+  }
+  $value = trim((string) $value);
+  if ($value === '') {
+    return NULL;
+  }
+  if (strlen($value) > $max_length) {
+    myapi_error('invalid_field', 422, ['@field' => $path]);
+  }
+
+  return check_plain($value);
+}
+
+/**
+ * Validates the payload against the contract and returns it normalized.
+ *
+ * Walks the contract in the order of the table in specs/bot/130, and every
+ * check aborts with its own error before anything else is read — so a payload
+ * with three problems always reports the first one, and reports it the same
+ * way twice.
+ *
+ * WHAT IT DOES NOT DO: touch the site. Whether the uid exists, whether the
+ * unit is published, whether that person may pay for that unit — all of that
+ * is myapi_bot_payment_create()'s, after this returns. This function is pure,
+ * which is why nearly every test of this endpoint lands on it.
+ *
+ * The date validation and the amount rule are NOT rewritten here: they are the
+ * app's, myapi_payment_normalize_date() and the same is_numeric() && > 0, so
+ * the two doors cannot drift into accepting different dates for the same node.
+ *
+ * @param array $payload  The decoded payload.
+ *
+ * @return array  Normalized values, keyed: message_key, media_ref, uid,
+ *                unit_nid, condominium_id, reference, amount, date,
+ *                issuing_bank, destination_bank.
+ */
+function myapi_bot_payment_validate(array $payload) {
+  // 1. message.message_key — the wamid, and the first half of the idempotency
+  // key. Capped at the width of the column that stores it in the clear: a
+  // truncated wamid would still hash to the right key, but the audit column
+  // that answers "which payments came from this message?" would hold a
+  // different string than the one WhatsApp sent.
+  $message_key = myapi_bot_payload_get($payload, 'message.message_key');
+  if ($message_key === NULL || (is_string($message_key) && trim($message_key) === '')) {
+    myapi_error('missing_field', 422, ['@field' => 'message.message_key']);
+  }
+  if (!is_scalar($message_key)) {
+    myapi_error('invalid_field', 422, ['@field' => 'message.message_key']);
+  }
+  $message_key = trim((string) $message_key);
+  if (strlen($message_key) > 255) {
+    myapi_error('invalid_field', 422, ['@field' => 'message.message_key']);
+  }
+
+  // 2-4. The identity the bot resolved with SPEC 127 or 128. Only the shape is
+  // checked here; whether they exist and belong together is revalidated
+  // against the site by the caller.
+  $uid            = myapi_bot_payment_required_id($payload, 'identity.person.uid');
+  $unit_nid       = myapi_bot_payment_required_id($payload, 'identity.unit.unit_id');
+  $condominium_id = myapi_bot_payment_required_id($payload, 'identity.unit.condominium_id');
+
+  // 5. media.ref — which attachment of the message this receipt is, and the
+  // second half of the idempotency key. Absent falls back to '-'.
+  $media_ref = myapi_bot_payload_get($payload, 'media.ref');
+  if ($media_ref === NULL) {
+    $media_ref = MYAPI_BOT_PAYMENT_MEDIA_REF_FALLBACK;
+  }
+  else {
+    if (!is_scalar($media_ref)) {
+      myapi_error('invalid_field', 422, ['@field' => 'media.ref']);
+    }
+    $media_ref = trim((string) $media_ref);
+    if ($media_ref === '') {
+      $media_ref = MYAPI_BOT_PAYMENT_MEDIA_REF_FALLBACK;
+    }
+    elseif (strlen($media_ref) > 64) {
+      myapi_error('invalid_field', 422, ['@field' => 'media.ref']);
+    }
+  }
+
+  // 6. receipt.reference — same rule and same order as the app's create.
+  $reference = myapi_bot_payload_get($payload, 'receipt.reference');
+  if ($reference === NULL || (is_string($reference) && trim($reference) === '')) {
+    myapi_error('missing_field', 422, ['@field' => 'receipt.reference']);
+  }
+  if (!is_scalar($reference)) {
+    myapi_error('invalid_field', 422, ['@field' => 'receipt.reference']);
+  }
+  $reference = trim((string) $reference);
+  if (strlen($reference) > 255) {
+    myapi_error('invalid_field', 422, ['@field' => 'receipt.reference']);
+  }
+  $reference = check_plain($reference);
+
+  // 7. receipt.amount — the app's rule, not a second one.
+  $amount = myapi_bot_payload_get($payload, 'receipt.amount');
+  if ($amount === NULL || $amount === '') {
+    myapi_error('missing_field', 422, ['@field' => 'receipt.amount']);
+  }
+  if (!is_numeric($amount) || (float) $amount <= 0) {
+    myapi_error('invalid_amount', 422);
+  }
+  $amount = (float) $amount;
+
+  // 8. receipt.date — REQUIRED here and optional in the app, on purpose. In
+  // the app there is a person who knows what day they paid; here an absent
+  // date means the OCR did not read one, and dating the payment at the instant
+  // of the conversation instead of the day of the transfer would be a false
+  // value nobody would ever catch. So there is no fall back to server time.
+  $date = myapi_bot_payload_get($payload, 'receipt.date');
+  if ($date === NULL || (is_string($date) && trim($date) === '')) {
+    myapi_error('missing_field', 422, ['@field' => 'receipt.date']);
+  }
+  if (!is_scalar($date)) {
+    myapi_error('invalid_date', 422);
+  }
+  $date = myapi_payment_normalize_date(trim((string) $date));
+  if ($date === NULL) {
+    myapi_error('invalid_date', 422);
+  }
+
+  // 9-10. The two banks the OCR read. Free text: they are NOT resolved against
+  // the 'bancos' vocabulary, which is the app's mechanism (SPEC 129).
+  $issuing_bank     = myapi_bot_payment_optional_text($payload, 'receipt.issuing_bank');
+  $destination_bank = myapi_bot_payment_optional_text($payload, 'receipt.destination_bank');
+
+  return [
+    'message_key'      => $message_key,
+    'media_ref'        => $media_ref,
+    'uid'              => $uid,
+    'unit_nid'         => $unit_nid,
+    'condominium_id'   => $condominium_id,
+    'reference'        => $reference,
+    'amount'           => $amount,
+    'date'             => $date,
+    'issuing_bank'     => $issuing_bank,
+    'destination_bank' => $destination_bank,
+  ];
+}
+
+/**
+ * The payment method every bot payment is stored with.
+ *
+ * Forced, never read from the payload: what the bot registers is always a bank
+ * receipt, and a receipt is never cash. One field fewer to send is one field
+ * fewer to validate, and one fewer way for a reading to be wrong.
+ */
+define('MYAPI_BOT_PAYMENT_METHOD', 'Transferencia');
+
+/**
+ * The SPEC 129 field holding the raw reading, and the guard that this endpoint
+ * is deployed on a site where SPEC 129 was applied.
+ */
+define('MYAPI_BOT_PAYMENT_EVIDENCE_FIELD', 'field_comprobante_ocr');
+
+/**
+ * The two free-text bank fields of SPEC 129.
+ *
+ * Text and not a term reference on purpose: what the OCR read is a name off a
+ * receipt, and forcing it through the 'bancos' vocabulary would raise the
+ * question "and if it matches no term?" on every single payment.
+ */
+define('MYAPI_BOT_PAYMENT_ISSUING_BANK_FIELD', 'field_banco_emisor');
+define('MYAPI_BOT_PAYMENT_DESTINATION_BANK_FIELD', 'field_banco_destino');
+
+/**
+ * Builds the idempotency key of one WhatsApp message attachment.
+ *
+ * WHY THE KEY IS COMPOUND. The wamid identifies the MESSAGE, which is what n8n
+ * retries — but one message can carry several attachments. With the wamid
+ * alone, a person sending two receipts in a single WhatsApp message would have
+ * the second answered as a retry of the first: 200, the wrong payment back,
+ * and one payment silently lost. media.ref says WHICH attachment this is, and
+ * costs one concatenation to close that hole.
+ *
+ * WHY IT IS HASHED. Both halves are of uncertain length, and a varchar primary
+ * key cannot exceed 191 characters under utf8mb4. A sha256 hex is 64 fixed
+ * characters, whatever came in.
+ *
+ * @param string $message_key  The wamid of the WhatsApp message.
+ * @param string $media_ref    The attachment reference, or '-' when absent.
+ *
+ * @return string  A 64-character hex digest.
+ */
+function myapi_bot_payment_idempotency_key($message_key, $media_ref) {
+  return hash('sha256', $message_key . '#' . $media_ref);
+}
+
+/**
+ * Adds to the node the four things that make it a bot payment.
+ *
+ * Deliberately NOT parameters of myapi_payment_build_node(): the base node is
+ * identical for both channels, and the path every resident's payment travels
+ * must not grow arguments only one caller ever passes.
+ *
+ * The evidence is the payload WHOLE, wrapped in nothing but a timestamp. A
+ * selection made by today's criterion does not answer the question asked in
+ * six months, and it is cheap: one drupal_json_encode(). What ends up in there
+ * is the wamid that caused the payment, the model that read it, the
+ * per-field confidences and whatever the bot corrected — none of which the
+ * backend ever reads, by design (SPEC 130, out of scope).
+ *
+ * field_banco is NOT set here and must stay unset: bank_id and bank_name are
+ * always null on a bot payment.
+ *
+ * @param object      $node         The node built by myapi_payment_build_node().
+ * @param array       $payload      The decoded payload, exactly as received.
+ * @param string|null $issuing      Sanitized issuing bank name, or NULL.
+ * @param string|null $destination  Sanitized destination bank name, or NULL.
+ */
+function myapi_bot_payment_decorate_node($node, array $payload, $issuing, $destination) {
+  $node->{MYAPI_PAYMENT_CHANNEL_FIELD}[LANGUAGE_NONE][0]['value'] = MYAPI_PAYMENT_CHANNEL_BOT;
+
+  $node->{MYAPI_BOT_PAYMENT_EVIDENCE_FIELD}[LANGUAGE_NONE][0]['value'] = drupal_json_encode([
+    'stored_at' => date('Y-m-d\TH:i:s'),
+    'payload'   => $payload,
+  ]);
+
+  if ($issuing !== NULL) {
+    $node->{MYAPI_BOT_PAYMENT_ISSUING_BANK_FIELD}[LANGUAGE_NONE][0]['value'] = $issuing;
+  }
+  if ($destination !== NULL) {
+    $node->{MYAPI_BOT_PAYMENT_DESTINATION_BANK_FIELD}[LANGUAGE_NONE][0]['value'] = $destination;
+  }
+}
+
+/**
+ * Responds with a payment node in the app's exact 201 shape, and exits.
+ *
+ * The body of the idempotent 200 and of the 201 are built by the SAME mapper,
+ * myapi_payment_build_created_item(), so n8n never has to branch: it always
+ * reads data.payment, and the only difference between a new payment and a
+ * retry is the HTTP status, which is there for whoever reads the logs.
+ *
+ * The bank term is always NULL — a bot payment has no 'bancos' term, so
+ * bank_id and bank_name are always null.
+ *
+ * @param object $node    The payment node, saved or loaded.
+ * @param int    $status  201 for a new payment, 200 for a retry.
+ */
+function myapi_bot_payment_respond($node, $status) {
+  $file = NULL;
+  if (isset($node->field_archivo[LANGUAGE_NONE][0]['fid'])) {
+    $loaded = file_load($node->field_archivo[LANGUAGE_NONE][0]['fid']);
+    if ($loaded) {
+      $file = $loaded;
+    }
+  }
+
+  myapi_respond(
+    ['payment' => myapi_payment_build_created_item($node, $file, NULL)],
+    $status,
+    'payment_created'
+  );
+}
+
+/**
+ * Looks an idempotency key up and answers 200 when it already has a payment.
+ *
+ * Three outcomes, and the third is the interesting one: no row at all (this is
+ * a new payment); a row whose node is alive (a retry — answer 200 and touch
+ * nothing); or a row whose node was DELETED in the back office. That last row
+ * is an orphan, and it is removed rather than honoured: answering 200 with a
+ * payment that no longer exists would be a lie, and answering 409 forever
+ * would let one deletion block that WhatsApp message for good.
+ *
+ * Exits with 200 when it finds a live payment; returns otherwise.
+ *
+ * @param string $key  The idempotency key.
+ */
+function myapi_bot_payment_resolve_existing($key) {
+  $nid = db_select('myapi_bot_payments', 'b')
+    ->fields('b', ['nid'])
+    ->condition('b.idempotency_key', $key)
+    ->range(0, 1)
+    ->execute()
+    ->fetchField();
+
+  if ($nid === FALSE || $nid === NULL) {
+    return;
+  }
+
+  $node = node_load((int) $nid);
+  if ($node && $node->type === 'pagos') {
+    myapi_bot_payment_respond($node, 200);
+  }
+
+  db_delete('myapi_bot_payments')
+    ->condition('idempotency_key', $key)
+    ->execute();
+}
+
+/**
+ * Handles POST /api/v1/bot/payments.
+ *
+ * Creates the same 'pagos' node the app creates, from the reading the bot made
+ * of a WhatsApp receipt plus the image itself, idempotently per message
+ * attachment. Every check aborts with its own error before anything is
+ * created, and the order below is the contract — see the numbered plan in
+ * specs/bot/130-bot-payment-registration.md, step 6.
+ *
+ * THE IDENTITY IS REVALIDATED, NOT TRUSTED. The bot resolved the uid and the
+ * unit_id with SPEC 127 or 128 and hands them over here, but the credential on
+ * this route is a MACHINE key: whoever holds it could otherwise charge a
+ * payment to any unit in the name of any resident. So the user must exist and
+ * be active, the unit must be a published 'vivienda', its condominium must be
+ * the one the payload claims, and that person must own or occupy it.
+ *
+ * WHAT IS DELIBERATELY NOT CHECKED is the sender's phone number. It is kept in
+ * the evidence and compared with nothing: SPEC 128 exists precisely to reach a
+ * unit when the phone identified nobody, and demanding a match would close
+ * that road.
+ */
+function myapi_bot_payment_create() {
+  // 1. The machine credential. First, and before any table is read.
+  myapi_bot_require_api_key();
+
+  // 2. Schema guard. Without SPEC 129 applied, node_save() drops the channel
+  // and the evidence SILENTLY — the payments would be created with neither,
+  // and nothing anywhere would say so. An endpoint that does not work beats
+  // one that stores mutilated payments.
+  if (!field_info_field(MYAPI_BOT_PAYMENT_EVIDENCE_FIELD)) {
+    watchdog(
+      'myapi',
+      'Bot payment refused: @field does not exist. SPEC 129 has not been applied on this site (run drush updb).',
+      ['@field' => MYAPI_BOT_PAYMENT_EVIDENCE_FIELD],
+      WATCHDOG_ERROR
+    );
+    myapi_error('server_error', 500);
+  }
+
+  // 3-4. The reading, parsed and validated. Pure: nothing below is touched
+  // until the payload is known to be well formed.
+  $payload = myapi_bot_payment_parse_payload();
+  $values  = myapi_bot_payment_validate($payload);
+
+  // 5. Idempotency, first pass. A retry of n8n ends here with 200 and the
+  // payment it already created; an orphan row is swept and we carry on.
+  $key = myapi_bot_payment_idempotency_key($values['message_key'], $values['media_ref']);
+  myapi_bot_payment_resolve_existing($key);
+
+  // 6. The person. Blocked is refused like non-existent: a deactivated account
+  // does not get payments registered in its name.
+  $account = user_load($values['uid']);
+  if (!$account || (int) $account->status !== 1) {
+    myapi_error('invalid_field', 422, ['@field' => 'identity.person.uid']);
+  }
+
+  // 7. The unit, and the condominium it really belongs to. IDS are compared,
+  // never names: a building is written a dozen ways and its nid only one.
+  $unit = node_load($values['unit_nid']);
+  if (!$unit || $unit->type !== 'vivienda' || (int) $unit->status !== 1) {
+    myapi_error('invalid_field', 422, ['@field' => 'identity.unit.unit_id']);
+  }
+  $unit_condominium = isset($unit->field_condominio[LANGUAGE_NONE][0]['target_id'])
+    ? (int) $unit->field_condominio[LANGUAGE_NONE][0]['target_id']
+    : NULL;
+  if ($unit_condominium !== $values['condominium_id']) {
+    myapi_error('invalid_field', 422, ['@field' => 'identity.unit.condominium_id']);
+  }
+
+  // 8. Access. Non-strict in_array() like the app's create, because
+  // myapi_unit_related_nids() returns nids as strings.
+  if (!in_array($values['unit_nid'], myapi_unit_related_nids($values['uid']))) {
+    myapi_error('unit_access_denied', 403);
+  }
+
+  // 9. The forced payment method must exist in the field's allowed_values. If
+  // it does not, somebody renamed the key in the back office — which is NOT
+  // n8n's fault, so this is a 500 and a watchdog entry rather than a 422 that
+  // would send the bot hunting for an error in a payload that has none.
+  $method_field = field_info_field(MYAPI_PAYMENT_METHOD_FIELD);
+  $allowed = ($method_field && isset($method_field['settings']['allowed_values']))
+    ? $method_field['settings']['allowed_values']
+    : [];
+  if (!array_key_exists(MYAPI_BOT_PAYMENT_METHOD, $allowed)) {
+    watchdog(
+      'myapi',
+      'Bot payment refused: "@method" is not an allowed value of @field.',
+      [
+        '@method' => MYAPI_BOT_PAYMENT_METHOD,
+        '@field'  => MYAPI_PAYMENT_METHOD_FIELD,
+      ],
+      WATCHDOG_ERROR
+    );
+    myapi_error('server_error', 500);
+  }
+
+  // 10. The same receipt sent twice in two different messages is a duplicate,
+  // not a retry: the retry was already answered in step 5.
+  if (myapi_payment_reference_exists($values['reference'], $values['unit_nid'])) {
+    myapi_error('duplicate_reference', 409);
+  }
+
+  // 11. The image. Required here and optional in the app: a bot payment with
+  // no receipt cannot be verified by anyone, so the flow must fail loudly
+  // instead of creating blind payments.
+  if (empty($_FILES['file']['name'])) {
+    myapi_error('missing_file', 422);
+  }
+  $file = myapi_payment_save_file();
+
+  // 12. Node and ledger row together, or neither. The primary key is what
+  // makes this safe against two simultaneous retries: the loser's INSERT
+  // throws, its whole transaction rolls back — the node never comes to
+  // exist — and it answers 200 with the winner's payment.
+  //
+  // The node is BUILT before the transaction opens and only saved inside it.
+  // Building touches nothing — it fills an object in memory — so what the
+  // transaction wraps is exactly what the spec asks it to wrap: node_save()
+  // and the ledger INSERT, and nothing that cannot be undone by a rollback.
+  $node = myapi_payment_build_node(
+    $values['uid'],
+    $values['unit_nid'],
+    $values['reference'],
+    $values['amount'],
+    MYAPI_BOT_PAYMENT_METHOD,
+    NULL,
+    $values['date'],
+    $file
+  );
+  myapi_bot_payment_decorate_node($node, $payload, $values['issuing_bank'], $values['destination_bank']);
+
+  $tx = db_transaction();
+  try {
+    node_save($node);
+
+    db_insert('myapi_bot_payments')
+      ->fields([
+        'idempotency_key' => $key,
+        'message_key'     => $values['message_key'],
+        'media_ref'       => $values['media_ref'],
+        'nid'             => (int) $node->nid,
+        'uid'             => $values['uid'],
+        'unit_nid'        => $values['unit_nid'],
+        'created'         => REQUEST_TIME,
+      ])
+      ->execute();
+  }
+  catch (Exception $e) {
+    $tx->rollback();
+
+    // Re-read: if another request got there first, this is the race and the
+    // right answer is its payment. myapi_bot_payment_resolve_existing() exits
+    // when it finds one.
+    myapi_bot_payment_resolve_existing($key);
+
+    // No winner, so it was not a race but a real failure.
+    watchdog(
+      'myapi',
+      'Bot payment failed for message @message_key: @error',
+      [
+        '@message_key' => $values['message_key'],
+        '@error'       => $e->getMessage(),
+      ],
+      WATCHDOG_ERROR
+    );
+    myapi_error('server_error', 500);
+  }
+  unset($tx);
+
+  // 13. Tie the file to the node now that the node is committed, so cron does
+  // not reap it. After the commit and not inside: a rolled-back loser leaves
+  // the receipt as a managed file with no usage, which cron collects.
+  file_usage_add($file, 'myapi', 'node', $node->nid);
+
+  // 14. The SPEC 80 email to the 'backend' role, OUTSIDE the transaction and
+  // on purpose. Inside, a losing retry would enqueue a mail that then gets
+  // rolled back — or worse, one that outlives a node which never existed.
+  // NULL bank term: a bot payment has none.
+  myapi_payment_notify_created($node, $unit, NULL, $file);
+
+  // 15. The app's exact 201 body. Same keys, same mapper, same order.
+  myapi_bot_payment_respond($node, 201);
 }

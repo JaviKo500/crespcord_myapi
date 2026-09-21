@@ -1,4 +1,4 @@
-# Bot endpoints (SPECS 127, 128)
+# Bot endpoints (SPECS 127, 128, 130)
 
 Machine endpoints consumed by the WhatsApp bot that runs in n8n. They are not
 part of the Flutter app's surface and they do **not** use the Bearer access
@@ -307,6 +307,246 @@ curl -i -H 'X-Api-Key: <the secret>' \
 
 No table is written, no table is read until the API key has been accepted, and
 the unit table is not touched at all when the condominium term matches nothing.
+
+---
+
+## POST /api/v1/bot/payments
+
+Registers a payment from the reading the bot made of a WhatsApp receipt, plus
+the receipt image itself. Creates the **same** `pagos` node the Flutter app
+creates — same fields, same forced state, same email to the `backend` role —
+distinguishable only by its channel and by the raw reading kept beside it.
+
+The third road, and the one that writes. The two endpoints above end at a
+`uid` and a `unit_id`; this is what the bot calls holding both, and it turns a
+WhatsApp conversation into a payment pending verification.
+
+**It is idempotent per message attachment.** A retried n8n call answers `200`
+with the payment it already created, never a second payment. See
+[Idempotency](#idempotency) below — and note the requirement it places on the
+n8n flow.
+
+**Authentication:** required (`X-Api-Key` machine key — the **same** key as
+`/bot/person` and `/bot/units`; SPEC 130 introduced no second credential)
+
+**Headers**
+| Header | Value |
+|--------|-------|
+| X-Api-Key | `<the key set with drush vset myapi_bot_api_key>` |
+| Content-Type | `multipart/form-data` |
+
+**Request parts**
+| Part | Type | Required | Content |
+|------|------|----------|---------|
+| `payload` | text field | **yes** | The reading, as a JSON string. Maximum **64 KB**. |
+| `file` | file | **yes** | The receipt image. `pdf jpg jpeg png`, ≤ 5 MB, real MIME verified with `finfo`, stored in `private://comprobantes_pago/`. |
+
+The JSON travels in a text field and not as the request body because the image
+forces `multipart`. It is the same decision the app's `POST /api/v1/payments`
+made, and it is what lets both endpoints share one upload implementation.
+
+**The payload**
+
+Keys are English, which is the module's public contract; n8n renames its own
+JSON before calling. Errors report the **full dotted path** (`receipt.amount`),
+so a failure reads directly in the n8n log.
+
+| Key | Type | Required | Rule |
+|-----|------|----------|------|
+| `message.message_key` | string | **yes** | The `wamid`. Non-empty, ≤ 255. First half of the idempotency key. |
+| `message.channel`, `.provider`, `.type` | string | no | Kept as evidence, not validated. |
+| `message.sender.id`, `.local_phone`, `.name` | string | no | Kept as evidence. **The phone is not checked against the uid** — see below. |
+| `message.button.id`, `.title` | string | no | Kept as evidence. |
+| `message.received_at` | string | no | Kept as evidence. |
+| `identity.person.uid` | int | **yes** | > 0. The user must exist and be **active** (`users.status = 1`). |
+| `identity.person.name` | string | no | Informative; the real name comes from Drupal. |
+| `identity.unit.unit_id` | int | **yes** | > 0. Must be an existing, published `vivienda`, and the uid must own or occupy it. |
+| `identity.unit.condominium_id` | int | **yes** | > 0, and must be **exactly** that unit's condominium. |
+| `identity.unit.unit`, `.condominium`, `.relation` | string | no | Informative. The **names are compared with nothing**: they are written a dozen ways, the ids one. |
+| `identity.source` | string | no | Kept as evidence. |
+| `media.ref` | string ≤ 64 | no | Which attachment of the message this receipt is. Second half of the idempotency key; absent → `-`. |
+| `media.mime_type`, `.file_name` | string | no | Informative. They do **not** validate the real file, which is the `file` part. |
+| `receipt.reference` | string | **yes** | Non-empty, ≤ 255. Duplicated in that unit → `409`. |
+| `receipt.amount` | number | **yes** | Numeric and **> 0**. A numeric string is accepted. |
+| `receipt.date` | string | **yes** | `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS`. **No fall back to server time** — see below. |
+| `receipt.issuing_bank` | string | no | ≤ 255, free text. Not resolved against the `bancos` vocabulary. |
+| `receipt.destination_bank` | string | no | Same. |
+| `receipt.confidence` | object | no | Stored and **never read** by the backend. |
+| `receipt.corrected` | array | no | Same. |
+| `receipt.model` | string | no | Same. |
+
+**An unknown key is not an error.** It is ignored for the node and travels
+whole into the evidence, so the bot can grow a field tomorrow without anything
+here having to change first.
+
+**Three rules worth reading twice**
+
+- **`receipt.date` is required here and optional in the app.** In the app there
+  is a person who knows what day they paid. Here, an absent date means the OCR
+  did not read one, and dating the payment at the instant of the conversation
+  instead of the day of the transfer would be a false value nobody would ever
+  catch afterwards.
+- **The sender's phone is not verified against the uid.** It is kept as
+  evidence and compared with nothing, because `/bot/units` exists precisely to
+  reach a unit when the phone identified nobody; demanding a match would close
+  that road.
+- **The confidences are not read.** No threshold, no different state, no
+  automatic rejection. Deciding whether a `0.3` deserves asking again belongs
+  to the bot, which is the one holding the conversation open.
+
+**What the server decides, whatever the payload says**
+
+| Field | Value |
+|-------|-------|
+| `field_estado_pago` | `"Pendiente de verificar"`, always. A human verifies it in the back office. |
+| `field_forma_de_pago` | `"Transferencia"`, always. A bank receipt is never cash. |
+| `field_canal` | `bot`. Decided by the door the request came in through, never by the caller. |
+| `field_banco` | **`NULL` always.** The `bancos` term reference is the app's mechanism; the bot uses the two free-text fields. |
+
+**Success response (201)**
+```json
+{
+  "success": true,
+  "data": {
+    "payment": {
+      "id": 87,
+      "title": "Pago 018273645 - 2026-09-12",
+      "unit_id": 45821,
+      "payment_date": "2026-09-12T00:00:00",
+      "status": "Pendiente de verificar",
+      "payment_method": "Transferencia",
+      "reference": "018273645",
+      "amount": 45.3,
+      "bank_id": null,
+      "bank_name": null,
+      "file_id": 55,
+      "file_name": "comprobante.jpg",
+      "detail": null
+    }
+  },
+  "message": "Pago registrado correctamente."
+}
+```
+
+Exactly the body the app's `POST /api/v1/payments` answers — it is built by the
+same mapper, so the two cannot drift.
+
+`bank_id` and `bank_name` are **always `null`** here. The two banks the OCR
+read are stored on the node but do not come out in any response, like
+everything else SPEC 129 added.
+
+### Idempotency
+
+**The key is `message.message_key` + `media.ref`**, stored as a `sha256` of
+`"<message_key>#<media_ref>"` in the primary key of `myapi_bot_payments`.
+
+Why both halves: the `wamid` identifies the **message**, which is what n8n
+retries, but one message can carry several attachments. With the `wamid` alone,
+a person sending two receipts in a single WhatsApp message would have the
+second answered as a retry of the first — `200`, the wrong payment back, and
+one payment silently lost.
+
+| Case | Answer |
+|------|--------|
+| First call | `201` with the new payment. |
+| Same `message_key` **and** `media.ref` again | `200` with the **same** `payment.id`. No second node, no second file, no second email. |
+| Same `message_key`, different `media.ref` | `201` — a different attachment is a different payment. |
+| Retry with the same key but a **different** payload | `200` with the original payment, unmodified. The first message wins. |
+| Same key, but its node was **deleted** in the back office | `201` — the orphan ledger row is swept and a new payment is created. |
+| Two **simultaneous** retries | One `201` and one `200`, one node. The loser's transaction rolls back against the primary key. |
+
+**The body of the `200` is identical to the body of the `201`.** The only
+difference is the HTTP status, which is there for whoever reads the logs; n8n
+never has to branch — it always reads `data.payment`.
+
+> **Requirement on the n8n flow: `media.ref` must be stable for a given
+> attachment.** If the flow regenerated it on every attempt, each retry would
+> build a different key and create a new payment. Diagnosis is one query: if
+> duplicate payments appear carrying the same `wamid` with different
+> `media_ref`, the problem is in n8n. Both halves are stored in the clear in
+> `myapi_bot_payments` precisely so that query is possible.
+
+**Possible errors**
+| Code | `error_code` | When |
+|------|--------------|------|
+| 401  | `unauthorized` | `X-Api-Key` absent, empty, or different. Also when `myapi_bot_api_key` is not configured at all. |
+| 405  | `method_not_allowed` | Any HTTP method other than `POST`. |
+| 422  | `invalid_payload` | `payload` absent, empty, larger than 64 KB, malformed JSON, or JSON that is not an object. |
+| 422  | `missing_field` | A required key is absent. `@field` carries the dotted path. |
+| 422  | `invalid_field` | Present but impossible: a uid that is not an integer, an inactive user, a missing or unpublished unit, a condominium that does not match, an oversized reference or bank name. |
+| 422  | `invalid_amount` | `receipt.amount` not numeric, or ≤ 0. |
+| 422  | `invalid_date` | `receipt.date` with an impossible format or calendar date (`2026-02-30`). |
+| 422  | `missing_file` | No `file` part. |
+| 422  | `invalid_file` | Extension or size outside what is allowed, or `private://` not configured on the site. |
+| 422  | `invalid_file_type` | The real MIME does not match an allowed type (a `.php` renamed to `.jpg`). |
+| 403  | `unit_access_denied` | The uid is neither owner nor occupant of that unit. |
+| 409  | `duplicate_reference` | That reference already exists in that unit under **another** idempotency key. |
+| 500  | `server_error` | Site misconfiguration: SPEC 129 not applied, or `"Transferencia"` missing from the `allowed_values` of `field_forma_de_pago`. Logged to `watchdog`. |
+
+**`403` and `409` say two different things to the bot.** The `403` means "you
+got the person or the unit wrong" and sends the flow back to ask again. The
+`409` means "this receipt is already registered" and is a finished
+conversation.
+
+**A `500` is never n8n's fault.** It is the site's, and answering `422` would
+send the flow hunting for an error in a payload that has none.
+
+**Site requirements**
+
+- **SPEC 129 must be applied** (`drush updb`) before this endpoint is
+  deployed. Without `field_comprobante_ocr`, `node_save()` would drop the
+  channel and the evidence *silently*. The endpoint refuses to run instead:
+  `500` plus a `watchdog` entry.
+- **The private filesystem must be configured.** The receipt is mandatory, so
+  without `private://` no bot payment can be registered at all.
+- **HTTPS.** The key is a machine credential that now creates payments.
+
+**Examples**
+
+```bash
+# 201 — the happy path
+curl -i -X POST 'https://<host>/api/v1/bot/payments' \
+  -H 'X-Api-Key: <the secret>' \
+  -F 'payload=@caso.json' \
+  -F 'file=@comprobante.jpg'
+
+# 200 — the same call again: same payment.id, nothing created
+curl -i -X POST 'https://<host>/api/v1/bot/payments' \
+  -H 'X-Api-Key: <the secret>' \
+  -F 'payload=@caso.json' \
+  -F 'file=@comprobante.jpg'
+
+# 422 missing_file
+curl -i -X POST 'https://<host>/api/v1/bot/payments' \
+  -H 'X-Api-Key: <the secret>' \
+  -F 'payload=@caso.json'
+```
+
+A minimal `caso.json`:
+
+```json
+{
+  "message":  { "message_key": "wamid.HBgMNTkzOTg3NTM1NjQ1FQIAEhgU" },
+  "identity": { "person": { "uid": 3 },
+                "unit": { "unit_id": 45821, "condominium_id": 12 } },
+  "media":    { "ref": "m-1" },
+  "receipt":  { "reference": "018273645", "amount": 45.3, "date": "2026-09-12" }
+}
+```
+
+**Tables written**
+| Table | Use |
+|-------|-----|
+| `node` + the `pagos` field tables | The payment itself, through `node_save()`. |
+| `file_managed`, `file_usage` | The receipt, as a permanent managed file tied to the node. |
+| `myapi_bot_payments` | The idempotency ledger: one row per message attachment, with `message_key` and `media_ref` in the clear for auditing. |
+
+`node_save()` and the ledger `INSERT` share one transaction: either the payment
+and its row both exist, or neither does. The `backend` email is sent **after**
+that transaction commits, so a losing retry never enqueues a mail for a node
+that does not exist.
+
+Nothing is read or written until the API key has been accepted.
 
 ---
 

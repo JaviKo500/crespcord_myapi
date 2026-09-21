@@ -93,12 +93,19 @@ class EndpointContractTest extends TestCase {
    * The endpoints authenticated by the machine API key, as "path [METHOD]" =>
    * why.
    *
-   * Two, and neither is an exemption from authentication but a different
+   * Three, and none is an exemption from authentication but a different
    * credential: the bot lives in n8n, has no session, and the Bearer flow
    * would make it log in before every call. What guards it is
    * myapi_bot_require_api_key(), and the two cases at the bottom of this file
-   * assert for both exactly what the four above assert for the access token —
-   * they answer 401 without a credential, and they reach no table on the way.
+   * assert for all three exactly what the four above assert for the access
+   * token — they answer 401 without a credential, and they reach no table on
+   * the way.
+   *
+   * The third one WRITES (SPEC 130), which is what makes those two cases stop
+   * being a formality: the same key that used to open two read-only lookups
+   * now creates payment nodes, so "answers 401 before touching a table" is the
+   * line between a leaked key that reveals nothing and one that registers
+   * false payments against real residents.
    *
    * So a line here does NOT make an endpoint public. It says "guarded by the
    * other credential", and the tests that come with it are the proof. What it
@@ -108,6 +115,7 @@ class EndpointContractTest extends TestCase {
   const API_KEY_ENDPOINTS = [
     'api/v1/bot/person [GET]' => 'the WhatsApp bot authenticates with X-Api-Key, not with an access token',
     'api/v1/bot/units [GET]'  => 'the same bot, the same key, the same guard: SPEC 128 added no second credential',
+    'api/v1/bot/payments [POST]' => 'the same key again, now on the write path: SPEC 130 added no second credential either',
   ];
 
   /**

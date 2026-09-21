@@ -328,6 +328,13 @@ function drupal_json_encode(...$arguments) {}
  *
  * @return mixed
  */
+function drupal_json_decode(...$arguments) {}
+
+/**
+ * @param mixed ...$arguments
+ *
+ * @return mixed
+ */
 function drupal_mail(...$arguments) {}
 
 /**

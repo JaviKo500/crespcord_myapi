@@ -278,6 +278,23 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'missing_unit'                       => 'The unit parameter is required.',
       'invalid_condominium'                => 'The condominium search term is too short.',
       'invalid_unit'                       => 'The unit search term is too short.',
+      // SPEC 130 — the two failures the bot's payment endpoint answers that
+      // nothing else in the module does. Same criterion as the eight keys
+      // above: the reader is whoever debugs the n8n flow, never a resident.
+      //
+      // invalid_payload covers every way the `payload` part can fail to be a
+      // reading — absent, empty, over 64 KB, malformed JSON, or JSON that is
+      // not an object. They are ONE error on purpose: from n8n's side the
+      // remedy is identical, and four codes would buy four branches nobody
+      // would write. Which of the five it was is a question for the request,
+      // not for the error catalogue.
+      //
+      // missing_file is its own key and not invalid_file, which already exists
+      // and means "a file came and it is not acceptable". Here no file came at
+      // all, and the difference is the whole diagnosis: one says the receipt
+      // is a .exe, the other that the flow never attached the image.
+      'invalid_payload'                    => 'The payload field is missing or is not a valid JSON object.',
+      'missing_file'                       => 'The receipt file is required.',
     ],
     'es' => [
       'invalid_credentials'    => 'Usuario o contraseña incorrectos.',
@@ -417,6 +434,9 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'missing_unit'                       => 'El parámetro unit es obligatorio.',
       'invalid_condominium'                => 'El término de búsqueda de condominium es demasiado corto.',
       'invalid_unit'                       => 'El término de búsqueda de unit es demasiado corto.',
+      // SPEC 130 — ver la nota junto al bloque en inglés.
+      'invalid_payload'                    => 'El campo payload falta o no es un objeto JSON válido.',
+      'missing_file'                       => 'El archivo del comprobante es obligatorio.',
     ],
   ];
 

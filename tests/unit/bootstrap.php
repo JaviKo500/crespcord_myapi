@@ -399,6 +399,21 @@ if (!function_exists('drupal_json_encode')) {
   }
 }
 
+if (!function_exists('drupal_json_decode')) {
+  /**
+   * Core's own (includes/common.inc), reproduced: json_decode() to associative
+   * arrays (SPEC 130).
+   *
+   * The associative flag is the whole point, not a convenience: the bot's
+   * payload reader walks the result with array_key_exists(), and a decode to
+   * stdClass objects would make every dotted path answer NULL — which is to
+   * say, every field of every payload would report as missing.
+   */
+  function drupal_json_decode($var) {
+    return json_decode($var, TRUE);
+  }
+}
+
 if (!function_exists('ip_address')) {
   function ip_address() {
     return isset($GLOBALS['myapi_test_ip']) ? $GLOBALS['myapi_test_ip'] : '203.0.113.7';
