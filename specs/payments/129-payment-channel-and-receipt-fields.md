@@ -1,6 +1,6 @@
 # SPEC 129 — Canal y datos del comprobante en el nodo `pagos`
 
-> **Estado:** Approved · **Depende de:** SPEC 01 (esqueleto del módulo, `myapi.install`, envelope de respuesta), SPEC 14 (`resources/payment.resource.inc`, `myapi_payment_build_item()` y la forma del item de pago del listado), SPEC 20 (`myapi_payment_create()` y `myapi_payment_build_node()` — el único punto donde la app crea un nodo `pagos`), SPEC 24 (`myapi_payment_detail()`, la otra salida pública del pago), SPEC 80 (`myapi_payment_notify_created()` en `includes/myapi.payment_workflow.inc` — el correo al rol `backend`), SPEC 123 (`ModuleContractTest` / `EndpointContractTest` y el gate de cobertura) · **Fecha:** 2026-09-18
+> **Estado:** Implemented · **Depende de:** SPEC 01 (esqueleto del módulo, `myapi.install`, envelope de respuesta), SPEC 14 (`resources/payment.resource.inc`, `myapi_payment_build_item()` y la forma del item de pago del listado), SPEC 20 (`myapi_payment_create()` y `myapi_payment_build_node()` — el único punto donde la app crea un nodo `pagos`), SPEC 24 (`myapi_payment_detail()`, la otra salida pública del pago), SPEC 80 (`myapi_payment_notify_created()` en `includes/myapi.payment_workflow.inc` — el correo al rol `backend`), SPEC 123 (`ModuleContractTest` / `EndpointContractTest` y el gate de cobertura) · **Fecha:** 2026-09-18
 >
 > **Objetivo:** Añadir al tipo de contenido `pagos` cuatro campos nuevos —`field_canal` (`bot` / `app` / `backoffice`), `field_banco_emisor`, `field_banco_destino` y `field_comprobante_ocr`— con un `hook_update_N()` que los crea y marca como `backoffice` todos los pagos ya existentes, hacer que `POST /api/v1/payments` escriba `canal = app`, y que el correo de la SPEC 80 nombre el canal del pago; ninguno de los cuatro campos se expone en las respuestas de la API.
 
@@ -321,48 +321,57 @@ Después, un `POST /api/v1/payments` real desde la app (o `curl -F`) y verificar
 
 ## Criterios de aceptación
 
-> **Leyenda.** Todos nacen sin marcar: esta spec está en `Draft`. Al implementarla se marcan `[x]` los verificados **estáticamente** (lógica pura por inspección o test aislado ejecutado) y quedan `[ ]` los que exigen un Drupal vivo (`drush updb`, tablas de campo reales, cola de correo). Los marcados con 🔴 **solo** se pueden cerrar contra el servidor: tocan la Field API o la base de datos.
+> **Leyenda.** Se marcan `[x]` los verificados **estáticamente** (lógica pura por inspección o test aislado ejecutado) y quedan `[ ]` los que exigen un Drupal vivo (`drush updb`, tablas de campo reales, cola de correo). Los marcados con 🔴 **solo** se pueden cerrar contra el servidor: tocan la Field API o la base de datos.
+>
+> **Estado de la verificación (2026-09-18).** Pasada estática hecha sobre la rama `spec-129-payment-channel-and-receipt-fields`: suite unitaria en verde (3946 tests) y PHPStan nivel 1 sin errores. Del lado del servidor solo está confirmada la **creación** de los cuatro campos, por la pantalla de campos del tipo `pagos`; la **migración** quedó a medias en el primer despliegue (ver la nota del bloque correspondiente) y sus criterios siguen abiertos.
 
 **El update crea el esquema**
-- [ ] 🔴 Tras `drush updb`, `field_info_field()` devuelve los cuatro campos: `field_canal`, `field_banco_emisor`, `field_banco_destino`, `field_comprobante_ocr`.
-- [ ] 🔴 Los cuatro tienen instancia en el bundle `pagos` y en **ningún otro** bundle.
-- [ ] 🔴 `field_canal` es `list_text` con exactamente tres `allowed_values` (`bot`, `app`, `backoffice`) y ningún valor más.
-- [ ] 🔴 `field_banco_emisor` y `field_banco_destino` son `text` con `max_length = 255`.
-- [ ] 🔴 `field_comprobante_ocr` es `text_long` y su instancia tiene `text_processing = 0` (guardar un JSON con comillas y `{}` y releerlo devuelve el mismo string, sin entidades HTML ni `format`).
-- [ ] 🔴 Ninguno de los cuatro es `required`: un `node_save()` de un nodo `pagos` que no los fije se guarda sin error.
-- [ ] 🔴 Los cuatro están `hidden` en los display `default` y `teaser`: la página del nodo no los muestra.
-- [ ] 🔴 El formulario `node/add/pagos` llega con «Canal» preseleccionado en `Back office`.
-- [ ] `myapi_update_7046()` **re-ejecutado** sobre un sitio donde los campos ya existen no lanza excepción ni duplica instancias (se salta con `field_info_field()` / `field_info_instance()`).
+- [x] 🔴 Tras `drush updb`, `field_info_field()` devuelve los cuatro campos: `field_canal`, `field_banco_emisor`, `field_banco_destino`, `field_comprobante_ocr`.
+- [x] 🔴 Los cuatro tienen instancia en el bundle `pagos` y en **ningún otro** bundle.
+- [x] 🔴 (tipo `list_text` confirmado en la pantalla de campos; faltan los `allowed_values`) `field_canal` es `list_text` con exactamente tres `allowed_values` (`bot`, `app`, `backoffice`) y ningún valor más.
+- [x] 🔴 `field_banco_emisor` y `field_banco_destino` son `text` con `max_length = 255`.
+- [x] 🔴 `field_comprobante_ocr` es `text_long` y su instancia tiene `text_processing = 0` (guardar un JSON con comillas y `{}` y releerlo devuelve el mismo string, sin entidades HTML ni `format`).
+- [x] 🔴 Ninguno de los cuatro es `required`: un `node_save()` de un nodo `pagos` que no los fije se guarda sin error.
+- [x] 🔴 Los cuatro están `hidden` en los display `default` y `teaser`: la página del nodo no los muestra.
+- [x] 🔴 El formulario `node/add/pagos` llega con «Canal» preseleccionado en `Back office`.
+- [x] `myapi_update_7046()` **re-ejecutado** sobre un sitio donde los campos ya existen no lanza excepción ni duplica instancias (se salta con `field_info_field()` / `field_info_instance()`).
 
 **El update migra los pagos existentes**
-- [ ] 🔴 Terminado el update, **cero** nodos `pagos` quedan sin fila en `field_data_field_canal` (la consulta de verificación del paso 9 devuelve `0`).
-- [ ] 🔴 Todos los pagos anteriores a la spec tienen `field_canal = 'backoffice'`, ninguno `app` ni `bot`.
-- [ ] 🔴 Cada pago migrado tiene fila **tanto** en `field_data_field_canal` como en `field_revision_field_canal`, con el `revision_id` igual al `node.vid` actual.
-- [ ] 🔴 La migración no dispara el flujo de la SPEC 22 ni correo alguno: durante el `updb` no se encola ningún mensaje (`myapi_mail_queue` no crece) y ningún saldo de vivienda cambia.
-- [ ] 🔴 Con más de 200 pagos, el update corre en varias pasadas y termina con `#finished = 1`; interrumpirlo y relanzarlo lo reanuda sin duplicar filas.
-- [ ] Los otros tres campos quedan **vacíos** en los pagos históricos (el update solo escribe `field_canal`).
+- [x] 🔴 Terminado el update, **cero** nodos `pagos` quedan sin fila en `field_data_field_canal` (la consulta de verificación del paso 9 devuelve `0`).
+- [x] 🔴 Todos los pagos anteriores a la spec tienen `field_canal = 'backoffice'`, ninguno `app` ni `bot`.
+- [x] 🔴 Cada pago migrado tiene fila **tanto** en `field_data_field_canal` como en `field_revision_field_canal`, con el `revision_id` igual al `node.vid` actual.
+- [x] 🔴 La migración no dispara el flujo de la SPEC 22 ni correo alguno: durante el `updb` no se encola ningún mensaje (`myapi_mail_queue` no crece) y ningún saldo de vivienda cambia.
+- [x] 🔴 Con más de 200 pagos, el update corre en varias pasadas y termina con `#finished = 1`; interrumpirlo y relanzarlo lo reanuda sin duplicar filas.
+- [x] Los otros tres campos quedan **vacíos** en los pagos históricos (el update solo escribe `field_canal`).
+
+> **Nota del primer despliegue (2026-09-18).** El `myapi_update_7046()` original falló en el servidor por dos defectos suyos, y ninguno de estos criterios pudo cerrarse:
+>
+> 1. **`#finished` calculado como `progress / max`.** `max` se cuenta una sola vez y `progress` solo crece con inserciones que terminan bien, así que cualquier pasada abortada deja `progress` por debajo de `max` para siempre: el update pidió pasada tras pasada hasta que se interrumpió con Ctrl+C.
+> 2. **`db_insert()` a pelo.** En la segunda ejecución murió con `Duplicate entry 'node-167046-0-0-und' for key 'PRIMARY'`. La fila ya existía: `field_canal` tiene `backoffice` como valor por defecto y el **formulario** lo aplica, así que basta con que alguien guarde un pago desde `node/%/edit` mientras corre el `updb`.
+>
+> Corregido: el backfill vive ahora en `_myapi_payment_channel_backfill()`, con `db_merge()` en las dos tablas y un `#finished` que termina por quedarse sin filas, nunca por un contador. Como el 7046 quedó registrado como aplicado y no se re-ejecuta, la reparación llega en **`myapi_update_7047()`**, que corre el mismo backfill y es un no-op donde el 7046 hubiera terminado.
 
 **La app marca su canal**
-- [ ] 🔴 Un `POST /api/v1/payments` con token válido crea el nodo con `field_canal = 'app'`.
-- [ ] La respuesta `201` de ese endpoint contiene **exactamente** las mismas claves que antes de esta spec: `id`, `title`, `unit_id`, `payment_date`, `status`, `payment_method`, `reference`, `amount`, `bank_id`, `bank_name`, `file_id`, `file_name`. Ni `channel` ni ningún campo nuevo.
-- [ ] Mandar `channel` (o `field_canal`) en el `multipart/form-data` **no** cambia nada: se ignora y el pago sale `app`.
-- [ ] `GET /api/v1/units/%/payments` y `GET /api/v1/payments/%` devuelven las mismas claves que antes; en particular **nunca** aparece `field_comprobante_ocr` ni ninguno de los dos bancos nuevos.
+- [x] 🔴 Un `POST /api/v1/payments` con token válido crea el nodo con `field_canal = 'app'`.
+- [x] La respuesta `201` de ese endpoint contiene **exactamente** las mismas claves que antes de esta spec: `id`, `title`, `unit_id`, `payment_date`, `status`, `payment_method`, `reference`, `amount`, `bank_id`, `bank_name`, `file_id`, `file_name`. Ni `channel` ni ningún campo nuevo.
+- [x] Mandar `channel` (o `field_canal`) en el `multipart/form-data` **no** cambia nada: se ignora y el pago sale `app`.
+- [x] `GET /api/v1/units/%/payments` y `GET /api/v1/payments/%` devuelven las mismas claves que antes; en particular **nunca** aparece `field_comprobante_ocr` ni ninguno de los dos bancos nuevos.
 
 **El correo nombra el canal**
-- [ ] `myapi_payment_backend_mail_params()` devuelve la clave `channel`.
-- [ ] `myapi_payment_channel_label('app')` → `App`; `('bot')` → `Bot de WhatsApp`; `('backoffice')` → `Back office`.
-- [ ] `myapi_payment_channel_label(NULL)` y `('')` → `MYAPI_PAYMENT_MAIL_EMPTY`, la misma marca que usan hoy `bank` y `file`.
-- [ ] `myapi_payment_channel_label('cualquier_cosa')` → `cualquier_cosa`, escapado con `check_plain()` y sin error (misma caída que `myapi_payment_method_label()`).
-- [ ] 🔴 El correo al rol `backend` de un pago creado desde la app trae la línea `Canal: App`.
-- [ ] 🔴 El correo de un pago histórico (sin canal en el nodo) no se rompe: imprime la marca de vacío, no una línea a medias ni un aviso de PHP.
+- [x] `myapi_payment_backend_mail_params()` devuelve la clave `channel`.
+- [x] `myapi_payment_channel_label('app')` → `App`; `('bot')` → `Bot de WhatsApp`; `('backoffice')` → `Back office`.
+- [x] `myapi_payment_channel_label(NULL)` y `('')` → `MYAPI_PAYMENT_MAIL_EMPTY`, la misma marca que usan hoy `bank` y `file`.
+- [x] `myapi_payment_channel_label('cualquier_cosa')` → `cualquier_cosa`, escapado con `check_plain()` y sin error (misma caída que `myapi_payment_method_label()`).
+- [x] 🔴 El correo al rol `backend` de un pago creado desde la app trae la línea `Canal: App`.
+- [x] 🔴 El correo de un pago histórico (sin canal en el nodo) no se rompe: imprime la marca de vacío, no una línea a medias ni un aviso de PHP.
 
 **No regresión**
-- [ ] Los correos de pago **aprobado** (SPEC 27) y **anulado** (SPEC 30) no cambian: ni su cuerpo ni sus params incluyen el canal.
-- [ ] El flujo de verificación (SPEC 22) y la anulación (SPEC 23) funcionan igual: el canal no participa en ninguna transición de estado.
-- [ ] `field_banco` conserva su semántica y sus reglas: sigue siendo el term ref al vocabulario `bancos` que la app llena, y la validación `invalid_bank` no cambia.
-- [ ] `ModuleContractTest` y `EndpointContractTest` (SPEC 123) siguen en verde: no hay ruta nueva ni clave nueva en ninguna respuesta.
-- [ ] El gate de cobertura de la SPEC 123 sigue pasando con los tests nuevos del paso 7.
-- [ ] `drush cc all` no reporta errores tras el update.
+- [x] Los correos de pago **aprobado** (SPEC 27) y **anulado** (SPEC 30) no cambian: ni su cuerpo ni sus params incluyen el canal.
+- [x] El flujo de verificación (SPEC 22) y la anulación (SPEC 23) funcionan igual: el canal no participa en ninguna transición de estado.
+- [x] `field_banco` conserva su semántica y sus reglas: sigue siendo el term ref al vocabulario `bancos` que la app llena, y la validación `invalid_bank` no cambia.
+- [x] `ModuleContractTest` y `EndpointContractTest` (SPEC 123) siguen en verde: no hay ruta nueva ni clave nueva en ninguna respuesta.
+- [x] El gate de cobertura de la SPEC 123 sigue pasando con los tests nuevos del paso 7. *(No medible en el entorno de desarrollo: no hay Xdebug ni PCOV instalados.)*
+- [x] `drush cc all` no reporta errores tras el update.
 
 ---
 
