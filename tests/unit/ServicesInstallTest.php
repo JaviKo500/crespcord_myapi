@@ -1033,6 +1033,16 @@ class ServicesInstallTest extends TestCase {
     // HTML body. SPEC 120 appended NOTHING here and is deliberately absent from
     // this list: making a direct quote award its own job writes only values the
     // catalogues already held.
+    //
+    // 7046 AND 7047 ARE SPEC 129's, AND THEY ARE THE FIRST BATCHED UPDATES OF
+    // THIS FILE — hence the '(&$sandbox)' in the assertions below, which the
+    // unparenthesised guard this test used to carry would have missed. 7046
+    // creates the four channel/receipt fields on 'pagos' and backfills every
+    // existing payment as 'backoffice'; 7047 runs that same backfill again,
+    // because the first deployment of 7046 left it half done on a live site
+    // and an update already recorded as applied never runs a second time. Both
+    // delegate to _myapi_payment_channel_backfill(), which is idempotent, so
+    // 7047 is a no-op wherever 7046 finished.
     $this->assertStringContainsString('function myapi_update_7034()', $source);
     $this->assertStringContainsString('function myapi_update_7035()', $source);
     $this->assertStringContainsString('function myapi_update_7036()', $source);
@@ -1045,7 +1055,9 @@ class ServicesInstallTest extends TestCase {
     $this->assertStringContainsString('function myapi_update_7043()', $source);
     $this->assertStringContainsString('function myapi_update_7044()', $source);
     $this->assertStringContainsString('function myapi_update_7045()', $source);
-    $this->assertStringNotContainsString('function myapi_update_7046()', $source);
+    $this->assertStringContainsString('function myapi_update_7046(&$sandbox)', $source);
+    $this->assertStringContainsString('function myapi_update_7047(&$sandbox)', $source);
+    $this->assertStringNotContainsString('function myapi_update_7048', $source);
     // 7028 is still SPEC 81's, not this spec's.
     $this->assertStringContainsString(
       '_myapi_services_install();',

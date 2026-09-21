@@ -953,6 +953,119 @@ function _myapi_reservations_ensure_instance($field_name, $bundle, array $instan
 }
 
 /**
+ * Backfills field_canal = 'backoffice' on every 'pagos' node without a channel.
+ *
+ * One batch pass per call, shared by myapi_update_7046() — which created the
+ * field — and myapi_update_7047(), which finishes the job on the sites where
+ * the first deployment of SPEC 129 left it half done.
+ *
+ * NO node_save(), AND THAT IS THE POINT. myapi.module hooks hook_node_update()
+ * for the payment verification workflow (SPEC 22) and for the approved and
+ * cancelled emails (SPEC 27, 30). Saving every historical payment in bulk would
+ * fire that workflow over payments closed months ago — recalculating unit and
+ * cash balances, and possibly avalanching emails at residents nobody touched.
+ * Writing the field's two tables directly stores the datum and wakes nothing.
+ *
+ * db_merge() AND NOT db_insert(), because this runs against a LIVE SITE. The
+ * row may already be there: field_canal defaults to 'backoffice' and a default
+ * is applied by the node form, so an operator saving a payment from
+ * node/%/edit while drush updb runs writes it first; and a pass killed between
+ * the two tables leaves the data row without its revision twin. The first
+ * deployment of this spec used db_insert() and died on
+ * "Duplicate entry 'node-...' for key 'PRIMARY'".
+ *
+ * #finished IS DERIVED FROM "DID THIS PASS STILL FIND WORK?" AND NEVER FROM
+ * progress/max. max is counted once, while progress only counts rows this run
+ * actually wrote, so any pass that aborts half way leaves progress behind max
+ * for ever and the update asks for pass after pass that find nothing left to
+ * do. That is not a hypothesis: it is what the first deployment did until
+ * somebody pressed Ctrl+C. The fraction is still reported, capped below 1, so
+ * drush can draw a progress bar — but what ENDS the update is running out of
+ * rows.
+ *
+ * @param array $sandbox  The hook_update_N() sandbox, altered by reference.
+ *
+ * @return int  Payments given a channel so far in this run.
+ */
+function _myapi_payment_channel_backfill(&$sandbox) {
+  $batch = 200;
+
+  $pending = "
+    SELECT n.nid, n.vid
+    FROM {node} n
+    LEFT JOIN {field_data_field_canal} c
+      ON c.entity_type = 'node' AND c.entity_id = n.nid AND c.deleted = 0
+    WHERE n.type = 'pagos' AND c.entity_id IS NULL
+    ORDER BY n.nid
+  ";
+
+  if (!isset($sandbox['progress'])) {
+    $sandbox['progress'] = 0;
+    $sandbox['max'] = (int) db_query("
+      SELECT COUNT(n.nid)
+      FROM {node} n
+      LEFT JOIN {field_data_field_canal} c
+        ON c.entity_type = 'node' AND c.entity_id = n.nid AND c.deleted = 0
+      WHERE n.type = 'pagos' AND c.entity_id IS NULL
+    ")->fetchField();
+  }
+
+  $rows = db_query_range($pending, 0, $batch)->fetchAll();
+
+  foreach ($rows as $row) {
+    $nid = (int) $row->nid;
+    $vid = (int) $row->vid;
+
+    db_merge('field_data_field_canal')
+      ->key(array(
+        'entity_type' => 'node',
+        'entity_id'   => $nid,
+        'deleted'     => 0,
+        'delta'       => 0,
+        'language'    => LANGUAGE_NONE,
+      ))
+      ->fields(array(
+        'bundle'            => 'pagos',
+        'revision_id'       => $vid,
+        'field_canal_value' => MYAPI_PAYMENT_CHANNEL_BACKOFFICE,
+      ))
+      ->execute();
+
+    // The revision table is keyed by the revision too: only the CURRENT one
+    // (node.vid) gets a row, because older revisions are dead history that
+    // nothing reads.
+    db_merge('field_revision_field_canal')
+      ->key(array(
+        'entity_type' => 'node',
+        'entity_id'   => $nid,
+        'revision_id' => $vid,
+        'deleted'     => 0,
+        'delta'       => 0,
+        'language'    => LANGUAGE_NONE,
+      ))
+      ->fields(array(
+        'bundle'            => 'pagos',
+        'field_canal_value' => MYAPI_PAYMENT_CHANNEL_BACKOFFICE,
+      ))
+      ->execute();
+
+    $sandbox['progress']++;
+  }
+
+  $sandbox['#finished'] = (count($rows) < $batch)
+    ? 1
+    : ($sandbox['max'] ? min(0.99, $sandbox['progress'] / $sandbox['max']) : 0.99);
+
+  if ($sandbox['#finished'] >= 1) {
+    // The entities already in cache_field / cache_entity_node were built
+    // before these rows existed and would keep answering without a channel.
+    field_cache_clear();
+  }
+
+  return $sandbox['progress'];
+}
+
+/**
  * Creates the reservations content types, fields and instances (idempotent).
  *
  * Single source of truth for the reservations schema: it is called both from
@@ -4914,23 +5027,12 @@ function myapi_update_7045() {
  * over WhatsApp, and it is read in the node edit form's textarea, which escapes
  * by construction.
  *
- * THEN IT BACKFILLS EVERY PAYMENT THAT PREDATES THE FIELD AS 'backoffice', IN
- * BATCHES OF 200 AND WITHOUT node_save(). That last part is the whole reason
- * this update looks the way it does: myapi.module hooks hook_node_update() for
- * the payment verification workflow (SPEC 22) and for the approved and
- * cancelled emails (SPEC 27, 30). Saving every historical payment in bulk would
- * fire that workflow over payments closed months ago — recalculating unit and
- * cash balances, and possibly avalanching emails at residents nobody touched. A
- * direct db_insert() into the field's two tables writes the datum and wakes
- * nothing.
- *
- * REANUDABLE BY CONSTRUCTION. The batch query selects payments that have NO row
- * in field_data_field_canal, so each pass advances on its own and an update cut
- * in half resumes exactly where it stopped, without duplicating rows.
- *
- * ONLY THE CURRENT REVISION (node.vid) GETS A ROW. Older revisions of a payment
- * are dead history that nothing reads; filling them would multiply the length
- * of the update for no reader.
+ * THEN IT BACKFILLS EVERY PAYMENT THAT PREDATES THE FIELD AS 'backoffice', in
+ * batches, through _myapi_payment_channel_backfill() — which is where the
+ * reasons for every line of that half are written down: no node_save(), a
+ * db_merge() that survives a concurrent form save, and a #finished that ends
+ * the update by running out of rows instead of by a counter that an aborted
+ * pass can strand below 1.
  *
  * THE OTHER THREE FIELDS STAY EMPTY on historical payments: nobody read those
  * receipts, and only SPEC 130 writes them.
@@ -5019,55 +5121,49 @@ function myapi_update_7046(&$sandbox) {
         ] + $definition['instance']
       );
     }
-
-    $sandbox['progress'] = 0;
-    $sandbox['max'] = (int) db_query("
-      SELECT COUNT(n.nid)
-      FROM {node} n
-      LEFT JOIN {field_data_field_canal} c
-        ON c.entity_type = 'node' AND c.entity_id = n.nid AND c.deleted = 0
-      WHERE n.type = 'pagos' AND c.entity_id IS NULL
-    ")->fetchField();
   }
 
-  $rows = db_query_range("
-    SELECT n.nid, n.vid
-    FROM {node} n
-    LEFT JOIN {field_data_field_canal} c
-      ON c.entity_type = 'node' AND c.entity_id = n.nid AND c.deleted = 0
-    WHERE n.type = 'pagos' AND c.entity_id IS NULL
-    ORDER BY n.nid
-  ", 0, 200)->fetchAll();
-
-  foreach ($rows as $row) {
-    foreach (['field_data_field_canal', 'field_revision_field_canal'] as $table) {
-      db_insert($table)
-        ->fields([
-          'entity_type'       => 'node',
-          'bundle'            => 'pagos',
-          'deleted'           => 0,
-          'entity_id'         => (int) $row->nid,
-          'revision_id'       => (int) $row->vid,
-          'language'          => LANGUAGE_NONE,
-          'delta'             => 0,
-          'field_canal_value' => MYAPI_PAYMENT_CHANNEL_BACKOFFICE,
-        ])
-        ->execute();
-    }
-
-    $sandbox['progress']++;
-  }
-
-  $sandbox['#finished'] = $sandbox['max'] ? ($sandbox['progress'] / $sandbox['max']) : 1;
+  // The backfill owns $sandbox['progress']: it sets it on its first call, which
+  // is also what tells the block above not to run again on the next pass.
+  $migrated = _myapi_payment_channel_backfill($sandbox);
 
   if ($sandbox['#finished'] >= 1) {
-    // The entities already in cache_field / cache_entity_node were built before
-    // these rows existed and would keep answering without a channel.
-    field_cache_clear();
-
     return t('SPEC 129: creados los cuatro campos del canal y del comprobante en el bundle «pagos». Canal «@channel» asignado a @count pagos ya existentes.', [
       '@channel' => MYAPI_PAYMENT_CHANNEL_BACKOFFICE,
-      '@count'   => $sandbox['progress'],
+      '@count'   => $migrated,
+    ]);
+  }
+}
+
+/**
+ * SPEC 129: finishes the channel backfill myapi_update_7046() left half done.
+ *
+ * WHY A SECOND UPDATE EXISTS FOR ONE SPEC. The first deployment of 7046 ran
+ * with a db_insert() that could collide with a row the node form had just
+ * written, and with a #finished derived from progress/max that could never
+ * reach 1 once a pass had aborted. The result on the site was an update that
+ * asked for pass after pass until it was interrupted, and then — on the second
+ * run — died on a duplicate key. 7046 is fixed for sites that have not run it
+ * yet; sites that already did have it recorded as applied and will never run
+ * it again, so the repair has to arrive as its own hook.
+ *
+ * IT IS THE SAME BACKFILL AND IT IS IDEMPOTENT, so it is a no-op wherever 7046
+ * completed: the query only selects payments with no channel row at all, and
+ * db_merge() writes over whatever is already there.
+ *
+ * IT DOES NOT RE-CREATE THE FIELDS. 7046 creates them before backfilling and
+ * its creation half never failed — a site that reached the backfill has the
+ * four fields, and one that did not will run 7046 first, in order.
+ */
+function myapi_update_7047(&$sandbox) {
+  module_load_include('inc', 'myapi', 'includes/myapi.payment_workflow');
+
+  $migrated = _myapi_payment_channel_backfill($sandbox);
+
+  if ($sandbox['#finished'] >= 1) {
+    return t('SPEC 129: backfill del canal completado. Canal «@channel» asignado a @count pagos que habían quedado sin él.', [
+      '@channel' => MYAPI_PAYMENT_CHANNEL_BACKOFFICE,
+      '@count'   => $migrated,
     ]);
   }
 }

@@ -139,6 +139,13 @@ function confirm_form(...$arguments) {}
  *
  * @return mixed
  */
+function current_path(...$arguments) {}
+
+/**
+ * @param mixed ...$arguments
+ *
+ * @return mixed
+ */
 function db_add_field(...$arguments) {}
 
 /**
