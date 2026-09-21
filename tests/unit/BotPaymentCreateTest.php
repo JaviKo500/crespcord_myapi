@@ -51,6 +51,13 @@ class BotPaymentCreateTest extends TestCase {
     $this->assertSame('es', myapi_get_lang(), 'suite precondition: language resolves to the default');
 
     myapi_test_db_seed();
+    myapi_test_db_fail_writes();
+    myapi_test_node_seed();
+    myapi_test_file_seed();
+    myapi_test_write_reset();
+    myapi_test_field_seed_allowed_values();
+    $GLOBALS['myapi_test_users'] = [];
+    $GLOBALS['myapi_test_db_writes'] = [];
     $GLOBALS['myapi_test_variables'] = ['myapi_bot_api_key' => self::API_KEY];
     $GLOBALS['myapi_test_watchdog'] = [];
     $_SERVER['REQUEST_METHOD'] = 'POST';
@@ -62,6 +69,10 @@ class BotPaymentCreateTest extends TestCase {
 
   protected function tearDown(): void {
     myapi_test_db_seed();
+    myapi_test_node_seed();
+    myapi_test_write_reset();
+    $GLOBALS['myapi_test_users'] = [];
+    $GLOBALS['myapi_test_db_writes'] = [];
     $GLOBALS['myapi_test_variables'] = [];
     $GLOBALS['myapi_test_watchdog'] = [];
     $_SERVER['REQUEST_METHOD'] = 'GET';
@@ -967,5 +978,312 @@ class BotPaymentCreateTest extends TestCase {
     $this->assertStringContainsString('function myapi_update_7048()', $source);
     $this->assertStringContainsString("db_table_exists('myapi_bot_payments')", $source);
     $this->assertStringContainsString("db_create_table('myapi_bot_payments'", $source);
+  }
+
+  /* -------------------------------------------------------------------------
+   * The response body — the same mapper for both statuses.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * The body carries EXACTLY the keys the app's 201 carries.
+   *
+   * Asserted against myapi_payment_build_created_item() itself rather than
+   * against a hand-written list, because the promise is not "these twelve
+   * names": it is "whatever the app answers, this answers". A key added to the
+   * app's payment response must appear here on the same commit, and a
+   * hand-written list would go on passing while the two drifted.
+   *
+   * (Which is why there are thirteen and not the twelve the spec's example
+   * shows: 'detail' was added to the app's mapper after the spec was written.)
+   */
+  public function testTheBodyCarriesExactlyTheKeysTheAppAnswers() {
+    $node = $this->decorated();
+    $node->nid = 87;
+
+    $result = myapi_test_capture(function () use ($node) {
+      myapi_bot_payment_respond($node, 201);
+    });
+
+    $this->assertSame(
+      array_keys(myapi_payment_build_created_item($node, NULL, NULL)),
+      array_keys($result['json']['data']['payment'])
+    );
+  }
+
+  /**
+   * bank_id and bank_name are null, always: the bot owns no 'bancos' term.
+   */
+  public function testTheBodyNeverCarriesABank() {
+    $node = $this->decorated();
+    $node->nid = 87;
+
+    $result = myapi_test_capture(function () use ($node) {
+      myapi_bot_payment_respond($node, 201);
+    });
+    $payment = $result['json']['data']['payment'];
+
+    $this->assertNull($payment['bank_id']);
+    $this->assertNull($payment['bank_name']);
+    $this->assertSame('Transferencia', $payment['payment_method']);
+    $this->assertSame('Pendiente de verificar', $payment['status']);
+  }
+
+  /**
+   * THE 200 AND THE 201 CARRY THE SAME BODY, byte for byte.
+   *
+   * The whole point of the idempotent answer: n8n never branches, it always
+   * reads data.payment. The only difference is the status, which exists for
+   * whoever reads the logs.
+   */
+  public function testTheIdempotentTwoHundredIsTheSameBodyAsTheTwoHundredAndOne() {
+    $node = $this->decorated();
+    $node->nid = 87;
+
+    $created = myapi_test_capture(function () use ($node) {
+      myapi_bot_payment_respond($node, 201);
+    });
+    $retried = myapi_test_capture(function () use ($node) {
+      myapi_bot_payment_respond($node, 200);
+    });
+
+    $this->assertSame(201, $created['status']);
+    $this->assertSame(200, $retried['status']);
+    $this->assertSame($created['output'], $retried['output'], 'same bytes, only the status differs');
+  }
+
+  /**
+   * Two requests with no media.ref and the same wamid are the same payment —
+   * the fallback is what makes the compound key degrade to the simple one.
+   */
+  public function testTwoCallsWithoutMediaRefShareOneKey() {
+    $first  = myapi_bot_payment_validate($this->payload(['media' => NULL]));
+    $second = myapi_bot_payment_validate($this->payload(['media' => ['ref' => '']]));
+
+    $this->assertSame(
+      myapi_bot_payment_idempotency_key($first['message_key'], $first['media_ref']),
+      myapi_bot_payment_idempotency_key($second['message_key'], $second['media_ref'])
+    );
+  }
+
+  /* -------------------------------------------------------------------------
+   * The create path, as far as a fixture site reaches.
+   *
+   * Everything below drives myapi_bot_payment_create() itself over seeded
+   * rows. It stops where Drupal starts — node_save(), the real upload — which
+   * is exactly where the spec's 🔴 criteria begin.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * Seeds a site where the happy path would work: SPEC 129 applied, the
+   * payment method catalogued, an active user who owns a published unit in the
+   * condominium the payload claims, and an empty ledger.
+   */
+  private function seedValidSite() {
+    myapi_test_field_seed_allowed_values([
+      'field_comprobante_ocr' => [],
+      'field_forma_de_pago'   => ['Transferencia' => 'Transferencia', 'Efectivo' => 'Efectivo'],
+    ]);
+
+    $GLOBALS['myapi_test_users'] = [3 => ['uid' => 3, 'status' => 1, 'name' => 'javier']];
+
+    $unit = (object) [
+      'nid'    => 45,
+      'type'   => 'vivienda',
+      'status' => 1,
+      'title'  => '3B',
+    ];
+    $unit->field_condominio = [LANGUAGE_NONE => [0 => ['target_id' => 12]]];
+    myapi_test_node_seed([45 => $unit]);
+
+    myapi_test_db_seed([
+      'field_data_field_propietario' => [
+        ['entity_id' => '45', 'field_propietario_target_id' => '3', 'deleted' => '0', 'entity_type' => 'node'],
+      ],
+    ]);
+
+    $_POST = ['payload' => json_encode($this->payload())];
+    $_FILES = [];
+  }
+
+  private function create() {
+    return myapi_test_capture(function () {
+      myapi_bot_payment_create();
+    });
+  }
+
+  /**
+   * No `file` part is 422 missing_file — and nothing is written on the way
+   * out. The image is mandatory here and optional in the app because a bot
+   * payment with no receipt cannot be verified by anyone: the flow has to fail
+   * loudly instead of creating blind payments.
+   */
+  public function testWithoutTheFilePartItIs422AndNothingIsWritten() {
+    $this->seedValidSite();
+
+    $result = $this->create();
+
+    $this->assertError($result, 422, 'missing_file');
+    $this->assertSame([], $GLOBALS['myapi_test_db_writes'], 'no ledger row, no node');
+  }
+
+  /**
+   * The schema guard. Without SPEC 129 applied, node_save() would drop the
+   * channel and the evidence SILENTLY, and every bot payment would be stored
+   * mutilated with nothing anywhere saying so. An endpoint that refuses to run
+   * beats one that does that.
+   */
+  public function testWithoutTheSpec129FieldsItIs500AndLogged() {
+    $this->seedValidSite();
+    myapi_test_field_seed_allowed_values([
+      'field_forma_de_pago' => ['Transferencia' => 'Transferencia'],
+    ]);
+
+    $result = $this->create();
+
+    $this->assertError($result, 500, 'server_error');
+    $this->assertNotEmpty($GLOBALS['myapi_test_watchdog'], 'the refusal is logged');
+    $this->assertSame([], $GLOBALS['myapi_test_db_writes']);
+  }
+
+  /**
+   * The guard runs BEFORE the payload is even parsed, so a misconfigured site
+   * answers the same 500 whatever the bot sends.
+   */
+  public function testTheSchemaGuardRunsBeforeThePayload() {
+    $this->seedValidSite();
+    myapi_test_field_seed_allowed_values([]);
+    $_POST = ['payload' => 'not json at all'];
+
+    $this->assertError($this->create(), 500, 'server_error');
+  }
+
+  /**
+   * "Transferencia" missing from the field's allowed_values is a 500 and a
+   * watchdog entry, NOT a 422. Somebody renamed the key in the back office,
+   * which is not n8n's fault — a 422 would send the flow hunting for an error
+   * in a payload that has none.
+   */
+  public function testAMissingPaymentMethodKeyIs500AndNotA422() {
+    $this->seedValidSite();
+    myapi_test_field_seed_allowed_values([
+      'field_comprobante_ocr' => [],
+      'field_forma_de_pago'   => ['Efectivo' => 'Efectivo'],
+    ]);
+
+    $result = $this->create();
+
+    $this->assertError($result, 500, 'server_error');
+    $this->assertNotEmpty($GLOBALS['myapi_test_watchdog']);
+  }
+
+  /**
+   * An inactive or unknown uid is 422 invalid_field naming the dotted path.
+   */
+  public function testAnInactiveOrUnknownPersonIs422() {
+    $this->seedValidSite();
+    $GLOBALS['myapi_test_users'] = [3 => ['uid' => 3, 'status' => 0, 'name' => 'javier']];
+    $this->assertError($this->create(), 422, 'invalid_field', 'identity.person.uid', 'blocked');
+
+    $this->seedValidSite();
+    $GLOBALS['myapi_test_users'] = [];
+    $this->assertError($this->create(), 422, 'invalid_field', 'identity.person.uid', 'unknown');
+  }
+
+  /**
+   * A unit that does not exist, is unpublished, or is not a 'vivienda'.
+   */
+  public function testAMissingOrUnpublishedUnitIs422() {
+    $cases = [
+      'unknown'     => NULL,
+      'unpublished' => ['status' => 0],
+      'wrong type'  => ['type' => 'pagos'],
+    ];
+
+    foreach ($cases as $label => $overrides) {
+      $this->seedValidSite();
+      if ($overrides === NULL) {
+        myapi_test_node_seed([]);
+      }
+      else {
+        $unit = (object) ((array) $GLOBALS['myapi_test_nodes'][45] + []);
+        foreach ($overrides as $key => $value) {
+          $unit->{$key} = $value;
+        }
+        myapi_test_node_seed([45 => $unit]);
+      }
+
+      $this->assertError($this->create(), 422, 'invalid_field', 'identity.unit.unit_id', $label);
+    }
+  }
+
+  /**
+   * A condominium_id that is not that unit's is 422 naming ITS path, not the
+   * unit's. An incoherent pair is a bug in the n8n flow, and without this
+   * check it would be stored in silence for months.
+   */
+  public function testACondominiumThatDoesNotMatchTheUnitIs422() {
+    $this->seedValidSite();
+    $_POST = ['payload' => json_encode($this->payload([
+      'identity' => ['unit' => ['condominium_id' => 999]],
+    ]))];
+
+    $result = $this->create();
+
+    $this->assertError($result, 422, 'invalid_field', 'identity.unit.condominium_id');
+    $this->assertSame([], $GLOBALS['myapi_test_db_writes']);
+  }
+
+  /**
+   * A unit with no condominium row at all fails the same way, instead of
+   * passing because NULL happened to equal nothing.
+   */
+  public function testAUnitWithNoCondominiumIs422() {
+    $this->seedValidSite();
+    $unit = $GLOBALS['myapi_test_nodes'][45];
+    unset($unit->field_condominio);
+    myapi_test_node_seed([45 => $unit]);
+
+    $this->assertError($this->create(), 422, 'invalid_field', 'identity.unit.condominium_id');
+  }
+
+  /**
+   * A uid who neither owns nor occupies the unit is 403 — and this is the
+   * check that makes a leaked machine key unable to charge a payment to
+   * somebody else's unit.
+   */
+  public function testAForeignUnitIs403() {
+    $this->seedValidSite();
+    myapi_test_db_seed([
+      'field_data_field_propietario' => [
+        ['entity_id' => '45', 'field_propietario_target_id' => '900', 'deleted' => '0', 'entity_type' => 'node'],
+      ],
+    ]);
+
+    $result = $this->create();
+
+    $this->assertError($result, 403, 'unit_access_denied');
+    $this->assertSame([], $GLOBALS['myapi_test_db_writes']);
+  }
+
+  /**
+   * The order of the checks is the contract: a request that is wrong in two
+   * ways always reports the FIRST one, so the same payload never answers two
+   * different errors on two different days. Access is checked before the
+   * reference, and the reference before the file.
+   */
+  public function testTheFirstFailureIsTheOneReported() {
+    $this->seedValidSite();
+    myapi_test_db_seed([
+      'field_data_field_propietario' => [
+        ['entity_id' => '45', 'field_propietario_target_id' => '900', 'deleted' => '0', 'entity_type' => 'node'],
+      ],
+    ]);
+    $_POST = ['payload' => json_encode($this->payload([
+      'identity' => ['unit' => ['condominium_id' => 999]],
+    ]))];
+
+    // Foreign unit AND a wrong condominium AND no file: the condominium check
+    // comes first, so that is what comes back.
+    $this->assertError($this->create(), 422, 'invalid_field', 'identity.unit.condominium_id');
   }
 }
