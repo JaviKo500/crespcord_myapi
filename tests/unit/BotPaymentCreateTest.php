@@ -929,6 +929,22 @@ class BotPaymentCreateTest extends TestCase {
   }
 
   /**
+   * The body of one function of myapi.install, from its signature to the next
+   * one — enough to assert what a given update hook does and does NOT do.
+   */
+  private function functionSource($name) {
+    $source = $this->installSource();
+    $start = strpos($source, 'function ' . $name . '(');
+    $this->assertNotFalse($start, $name . ' is not defined in myapi.install');
+
+    $next = strpos($source, "\nfunction ", $start + 1);
+
+    return $next === FALSE
+      ? substr($source, $start)
+      : substr($source, $start, $next - $start);
+  }
+
+  /**
    * idempotency_key is the PRIMARY KEY, not a column with an index.
    *
    * This is the whole race protection: uniqueness is imposed by the database,
@@ -981,6 +997,35 @@ class BotPaymentCreateTest extends TestCase {
     $this->assertStringContainsString('function myapi_update_7048()', $source);
     $this->assertStringContainsString("db_table_exists('myapi_bot_payments')", $source);
     $this->assertStringContainsString("db_create_table('myapi_bot_payments'", $source);
+  }
+
+  /**
+   * THE COLUMN IS ADDED BY ITS OWN HOOK, not by an edit to the one that
+   * created the table.
+   *
+   * This is the test the outage bought. uid_resolved was first added inside
+   * myapi_update_7048() behind a db_field_exists() guard — which reads as
+   * idempotent and is unreachable: drush updb only offers hooks numbered above
+   * the site's stored schema_version, so a site that already ran 7048 is never
+   * offered it again and nothing inside it fires. Dev ran code that wrote a
+   * column the database did not have, and EVERY bot payment failed until 7049
+   * existed.
+   *
+   * So the assertion is not "7049 exists". It is that the db_add_field lives
+   * in 7049 and NOT in 7048: an applied hook_update_N() is a site's history
+   * and is immutable, whatever it costs in tidiness.
+   */
+  public function testTheColumnIsAddedByItsOwnHookAndNotByEditingTheOldOne() {
+    $source = $this->installSource();
+
+    $this->assertStringContainsString('function myapi_update_7049()', $source);
+
+    $seventy_eight = $this->functionSource('myapi_update_7048');
+    $seventy_nine = $this->functionSource('myapi_update_7049');
+
+    $this->assertStringNotContainsString('db_add_field', $seventy_eight, '7048 is applied; it must not grow');
+    $this->assertStringContainsString("db_add_field('myapi_bot_payments', 'uid_resolved'", $seventy_nine);
+    $this->assertStringContainsString("db_field_exists('myapi_bot_payments', 'uid_resolved')", $seventy_nine);
   }
 
   /* -------------------------------------------------------------------------

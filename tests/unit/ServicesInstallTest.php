@@ -1052,6 +1052,20 @@ class ServicesInstallTest extends TestCase {
     // written before 7047 became SPEC 129's repair, and the implementation
     // took the next free one instead. Reusing an applied number is invisible
     // and fatal — every site that ran the repair would skip the table.
+    //
+    // 7049 IS SPEC 130's TOO, and it exists because that last sentence had to
+    // be learned twice. The uid_resolved column was first added by EDITING
+    // 7048, guarded by db_field_exists(), which reads as idempotent and is in
+    // fact unreachable: drush updb only offers hooks numbered ABOVE the site's
+    // stored schema_version, so a site that ran 7048 is never offered it again
+    // and nothing inside it can fire. Dev shipped code writing a column the
+    // database did not have, and every bot payment failed — including the ones
+    // that worked before — until 7049 existed.
+    //
+    // WHICH IS WHY THE ASSERTIONS BELOW EARN THEIR LINES. They are not
+    // bookkeeping: each pins a number some site has already recorded as
+    // applied, and a test that fails when somebody edits one of these hooks
+    // instead of adding the next one is cheaper than the outage was.
     $this->assertStringContainsString('function myapi_update_7034()', $source);
     $this->assertStringContainsString('function myapi_update_7035()', $source);
     $this->assertStringContainsString('function myapi_update_7036()', $source);
@@ -1067,7 +1081,8 @@ class ServicesInstallTest extends TestCase {
     $this->assertStringContainsString('function myapi_update_7046(&$sandbox)', $source);
     $this->assertStringContainsString('function myapi_update_7047(&$sandbox)', $source);
     $this->assertStringContainsString('function myapi_update_7048()', $source);
-    $this->assertStringNotContainsString('function myapi_update_7049', $source);
+    $this->assertStringContainsString('function myapi_update_7049()', $source);
+    $this->assertStringNotContainsString('function myapi_update_7050', $source);
     // 7028 is still SPEC 81's, not this spec's.
     $this->assertStringContainsString(
       '_myapi_services_install();',

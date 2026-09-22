@@ -5282,18 +5282,57 @@ function myapi_update_7048() {
     return t('SPEC 130: tabla myapi_bot_payments creada.');
   }
 
-  // The uid_resolved column arrived with the revision that made
-  // identity.person.uid optional, after this hook was already written but
-  // before it had run anywhere. Adding it here instead of in a 7049 keeps one
-  // update per table; the branch below is what makes that safe if some site
-  // did run the first version — it is the same hook, idempotent, and a site
-  // that already has the column falls through to the last line.
-  if (!db_field_exists('myapi_bot_payments', 'uid_resolved')) {
-    $schema = drupal_get_schema_unprocessed('myapi', 'myapi_bot_payments');
-    db_add_field('myapi_bot_payments', 'uid_resolved', $schema['fields']['uid_resolved']);
+  return t('SPEC 130: la tabla myapi_bot_payments ya existía; nada que hacer.');
+}
 
-    return t('SPEC 130: columna uid_resolved añadida a myapi_bot_payments.');
+/**
+ * SPEC 130: adds myapi_bot_payments.uid_resolved.
+ *
+ * The column arrived with the revision that made identity.person.uid optional:
+ * it is 1 when the payload omitted the uid and the server resolved the payer
+ * from the unit, which is the path where the identity revalidation checks
+ * nothing. Counting those is a WHERE, not a walk through the evidence JSON of
+ * every node.
+ *
+ * WHY THIS IS A SEPARATE HOOK, AND THE MISTAKE IT REPAIRS. The column was
+ * first added INSIDE myapi_update_7048(), guarded by db_field_exists(), on the
+ * reasoning that 7048 "had not run anywhere yet" and that the guard covered
+ * the case where it had. Both halves were wrong, and the second is the
+ * interesting one:
+ *
+ *   - 7048 HAD run. It was deployed and creating payments on dev, which is
+ *     precisely what the guard was supposed to protect against.
+ *   - THE GUARD COULD NEVER FIRE. drush updb only runs hooks numbered ABOVE
+ *     the module's stored schema_version. A site that ran 7048 has 7048 as its
+ *     version, so 7048 is never offered again and the branch inside it is
+ *     unreachable code. Editing an applied update hook does nothing at all.
+ *
+ * The result on dev was an outage: the code shipped writing a column that the
+ * database did not have, so EVERY bot payment failed — including the ones that
+ * worked before, because the ledger INSERT carries uid_resolved on both paths.
+ * The transaction rolled back each time, so no half-written payments, but the
+ * endpoint was down until this hook existed.
+ *
+ * The rule this cost us, written here so the next hook does not relearn it:
+ * an applied hook_update_N() is a site's history and is immutable. A schema
+ * change is always a NEW number, whatever it costs in tidiness.
+ *
+ * Existing rows take the default 0, which is the truth about them: they were
+ * written when identity.person.uid was still mandatory, so the bot sent every
+ * one of those uids.
+ */
+function myapi_update_7049() {
+  if (!db_table_exists('myapi_bot_payments')) {
+    // 7048 creates it, from a hook_schema() that already declares the column.
+    return t('SPEC 130: myapi_bot_payments no existe todavía; la crea el update 7048.');
   }
 
-  return t('SPEC 130: la tabla myapi_bot_payments ya existía; nada que hacer.');
+  if (db_field_exists('myapi_bot_payments', 'uid_resolved')) {
+    return t('SPEC 130: la columna uid_resolved ya existía; nada que hacer.');
+  }
+
+  $schema = drupal_get_schema_unprocessed('myapi', 'myapi_bot_payments');
+  db_add_field('myapi_bot_payments', 'uid_resolved', $schema['fields']['uid_resolved']);
+
+  return t('SPEC 130: columna uid_resolved añadida a myapi_bot_payments.');
 }
