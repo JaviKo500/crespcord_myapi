@@ -500,8 +500,8 @@ class BotPersonTest extends TestCase {
     $this->assertCount(2, $data['units']);
     $this->assertSame(
       [
-        ['unit_id' => 45, 'unit' => 'Dpto 3B', 'condominium_id' => 12, 'condominium' => 'Torre Azul', 'relation' => 'owner'],
-        ['unit_id' => 46, 'unit' => 'Local 2', 'condominium_id' => 12, 'condominium' => 'Torre Azul', 'relation' => 'occupant'],
+        ['unit_id' => 45, 'unit' => 'Dpto 3B', 'condominium_id' => 12, 'condominium' => 'Torre Azul', 'condominium_payment_info' => 'Cuenta corriente 00-1234567-8', 'relation' => 'owner'],
+        ['unit_id' => 46, 'unit' => 'Local 2', 'condominium_id' => 12, 'condominium' => 'Torre Azul', 'condominium_payment_info' => 'Cuenta corriente 00-1234567-8', 'relation' => 'occupant'],
       ],
       $data['units']
     );
@@ -679,25 +679,33 @@ class BotPersonTest extends TestCase {
   // ---------------------------------------------------------------------
 
   /**
-   * Nothing financial and nothing personal beyond the name leaves Drupal.
+   * Nothing financial of the PERSON and nothing personal beyond the name
+   * leaves Drupal.
    *
-   * The balance and the payment information are both within reach of the
-   * queries this endpoint already runs — saldo_actual is selected by
-   * myapi_unit_fetch_units() and the payment information by
-   * myapi_unit_fetch_condominiums() — which is exactly why the absence is
-   * asserted over the raw body instead of trusted to the shape of the array.
+   * The balance is within reach of the query this endpoint already runs —
+   * saldo_actual is selected by myapi_unit_fetch_units() — which is exactly
+   * why the absence is asserted over the raw body instead of trusted to the
+   * shape of the array.
+   *
+   * The condominium's payment information is the one thing on this list that
+   * changed sides: it now travels, as condominium_payment_info, because the
+   * bot reads it back over WhatsApp so the resident knows where to transfer.
+   * It describes the building's bank account, not the resident, and it is
+   * asserted present here so that removing it again breaks a test rather than
+   * a conversation.
    */
-  public function testTheResponseCarriesNoBalanceNoPaymentInformationAndNoPhone() {
+  public function testTheResponseCarriesNoBalanceNoPhoneAndOnlyTheDisplayName() {
     $this->seedTwoUnits();
 
     $body = $this->request()['output'];
 
     $this->assertStringNotContainsString('1234.56', $body, 'the balance travelled');
     $this->assertStringNotContainsString('current_balance', $body);
-    $this->assertStringNotContainsString('payment_information', $body);
-    $this->assertStringNotContainsString('00-1234567-8', $body);
     $this->assertStringNotContainsString('753', $body, 'the phone number travelled back');
     $this->assertStringNotContainsString('jperez', $body, 'the account name is not the display name');
+
+    $this->assertStringContainsString('condominium_payment_info', $body);
+    $this->assertStringContainsString('00-1234567-8', $body);
   }
 
   /**
@@ -732,7 +740,7 @@ class BotPersonTest extends TestCase {
     $this->assertSame(['found', 'person', 'units'], array_keys($data));
     $this->assertSame(['uid', 'name'], array_keys($data['person']));
     $this->assertSame(
-      ['unit_id', 'unit', 'condominium_id', 'condominium', 'relation'],
+      ['unit_id', 'unit', 'condominium_id', 'condominium', 'condominium_payment_info', 'relation'],
       array_keys($data['units'][0])
     );
   }

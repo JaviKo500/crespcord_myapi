@@ -354,13 +354,18 @@ class BotUnitsSearchTest extends TestCase {
 
   /**
    * A published 'condominio' node row.
+   *
+   * payment_information is the column myapi_unit_fetch_condominiums() projects
+   * field_informacion_pago_value to, and it is seeded by default so that the
+   * value travelling to the bot is proved rather than assumed to be NULL.
    */
-  private function condominiumRow($nid, $title, $status = 1) {
+  private function condominiumRow($nid, $title, $status = 1, $payment_information = 'Banco Pichincha 2100XXXXXX') {
     return [
-      'nid'    => (string) $nid,
-      'type'   => 'condominio',
-      'status' => (string) $status,
-      'title'  => $title,
+      'nid'                 => (string) $nid,
+      'type'                => 'condominio',
+      'status'              => (string) $status,
+      'title'               => $title,
+      'payment_information' => $payment_information,
     ];
   }
 
@@ -537,12 +542,13 @@ class BotUnitsSearchTest extends TestCase {
     $this->assertSame(1, $data['total']);
     $this->assertSame(
       [
-        'unit_id'        => 45,
-        'unit'           => 'Dpto 3-B',
-        'condominium_id' => 12,
-        'condominium'    => 'Edificio Torre Azul',
-        'owner'          => ['uid' => 7, 'name' => 'Juan Pérez'],
-        'match'          => 'exact',
+        'unit_id'                  => 45,
+        'unit'                     => 'Dpto 3-B',
+        'condominium_id'           => 12,
+        'condominium'              => 'Edificio Torre Azul',
+        'condominium_payment_info' => 'Banco Pichincha 2100XXXXXX',
+        'owner'                    => ['uid' => 7, 'name' => 'Juan Pérez'],
+        'match'                    => 'exact',
       ],
       $data['units'][0]
     );
@@ -730,9 +736,12 @@ class BotUnitsSearchTest extends TestCase {
   }
 
   /**
-   * The balance and the payment information are within reach of the query and
-   * still never travel, and neither does anything of the owner beyond a uid
-   * and a name.
+   * The balance is within reach of the query and still never travels, and
+   * neither does anything of the owner beyond a uid and a name.
+   *
+   * The condominium's payment information is the exception, and a deliberate
+   * one: it describes the building's bank account, the bot reads it back over
+   * WhatsApp, and it is asserted present in the key list below.
    */
   public function testNoElementCarriesTheBalanceOrPersonalData() {
     $this->seedTwoBuildings();
@@ -740,15 +749,46 @@ class BotUnitsSearchTest extends TestCase {
     $element = $this->request('torre azul', '3B')['json']['data']['units'][0];
 
     $this->assertSame(
-      ['unit_id', 'unit', 'condominium_id', 'condominium', 'owner', 'match'],
+      ['unit_id', 'unit', 'condominium_id', 'condominium', 'condominium_payment_info', 'owner', 'match'],
       array_keys($element)
     );
     $this->assertSame(['uid', 'name'], array_keys($element['owner']));
 
     $body = json_encode($element);
-    foreach (['1234.56', 'saldo', 'current_balance', 'payment_information', 'telefono', 'email'] as $forbidden) {
+    foreach (['1234.56', 'saldo', 'current_balance', 'telefono', 'email'] as $forbidden) {
       $this->assertStringNotContainsString($forbidden, $body, $forbidden);
     }
+  }
+
+  /**
+   * Each element carries the payment information of ITS OWN building, and NULL
+   * when that building has no row in field_data_field_informacion_pago.
+   *
+   * The value is resolved after the cut to five, by a query of its own over
+   * the condominiums that survived, so what this pins is that the text does
+   * not slide from one building to the next on the way.
+   */
+  public function testEachElementCarriesItsOwnBuildingsPaymentInformation() {
+    myapi_test_db_seed([
+      'node' => [
+        $this->condominiumRow(12, 'Edificio Torre Azul', 1, 'Banco Pichincha 2100XXXXXX'),
+        $this->condominiumRow(31, 'Torre Azul II', 1, NULL),
+        $this->unitRow(45, 'Dpto 3-B', 12),
+        $this->unitRow(46, 'Dpto 3-B', 31),
+      ],
+    ]);
+
+    $units = $this->request('torre azul', '3B')['json']['data']['units'];
+
+    $this->assertCount(2, $units);
+
+    $info = [];
+    foreach ($units as $unit) {
+      $info[$unit['condominium_id']] = $unit['condominium_payment_info'];
+    }
+
+    $this->assertSame('Banco Pichincha 2100XXXXXX', $info[12]);
+    $this->assertNull($info[31]);
   }
 
   /**

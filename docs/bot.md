@@ -41,8 +41,22 @@ None — `GET` only.
     "found": true,
     "person": { "uid": 123, "name": "Juan Pérez" },
     "units": [
-      { "unit_id": 456, "unit": "Dpto 3B", "condominium_id": 12, "condominium": "Torre Azul", "relation": "owner" },
-      { "unit_id": 789, "unit": "Local 2",  "condominium_id": 12, "condominium": "Torre Azul", "relation": "occupant" }
+      {
+        "unit_id": 456,
+        "unit": "Dpto 3B",
+        "condominium_id": 12,
+        "condominium": "Torre Azul",
+        "condominium_payment_info": "Banco Pichincha\nCta. Corriente 2100XXXXXX\nRUC 179XXXXXX001",
+        "relation": "owner"
+      },
+      {
+        "unit_id": 789,
+        "unit": "Local 2",
+        "condominium_id": 12,
+        "condominium": "Torre Azul",
+        "condominium_payment_info": "Banco Pichincha\nCta. Corriente 2100XXXXXX\nRUC 179XXXXXX001",
+        "relation": "occupant"
+      }
     ]
   }
 }
@@ -53,9 +67,19 @@ to the person: a tenant pays the maintenance fee as often as an owner does, and
 the same person can own one unit and rent another. When somebody is both owner
 and occupant of the *same* unit, `"owner"` wins.
 
-Only published units whose condominium is also published are listed. Neither
-the balance (`current_balance`) nor the condominium's payment information is
-returned, and neither is the person's phone, national id or email.
+`condominium_payment_info` is the condominium's `field_informacion_pago_value`
+exposed exactly as stored (raw, unfiltered text — the field's text format is
+ignored), `null` when the building has no row in
+`field_data_field_informacion_pago`. It is the text the bot reads back over
+WhatsApp so the resident knows where to transfer. It is a property of the
+**condominium**, not of the unit: two units of the same building repeat the
+same value, which is what keeps every element of `units` self-contained and n8n
+free of a second lookup. It is the same field the app receives as
+`payment_information` in [`GET /api/v1/units`](unit.md).
+
+Only published units whose condominium is also published are listed. The
+balance (`current_balance`) is **not** returned, and neither is the person's
+phone, national id or email.
 
 **Success response (200), person not found**
 ```json
@@ -115,7 +139,7 @@ according to the `Accept-Language` header (`es`/`en`, default `es`). See
 | `field_data_field_propietario` | `entity_id`, `field_propietario_target_id` | Units owned, via `myapi_user_owned_unit_nids()`. |
 | `field_data_field_ocupante` / `field_data_field_ocupantes` | `entity_id`, `field_ocupante(s)_target_id` | Units occupied, via `myapi_user_occupied_unit_nids()`. |
 | `node` + `field_data_field_nombre_vivienda` + `field_data_field_condominio` | — | Unit name and its condominium, via `myapi_unit_fetch_units()`. |
-| `node` (condominio) | `nid`, `title`, `status` | Condominium title, via `myapi_unit_fetch_condominiums()`. |
+| `node` (condominio) + `field_data_field_informacion_pago` | `nid`, `title`, `status`, `field_informacion_pago_value` | Condominium title and payment information, via `myapi_unit_fetch_condominiums()`. |
 
 No table is written, and no table is read at all until the API key has been
 accepted.
@@ -205,6 +229,7 @@ None — `GET` only.
         "unit": "Dpto 3B",
         "condominium_id": 12,
         "condominium": "Edificio Torre Azul",
+        "condominium_payment_info": "Banco Pichincha\nCta. Corriente 2100XXXXXX\nRUC 179XXXXXX001",
         "owner": { "uid": 123, "name": "Juan Pérez" },
         "match": "exact"
       },
@@ -213,6 +238,7 @@ None — `GET` only.
         "unit": "Dpto 3B",
         "condominium_id": 31,
         "condominium": "Torre Azul II",
+        "condominium_payment_info": null,
         "owner": null,
         "match": "fuzzy"
       }
@@ -238,6 +264,7 @@ None — `GET` only.
 |-------|------------|
 | `found` | `true` when `units` is not empty. It exists for symmetry with `/bot/person`, not because it adds anything. |
 | `total` | The real number of matches **before** the cut to five. `total > 5` means "narrow the term down", and the bot can say so instead of showing five as if they were all of them. See the caveat below. |
+| `condominium_payment_info` | The condominium's `field_informacion_pago_value`, raw as stored, `null` when the building has no row in `field_data_field_informacion_pago`. The same value and the same meaning as in `/bot/person`: where to transfer, read back over WhatsApp. A property of the building, so two units of the same one repeat it. |
 | `owner` | `{ uid, name }`, or `null` when the unit has no owner assigned or the uid no longer resolves. The unit still travels either way. Never the phone, the national id or the email. |
 | `match` | `"exact"` when unit **and** condominium were resolved without approximating — that includes a prefix or a partial match, since both are literal. `"fuzzy"` when either of the two needed the second pass. |
 
@@ -249,9 +276,8 @@ short term the bot may say "there are 12" when there really are 60. Do not build
 a count on this number — it is a search made to narrow things down, not a
 report.
 
-Only published units whose condominium is also published are returned. Neither
-the balance (`current_balance`) nor the condominium's payment information is
-included, exactly as in `/bot/person`.
+Only published units whose condominium is also published are returned. The
+balance (`current_balance`) is **not** included, exactly as in `/bot/person`.
 
 **Success response (200), no results**
 ```json
@@ -304,6 +330,7 @@ curl -i -H 'X-Api-Key: <the secret>' \
 | `field_data_field_nombre_vivienda` | `entity_id`, `field_nombre_vivienda_value` | The unit name, via `myapi_unit_fetch_units()`. |
 | `field_data_field_propietario` | `entity_id`, `field_propietario_target_id` | The owner's uid. |
 | `users`, `field_data_field_nombre`, `field_data_field_apellidos` | — | The owner's display name, via `myapi_user_display_names()`, for the five that travel only. |
+| `node` (condominio) + `field_data_field_informacion_pago` | `nid`, `field_informacion_pago_value` | The payment information, via `myapi_unit_fetch_condominiums()`, for the buildings behind the five that travel only. The first phase loads the titles alone. |
 
 No table is written, no table is read until the API key has been accepted, and
 the unit table is not touched at all when the condominium term matches nothing.

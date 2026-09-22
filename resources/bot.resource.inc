@@ -148,15 +148,18 @@ function myapi_bot_find_uids_by_phone($digits) {
  *
  * Visibility follows SPEC 08 unchanged — myapi_unit_fetch_units() returns only
  * published units, and a unit whose condominium is not in the map (unpublished
- * or gone) is dropped here. Neither the balance nor the payment information is
- * copied over: they are within reach of the query and still have no business
- * leaving Drupal for n8n.
+ * or gone) is dropped here. The balance is still not copied over: it is within
+ * reach of the query and has no business leaving Drupal for n8n. The
+ * condominium's payment information DOES travel, as condominium_payment_info —
+ * it is the text the bot has to read back over WhatsApp so the resident knows
+ * where to transfer, and it is a property of the building, not of anybody.
  *
  * @param array $owned_nids     'vivienda' nids the person owns.
  * @param array $occupied_nids  'vivienda' nids the person occupies.
  *
  * @return array  One entry per visible unit, with unit_id, unit,
- *                condominium_id, condominium and relation.
+ *                condominium_id, condominium, condominium_payment_info and
+ *                relation.
  */
 function myapi_bot_build_units(array $owned_nids, array $occupied_nids) {
   $nids = array_values(array_unique(array_merge($owned_nids, $occupied_nids)));
@@ -185,11 +188,12 @@ function myapi_bot_build_units(array $owned_nids, array $occupied_nids) {
     }
 
     $built[] = [
-      'unit_id'        => (int) $unit->nid,
-      'unit'           => $unit->name,
-      'condominium_id' => (int) $unit->condominio_nid,
-      'condominium'    => $condominiums[$unit->condominio_nid]->title,
-      'relation'       => isset($owned[$unit->nid]) ? 'owner' : 'occupant',
+      'unit_id'                  => (int) $unit->nid,
+      'unit'                     => $unit->name,
+      'condominium_id'           => (int) $unit->condominio_nid,
+      'condominium'              => $condominiums[$unit->condominio_nid]->title,
+      'condominium_payment_info' => $condominiums[$unit->condominio_nid]->payment_information,
+      'relation'                 => isset($owned[$unit->nid]) ? 'owner' : 'occupant',
     ];
   }
 
@@ -759,8 +763,14 @@ function myapi_bot_search_owner($uid, array $names) {
  * @param array $owner_names          Map of uid => display name; a uid that is
  *                                    missing answers a null owner.
  *
+ * condominium_payment_info is born NULL here and filled in by the caller after
+ * the cut, for the same reason `owner` is: the text belongs to the building,
+ * and looking it up for matches that are never answered is a query for
+ * nothing.
+ *
  * @return array  Every matching unit, ordered, with unit_id, unit,
- *                condominium_id, condominium, owner and match.
+ *                condominium_id, condominium, condominium_payment_info, owner
+ *                and match.
  */
 function myapi_bot_build_search_results(array $units, array $unit_ranks, array $condominium_ranks, array $condominium_titles, array $owner_names) {
   $built = [];
@@ -782,12 +792,13 @@ function myapi_bot_build_search_results(array $units, array $unit_ranks, array $
 
     $built[] = [
       'element' => [
-        'unit_id'        => (int) $unit->nid,
-        'unit'           => $unit->name,
-        'condominium_id' => (int) $unit->condominio_nid,
-        'condominium'    => $condominium_titles[$unit->condominio_nid],
-        'owner'          => myapi_bot_search_owner($unit->owner_uid, $owner_names),
-        'match'          => ($unit_rank === 'fuzzy' || $condominium_rank === 'fuzzy') ? 'fuzzy' : 'exact',
+        'unit_id'                  => (int) $unit->nid,
+        'unit'                     => $unit->name,
+        'condominium_id'           => (int) $unit->condominio_nid,
+        'condominium'              => $condominium_titles[$unit->condominio_nid],
+        'condominium_payment_info' => NULL,
+        'owner'                    => myapi_bot_search_owner($unit->owner_uid, $owner_names),
+        'match'                    => ($unit_rank === 'fuzzy' || $condominium_rank === 'fuzzy') ? 'fuzzy' : 'exact',
       ],
       'unit_weight'        => myapi_bot_match_weight($unit_rank),
       'condominium_weight' => myapi_bot_match_weight($condominium_rank),
@@ -917,6 +928,23 @@ function myapi_bot_units_search() {
       $uid = isset($owner_uids[$result['unit_id']]) ? $owner_uids[$result['unit_id']] : NULL;
       $results[$index]['owner'] = myapi_bot_search_owner($uid, $names);
     }
+  }
+
+  // The payment information of the buildings that travel, and only of those.
+  // The first phase loaded the titles alone — it compares 150 of them and has
+  // no use for anything else — so the text comes from the sibling query that
+  // carries it, asked for the couple of condominiums behind the five results.
+  $condominium_nids = [];
+  foreach ($results as $result) {
+    $condominium_nids[$result['condominium_id']] = TRUE;
+  }
+
+  $payment_info = myapi_unit_fetch_condominiums(array_keys($condominium_nids));
+  foreach ($results as $index => $result) {
+    $nid = $result['condominium_id'];
+    $results[$index]['condominium_payment_info'] = isset($payment_info[$nid])
+      ? $payment_info[$nid]->payment_information
+      : NULL;
   }
 
   myapi_respond([
