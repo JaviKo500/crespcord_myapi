@@ -143,8 +143,8 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'claim_close_denied'                 => 'Only the requester can close this claim.',
       'claim_not_closable'                 => 'This claim can no longer be closed because its status changed.',
       'claim_too_many_images'              => 'Maximum 5 images per claim.',
-      'claim_invalid_image'                => 'Invalid image. Allowed: JPG, JPEG or PNG up to 3 MB.',
-      'claim_invalid_attachment'           => 'Invalid attachment. Allowed: PDF, DOC, DOCX, XLS or XLSX up to 3 MB.',
+      'claim_invalid_image'                => 'Invalid image. Allowed: JPG, JPEG or PNG up to 5 MB.',
+      'claim_invalid_attachment'           => 'Invalid attachment. Allowed: PDF, DOC, DOCX, XLS or XLSX up to 5 MB.',
       'file_not_found'                     => 'File not found.',
       // SPEC 82. A key of its own and not a reuse of claim_not_found: they are
       // different messages for the end user, and the catalogue does not share
@@ -164,8 +164,8 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       // SPEC 90.
       'service_request_created'            => 'Service request created successfully.',
       'service_request_too_many_images'    => 'Maximum 5 images per service request.',
-      'service_request_invalid_image'      => 'Invalid image. Allowed: JPG, JPEG or PNG up to 3 MB.',
-      'service_request_invalid_attachment' => 'Invalid attachment. Allowed: PDF, DOC, DOCX, XLS or XLSX up to 3 MB.',
+      'service_request_invalid_image'      => 'Invalid image. Allowed: JPG, JPEG or PNG up to 5 MB.',
+      'service_request_invalid_attachment' => 'Invalid attachment. Allowed: PDF, DOC, DOCX, XLS or XLSX up to 5 MB.',
       'service_request_too_many_attachments' => 'Only one attachment per service request.',
       'provider_not_eligible'              => 'The selected provider cannot receive this request.',
       // SPEC 95.
@@ -370,8 +370,8 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       'claim_close_denied'                 => 'Solo el solicitante puede cerrar este reclamo.',
       'claim_not_closable'                 => 'Este reclamo ya no se puede cerrar porque su estado cambió.',
       'claim_too_many_images'              => 'Máximo 5 imágenes por reclamo.',
-      'claim_invalid_image'                => 'Imagen inválida. Permitidos: JPG, JPEG o PNG hasta 3 MB.',
-      'claim_invalid_attachment'           => 'Adjunto inválido. Permitidos: PDF, DOC, DOCX, XLS o XLSX hasta 3 MB.',
+      'claim_invalid_image'                => 'Imagen inválida. Permitidos: JPG, JPEG o PNG hasta 5 MB.',
+      'claim_invalid_attachment'           => 'Adjunto inválido. Permitidos: PDF, DOC, DOCX, XLS o XLSX hasta 5 MB.',
       'file_not_found'                     => 'Archivo no encontrado.',
       'provider_not_found'                 => 'Proveedor no encontrado.',
       // SPEC 89 — see the note next to the English pair.
@@ -380,8 +380,8 @@ function myapi_t($key, $replacements = [], $lang = NULL) {
       // SPEC 90.
       'service_request_created'            => 'Solicitud de servicio creada correctamente.',
       'service_request_too_many_images'    => 'Máximo 5 imágenes por solicitud.',
-      'service_request_invalid_image'      => 'Imagen inválida. Permitidos: JPG, JPEG o PNG hasta 3 MB.',
-      'service_request_invalid_attachment' => 'Adjunto inválido. Permitidos: PDF, DOC, DOCX, XLS o XLSX hasta 3 MB.',
+      'service_request_invalid_image'      => 'Imagen inválida. Permitidos: JPG, JPEG o PNG hasta 5 MB.',
+      'service_request_invalid_attachment' => 'Adjunto inválido. Permitidos: PDF, DOC, DOCX, XLS o XLSX hasta 5 MB.',
       'service_request_too_many_attachments' => 'Solo se permite un adjunto por solicitud.',
       'provider_not_eligible'              => 'El proveedor seleccionado no puede recibir esta solicitud.',
       // SPEC 95.

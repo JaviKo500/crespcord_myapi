@@ -900,7 +900,7 @@ class ServicesInstallTest extends TestCase {
     $this->assertStringContainsString("'required' => 0", $instance);
     $this->assertStringContainsString("'widget' => ['type' => 'image_image']", $instance);
     $this->assertStringContainsString("'file_extensions' => 'png jpg jpeg'", $instance);
-    $this->assertStringContainsString("'max_filesize' => '3 MB'", $instance);
+    $this->assertStringContainsString("'max_filesize' => '5 MB'", $instance);
   }
 
   /**
@@ -1176,7 +1176,7 @@ class ServicesInstallTest extends TestCase {
 
   /**
    * The instance: optional, on the provider bundle, with the image widget, the
-   * three extensions, the 2 MB cap and BOTH resolutions.
+   * three extensions, the 5 MB cap and BOTH resolutions.
    *
    * The two resolutions are not symmetrical and that is the reason both are
    * pinned here: min_resolution is the only one that REJECTS, so dropping it
@@ -1190,7 +1190,7 @@ class ServicesInstallTest extends TestCase {
     $this->assertStringContainsString("'required' => 0", $instance);
     $this->assertStringContainsString("'widget' => ['type' => 'image_image']", $instance);
     $this->assertStringContainsString("'file_extensions' => 'png jpg jpeg'", $instance);
-    $this->assertStringContainsString("'max_filesize' => '2 MB'", $instance);
+    $this->assertStringContainsString("'max_filesize' => '5 MB'", $instance);
     $this->assertStringContainsString("'min_resolution' => '200x200'", $instance);
     $this->assertStringContainsString("'max_resolution' => '1000x1000'", $instance);
     $this->assertStringContainsString("'alt_field' => 1", $instance);
@@ -1244,7 +1244,7 @@ class ServicesInstallTest extends TestCase {
 
     $this->assertStringContainsString("'cardinality' => 10", $field);
     $this->assertStringContainsString("'settings' => ['uri_scheme' => 'private']", $field);
-    $this->assertStringContainsString("'max_filesize' => '3 MB'", $instance);
+    $this->assertStringContainsString("'max_filesize' => '5 MB'", $instance);
     $this->assertStringNotContainsString("'min_resolution'", $instance);
     $this->assertStringNotContainsString("'max_resolution'", $instance);
   }

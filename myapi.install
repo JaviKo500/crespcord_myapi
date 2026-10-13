@@ -2064,7 +2064,7 @@ function _myapi_claims_install() {
   // bundles (same rule, same limits — see the docblock above).
   $images_settings = [
     'file_extensions'    => 'png jpg jpeg',
-    'max_filesize'       => '3 MB',
+    'max_filesize'       => '5 MB',
     // Alt text is offered but not required — distinct from field_image on
     // 'area' (SPEC 32), which disables it entirely (alt_field = 0).
     'alt_field'          => 1,
@@ -2072,7 +2072,7 @@ function _myapi_claims_install() {
   ];
   $attachment_settings = [
     'file_extensions' => 'pdf doc docx xls xlsx',
-    'max_filesize'    => '3 MB',
+    'max_filesize'    => '5 MB',
   ];
 
   foreach ([$claim_type, $transaction_type] as $bundle) {
@@ -2299,7 +2299,7 @@ function _myapi_services_install() {
     'required'    => 0,
     'settings'    => [
       'file_extensions'    => 'png jpg jpeg',
-      'max_filesize'       => '1 MB',
+      'max_filesize'       => '5 MB',
       'alt_field'          => 1,
       'alt_field_required' => 0,
     ],
@@ -2875,7 +2875,7 @@ function _myapi_services_install() {
     'description' => 'Hasta 10 imágenes para el carrusel de la ficha del proveedor. Se arrastran para ordenarlas: el orden del formulario es el que ve la app. Son privadas: solo se sirven a usuarios autenticados.',
     'settings'    => [
       'file_extensions'    => 'png jpg jpeg',
-      'max_filesize'       => '3 MB',
+      'max_filesize'       => '5 MB',
       'alt_field'          => 1,
       'alt_field_required' => 0,
     ],
@@ -2891,8 +2891,8 @@ function _myapi_services_install() {
   //     stored as 1000x750, with no error and no warning.
   //
   // And max_filesize is validated BEFORE the resize, so the resize never
-  // rescues a heavy file: a 4000x4000 PNG of 5 MB is rejected by weight and
-  // never gets reduced. The 2 MB are those of the file leaving the operator's
+  // rescues a heavy file: a 4000x4000 PNG of 8 MB is rejected by weight and
+  // never gets reduced. The 5 MB are those of the file leaving the operator's
   // disk.
   //
   // The aspect ratio is not validated: D7 has no native ratio check and
@@ -2904,10 +2904,10 @@ function _myapi_services_install() {
     'bundle'      => $provider_type,
     'label'       => 'Logo',
     'required'    => 0,
-    'description' => 'Logo del proveedor. Se recomienda cuadrado, mínimo 200×200 px y máximo 2 MB. Una imagen mayor de 1000×1000 se reduce automáticamente al guardar; una menor de 200×200 se rechaza.',
+    'description' => 'Logo del proveedor. Se recomienda cuadrado, mínimo 200×200 px y máximo 5 MB. Una imagen mayor de 1000×1000 se reduce automáticamente al guardar; una menor de 200×200 se rechaza.',
     'settings'    => [
       'file_extensions'    => 'png jpg jpeg',
-      'max_filesize'       => '2 MB',
+      'max_filesize'       => '5 MB',
       'min_resolution'     => '200x200',
       'max_resolution'     => '1000x1000',
       'alt_field'          => 1,
@@ -3325,7 +3325,7 @@ function _myapi_services_install() {
     'required'    => 0,
     'settings'    => [
       'file_extensions'    => 'png jpg jpeg',
-      'max_filesize'       => '3 MB',
+      'max_filesize'       => '5 MB',
       'alt_field'          => 1,
       'alt_field_required' => 0,
     ],
@@ -3339,7 +3339,7 @@ function _myapi_services_install() {
     'required'    => 0,
     'settings'    => [
       'file_extensions' => 'pdf doc docx xls xlsx',
-      'max_filesize'    => '3 MB',
+      'max_filesize'    => '5 MB',
     ],
     'widget'      => ['type' => 'file_generic'],
   ]);
