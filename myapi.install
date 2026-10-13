@@ -403,7 +403,10 @@ function myapi_install() {
  * It reports and does NOT repair. Re-granting the permission on every status
  * report would overrule an administrator who removed it on purpose, which is
  * the same conservative line _myapi_building_admin_install() has held since
- * SPEC 49. myapi_update_7014() is where the permission is granted.
+ * SPEC 49. The permission is granted by _myapi_building_admin_install(): on a
+ * new site from hook_install(), on an existing one from myapi_update_7018(),
+ * the first update to re-run the installer after SPEC 51 added the permission
+ * to its catalogue. There is no myapi_update_7014().
  *
  * A site without the role says nothing at all: the role is created by this
  * module's installer, but a site may legitimately have deleted it.
@@ -3762,8 +3765,8 @@ function myapi_update_7013() {
  * Idempotent: user_role_revoke_permissions() deletes rows, so a second run
  * removes nothing that is not there. A site without the role does nothing.
  *
- * The number is 7015 and NOT 7014: SPEC 51 takes 7014, and reusing a number
- * would leave one of the two unrun on every site that already ran the other.
+ * The number is 7015 and NOT 7014: SPEC 51 reserved 7014 for a function that
+ * was never written. 7014 stays unused; see myapi_update_7017().
  */
 function myapi_update_7015() {
   module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
@@ -3898,11 +3901,11 @@ function myapi_update_7016() {
  * disable/enable cycle and without touching any existing table or bundle
  * (my_api_tokens, myapi_notifications, 'area'/'reservation', etc.).
  *
- * The number is 7017 and NOT 7014, the next number the two comments above
- * myapi_requirements() and myapi_update_7015() point at: SPEC 51 reserved 7014
- * for a permission repair whose function was never written, a gap that
- * predates this spec and that this spec does not fill. 7015 and 7016 are
- * already taken, so 7017 is the first number actually free.
+ * The number is 7017 and NOT 7014: SPEC 51 reserved 7014 for a permission
+ * repair whose function was never written (the permission ended up granted by
+ * myapi_update_7018()), a gap that predates this spec and that this spec does
+ * not fill. 7015 and 7016 are already taken, so 7017 is the first number
+ * actually free.
  */
 function myapi_update_7017() {
   _myapi_claims_install();

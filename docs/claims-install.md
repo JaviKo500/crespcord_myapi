@@ -217,11 +217,11 @@ the claims schema.
 
 ### Why `myapi_update_7017` and not `myapi_update_7014`
 
-`myapi_update_7014` is the number two existing comments in `myapi.install`
-(above `myapi_requirements()` and above `myapi_update_7015()`) point at as
-"reserved by SPEC 51" — but that function was never written. It is a
-preexisting gap this spec documents and does not fill: reusing 7014 would
-paper over a bug this spec did not create and cannot fully diagnose. `7015`
+`myapi_update_7014` was reserved by SPEC 51 for a permission repair, but that
+function was never written: the permission (`access user profiles`) ended up
+granted by `myapi_update_7018()`, which re-runs `_myapi_building_admin_install()`.
+7014 stays an intentional gap; reusing it would leave it unrun on any site whose
+schema version already passed it. `7015`
 and `7016` are already taken, so `7017` is the next number genuinely free.
 
 ---
