@@ -138,11 +138,11 @@ reasoning SPEC 32 used for `field_condominium`.
 
 | Field | Type | Cardinality | Instance settings (identical on both bundles) |
 |---|---|---|---|
-| `field_images` | image | Unlimited (`-1`) | `file_extensions = 'png jpg jpeg'`, `max_filesize = '3 MB'`, alt text enabled but not required (`alt_field = 1`, `alt_field_required = 0`) — distinct from `field_image` on `area` (SPEC 32), which disables alt entirely. |
-| `field_attachment` | file | 1 | `file_extensions = 'pdf doc docx xls xlsx'`, `max_filesize = '3 MB'`. |
+| `field_images` | image | Unlimited (`-1`) | `file_extensions = 'png jpg jpeg'`, `max_filesize = '5 MB'`, alt text enabled but not required (`alt_field = 1`, `alt_field_required = 0`) — distinct from `field_image` on `area` (SPEC 32), which disables alt entirely. |
+| `field_attachment` | file | 1 | `file_extensions = 'pdf doc docx xls xlsx'`, `max_filesize = '5 MB'`. |
 
 Neither instance is required. A file outside the allowed extensions or over
-3 MB is rejected by Drupal's native Field API validation on the node form —
+5 MB is rejected by Drupal's native Field API validation on the node form —
 no custom validation code is added by this spec.
 
 ## `field_claim` — the 1:N link to the timeline

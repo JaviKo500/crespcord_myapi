@@ -407,7 +407,7 @@ value has no effect, because there is no such input to send.
 | Aspect | Images | Attachment |
 |--------|--------|------------|
 | Extensions | `jpg`, `jpeg`, `png` (SPEC 55, unchanged) | `pdf`, `doc`, `docx`, `xls`, `xlsx` (SPEC 55, unchanged) |
-| Size | ≤ 3 MB each | ≤ 3 MB |
+| Size | ≤ 5 MB each | ≤ 5 MB |
 | Count | Up to 5. A 6th file → `422 claim_too_many_images`, none saved. | At most 1 — `attachment` is not an array field, so a second `attachment` part sent by the client is not receivable as two files. |
 | Real MIME | Checked with `finfo`, derived from the field's own allowed extensions (not hardcoded). Mismatch (e.g. a `.php` renamed to `.jpg`) → `422 invalid_file_type`. | Same check → `422 invalid_file_type`. |
 | Rejected extension/size | `422 claim_invalid_image` | `422 claim_invalid_attachment` |

@@ -193,7 +193,7 @@ marketplace is the same for the whole site, exactly like
 **Every image costs a PHP request.** A private file is not served by the web
 server: ten images are ten Drupal bootstraps, with no CDN, no web-server cache
 and no `304` by `ETag`. That is the accepted price of the privacy decision, and
-it is bounded by the 10-image cap and the 3 MB per file.
+it is bounded by the 10-image cap and the 5 MB per file.
 
 Out of scope today: image styles and thumbnails (the original is served),
 `Range` and partial downloads, and any write path.

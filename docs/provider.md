@@ -294,7 +294,7 @@ Three things worth knowing before painting it:
   express decision, so a `1000×300` reaches the app. Paint it with
   `BoxFit.contain` over a fixed-ratio box: the logo arrives whole, with margins,
   instead of cropped or stretched.
-- **It is at most 1000×1000 and 2 MB**, the original file with no image style
+- **It is at most 1000×1000 and 5 MB**, the original file with no image style
   and no thumbnail behind it. There is no `?style=` derivative served by the API.
 
 The logo is **read-only over the API**, like everything else in the marketplace:

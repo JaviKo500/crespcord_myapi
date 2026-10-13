@@ -46,7 +46,7 @@ Servicios Generales) are loaded by the operator, not by the installer.
 | Field | Type | Required | Notes |
 |---|---|:---:|---|
 | `field_category_code` | text (32) | Yes | The stable identifier that travels in the API. A `tid` changes if the vocabulary is re-imported; this code does not. Uppercase, no spaces — `CLEANING`, `MAINTENANCE`. |
-| `field_category_icon` | image | No | `png jpg jpeg`, 1 MB. **`uri_scheme = 'public'`** — see [Which files are private](#which-files-are-private). |
+| `field_category_icon` | image | No | `png jpg jpeg`, 5 MB. **`uri_scheme = 'public'`** — see [Which files are private](#which-files-are-private). |
 
 Uniqueness of `field_category_code` is **not** enforced yet: it needs a
 `hook_form_alter()` validation, which is module code and belongs to the spec
@@ -94,8 +94,8 @@ Native title = «Nombre comercial».
 | `field_hourly_rate` | number_decimal (10,2) | 1 | No | SPEC 81. «Valor hora». Informative reference price, in the module's implicit currency. `min = 0`, `prefix = '$ '` — see [The hourly rate](#the-hourly-rate). |
 | `field_tags` | taxonomy_term_reference → `provider_tag` | ∞ | No | SPEC 81. «Etiquetas». Autocomplete (`taxonomy_autocomplete`) that **creates the terms it does not find** — see [How the tags are born](#how-the-tags-are-born). |
 | `field_short_description` | text (255) | 1 | No | SPEC 81. «Descripción corta». One line for the marketplace card. No text format selector. |
-| `field_gallery` | image | **10** | No | SPEC 82. «Galería». `png jpg jpeg`, 3 MB, **`private://`** — see [Which files are private](#which-files-are-private) and [provider-gallery.md](provider-gallery.md). Replaces the deleted `field_photo`. |
-| `field_logo` | image | 1 | No | SPEC 85. «Logo». `png jpg jpeg`, 2 MB, `200x200`–`1000x1000`, **`public://`** — see [The logo](#the-logo) and [Which files are private](#which-files-are-private). |
+| `field_gallery` | image | **10** | No | SPEC 82. «Galería». `png jpg jpeg`, 5 MB, **`private://`** — see [Which files are private](#which-files-are-private) and [provider-gallery.md](provider-gallery.md). Replaces the deleted `field_photo`. |
+| `field_logo` | image | 1 | No | SPEC 85. «Logo». `png jpg jpeg`, 5 MB, `200x200`–`1000x1000`, **`public://`** — see [The logo](#the-logo) and [Which files are private](#which-files-are-private). |
 
 The two counters exist so the "providers of a category" listing does not run an
 `AVG()` per row. The hooks that recalculate them ship with the rating flow;
@@ -152,8 +152,8 @@ equivalent limits is the mistake worth avoiding:
 | `min_resolution = 200x200` | **REJECTS.** An image below it cannot be saved and the form says the minimum. |
 | `max_resolution = 1000x1000` | **RESIZES, silently.** A `2000×1500` is accepted and stored as `1000×750`, with no error and no warning. |
 
-And `max_filesize = 2 MB` **is validated BEFORE the resize**, so the resize never
-rescues a heavy file: a `4000×4000` PNG of 5 MB is rejected **by weight** and
+And `max_filesize = 5 MB` **is validated BEFORE the resize**, so the resize never
+rescues a heavy file: a `4000×4000` PNG of 8 MB is rejected **by weight** and
 never gets reduced. The operator has to export it light already — the automatic
 resize saves pixels, not upload bytes. Both behaviours are written in the field's
 description, which is the only text the operator reads while uploading.

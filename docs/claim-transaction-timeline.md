@@ -631,7 +631,7 @@ drush cc all
 | Submit | Creates the transaction, redirects to `node/%nid/edit`, full reload |
 | After redirect | New transaction is first in the timeline |
 | No `create claim_transaction content`, or no condominium access (SPEC 56) | 403 on this route, even with the `nid` known |
-| Image > 3 MB, or wrong extension; attachment outside `pdf/doc/docx/xls/xlsx` | Rejected with the native field validation message |
+| Image > 5 MB, or wrong extension; attachment outside `pdf/doc/docx/xls/xlsx` | Rejected with the native field validation message |
 
 **Files matrix** — the creation form only; on `node/%nid/edit` these are the
 native widgets and were never affected:

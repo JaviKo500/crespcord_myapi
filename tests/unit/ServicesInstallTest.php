@@ -978,6 +978,22 @@ class ServicesInstallTest extends TestCase {
   }
 
   /**
+   * Existing sites keep the size their instances were created with, so the
+   * 5 MB cap of the installer reaches them only through myapi_update_7050(),
+   * which must cover every file and image instance the installer declares.
+   */
+  public function testUpdate7050RaisesEveryUploadInstanceToFiveMegabytes() {
+    $update = $this->functionSource('myapi_update_7050');
+
+    $this->assertStringContainsString("\$instance['settings']['max_filesize'] = '5 MB';", $update);
+    $this->assertStringContainsString('field_update_instance($instance);', $update);
+    foreach (['field_images', 'field_attachment', 'field_gallery', 'field_logo', 'field_category_icon'] as $field_name) {
+      $this->assertStringContainsString("'$field_name'", $update);
+    }
+    $this->assertStringContainsString("'claim_transaction'", $update);
+  }
+
+  /**
    * myapi_update_7028 and everything before it stay untouched: a spec that
    * renumbers an existing update leaves every already-updated site skipping it
    * or running it twice.
@@ -1082,7 +1098,8 @@ class ServicesInstallTest extends TestCase {
     $this->assertStringContainsString('function myapi_update_7047(&$sandbox)', $source);
     $this->assertStringContainsString('function myapi_update_7048()', $source);
     $this->assertStringContainsString('function myapi_update_7049()', $source);
-    $this->assertStringNotContainsString('function myapi_update_7050', $source);
+    $this->assertStringContainsString('function myapi_update_7050()', $source);
+    $this->assertStringNotContainsString('function myapi_update_7051', $source);
     // 7028 is still SPEC 81's, not this spec's.
     $this->assertStringContainsString(
       '_myapi_services_install();',

@@ -1333,7 +1333,7 @@ rejected for its provider never leaves an orphaned upload behind.
 | Aspect | Images | Attachment |
 |--------|--------|------------|
 | Extensions | `jpg`, `jpeg`, `png` | `pdf`, `doc`, `docx`, `xls`, `xlsx` |
-| Size | ≤ 3 MB each (inherited from the field instance, same limit `field_images`/`field_attachment` have carried since SPEC 77) | ≤ 3 MB |
+| Size | ≤ 5 MB each (inherited from the field instance; raised from 3 MB by `myapi_update_7050()`) | ≤ 5 MB |
 | Count | Up to 5. A 6th file → `422 service_request_too_many_images`, none saved. | At most 1. Sending the input as `attachment[]` with two files → `422 service_request_too_many_attachments`, none saved. |
 | Real MIME | Checked with `finfo`, derived from the field's own allowed extensions. Mismatch (e.g. a `.php` renamed to `.jpg`) → `422 invalid_file_type`. | Same check → `422 invalid_file_type`. |
 | Rejected extension/size | `422 service_request_invalid_image` | `422 service_request_invalid_attachment` |

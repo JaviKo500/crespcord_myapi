@@ -5339,3 +5339,51 @@ function myapi_update_7049() {
 
   return t('SPEC 130: columna uid_resolved añadida a myapi_bot_payments.');
 }
+
+/**
+ * Raises every file and image upload of the module to a single 5 MB cap.
+ *
+ * The limit lives in the field instance settings, and the API reads it from
+ * there (file_field_widget_upload_validators() in myapi_node_files_*), so the
+ * installer change alone would only reach new sites: existing instances keep
+ * the size they were created with. The payment receipt is not a field of this
+ * module and was already capped at 5 MB in myapi_payment_write.inc.
+ *
+ * Idempotent: an instance already at 5 MB, or missing on this site, is skipped.
+ */
+function myapi_update_7050() {
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+  module_load_include('inc', 'myapi', 'includes/myapi.services_common');
+
+  $targets = [
+    ['node', MYAPI_BUILDING_ADMIN_CLAIM_TYPE, 'field_images'],
+    ['node', MYAPI_BUILDING_ADMIN_CLAIM_TYPE, 'field_attachment'],
+    ['node', 'claim_transaction', 'field_images'],
+    ['node', 'claim_transaction', 'field_attachment'],
+    ['node', MYAPI_SERVICES_REQUEST_TYPE, 'field_images'],
+    ['node', MYAPI_SERVICES_REQUEST_TYPE, 'field_attachment'],
+    ['node', MYAPI_SERVICES_PROVIDER_TYPE, 'field_gallery'],
+    ['node', MYAPI_SERVICES_PROVIDER_TYPE, 'field_logo'],
+    ['taxonomy_term', MYAPI_SERVICES_CATEGORY_VOCABULARY, 'field_category_icon'],
+  ];
+
+  $updated = [];
+  foreach ($targets as $target) {
+    list($entity_type, $bundle, $field_name) = $target;
+    $instance = field_info_instance($entity_type, $field_name, $bundle);
+    if (!$instance || (isset($instance['settings']['max_filesize']) && $instance['settings']['max_filesize'] === '5 MB')) {
+      continue;
+    }
+    $instance['settings']['max_filesize'] = '5 MB';
+    if ($field_name === 'field_logo') {
+      $instance['description'] = str_replace('máximo 2 MB', 'máximo 5 MB', $instance['description']);
+    }
+    field_update_instance($instance);
+    $updated[] = $bundle . '.' . $field_name;
+  }
+
+  if (!$updated) {
+    return t('Límite de subida: todas las instancias ya estaban en 5 MB.');
+  }
+  return t('Límite de subida subido a 5 MB en: @list.', ['@list' => implode(', ', $updated)]);
+}

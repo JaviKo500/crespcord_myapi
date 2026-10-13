@@ -19,7 +19,7 @@ Seguir **en orden**. Los valores entre `<...>` son secretos: nunca se suben al r
   drush sqlq "SELECT schema_version FROM dr_system WHERE name='myapi'"
   drush updb --no    # lista las pendientes sin ejecutarlas
   ```
-  El máximo es la **7049**. La **7014 no existe** (hueco intencionado).
+  El máximo es la **7050** (sube a 5 MB el límite de todos los campos de archivo). La **7014 no existe** (hueco intencionado).
   Updates destructivas o masivas, por si están pendientes:
   - 7015 **quita** el permiso `view the administration theme` al rol `administrador edificio`.
   - 7016 reescribe la configuración de los campos entityreference.
@@ -196,14 +196,16 @@ Notas:
   `HTTP_AUTHORIZATION`. Verificar con curl (paso 7).
 - [ ] `mod_rewrite` activo y `AllowOverride All` en el docroot (URLs limpias).
 - [ ] HTTPS forzado (redirect de 80 a 443) y HSTS.
-- [ ] **Límites de subida en `php.ini`** (los de Ubuntu, 2M, no bastan). La app envía
-  comprobantes de hasta 5 MB y varios ficheros de hasta 3 MB en una misma petición
-  (reclamos y solicitudes: hasta 5 imágenes más adjuntos):
+- [ ] **Límites de subida en `php.ini`** (los de Ubuntu, 2M, no bastan). Todos los
+  ficheros del módulo admiten hasta **5 MB** (comprobantes, imágenes y adjuntos de
+  reclamos y solicitudes, galería, logo e icono). Una misma petición puede llevar
+  varios: hasta 5 imágenes más un adjunto en reclamos y solicitudes (unos 30 MB):
   ```ini
   upload_max_filesize = 5M
-  post_max_size = 32M
+  post_max_size = 40M
   max_file_uploads = 10
   ```
+  Si hay proxy delante (nginx, Cloudflare), su límite de cuerpo también debe ser ≥ 40 MB.
   Reiniciar PHP-FPM o Apache después.
 - [ ] Extensiones PHP: `openssl` (chat) y `fileinfo` (validación del tipo real de las subidas).
   Comprobar con `php -m`.
@@ -229,7 +231,7 @@ El script sube el módulo, ejecuta `drush updb -y` y `drush cc all`.
 - **Sitio nuevo:** antes, `drush en myapi -y`. Ojo: `hook_install` **no** crea los
   campos del bot de `pagos` (`field_canal`, `field_banco_emisor`, `field_banco_destino`,
   `field_comprobante_ocr`), y la 7046 no llega a ejecutarse porque el módulo ya queda
-  en la 7049. Hay que crearlos a mano (definición en `myapi_update_7046()`), o
+  en la 7050. Hay que crearlos a mano (definición en `myapi_update_7046()`), o
   `bot/payments` responde 500.
 - Opcional: cargar las categorías de servicio. El script de deploy **no** sube
   `scripts/`, así que primero hay que copiarlo:
@@ -304,7 +306,7 @@ Desde la app (o con curl usando `Authorization: Bearer`):
 - [ ] Login y luego `GET /api/v1/units`. **Si da 401, revisar el paso 3.**
 - [ ] Registrar un pago con un comprobante de unos 4 MB. Se crea en "Pendiente de
   verificar" y el archivo queda en `private://comprobantes_pago`.
-- [ ] Crear un reclamo con varias fotos (comprueba `post_max_size`).
+- [ ] Crear un reclamo con varias fotos de unos 4 MB (comprueba `post_max_size`).
 - [ ] `GET /api/v1/payment-methods` muestra los métodos con su tipo.
 - [ ] Aprobar el pago en el backoffice: **llega el push** al móvil y el saldo se
   aplica una sola vez.
