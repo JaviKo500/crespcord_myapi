@@ -1,7 +1,8 @@
 /**
  * @file
  * Styles for the back-office claims listing (SPEC 56), the service-request
- * listing (SPEC 125) and the listings of SPEC 131.
+ * listing (SPEC 125), the listings of SPEC 131 and the payments report
+ * (SPEC 132).
  *
  * Loaded from each listing's page callback with drupal_add_css(), never
  * declared in myapi.info: a stylesheets[] entry would ship this file on every
@@ -13,7 +14,7 @@
  * one of them is touched. Each page keeps its own class — .myapi-claims-filters,
  * .myapi-service-requests-filters, .myapi-reservations-filters,
  * .myapi-providers-filters, .myapi-service-offers-filters,
- * .myapi-service-ratings-filters — so a rule can still be given to one alone
+ * .myapi-service-ratings-filters, .myapi-payments-filters — so a rule can still be given to one alone
  * the day they stop being identical.
  *
  * Everything is namespaced under .myapi-* so it cannot leak into the admin
@@ -35,7 +36,8 @@
 .myapi-reservations-filters,
 .myapi-providers-filters,
 .myapi-service-offers-filters,
-.myapi-service-ratings-filters {
+.myapi-service-ratings-filters,
+.myapi-payments-filters {
   margin: 1em 0 0.5em;
   padding: 12px 14px;
   border: 1px solid #e0e0e0;
@@ -51,7 +53,8 @@
 .myapi-reservations-filters > div,
 .myapi-providers-filters > div,
 .myapi-service-offers-filters > div,
-.myapi-service-ratings-filters > div {
+.myapi-service-ratings-filters > div,
+.myapi-payments-filters > div {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
@@ -62,7 +65,8 @@
 .myapi-reservations-filters .form-item,
 .myapi-providers-filters .form-item,
 .myapi-service-offers-filters .form-item,
-.myapi-service-ratings-filters .form-item {
+.myapi-service-ratings-filters .form-item,
+.myapi-payments-filters .form-item {
   margin: 0 14px 0 0;
   padding: 0;
 }
@@ -72,7 +76,8 @@
 .myapi-reservations-filters label,
 .myapi-providers-filters label,
 .myapi-service-offers-filters label,
-.myapi-service-ratings-filters label {
+.myapi-service-ratings-filters label,
+.myapi-payments-filters label {
   display: block;
   margin-bottom: 3px;
   font-size: 0.82em;
@@ -114,4 +119,29 @@
 .myapi-provider-situation-suspended {
   background: #e6e6e6;
   color: #444;
+}
+
+/* ---- Payments report (SPEC 132) ----
+ *
+ * The 'Descargar CSV' button above the table and the total row under it. The
+ * total is the one figure of the page an operator reads twice, so it is set
+ * apart from the table rather than mixed into its rows. */
+
+.myapi-payments-actions {
+  margin: 0.5em 0;
+  text-align: right;
+}
+
+.myapi-payments-csv {
+  white-space: nowrap;
+}
+
+.myapi-payments-total {
+  margin: 0.5em 0 1em;
+  padding: 8px 14px;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  background: #fafafa;
+  font-weight: bold;
+  text-align: right;
 }

@@ -871,6 +871,26 @@ function myapi_menu() {
     'file'             => 'includes/myapi.service_ratings_admin.inc',
   ];
 
+  // Back-office payments report (SPEC 132). Same pattern as the listings
+  // above, with an access callback of its own: the question is "may this
+  // account see the financial back office?", not the marketplace's. The CSV
+  // is a MENU_CALLBACK child with the same access, reached only from the
+  // 'Descargar CSV' button of the report.
+  $items['admin/content/payments'] = [
+    'title'            => 'Reporte de pagos',
+    'page callback'    => 'myapi_payments_admin_page',
+    'access callback'  => 'myapi_payments_admin_access',
+    'type'             => MENU_NORMAL_ITEM,
+    'file'             => 'includes/myapi.payments_admin.inc',
+  ];
+  $items['admin/content/payments/csv'] = [
+    'title'            => 'Reporte de pagos (CSV)',
+    'page callback'    => 'myapi_payments_admin_csv',
+    'access callback'  => 'myapi_payments_admin_access',
+    'type'             => MENU_CALLBACK,
+    'file'             => 'includes/myapi.payments_admin.inc',
+  ];
+
   // Claim transaction creation page (SPEC 57). Same non-api/v1 pattern as
   // admin/content/claims just above: HTML for an operator, not the JSON
   // envelope. MENU_CALLBACK (not a menu-visible item) since it is only ever
