@@ -861,6 +861,16 @@ function myapi_menu() {
     'file'             => 'includes/myapi.service_offers_admin.inc',
   ];
 
+  // Back-office service-rating listing (SPEC 131). Same access as the two
+  // marketplace listings just above: myapi_marketplace_admin_access().
+  $items['admin/content/service-ratings'] = [
+    'title'            => 'Calificaciones de servicio',
+    'page callback'    => 'myapi_service_ratings_admin_page',
+    'access callback'  => 'myapi_marketplace_admin_access',
+    'type'             => MENU_NORMAL_ITEM,
+    'file'             => 'includes/myapi.service_ratings_admin.inc',
+  ];
+
   // Claim transaction creation page (SPEC 57). Same non-api/v1 pattern as
   // admin/content/claims just above: HTML for an operator, not the JSON
   // envelope. MENU_CALLBACK (not a menu-visible item) since it is only ever

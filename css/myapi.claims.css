@@ -12,8 +12,9 @@
  * the same declarations under another class name would drift the first time
  * one of them is touched. Each page keeps its own class — .myapi-claims-filters,
  * .myapi-service-requests-filters, .myapi-reservations-filters,
- * .myapi-providers-filters, .myapi-service-offers-filters — so a rule can still
- * be given to one alone the day they stop being identical.
+ * .myapi-providers-filters, .myapi-service-offers-filters,
+ * .myapi-service-ratings-filters — so a rule can still be given to one alone
+ * the day they stop being identical.
  *
  * Everything is namespaced under .myapi-* so it cannot leak into the admin
  * theme, and no rule targets a bare element selector.
@@ -33,7 +34,8 @@
 .myapi-service-requests-filters,
 .myapi-reservations-filters,
 .myapi-providers-filters,
-.myapi-service-offers-filters {
+.myapi-service-offers-filters,
+.myapi-service-ratings-filters {
   margin: 1em 0 0.5em;
   padding: 12px 14px;
   border: 1px solid #e0e0e0;
@@ -48,7 +50,8 @@
 .myapi-service-requests-filters > div,
 .myapi-reservations-filters > div,
 .myapi-providers-filters > div,
-.myapi-service-offers-filters > div {
+.myapi-service-offers-filters > div,
+.myapi-service-ratings-filters > div {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
@@ -58,7 +61,8 @@
 .myapi-service-requests-filters .form-item,
 .myapi-reservations-filters .form-item,
 .myapi-providers-filters .form-item,
-.myapi-service-offers-filters .form-item {
+.myapi-service-offers-filters .form-item,
+.myapi-service-ratings-filters .form-item {
   margin: 0 14px 0 0;
   padding: 0;
 }
@@ -67,7 +71,8 @@
 .myapi-service-requests-filters label,
 .myapi-reservations-filters label,
 .myapi-providers-filters label,
-.myapi-service-offers-filters label {
+.myapi-service-offers-filters label,
+.myapi-service-ratings-filters label {
   display: block;
   margin-bottom: 3px;
   font-size: 0.82em;
