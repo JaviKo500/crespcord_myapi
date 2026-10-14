@@ -309,7 +309,7 @@ Una página por commit, en este orden (de la más simple a la que más joins tie
 
 **6. Reservas ordenadas por fecha de reserva, no por `nid`.** Lo que el operador pregunta es "¿qué hay reservado?", no "¿qué se creó último?". La columna Creada se muestra igual.
 
-**7. Sin listado de pagos.** *Reporte Pagos* ya existe como View del sitio.
+**7. ~~Sin listado de pagos.~~ *Reporte Pagos* ya existe como View del sitio.** — **Revocada por la [SPEC 132](132-payments-report.md)** (2026-10-14): el canal de la SPEC 129/130 no se puede filtrar en la View y hacía falta una exportación CSV coherente con la tabla. La View sigue existiendo.
 
 ---
 

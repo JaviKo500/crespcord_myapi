@@ -321,6 +321,37 @@ sudo crontab -u www-data -e
 - [ ] Comprobar: con `backend` aparecen los cuatro; con `administrador edificio`
   solo *Listado de reservas*.
 
+### Reporte de pagos (SPEC 132)
+- [ ] En `admin/structure/menu/manage/navigation`, añadir este enlace **debajo
+  de *Calificaciones de servicio***:
+
+  | Título | Ruta |
+  |---|---|
+  | Reporte de pagos | `admin/content/payments` |
+
+  Drupal oculta el enlace a quien no puede entrar en la ruta: lo ven
+  `administrator` y `backend`, y **no** el `administrador edificio`. No hace
+  falta ninguna visibilidad por rol.
+
+  Lo mismo con un comando (cuelga el enlace del mismo padre que *Calificaciones
+  de servicio*, con el peso justo detrás del suyo, y no lo duplica si ya existe):
+
+  ```bash
+  drush php-eval "
+  \$ref = db_query(\"SELECT mlid, plid, weight FROM {menu_links} WHERE menu_name = 'navigation' AND link_path = 'admin/content/service-ratings'\")->fetchObject();
+  if (!\$ref) { print 'No encuentro Calificaciones de servicio en navigation' . PHP_EOL; return; }
+  if (db_query(\"SELECT 1 FROM {menu_links} WHERE menu_name = 'navigation' AND link_path = 'admin/content/payments'\")->fetchField()) { print 'Ya existe' . PHP_EOL; return; }
+  menu_link_save(array('menu_name' => 'navigation', 'link_path' => 'admin/content/payments', 'link_title' => 'Reporte de pagos', 'plid' => \$ref->plid, 'weight' => \$ref->weight + 1, 'module' => 'menu'));
+  menu_cache_clear_all();
+  print 'OK' . PHP_EOL;
+  " && drush cc all
+  ```
+
+  Si un hermano posterior tiene el mismo peso, Drupal ordena el empate por
+  título: revisar el orden en la pantalla del menú y arrastrar si hace falta.
+- [ ] Comprobar: con `backend` aparece *Reporte de pagos*; con `administrador
+  edificio` no.
+
 ### Roles
 - [ ] Revisar los permisos de `administrador edificio` y la advertencia en
   `admin/reports/status`.
