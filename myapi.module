@@ -1204,6 +1204,87 @@ function myapi_claims_admin_access() {
 }
 
 /**
+ * The roles allowed into the back-office reservation listing (SPEC 131).
+ *
+ * Single source of truth for that list, same criterion as
+ * myapi_claims_admin_roles(): myapi_reservations_admin_access() is its only
+ * caller, and names are compared, never rids.
+ *
+ * 'administrador edificio' is here for the same reason it is in the
+ * calendar's list: 'reservation' is in the role's editable catalogue with mode
+ * 'direct' since SPEC 49, so the rows it sees are narrowed to its own
+ * condominiums by the query's ->addTag('node_access'), never by this list.
+ *
+ * @return array  Role names.
+ */
+function myapi_reservations_admin_roles() {
+  module_load_include('inc', 'myapi', 'includes/myapi.building_admin');
+
+  return ['administrator', 'backend', MYAPI_BUILDING_ADMIN_ROLE];
+}
+
+/**
+ * Access callback of admin/content/reservations (SPEC 131).
+ *
+ * By ROLE only, byte for byte the criterion of myapi_claims_admin_access():
+ * an 'administrador edificio' with no condominium assigned still gets in and
+ * sees an empty table — what is shown once in belongs to the query.
+ *
+ * uid 1 is let in explicitly, same guard and same reason as the callbacks
+ * above: the superuser bypass lives inside user_access(), which this callback
+ * never calls.
+ *
+ * @return bool  TRUE when the current user may see the reservation listing.
+ */
+function myapi_reservations_admin_access() {
+  global $user;
+
+  if ((int) $user->uid === 1) {
+    return TRUE;
+  }
+
+  return (bool) array_intersect($user->roles, myapi_reservations_admin_roles());
+}
+
+/**
+ * The roles allowed into the three marketplace listings (SPEC 131).
+ *
+ * Providers, service offers and service ratings share ONE list because the
+ * question is the same for the three pages — "may this account supervise the
+ * marketplace?" — and three copies would drift.
+ *
+ * 'administrador edificio' is deliberately NOT here (decision 2 of SPEC 131):
+ * the role manages condominiums, and none of these bundles has a condominium
+ * of its own — a provider serves every building, and a rating of a 'direct'
+ * request cannot even be tied to a request. Letting it in would require an
+ * indirect scoping mode (offer → request → condominium) that does not exist.
+ *
+ * @return array  Role names.
+ */
+function myapi_marketplace_admin_roles() {
+  return ['administrator', 'backend'];
+}
+
+/**
+ * Access callback of the three marketplace listings (SPEC 131).
+ *
+ * admin/content/providers, admin/content/service-offers and
+ * admin/content/service-ratings. By ROLE only, same criterion and same uid 1
+ * guard as myapi_claims_admin_access().
+ *
+ * @return bool  TRUE when the current user may see the marketplace listings.
+ */
+function myapi_marketplace_admin_access() {
+  global $user;
+
+  if ((int) $user->uid === 1) {
+    return TRUE;
+  }
+
+  return (bool) array_intersect($user->roles, myapi_marketplace_admin_roles());
+}
+
+/**
  * Access callback of node/%node/claim-transaction/add (SPEC 57).
  *
  * Unlike myapi_claims_admin_access() above, this is a per-NODE check, not a
