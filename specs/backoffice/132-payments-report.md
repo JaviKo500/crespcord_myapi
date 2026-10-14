@@ -1,6 +1,6 @@
 # SPEC 132 — Reporte de pagos con filtro por canal y exportación CSV
 
-> **Estado:** Approved · **Depende de:** SPEC 14 (bundle `pagos` y sus campos), SPEC 20 (la app escribe pagos), SPEC 22/23 (catálogo de `field_estado_pago`: `Nuevo`, `Pendiente de verificar`, `Completado`, `Anulado`), SPEC 47 (patrón de página back-office sin AJAX y helpers `myapi_calendar_condominium_options()` / `_positive_int()` / `_filter_form_after_build()`), SPEC 129 (`field_canal`, `field_banco_emisor`, `field_banco_destino`, constantes `MYAPI_PAYMENT_CHANNEL_*`), SPEC 130 (el bot escribe `canal = bot`), SPEC 131 (molde exacto de listado y reglas comunes; **esta spec revoca su decisión 7**) · **Fecha:** 2026-10-14
+> **Estado:** Implemented · **Depende de:** SPEC 14 (bundle `pagos` y sus campos), SPEC 20 (la app escribe pagos), SPEC 22/23 (catálogo de `field_estado_pago`: `Nuevo`, `Pendiente de verificar`, `Completado`, `Anulado`), SPEC 47 (patrón de página back-office sin AJAX y helpers `myapi_calendar_condominium_options()` / `_positive_int()` / `_filter_form_after_build()`), SPEC 129 (`field_canal`, `field_banco_emisor`, `field_banco_destino`, constantes `MYAPI_PAYMENT_CHANNEL_*`), SPEC 130 (el bot escribe `canal = bot`), SPEC 131 (molde exacto de listado y reglas comunes; **esta spec revoca su decisión 7**) · **Fecha:** 2026-10-14
 >
 > **Objetivo:** Añadir una página de back-office de solo lectura en `admin/content/payments` que liste los pagos con los filtros de la View *Reporte Pagos* más un filtro por canal (`App` / `Bot` / `Back office`), muestre el total del valor filtrado y permita descargar el resultado filtrado como CSV.
 
@@ -171,49 +171,49 @@ Todo en un solo commit de feature (`feat(backoffice): add payments report page (
 
 **Rutas y acceso**
 
-- [ ] `admin/content/payments` y `admin/content/payments/csv` responden 200 a `administrator` y `backend`, y 403 a `administrador edificio` y a un autenticado sin roles.
-- [ ] `uid 1` entra a las dos.
-- [ ] Una vez configurado el menú, un `administrador edificio` no ve *Reporte de pagos* en el sidebar.
+- [x] `admin/content/payments` y `admin/content/payments/csv` responden 200 a `administrator` y `backend`, y 403 a `administrador edificio` y a un autenticado sin roles.
+- [x] `uid 1` entra a las dos.
+- [x] Una vez configurado el menú, un `administrador edificio` no ve *Reporte de pagos* en el sidebar.
 
 **Listado**
 
-- [ ] Aparecen pagos de los cuatro estados, incluido `Nuevo`.
-- [ ] Orden: la fecha de pago más reciente arriba; si dos coinciden, el `nid` mayor primero.
-- [ ] La columna Cédula muestra `field_cedula`, nunca el usuario ni el correo.
-- [ ] Un pago cuya vivienda fue borrada aparece con `Vivienda eliminada (#id)` y `—` en condominio, propietario y ocupante: no desaparece.
-- [ ] La columna Canal muestra `App`, `Bot de WhatsApp` o `Back office` según `field_canal`.
+- [x] Aparecen pagos de los cuatro estados, incluido `Nuevo`.
+- [x] Orden: la fecha de pago más reciente arriba; si dos coinciden, el `nid` mayor primero.
+- [x] La columna Cédula muestra `field_cedula`, nunca el usuario ni el correo.
+- [x] Un pago cuya vivienda fue borrada aparece con `Vivienda eliminada (#id)` y `—` en condominio, propietario y ocupante: no desaparece.
+- [x] La columna Canal muestra `App`, `Bot de WhatsApp` o `Back office` según `field_canal`.
 
 **Filtros**
 
-- [ ] `?channel=bot` muestra solo pagos del bot; `?channel=app`, solo de la app; `?channel=backoffice`, incluye los históricos migrados por la SPEC 129.
-- [ ] `?unit_name=` encuentra la vivienda tanto por su título como por `field_nombre_vivienda`, sin distinguir mayúsculas y por coincidencia parcial.
-- [ ] `?owner_last_name=` y `?occupant_last_name=` filtran por `field_apellidos` del usuario correspondiente.
-- [ ] `?condominium=` filtra por el condominio **de la vivienda**.
-- [ ] El rango de fechas filtra `field_fecha_de_pago`, no la fecha de creación.
-- [ ] Entrar sin parámetros de fecha aplica los últimos 30 días y los muestra en el formulario; enviar ambos vacíos quita el límite.
-- [ ] Los parámetros basura (`?status=xyz`, `?condominium=-1`, `?date_from=2026-02-30`, `?channel[]=bot`, un texto de 101 caracteres) se ignoran sin error.
-- [ ] Los filtros se mantienen al cambiar de página.
+- [x] `?channel=bot` muestra solo pagos del bot; `?channel=app`, solo de la app; `?channel=backoffice`, incluye los históricos migrados por la SPEC 129.
+- [x] `?unit_name=` encuentra la vivienda tanto por su título como por `field_nombre_vivienda`, sin distinguir mayúsculas y por coincidencia parcial.
+- [x] `?owner_last_name=` y `?occupant_last_name=` filtran por `field_apellidos` del usuario correspondiente.
+- [x] `?condominium=` filtra por el condominio **de la vivienda**.
+- [x] El rango de fechas filtra `field_fecha_de_pago`, no la fecha de creación.
+- [x] Entrar sin parámetros de fecha aplica los últimos 30 días y los muestra en el formulario; enviar ambos vacíos quita el límite.
+- [x] Los parámetros basura (`?status=xyz`, `?condominium=-1`, `?date_from=2026-02-30`, `?channel[]=bot`, un texto de 101 caracteres) se ignoran sin error.
+- [x] Los filtros se mantienen al cambiar de página.
 
 **Total**
 
-- [ ] La fila de total suma `field_valor` de **todas** las filas filtradas (no solo de la página visible) y muestra el número de pagos.
-- [ ] El total cambia al aplicar un filtro de estado.
+- [x] La fila de total suma `field_valor` de **todas** las filas filtradas (no solo de la página visible) y muestra el número de pagos.
+- [x] El total cambia al aplicar un filtro de estado.
 
 **CSV**
 
-- [ ] *Descargar CSV* baja un archivo `pagos-YYYYmmdd-HHii.csv` con las mismas filas que la tabla, sin paginar, incluido el rango por defecto cuando se está aplicando.
-- [ ] El CSV tiene 17 columnas: las 15 de la pantalla más Banco emisor y Banco destino.
-- [ ] Abierto en Excel, las tildes y la `ñ` se ven bien (BOM UTF-8).
-- [ ] Una referencia `=1+1` aparece en el CSV como `'=1+1`.
-- [ ] La suma de la columna Valor del CSV es igual al total de la página.
-- [ ] Un filtro de 1.000 o más pagos se exporta completo, sin agotar memoria ni tiempo (lotes de 500).
+- [x] *Descargar CSV* baja un archivo `pagos-YYYYmmdd-HHii.csv` con las mismas filas que la tabla, sin paginar, incluido el rango por defecto cuando se está aplicando.
+- [x] El CSV tiene 17 columnas: las 15 de la pantalla más Banco emisor y Banco destino.
+- [x] Abierto en Excel, las tildes y la `ñ` se ven bien (BOM UTF-8).
+- [x] Una referencia `=1+1` aparece en el CSV como `'=1+1`.
+- [x] La suma de la columna Valor del CSV es igual al total de la página.
+- [x] Un filtro de 1.000 o más pagos se exporta completo, sin agotar memoria ni tiempo (lotes de 500).
 
 **Comunes**
 
-- [ ] `git diff main -- resources/ myapi.install includes/*_query.inc` está vacío.
-- [ ] `vendor/bin/phpunit` pasa en verde con el gate de cobertura; `phpstan` no da errores nuevos; no hay sintaxis de PHP 8 (`ModuleContractTest`).
-- [ ] `docs/payments-list.md` existe y describe lo implementado.
-- [ ] La decisión 7 de la SPEC 131 está marcada como revocada.
+- [x] `git diff main -- resources/ myapi.install includes/*_query.inc` está vacío.
+- [x] `vendor/bin/phpunit` pasa en verde con el gate de cobertura; `phpstan` no da errores nuevos; no hay sintaxis de PHP 8 (`ModuleContractTest`).
+- [x] `docs/payments-list.md` existe y describe lo implementado.
+- [x] La decisión 7 de la SPEC 131 está marcada como revocada.
 
 ---
 
