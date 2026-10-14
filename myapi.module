@@ -1328,6 +1328,46 @@ function myapi_marketplace_admin_access() {
 }
 
 /**
+ * The roles allowed into the back-office payments report (SPEC 132).
+ *
+ * Single source of truth for that list, same criterion as
+ * myapi_claims_admin_roles(): myapi_payments_admin_access() is its only
+ * caller, and names are compared, never rids.
+ *
+ * It is NOT myapi_marketplace_admin_roles() even though today the answer is
+ * the same (decision 3 of SPEC 132): the question here is "may this account
+ * see the financial back office?", and the two lists must be free to drift.
+ *
+ * 'administrador edificio' is deliberately NOT here, although the query's
+ * ->addTag('node_access') would already narrow 'pagos' to its own
+ * condominiums: docs/building-admin-role.md keeps the financial back office
+ * away from that role, and changing that is a spec of its own.
+ *
+ * @return array  Role names.
+ */
+function myapi_payments_admin_roles() {
+  return ['administrator', 'backend'];
+}
+
+/**
+ * Access callback of the payments report (SPEC 132).
+ *
+ * admin/content/payments and admin/content/payments/csv. By ROLE only, same
+ * criterion and same uid 1 guard as myapi_claims_admin_access().
+ *
+ * @return bool  TRUE when the current user may see the payments report.
+ */
+function myapi_payments_admin_access() {
+  global $user;
+
+  if ((int) $user->uid === 1) {
+    return TRUE;
+  }
+
+  return (bool) array_intersect($user->roles, myapi_payments_admin_roles());
+}
+
+/**
  * Access callback of node/%node/claim-transaction/add (SPEC 57).
  *
  * Unlike myapi_claims_admin_access() above, this is a per-NODE check, not a
