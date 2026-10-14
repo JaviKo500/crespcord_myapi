@@ -840,6 +840,17 @@ function myapi_menu() {
     'file'             => 'includes/myapi.reservations_admin.inc',
   ];
 
+  // Back-office provider directory (SPEC 131). 'administrator' and 'backend'
+  // only: a provider has no condominium of its own, so the
+  // 'administrador edificio' has nothing to be scoped to (decision 2).
+  $items['admin/content/providers'] = [
+    'title'            => 'Proveedores',
+    'page callback'    => 'myapi_providers_admin_page',
+    'access callback'  => 'myapi_marketplace_admin_access',
+    'type'             => MENU_NORMAL_ITEM,
+    'file'             => 'includes/myapi.providers_admin.inc',
+  ];
+
   // Claim transaction creation page (SPEC 57). Same non-api/v1 pattern as
   // admin/content/claims just above: HTML for an operator, not the JSON
   // envelope. MENU_CALLBACK (not a menu-visible item) since it is only ever

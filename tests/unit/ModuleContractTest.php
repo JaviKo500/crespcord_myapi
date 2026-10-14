@@ -53,6 +53,7 @@ class ModuleContractTest extends TestCase {
     'admin/content/service-requests',
     'admin/content/service-requests/%node',
     'admin/content/reservations',
+    'admin/content/providers',
     'node/%node/claim-transaction/add',
     'node/%node/service-transaction/add',
     'node/%node/service-transaction/%node/delete',
