@@ -127,11 +127,10 @@ $conf['file_private_path'] = '/var/www/private';
  * NO los abre la app.
  */
 $conf['myapi_password_reset_deep_link_base'] = 'crespcord://restablecer-contrasena';
-// PENDIENTE de acordar con la app: no tiene host para solicitudes de servicio.
-// Sin esto, el botón "Ver solicitud" de los correos apunta a myapp://service-requests/<id>
-// y no abre nada. Opciones: que la app añada un host (p. ej. crespcord://solicitudes/{id})
-// o quitar el botón de los correos.
-// $conf['myapi_service_request_deep_link_base'] = 'crespcord://...';
+// Botón "Ver solicitud" de los correos → crespcord://solicitudes/<nid de la solicitud>.
+// Solo lo abren las versiones posteriores a la 1.0.0+5; esa y las anteriores abren la app
+// en su pantalla normal. Activarlo antes no rompe nada.
+$conf['myapi_service_request_deep_link_base'] = 'crespcord://solicitudes';
 
 /**
  * OneSignal (push).
