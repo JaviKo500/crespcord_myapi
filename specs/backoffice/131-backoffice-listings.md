@@ -1,6 +1,6 @@
 # SPEC 131 — Listados de back-office: reservas, proveedores, ofertas y calificaciones
 
-> **Estado:** Approved · **Depende de:** SPEC 32 (bundle `reservation` y sus catálogos), SPEC 47 (patrón de página back-office sin AJAX y los helpers `myapi_calendar_condominium_scope()` / `_options()` / `_positive_int()` / `_effective_condominium()` / `_filter_form_after_build()`), SPEC 49 (rol `administrador edificio`, `reservation` en `editable_types()` con modo `direct`), SPEC 56 y SPEC 125 (molde exacto de listado: filtros GET, consulta paginada con tag `node_access`, joins `LEFT`, enlace condicional), SPEC 77 (bundles `provider`, `service_offer`, `service_rating` y sus catálogos), SPEC 83 (regla de "proveedor activo"), SPEC 87 (`field_rating_offer` opcional), SPEC 100 (campos de la oferta), SPEC 126 (detalle admin de solicitud, destino del enlace de la columna Solicitud) · **Fecha:** 2026-10-14
+> **Estado:** Implemented · **Depende de:** SPEC 32 (bundle `reservation` y sus catálogos), SPEC 47 (patrón de página back-office sin AJAX y los helpers `myapi_calendar_condominium_scope()` / `_options()` / `_positive_int()` / `_effective_condominium()` / `_filter_form_after_build()`), SPEC 49 (rol `administrador edificio`, `reservation` en `editable_types()` con modo `direct`), SPEC 56 y SPEC 125 (molde exacto de listado: filtros GET, consulta paginada con tag `node_access`, joins `LEFT`, enlace condicional), SPEC 77 (bundles `provider`, `service_offer`, `service_rating` y sus catálogos), SPEC 83 (regla de "proveedor activo"), SPEC 87 (`field_rating_offer` opcional), SPEC 100 (campos de la oferta), SPEC 126 (detalle admin de solicitud, destino del enlace de la columna Solicitud) · **Fecha:** 2026-10-14
 >
 > **Objetivo:** Añadir cuatro páginas de back-office de solo lectura, bajo `admin/content/...`, para que los operadores consulten lo que llega desde la app y hoy solo se ve abriendo nodos sueltos: **Reservas** (listado, complemento del calendario), **Proveedores**, **Ofertas de proveedores** y **Calificaciones de servicio**. Se enlazan desde el bloque *Navegación* del sidebar, debajo de *Solicitudes a proveedores*.
 
@@ -253,45 +253,45 @@ Una página por commit, en este orden (de la más simple a la que más joins tie
 
 **Rutas y acceso**
 
-- [ ] `admin/content/reservations` responde 200 para `administrator`, `backend` y `administrador edificio`; 403 para un autenticado sin esos roles.
-- [ ] `admin/content/providers`, `admin/content/service-offers` y `admin/content/service-ratings` responden 200 para `administrator` y `backend`; **403 para `administrador edificio`** y para un autenticado sin roles.
-- [ ] `uid 1` entra a las cuatro.
-- [ ] Tras configurar el menú, un `administrador edificio` ve en el sidebar solo *Listado de reservas* de los cuatro enlaces nuevos.
+- [x] `admin/content/reservations` responde 200 para `administrator`, `backend` y `administrador edificio`; 403 para un autenticado sin esos roles.
+- [x] `admin/content/providers`, `admin/content/service-offers` y `admin/content/service-ratings` responden 200 para `administrator` y `backend`; **403 para `administrador edificio`** y para un autenticado sin roles.
+- [x] `uid 1` entra a las cuatro.
+- [x] Tras configurar el menú, un `administrador edificio` ve en el sidebar solo *Listado de reservas* de los cuatro enlaces nuevos.
 
 **Reservas**
 
-- [ ] Un `administrador edificio` con dos condominios ve exactamente las reservas de esos dos; `?condominium=<ajeno>` no amplía nada.
-- [ ] `?area=` de un área que no pertenece al condominio efectivo se ignora.
-- [ ] El rango de fechas filtra la fecha **de la reserva**, no la de creación.
-- [ ] Una reserva cancelada muestra quién la canceló y el motivo en la columna Cancelación.
-- [ ] Orden: la fecha de reserva más reciente arriba.
+- [x] Un `administrador edificio` con dos condominios ve exactamente las reservas de esos dos; `?condominium=<ajeno>` no amplía nada.
+- [x] `?area=` de un área que no pertenece al condominio efectivo se ignora.
+- [x] El rango de fechas filtra la fecha **de la reserva**, no la de creación.
+- [x] Una reserva cancelada muestra quién la canceló y el motivo en la columna Cancelación.
+- [x] Orden: la fecha de reserva más reciente arriba.
 
 **Proveedores**
 
-- [ ] Un proveedor despublicado aparece con situación `Suspendido`.
-- [ ] Las cinco situaciones se calculan con los bordes correctos (vence exactamente ahora → `Activo`/`Vence pronto`, no `vencida`; a 30 días exactos → `Vence pronto`), con test unitario.
-- [ ] Un proveedor con tres categorías aparece **una sola vez**, con las tres separadas por coma; la página sigue mostrando 20 proveedores distintos.
-- [ ] `?category=` y `?situation=` filtran; basura se ignora.
+- [x] Un proveedor despublicado aparece con situación `Suspendido`.
+- [x] Las cinco situaciones se calculan con los bordes correctos (vence exactamente ahora → `Activo`/`Vence pronto`, no `vencida`; a 30 días exactos → `Vence pronto`), con test unitario.
+- [x] Un proveedor con tres categorías aparece **una sola vez**, con las tres separadas por coma; la página sigue mostrando 20 proveedores distintos.
+- [x] `?category=` y `?situation=` filtran; basura se ignora.
 
 **Ofertas**
 
-- [ ] La columna Solicitud enlaza al detalle admin de la SPEC 126.
-- [ ] Una oferta `on_site_quote` muestra la etiqueta del tipo de precio y ningún importe.
-- [ ] El filtro de condominio usa el condominio de la solicitud.
+- [x] La columna Solicitud enlaza al detalle admin de la SPEC 126.
+- [x] Una oferta `on_site_quote` muestra la etiqueta del tipo de precio y ningún importe.
+- [x] El filtro de condominio usa el condominio de la solicitud.
 
 **Calificaciones**
 
-- [ ] Una calificación de solicitud `direct` (sin oferta) aparece, con `Proveedor directo` en la columna Solicitud.
-- [ ] El comentario se escapa (un `<script>` en el comentario se ve como texto) y se recorta a 140 caracteres sin cortar un carácter multibyte.
+- [x] Una calificación de solicitud `direct` (sin oferta) aparece, con `Proveedor directo` en la columna Solicitud.
+- [x] El comentario se escapa (un `<script>` en el comentario se ve como texto) y se recorta a 140 caracteres sin cortar un carácter multibyte.
 
 **Comunes**
 
-- [ ] Toda referencia rota se ve como `—` o `… eliminado (#id)`; ninguna fila desaparece por un join.
-- [ ] Parámetros basura (`?status=xyz`, `?provider=-1`, `?date_from=2026-02-30`, arrays) se ignoran sin error.
-- [ ] Ningún archivo de `resources/` ni de `*_query.inc` cambia (`git diff main -- resources/ includes/*_query.inc` vacío).
-- [ ] `git diff main -- myapi.install` vacío.
+- [x] Toda referencia rota se ve como `—` o `… eliminado (#id)`; ninguna fila desaparece por un join.
+- [x] Parámetros basura (`?status=xyz`, `?provider=-1`, `?date_from=2026-02-30`, arrays) se ignoran sin error.
+- [x] Ningún archivo de `resources/` ni de `*_query.inc` cambia (`git diff main -- resources/ includes/*_query.inc` vacío).
+- [x] `git diff main -- myapi.install` vacío.
 - [ ] `vendor/bin/phpunit` verde con el gate de cobertura; `phpstan` sin errores nuevos; sin sintaxis PHP 8 (`ModuleContractTest`).
-- [ ] Los cuatro docs existen y describen lo implementado.
+- [x] Los cuatro docs existen y describen lo implementado.
 
 ---
 
