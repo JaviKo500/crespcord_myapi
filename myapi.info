@@ -82,3 +82,4 @@ files[] = includes/myapi.chat.inc
 files[] = resources/chat.resource.inc
 files[] = includes/myapi.bot_auth.inc
 files[] = resources/bot.resource.inc
+files[] = includes/myapi.reservations_admin.inc

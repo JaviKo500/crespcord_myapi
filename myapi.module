@@ -828,6 +828,18 @@ function myapi_menu() {
     'file'             => 'includes/myapi.service_request_detail_admin.inc',
   ];
 
+  // Back-office reservation listing (SPEC 131), the list companion of the
+  // calendar. Same pattern as admin/content/service-requests above. The
+  // 'administrador edificio' gets in and sees only their condominiums: that
+  // narrowing is the query's ->addTag('node_access'), not this entry.
+  $items['admin/content/reservations'] = [
+    'title'            => 'Listado de reservas',
+    'page callback'    => 'myapi_reservations_admin_page',
+    'access callback'  => 'myapi_reservations_admin_access',
+    'type'             => MENU_NORMAL_ITEM,
+    'file'             => 'includes/myapi.reservations_admin.inc',
+  ];
+
   // Claim transaction creation page (SPEC 57). Same non-api/v1 pattern as
   // admin/content/claims just above: HTML for an operator, not the JSON
   // envelope. MENU_CALLBACK (not a menu-visible item) since it is only ever
