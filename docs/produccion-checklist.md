@@ -276,6 +276,51 @@ sudo crontab -u www-data -e
 - [ ] Dar permisos al rol `backend` sobre los tipos de contenido del marketplace.
 - [ ] Revisar el menú de navegación (mismo enlace de arriba).
 
+### Listados de back-office (SPEC 131)
+- [ ] En `admin/structure/menu/manage/navigation`, añadir estos cuatro enlaces
+  **debajo de *Solicitudes a proveedores***, en este orden:
+
+  | Título | Ruta |
+  |---|---|
+  | Listado de reservas | `admin/content/reservations` |
+  | Proveedores | `admin/content/providers` |
+  | Ofertas de proveedores | `admin/content/service-offers` |
+  | Calificaciones de servicio | `admin/content/service-ratings` |
+
+  Drupal oculta el enlace a quien no puede entrar en la ruta: `administrator` y
+  `backend` ven los cuatro, `administrador edificio` solo ve *Listado de
+  reservas*. No hace falta ninguna visibilidad por rol.
+
+  Lo mismo con un comando (cuelga los enlaces del mismo padre que *Solicitudes a
+  proveedores*, con pesos justo detrás del suyo, y no duplica los que ya existan):
+
+  ```bash
+  drush php-eval "
+  \$ref = db_query(\"SELECT mlid, plid, weight FROM {menu_links} WHERE menu_name = 'navigation' AND link_path = 'admin/content/service-requests'\")->fetchObject();
+  if (!\$ref) { print 'No encuentro Solicitudes a proveedores en navigation' . PHP_EOL; return; }
+  \$links = array(
+    'admin/content/reservations' => 'Listado de reservas',
+    'admin/content/providers' => 'Proveedores',
+    'admin/content/service-offers' => 'Ofertas de proveedores',
+    'admin/content/service-ratings' => 'Calificaciones de servicio',
+  );
+  \$w = \$ref->weight;
+  foreach (\$links as \$path => \$title) {
+    \$w++;
+    if (db_query(\"SELECT 1 FROM {menu_links} WHERE menu_name = 'navigation' AND link_path = :p\", array(':p' => \$path))->fetchField()) { continue; }
+    menu_link_save(array('menu_name' => 'navigation', 'link_path' => \$path, 'link_title' => \$title, 'plid' => \$ref->plid, 'weight' => \$w, 'module' => 'menu'));
+  }
+  menu_cache_clear_all();
+  print 'OK' . PHP_EOL;
+  " && drush cc all
+  ```
+
+  Si algún hermano posterior tiene el mismo peso que uno de los nuevos, Drupal
+  ordena el empate por título: revisar el orden en la pantalla del menú y
+  arrastrar si hace falta.
+- [ ] Comprobar: con `backend` aparecen los cuatro; con `administrador edificio`
+  solo *Listado de reservas*.
+
 ### Roles
 - [ ] Revisar los permisos de `administrador edificio` y la advertencia en
   `admin/reports/status`.
