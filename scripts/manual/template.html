@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>$pagetitle$ · Manual de CrespCord</title>
+<link rel="icon" href="$root$img/crespcord-icon.png">
+<style>
+:root {
+  --brand: #604030;
+  --brand-strong: #4a3326;
+  --accent: #907050;
+  --bg: #f8f4ef;
+  --surface: #ffffff;
+  --surface-alt: #fcfaf7;
+  --sunken: #f1ebe3;
+  --line: #e7ded3;
+  --text: #352c26;
+  --text-strong: #221b16;
+  --muted: #6b5d52;
+  --on-brand: #f7f1ea;
+  --shadow: 0 1px 2px rgba(43, 29, 20, .06), 0 4px 16px rgba(43, 29, 20, .08);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --brand: #d6c5b6;
+    --brand-strong: #ece2d8;
+    --accent: #c5ad8c;
+    --bg: #1b1511;
+    --surface: #241c17;
+    --surface-alt: #2a211b;
+    --sunken: #30261f;
+    --line: #3d3129;
+    --text: #e7ded3;
+    --text-strong: #f8f4ef;
+    --muted: #b6a795;
+    --on-brand: #f7f1ea;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 4px 16px rgba(0, 0, 0, .3);
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 17px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+a { color: var(--brand); text-underline-offset: 2px; }
+a:hover { color: var(--brand-strong); }
+
+/* ---- Top bar ---- */
+.topbar {
+  background: #604030;
+  color: var(--on-brand);
+}
+.topbar-inner {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.topbar img { width: 34px; height: 34px; padding: 3px; border-radius: 9px; background: #f7f1ea; }
+.topbar a { color: inherit; text-decoration: none; font-weight: 600; letter-spacing: .01em; }
+.topbar small { opacity: .75; font-weight: 400; }
+
+main {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 8px 16px 48px;
+}
+
+/* ---- Pager ---- */
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+  font-size: 15px;
+}
+.pager a {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pager a.index { flex: 0 0 auto; }
+.pager a.next { text-align: right; }
+@media (max-width: 480px) {
+  .pager .long { display: none; }
+}
+
+/* ---- Headings ---- */
+h1 {
+  color: var(--text-strong);
+  font-size: 30px;
+  line-height: 1.2;
+  margin: 24px 0 8px;
+}
+h2 {
+  color: var(--brand);
+  font-size: 23px;
+  line-height: 1.25;
+  margin: 40px 0 0;
+  padding-top: 16px;
+  border-top: 2px solid var(--line);
+  scroll-margin-top: 16px;
+}
+h3 { font-size: 19px; margin: 28px 0 8px; }
+
+/* ---- "En esta página" ---- */
+details.toc {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 4px 16px;
+  margin: 16px 0 8px;
+}
+details.toc summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 8px 0;
+  color: var(--text-strong);
+}
+details.toc ul { margin: 0 0 8px; padding-left: 20px; }
+details.toc li { margin: 4px 0; }
+
+/* ---- "**¿Para qué sirve?**" labels ---- */
+.label p {
+  margin: 24px 0 2px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.label + p { margin-top: 0; }
+
+/* ---- Screenshots: 280 px, two per row, wrap when they don't fit ---- */
+.shots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 16px 0 20px;
+}
+.shots figure {
+  margin: 0;
+  flex: 0 1 280px;
+  min-width: 0;
+}
+.shots img {
+  display: block;
+  width: 100%;
+  max-width: 280px;
+  height: auto;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  background: var(--surface);
+}
+.shots figcaption {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 6px;
+  line-height: 1.4;
+}
+li .shots { margin: 12px 0; }
+@media (max-width: 400px) {
+  /* Two 280 px shots don't fit: show them side by side, scaled down. */
+  .shots { gap: 10px; }
+  .shots figure { flex: 1 1 140px; }
+}
+
+/* ---- Lists, tables, quotes ---- */
+ol, ul { padding-left: 24px; }
+li { margin: 6px 0; }
+li::marker { color: var(--accent); font-weight: 600; }
+.table-wrap { overflow-x: auto; margin: 16px 0; }
+table {
+  border-collapse: collapse;
+  width: 100%;
+  background: var(--surface);
+  border-radius: 10px;
+  overflow: hidden;
+  font-size: 15px;
+}
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { background: var(--sunken); color: var(--text-strong); }
+tr:last-child td { border-bottom: 0; }
+blockquote {
+  margin: 16px 0;
+  padding: 12px 16px;
+  background: var(--sunken);
+  border-left: 4px solid var(--accent);
+  border-radius: 0 10px 10px 0;
+  color: var(--muted);
+}
+blockquote p { margin: 0; }
+code { background: var(--sunken); padding: 1px 5px; border-radius: 4px; font-size: .9em; }
+
+footer {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 0 16px 32px;
+  color: var(--muted);
+  font-size: 14px;
+}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <img src="$root$img/crespcord-icon.png" alt="">
+    <a href="$if(root)$$root$$else$./$endif$">CrespCord <small>· Manual de usuario</small></a>
+  </div>
+</header>
+<main>
+$if(pager)$
+$pager$
+$endif$
+<h1>$heading$</h1>
+$if(toc)$
+<details class="toc">
+<summary>En esta página</summary>
+$table-of-contents$
+</details>
+$endif$
+$body$
+$if(pager)$
+$pager$
+$endif$
+</main>
+<footer>CrespCord · Manual de usuario de la app</footer>
+</body>
+</html>

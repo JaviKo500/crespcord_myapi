@@ -1,0 +1,31 @@
+# Published as /var/www/html/manual/.htaccess by scripts/deploy-manual.sh.
+#
+# The manual is plain static files served by Apache, outside Drupal. Drupal's
+# root .htaccess lets existing files and directories through and lists
+# index.html in DirectoryIndex, so nothing else is needed for the routing.
+#
+# It does set ExpiresDefault to two weeks for every file, HTML included, which
+# would keep an outdated manual in the browser. Override it here: pages are
+# always revalidated (ETag), screenshots are cached for a year because the
+# build appends ?v=<hash> to their URL whenever they change.
+
+Options -Indexes
+
+<IfModule mod_expires.c>
+  <FilesMatch "\.html$">
+    ExpiresActive Off
+  </FilesMatch>
+  <FilesMatch "\.png$">
+    ExpiresActive On
+    ExpiresDefault "access plus 1 year"
+  </FilesMatch>
+</IfModule>
+
+<IfModule mod_headers.c>
+  <FilesMatch "\.html$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+  <FilesMatch "\.png$">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+  </FilesMatch>
+</IfModule>
