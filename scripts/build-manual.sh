@@ -7,6 +7,9 @@
 #   manual_app/guia/03_alicuotas_y_pagos.md -> build/manual/alicuotas-y-pagos/index.html
 #   manual_app/assets/*.png           -> build/manual/img/*.png
 #   manual_bot/USER_GUIDE.md          -> build/manual/whatsapp/index.html
+#   manual_backoffice/USER_GUIDE.md   -> build/manual/backoffice/index.html
+#   manual_backoffice/guia/02_pagos.md -> build/manual/backoffice/pagos/index.html
+#   manual_backoffice/assets/*.png    -> build/manual/backoffice/img/*.png
 #
 # The conversion itself (link rewriting, screenshot grouping, pager) lives in
 # scripts/manual/manual.lua; the page layout and CSS in scripts/manual/template.html.
@@ -19,6 +22,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SRC="$(dirname "$SCRIPT_DIR")"
 MANUAL="$SRC/manual_app"
 BOT="$SRC/manual_bot"
+BACKOFFICE="$SRC/manual_backoffice"
 TOOLS="$SCRIPT_DIR/manual"
 OUT="$SRC/build/manual"
 
@@ -68,9 +72,38 @@ else
   echo "Aviso: no existe manual_bot/USER_GUIDE.md; se omite el manual de WhatsApp." >&2
 fi
 
+# The back-office manual (manual_backoffice/), for the 'backend' and
+# 'administrador edificio' roles: same layout as the app manual (index plus one
+# page per guia/*.md), under backoffice/ with its own img/. CAPTURAS.md is an
+# internal note for whoever maintains it and is never published.
+if [ -f "$BACKOFFICE/USER_GUIDE.md" ]; then
+  mkdir -p "$OUT/backoffice/img"
+  cp "$BACKOFFICE"/assets/*.png "$OUT/backoffice/img/"
+  cp "$SRC/assets/crespcord-icon.png" "$OUT/backoffice/img/"
+  render_backoffice() { # <source.md> <output.html> <root>
+    pandoc -f gfm -t html5 --standalone \
+      --template="$TOOLS/template.html" \
+      --lua-filter="$TOOLS/manual.lua" \
+      --toc --toc-depth=2 \
+      -M root="$3" -M source_dir="$BACKOFFICE" \
+      -M footer="CrespCord · Manual del back office" \
+      -M brand="Manual del back office" -M wide=true \
+      "$1" -o "$2"
+  }
+  render_backoffice "$BACKOFFICE/USER_GUIDE.md" "$OUT/backoffice/index.html" ""
+  for page in "$BACKOFFICE"/guia/*.md; do
+    name="$(basename "$page" .md)"
+    slug="$(echo "${name#[0-9][0-9]_}" | tr '_' '-')"
+    mkdir -p "$OUT/backoffice/$slug"
+    render_backoffice "$page" "$OUT/backoffice/$slug/index.html" "../"
+  done
+else
+  echo "Aviso: no existe manual_backoffice/USER_GUIDE.md; se omite el manual del back office." >&2
+fi
+
 # Every #anchor must exist as an id in the page it points to.
 broken=0
-for html in "$OUT"/index.html "$OUT"/*/index.html; do
+for html in "$OUT"/index.html "$OUT"/*/index.html "$OUT"/backoffice/*/index.html; do
   dir="$(dirname "$html")"
   while IFS= read -r href; do
     target="${href%%#*}"

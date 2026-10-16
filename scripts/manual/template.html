@@ -174,6 +174,13 @@ details.toc li { margin: 4px 0; }
   line-height: 1.4;
 }
 li .shots { margin: 12px 0; }
+
+/* ---- Wide layout (-M wide=true): desktop screenshots of the back office,
+   one per row at full column width, each a link to the full-size image ---- */
+.wide .topbar-inner, .wide main, .wide footer { max-width: 1040px; }
+.wide .shots figure { flex: 1 1 100%; }
+.wide .shots a { display: block; }
+.wide .shots img { width: auto; max-width: 100%; border-radius: 8px; }
 @media (max-width: 400px) {
   /* Two 280 px shots don't fit: show them side by side, scaled down. */
   .shots { gap: 10px; }
@@ -216,11 +223,11 @@ footer {
 }
 </style>
 </head>
-<body>
+<body$if(wide)$ class="wide"$endif$>
 <header class="topbar">
   <div class="topbar-inner">
     <img src="$root$img/crespcord-icon.png" alt="">
-    <a href="$if(root)$$root$$else$./$endif$">CrespCord <small>· Manual de usuario</small></a>
+    <a href="$if(root)$$root$$else$./$endif$">CrespCord <small>· $if(brand)$$brand$$else$Manual de usuario$endif$</small></a>
   </div>
 </header>
 <main>

@@ -12,9 +12,10 @@ local function slug_of(name)
 end
 
 -- Set from the command line: -M root=../ for guide pages (nothing for the
--- index) and -M source_dir=<manual_app>.
+-- index), -M source_dir=<manual_app> and, for desktop screenshots, -M wide=true.
 local root = ""
 local source_dir = ""
+local wide = false
 
 local function slug_url(name, anchor)
   local path = name == "USER_GUIDE" and "USER_GUIDE.md" or ("guia/" .. name .. ".md")
@@ -60,8 +61,14 @@ local function images_block(inlines)
   for _, el in ipairs(inlines) do
     if is_img(el) then
       local alt = el.text:match('alt="([^"]*)"') or ""
-      local tag = el.text:gsub(' width="%d+"', '')
-      html[#html + 1] = "<figure>" .. tag:gsub("^<img ", '<img loading="lazy" ')
+      local tag = el.text:gsub(' width="%d+"', ''):gsub("^<img ", '<img loading="lazy" ')
+      -- Wide manuals link each screenshot to itself: a desktop capture scaled
+      -- to the column is readable, but the full size is one click away.
+      if wide then
+        local src = tag:match('src="([^"]+)"')
+        tag = '<a href="' .. src .. '" target="_blank" rel="noopener">' .. tag .. "</a>"
+      end
+      html[#html + 1] = "<figure>" .. tag
         .. "<figcaption>" .. alt .. "</figcaption></figure>"
     end
   end
@@ -73,6 +80,7 @@ return {
     Meta = function(meta)
       root = meta.root and pandoc.utils.stringify(meta.root) or ""
       source_dir = pandoc.utils.stringify(meta.source_dir)
+      wide = meta.wide ~= nil and pandoc.utils.stringify(meta.wide) == "true"
     end,
   },
   {

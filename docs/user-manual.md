@@ -16,6 +16,13 @@ por Drupal: Apache sirve `/var/www/html/manual/` directamente.
 | `guia/07_mi_cuenta.md` | `/manual/mi-cuenta/` |
 | `guia/08_modo_proveedor.md` | `/manual/modo-proveedor/` |
 | `manual_bot/USER_GUIDE.md` (bot de WhatsApp) | `/manual/whatsapp/` |
+| `manual_backoffice/USER_GUIDE.md` (back office) | `/manual/backoffice/` |
+| `manual_backoffice/guia/01_acceso_y_menu.md` | `/manual/backoffice/acceso-y-menu/` |
+| `manual_backoffice/guia/02_pagos.md` | `/manual/backoffice/pagos/` |
+| `manual_backoffice/guia/03_reclamos.md` | `/manual/backoffice/reclamos/` |
+| `manual_backoffice/guia/04_reservas.md` | `/manual/backoffice/reservas/` |
+| `manual_backoffice/guia/05_servicios.md` | `/manual/backoffice/servicios/` |
+| `manual_backoffice/guia/06_boletines.md` | `/manual/backoffice/boletines/` |
 
 El slug sale del nombre del fichero: se quita el prefijo de orden y `_` pasa a
 `-`. Renumerar páginas no cambia las URL; **renombrarlas sí**, y rompe los
@@ -27,6 +34,7 @@ enlaces externos (por ejemplo, un futuro botón «Ayuda» de la app).
 |------|--------|
 | `manual_app/` | Fuente: `USER_GUIDE.md`, `guia/*.md`, `assets/*.png`. Se regenera desde el repo de la app. |
 | `manual_bot/` | Fuente del manual del bot de WhatsApp: `USER_GUIDE.md` y `assets/*.png`, copiados de `docs/` del repo `crespcord-lambda` (sin `CAPTURAS.md`, que es interno). Una sola página con su propio índice; sus capturas van a `/manual/whatsapp/img/`. |
+| `manual_backoffice/` | Fuente del manual del back office (roles `backend` y `administrador edificio`): `USER_GUIDE.md`, `guia/*.md` y `assets/*.png`, con capturas reales del servidor de pruebas. Mismo formato que el de la app; sus capturas van a `/manual/backoffice/img/`. `CAPTURAS.md` es interno (cómo sacar capturas de WhatsApp) y no se publica. |
 | `scripts/build-manual.sh` | Genera `build/manual/` con pandoc. |
 | `scripts/deploy-manual.sh` | Ejecuta el build, sube `build/manual/` y sustituye `/var/www/html/manual/` de una vez (`mv`). Los ficheros quedan de `root` y en solo lectura (644/755): PHP no puede modificarlos. |
 | `scripts/manual/manual.lua` | Filtro de pandoc: reescribe enlaces `.md` y capturas, agrupa las capturas, crea la barra anterior/índice/siguiente. |
