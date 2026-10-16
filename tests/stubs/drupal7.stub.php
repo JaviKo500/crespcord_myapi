@@ -102,8 +102,10 @@ define('FILE_CREATE_DIRECTORY', 1);
 define('FILE_EXISTS_RENAME', 0);
 define('FILE_STATUS_PERMANENT', 1);
 define('LANGUAGE_NONE', 'und');
+define('MENU_ACCESS_DENIED', 3);
 define('MENU_CALLBACK', 4);
 define('MENU_NORMAL_ITEM', 6);
+define('MENU_NOT_FOUND', 2);
 define('NODE_ACCESS_DENY', 'deny');
 define('NODE_ACCESS_IGNORE', NULL);
 define('REQUEST_TIME', 0);
@@ -112,6 +114,13 @@ define('WATCHDOG_ERROR', 3);
 define('WATCHDOG_WARNING', 4);
 define('WATCHDOG_NOTICE', 5);
 define('WATCHDOG_INFO', 6);
+
+/**
+ * @param mixed ...$arguments
+ *
+ * @return mixed
+ */
+function base_path(...$arguments) {}
 
 /**
  * @param mixed ...$arguments
@@ -314,6 +323,13 @@ function drupal_get_schema_unprocessed(...$arguments) {}
  *
  * @return mixed
  */
+function drupal_goto(...$arguments) {}
+
+/**
+ * @param mixed ...$arguments
+ *
+ * @return mixed
+ */
 function drupal_http_request(...$arguments) {}
 
 /**
@@ -343,6 +359,13 @@ function drupal_mail(...$arguments) {}
  * @return mixed
  */
 function drupal_realpath(...$arguments) {}
+
+/**
+ * @param mixed ...$arguments
+ *
+ * @return mixed
+ */
+function drupal_send_headers(...$arguments) {}
 
 /**
  * @param mixed ...$arguments
@@ -763,6 +786,13 @@ function node_type_save(...$arguments) {}
  * @return mixed
  */
 function node_type_set_defaults(...$arguments) {}
+
+/**
+ * @param mixed ...$arguments
+ *
+ * @return mixed
+ */
+function request_uri(...$arguments) {}
 
 /**
  * @param mixed ...$arguments

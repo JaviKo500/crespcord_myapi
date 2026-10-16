@@ -891,6 +891,19 @@ function myapi_menu() {
     'file'             => 'includes/myapi.payments_admin.inc',
   ];
 
+  // Back-office user manual (SPEC 133): static HTML kept outside the document
+  // root and served only to back-office accounts. The segments after the path
+  // (a page slug, or img/<file>.png) reach the page callback as arguments.
+  // Access is TRUE on purpose: the callback redirects an anonymous visitor to
+  // the login form, which an access callback cannot do.
+  $items['manual/backoffice'] = [
+    'title'            => 'Manual del back office',
+    'page callback'    => 'myapi_backoffice_manual_page',
+    'access callback'  => TRUE,
+    'type'             => MENU_CALLBACK,
+    'file'             => 'includes/myapi.backoffice_manual.inc',
+  ];
+
   // Claim transaction creation page (SPEC 57). Same non-api/v1 pattern as
   // admin/content/claims just above: HTML for an operator, not the JSON
   // envelope. MENU_CALLBACK (not a menu-visible item) since it is only ever

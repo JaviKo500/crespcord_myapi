@@ -7,9 +7,9 @@
 #   manual_app/guia/03_alicuotas_y_pagos.md -> build/manual/alicuotas-y-pagos/index.html
 #   manual_app/assets/*.png           -> build/manual/img/*.png
 #   manual_bot/USER_GUIDE.md          -> build/manual/whatsapp/index.html
-#   manual_backoffice/USER_GUIDE.md   -> build/manual/backoffice/index.html
-#   manual_backoffice/guia/02_pagos.md -> build/manual/backoffice/pagos/index.html
-#   manual_backoffice/assets/*.png    -> build/manual/backoffice/img/*.png
+#   manual_backoffice/USER_GUIDE.md   -> build/manual-backoffice/index.html
+#   manual_backoffice/guia/02_pagos.md -> build/manual-backoffice/pagos/index.html
+#   manual_backoffice/assets/*.png    -> build/manual-backoffice/img/*.png
 #
 # The conversion itself (link rewriting, screenshot grouping, pager) lives in
 # scripts/manual/manual.lua; the page layout and CSS in scripts/manual/template.html.
@@ -25,6 +25,9 @@ BOT="$SRC/manual_bot"
 BACKOFFICE="$SRC/manual_backoffice"
 TOOLS="$SCRIPT_DIR/manual"
 OUT="$SRC/build/manual"
+# Outside $OUT on purpose (SPEC 133): $OUT is published as public static files,
+# and the back-office manual must only ever be served through Drupal.
+BO_OUT="$SRC/build/manual-backoffice"
 
 command -v pandoc >/dev/null || { echo "pandoc no está instalado." >&2; exit 1; }
 
@@ -74,12 +77,13 @@ fi
 
 # The back-office manual (manual_backoffice/), for the 'backend' and
 # 'administrador edificio' roles: same layout as the app manual (index plus one
-# page per guia/*.md), under backoffice/ with its own img/. CAPTURAS.md is an
+# page per guia/*.md), in its own tree with its own img/. CAPTURAS.md is an
 # internal note for whoever maintains it and is never published.
 if [ -f "$BACKOFFICE/USER_GUIDE.md" ]; then
-  mkdir -p "$OUT/backoffice/img"
-  cp "$BACKOFFICE"/assets/*.png "$OUT/backoffice/img/"
-  cp "$SRC/assets/crespcord-icon.png" "$OUT/backoffice/img/"
+  rm -rf "$BO_OUT"
+  mkdir -p "$BO_OUT/img"
+  cp "$BACKOFFICE"/assets/*.png "$BO_OUT/img/"
+  cp "$SRC/assets/crespcord-icon.png" "$BO_OUT/img/"
   render_backoffice() { # <source.md> <output.html> <root>
     pandoc -f gfm -t html5 --standalone \
       --template="$TOOLS/template.html" \
@@ -90,12 +94,12 @@ if [ -f "$BACKOFFICE/USER_GUIDE.md" ]; then
       -M brand="Manual del back office" -M wide=true \
       "$1" -o "$2"
   }
-  render_backoffice "$BACKOFFICE/USER_GUIDE.md" "$OUT/backoffice/index.html" ""
+  render_backoffice "$BACKOFFICE/USER_GUIDE.md" "$BO_OUT/index.html" ""
   for page in "$BACKOFFICE"/guia/*.md; do
     name="$(basename "$page" .md)"
     slug="$(echo "${name#[0-9][0-9]_}" | tr '_' '-')"
-    mkdir -p "$OUT/backoffice/$slug"
-    render_backoffice "$page" "$OUT/backoffice/$slug/index.html" "../"
+    mkdir -p "$BO_OUT/$slug"
+    render_backoffice "$page" "$BO_OUT/$slug/index.html" "../"
   done
 else
   echo "Aviso: no existe manual_backoffice/USER_GUIDE.md; se omite el manual del back office." >&2
@@ -103,7 +107,7 @@ fi
 
 # Every #anchor must exist as an id in the page it points to.
 broken=0
-for html in "$OUT"/index.html "$OUT"/*/index.html "$OUT"/backoffice/*/index.html; do
+for html in "$OUT"/index.html "$OUT"/*/index.html "$BO_OUT"/index.html "$BO_OUT"/*/index.html; do
   dir="$(dirname "$html")"
   while IFS= read -r href; do
     target="${href%%#*}"
@@ -115,7 +119,7 @@ for html in "$OUT"/index.html "$OUT"/*/index.html "$OUT"/backoffice/*/index.html
       [ "$target" = "./" ] && file="$dir/index.html"
     fi
     if [ ! -f "$file" ] || ! grep -q "id=\"$anchor\"" "$file"; then
-      echo "Ancla rota en ${html#$OUT/}: $href" >&2
+      echo "Ancla rota en ${html#$SRC/build/}: $href" >&2
       broken=1
     fi
   done < <(grep -o 'href="[^"]*#[^"]*"' "$html" | sed 's/^href="//; s/"$//' | grep -v '^https\?:' || true)
@@ -123,3 +127,6 @@ done
 [ "$broken" -eq 0 ] || exit 1
 
 echo "Manual generado en build/manual/ ($(find "$OUT" -name index.html | wc -l | tr -d ' ') páginas)."
+if [ -d "$BO_OUT" ]; then
+  echo "Manual del back office en build/manual-backoffice/ ($(find "$BO_OUT" -name index.html | wc -l | tr -d ' ') páginas), solo para Drupal."
+fi

@@ -4,6 +4,11 @@ El manual de la app se publica como HTML estático en
 **https://crespcord.lamotora.com/manual/**. Es público, con `noindex`, y no pasa
 por Drupal: Apache sirve `/var/www/html/manual/` directamente.
 
+**Excepción: el manual del back office** (`/manual/backoffice/`) **no es
+público**. Se guarda fuera del *document root* y lo sirve Drupal solo a los
+roles `administrator`, `backend` y `administrador edificio` (SPEC 133, ver
+[backoffice-manual.md](backoffice-manual.md)).
+
 | Página | URL |
 |--------|-----|
 | Índice (`USER_GUIDE.md`) | `/manual/` |
@@ -16,7 +21,7 @@ por Drupal: Apache sirve `/var/www/html/manual/` directamente.
 | `guia/07_mi_cuenta.md` | `/manual/mi-cuenta/` |
 | `guia/08_modo_proveedor.md` | `/manual/modo-proveedor/` |
 | `manual_bot/USER_GUIDE.md` (bot de WhatsApp) | `/manual/whatsapp/` |
-| `manual_backoffice/USER_GUIDE.md` (back office) | `/manual/backoffice/` |
+| `manual_backoffice/USER_GUIDE.md` (back office, **requiere sesión**) | `/manual/backoffice/` |
 | `manual_backoffice/guia/01_acceso_y_menu.md` | `/manual/backoffice/acceso-y-menu/` |
 | `manual_backoffice/guia/02_pagos.md` | `/manual/backoffice/pagos/` |
 | `manual_backoffice/guia/03_reclamos.md` | `/manual/backoffice/reclamos/` |
@@ -34,9 +39,9 @@ enlaces externos (por ejemplo, un futuro botón «Ayuda» de la app).
 |------|--------|
 | `manual_app/` | Fuente: `USER_GUIDE.md`, `guia/*.md`, `assets/*.png`. Se regenera desde el repo de la app. |
 | `manual_bot/` | Fuente del manual del bot de WhatsApp: `USER_GUIDE.md` y `assets/*.png`, copiados de `docs/` del repo `crespcord-lambda` (sin `CAPTURAS.md`, que es interno). Una sola página con su propio índice; sus capturas van a `/manual/whatsapp/img/`. |
-| `manual_backoffice/` | Fuente del manual del back office (roles `backend` y `administrador edificio`): `USER_GUIDE.md`, `guia/*.md` y `assets/*.png`, con capturas reales del servidor de pruebas. Mismo formato que el de la app; sus capturas van a `/manual/backoffice/img/`. `CAPTURAS.md` es interno (cómo sacar capturas de WhatsApp) y no se publica. |
-| `scripts/build-manual.sh` | Genera `build/manual/` con pandoc. |
-| `scripts/deploy-manual.sh` | Ejecuta el build, sube `build/manual/` y sustituye `/var/www/html/manual/` de una vez (`mv`). Los ficheros quedan de `root` y en solo lectura (644/755): PHP no puede modificarlos. |
+| `manual_backoffice/` | Fuente del manual del back office (roles `backend` y `administrador edificio`): `USER_GUIDE.md`, `guia/*.md` y `assets/*.png`, con capturas reales del servidor de pruebas. Mismo formato que el de la app. Se genera en `build/manual-backoffice/` (nunca dentro de `build/manual/`) y se publica en `/var/www/manual-backoffice/`, fuera del *document root*. `CAPTURAS.md` es interno (cómo sacar capturas de WhatsApp) y no se publica. |
+| `scripts/build-manual.sh` | Genera `build/manual/` (público) y `build/manual-backoffice/` (privado) con pandoc. |
+| `scripts/deploy-manual.sh` | Ejecuta el build, sube `build/manual/` y sustituye `/var/www/html/manual/` de una vez (`mv`); igual con `build/manual-backoffice/` → `/var/www/manual-backoffice/`. Falla si queda un `/var/www/html/manual/backoffice/`. Los ficheros quedan de `root` y en solo lectura (644/755): PHP no puede modificarlos. |
 | `scripts/manual/manual.lua` | Filtro de pandoc: reescribe enlaces `.md` y capturas, agrupa las capturas, crea la barra anterior/índice/siguiente. |
 | `scripts/manual/template.html` | Plantilla HTML con el CSS (colores de la app, modo oscuro, móvil). |
 | `scripts/manual/htaccess` | Se publica como `/manual/.htaccess`: caché del HTML y de las capturas. |
@@ -54,7 +59,9 @@ parte del módulo.
 2. `./scripts/build-manual.sh` (requiere `pandoc`). Falla si hay un enlace a una
    página que no existe, una captura que falta o un ancla rota.
 3. Revisar `build/manual/index.html` en el navegador.
-4. `./scripts/deploy-manual.sh`. Vuelve a generar el manual y lo publica. No usa
+4. `./scripts/deploy-manual.sh`. Vuelve a generar el manual y lo publica.
+   El manual del back office solo se ve si el módulo ya tiene la ruta
+   `manual/backoffice` (SPEC 133): la primera vez, desplegar antes el módulo. No usa
    drush ni modo mantenimiento, y borra del servidor las capturas que ya no
    existen en `manual_app/`. Usa la misma clave que `deploy.sh`
    (`MYAPI_DEPLOY_KEY` o `~/.ssh/crespcord.pem`).

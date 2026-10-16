@@ -40,7 +40,8 @@ class ModuleContractTest extends TestCase {
    * page is the HTML landing the emailed deep link opens (it is not consumed by
    * the app, it is opened by a browser), and the rest are back-office
    * screens hanging off Drupal's own admin/ and node/ trees, where the path is
-   * Drupal's to choose and not ours.
+   * Drupal's to choose and not ours. manual/backoffice is the third case: the
+   * back-office manual kept the URL it had as static HTML (SPEC 133).
    *
    * A new entry here is a decision, which is the point: adding one is a line in
    * a diff that a reviewer sees, and forgetting the api/v1 prefix on a real
@@ -61,6 +62,7 @@ class ModuleContractTest extends TestCase {
     'node/%node/claim-transaction/add',
     'node/%node/service-transaction/add',
     'node/%node/service-transaction/%node/delete',
+    'manual/backoffice',
   ];
 
   /**
