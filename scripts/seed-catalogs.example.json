@@ -1,0 +1,33 @@
+{
+  "banks": [
+    { "name": "Banco Pichincha" },
+    { "name": "Banco Guayaquil" }
+  ],
+  "payment_methods": [
+    { "name": "Efectivo", "type_method": "efectivo", "description": "Pago en la administración" },
+    { "name": "Transferencia bancaria", "type_method": "transferencia", "description": "" }
+  ],
+  "areas": [
+    {
+      "condominium": "Edificio El Sáuco",
+      "title": "Salón comunal",
+      "category": "social_room",
+      "status": "active",
+      "open_time": "08:00",
+      "close_time": "22:00",
+      "slot_minutes": 60,
+      "max_minutes": 240,
+      "who_can_reserve": "both",
+      "cancel_deadline_minutes": 120,
+      "concurrent_reservations": 1,
+      "notes": "Dejar el salón limpio al terminar."
+    },
+    {
+      "condominium": "Edificio El Sáuco",
+      "title": "Piscina",
+      "category": "pool",
+      "open_time": "09:00",
+      "close_time": "19:00"
+    }
+  ]
+}

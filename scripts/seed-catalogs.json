@@ -1,0 +1,14 @@
+{
+  "banks": [
+    { "name": "Guayaquil" },
+    { "name": "Pichincha" },
+    { "name": "Produbanco" }
+  ],
+  "payment_methods": [
+    { "name": "Cheque", "type_method": "cheque", "description": "" },
+    { "name": "Deposito", "type_method": "deposito", "description": "" },
+    { "name": "Efectivo", "type_method": "efectivo", "description": "" },
+    { "name": "Transferencia", "type_method": "transferencia", "description": "" }
+  ],
+  "areas": []
+}

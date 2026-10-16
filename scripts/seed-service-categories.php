@@ -36,83 +36,18 @@
  * the API, which sorts alphabetically by name.
  */
 $catalogue = [
-  // Repairs and building work.
-  ['plomeria',            'Plomería',                  'Fugas, grifería, desagües'],
-  ['electricidad',        'Electricidad',              'Instalaciones y reparaciones'],
-  ['gasfiteria_gas',      'Gas y calefón',             'Instalación y mantención de gas'],
-  ['climatizacion',       'Climatización',             'A/C, ventilación, mantención'],
-  ['calefaccion',         'Calefacción',               'Estufas, radiadores, caldera'],
+  ['albanileria',         'Albañilería',               'Obra menor, muros, reparaciones'],
   ['carpinteria',         'Carpintería',               'Muebles, puertas, reparación'],
   ['cerrajeria',          'Cerrajería',                'Cerraduras, llaves, aperturas'],
-  ['pintura',             'Pintura',                   'Interiores y exteriores'],
-  ['albanileria',         'Albañilería',               'Obra menor, muros, reparaciones'],
-  ['pisos_ceramica',      'Pisos y cerámica',          'Instalación y reparación de pisos'],
-  ['techos',              'Techumbre',                 'Techos, canaletas, filtraciones'],
-  ['impermeabilizacion',  'Impermeabilización',        'Sellado y tratamiento de humedad'],
-  ['vidrieria',           'Vidriería',                 'Vidrios, espejos, termopaneles'],
-  ['ventanas_puertas',    'Ventanas y puertas',        'PVC, aluminio, instalación'],
-  ['tabiqueria_yeso',     'Tabiquería y yeso',         'Volcanita, cielos, molduras'],
-  ['herreria_soldadura',  'Herrería y soldadura',      'Rejas, portones, estructuras'],
-  ['multiservicios',      'Maestro multiservicios',    'Arreglos varios del hogar'],
-
-  // Cleaning and sanitation.
-  ['limpieza',            'Limpieza',                  'Profunda, mudanza, vidrios'],
-  ['lavado_tapiz',        'Lavado de alfombras',       'Alfombras, sillones, tapiz'],
-  ['sanitizacion',        'Sanitización',              'Desinfección de espacios'],
-  ['control_plagas',      'Control de plagas',         'Fumigación y desratización'],
-  ['destape_desagues',    'Destape de desagües',       'Desatascos y limpieza de ductos'],
-  ['retiro_escombros',    'Retiro de escombros',       'Retiro de restos de obra'],
-  ['reciclaje',           'Reciclaje y basura',        'Retiro y gestión de residuos'],
-
-  // Outdoors.
-  ['jardineria',          'Jardinería',                'Poda, césped, mantenimiento'],
-  ['poda_arboles',        'Poda de árboles',           'Poda en altura y tala'],
-  ['riego',               'Riego automático',          'Instalación y reparación de riego'],
-  ['piscinas',            'Piscinas',                  'Mantención, químicos, reparación'],
-
-  // Appliances and technology.
-  ['electrodomesticos',   'Electrodomésticos',         'Reparación de línea blanca'],
-  ['lavadoras',           'Lavadoras y secadoras',     'Reparación y mantención'],
-  ['refrigeracion',       'Refrigeración',             'Refrigeradores y equipos de frío'],
-  ['computacion',         'Computación',               'Soporte técnico y reparación'],
-  ['redes_wifi',          'Redes y WiFi',              'Cableado, routers, cobertura'],
-  ['tv_audio',            'TV, audio y antenas',       'Instalación y configuración'],
-
-  // Security and building systems.
-  ['camaras_cctv',        'Cámaras y CCTV',            'Instalación y mantención'],
-  ['alarmas',             'Alarmas',                   'Sistemas de alarma y sensores'],
-  ['citofonia',           'Citofonía',                 'Citófonos e intercomunicadores'],
-  ['control_acceso',      'Control de acceso',         'Tarjetas, huella, barreras'],
-  ['portones_automaticos','Portones automáticos',      'Motores, controles, reparación'],
-  ['ascensores',          'Ascensores',                'Mantención y certificación'],
-  ['extintores',          'Extintores y red seca',     'Recarga, certificación, red húmeda'],
-  ['paneles_solares',     'Paneles solares',           'Instalación y mantención'],
-  ['generadores',         'Grupos electrógenos',       'Instalación y mantención'],
-  ['domotica',            'Domótica',                  'Automatización del hogar'],
-
-  // Home and lifestyle.
-  ['mudanzas',            'Mudanzas y fletes',         'Traslados y transporte'],
-  ['tapiceria',           'Tapicería',                 'Restauración de muebles'],
-  ['cortinas_persianas',  'Cortinas y persianas',      'Confección e instalación'],
-  ['decoracion',          'Decoración e interiorismo', 'Asesoría y diseño de espacios'],
-  ['mascotas',            'Mascotas',                  'Paseo, peluquería, cuidado'],
-  ['belleza',             'Belleza a domicilio',       'Peluquería, manicura, estética'],
-  ['masajes_spa',         'Masajes y bienestar',       'Masajes y terapias a domicilio'],
-  ['salud_domicilio',     'Salud a domicilio',         'Enfermería, kinesiología, exámenes'],
-  ['cuidado_mayores',     'Cuidado de adultos mayores','Acompañamiento y cuidados'],
+  ['climatizacion',       'Climatización',             'A/C, ventilación, mantención'],
   ['cuidado_ninos',       'Cuidado infantil',          'Niñeras y apoyo escolar'],
-  ['clases_particulares', 'Clases particulares',       'Refuerzo escolar, idiomas, música'],
-  ['entrenamiento',       'Entrenador personal',       'Entrenamiento y yoga a domicilio'],
-  ['catering',            'Banquetería y catering',    'Comida para eventos'],
-  ['eventos',             'Eventos y arriendo',        'Producción, mobiliario, sonido'],
-  ['fotografia',          'Fotografía y video',        'Sesiones y cobertura de eventos'],
-  ['lavado_autos',        'Lavado de autos',           'Lavado y detailing a domicilio'],
-  ['mecanica_domicilio',  'Mecánica a domicilio',      'Mecánica menor y batería'],
-
-  // Professional services.
-  ['arquitectura',        'Arquitectura y proyectos',  'Proyectos, permisos, remodelación'],
-  ['legal_contable',      'Legal y contable',          'Asesoría jurídica y contable'],
+  ['electricidad',        'Electricidad',              'Instalaciones y reparaciones'],
+  ['jardineria',          'Jardinería',                'Poda, césped, mantenimiento'],
+  ['limpieza',            'Limpieza',                  'Profunda, mudanza, vidrios'],
+  ['mascotas',            'Mascotas',                  'Paseo, peluquería, cuidado'],
   ['otros',               'Otros servicios',           'Servicios que no calzan en el resto'],
+  ['pintura',             'Pintura',                   'Interiores y exteriores'],
+  ['plomeria',            'Plomería',                  'Fugas, grifería, desagües'],
 ];
 
 $vocabulary_name = defined('MYAPI_SERVICES_CATEGORY_VOCABULARY')
