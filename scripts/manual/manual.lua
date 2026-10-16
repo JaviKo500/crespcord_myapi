@@ -97,6 +97,23 @@ return {
       return images_block(inlines)
     end,
 
+    -- A Markdown screenshot, ![alt](assets/x.png), as the WhatsApp bot manual
+    -- writes them. Turned into the same <img> tag as the HTML ones, so the
+    -- grouping below treats both alike.
+    Image = function(el)
+      local file = el.src:match("^[%./]*assets/(.+)$")
+      if not file then return nil end
+      local alt = pandoc.utils.stringify(el.caption)
+        :gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;")
+      return pandoc.RawInline("html", '<img src="' .. root .. "img/" .. file
+        .. "?v=" .. hash_of(file) .. '" alt="' .. alt .. '">')
+    end,
+
+    -- "---" between sections: every h2 already draws its own top border.
+    HorizontalRule = function()
+      return {}
+    end,
+
     Link = function(el)
       local name, anchor = el.target:match("^[%./%w_]-([%w_]+)%.md(#?.*)$")
       if name then

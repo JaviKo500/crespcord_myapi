@@ -15,6 +15,7 @@ por Drupal: Apache sirve `/var/www/html/manual/` directamente.
 | `guia/06_servicios.md` | `/manual/servicios/` |
 | `guia/07_mi_cuenta.md` | `/manual/mi-cuenta/` |
 | `guia/08_modo_proveedor.md` | `/manual/modo-proveedor/` |
+| `manual_bot/USER_GUIDE.md` (bot de WhatsApp) | `/manual/whatsapp/` |
 
 El slug sale del nombre del fichero: se quita el prefijo de orden y `_` pasa a
 `-`. Renumerar páginas no cambia las URL; **renombrarlas sí**, y rompe los
@@ -25,6 +26,7 @@ enlaces externos (por ejemplo, un futuro botón «Ayuda» de la app).
 | Ruta | Qué es |
 |------|--------|
 | `manual_app/` | Fuente: `USER_GUIDE.md`, `guia/*.md`, `assets/*.png`. Se regenera desde el repo de la app. |
+| `manual_bot/` | Fuente del manual del bot de WhatsApp: `USER_GUIDE.md` y `assets/*.png`, copiados de `docs/` del repo `crespcord-lambda` (sin `CAPTURAS.md`, que es interno). Una sola página con su propio índice; sus capturas van a `/manual/whatsapp/img/`. |
 | `scripts/build-manual.sh` | Genera `build/manual/` con pandoc. |
 | `scripts/deploy-manual.sh` | Ejecuta el build, sube `build/manual/` y sustituye `/var/www/html/manual/` de una vez (`mv`). Los ficheros quedan de `root` y en solo lectura (644/755): PHP no puede modificarlos. |
 | `scripts/manual/manual.lua` | Filtro de pandoc: reescribe enlaces `.md` y capturas, agrupa las capturas, crea la barra anterior/índice/siguiente. |
@@ -37,7 +39,10 @@ parte del módulo.
 
 ## Actualizar el manual
 
-1. Copiar el `docs/` regenerado de la app sobre `manual_app/`.
+1. Copiar el `docs/` regenerado de la app sobre `manual_app/`. Para el bot,
+   copiar `USER_GUIDE.md` y `assets/*.png` de `crespcord-lambda/docs/` sobre
+   `manual_bot/` (nunca `CAPTURAS.md`) y revisar que las capturas no muestren
+   datos reales.
 2. `./scripts/build-manual.sh` (requiere `pandoc`). Falla si hay un enlace a una
    página que no existe, una captura que falta o un ancla rota.
 3. Revisar `build/manual/index.html` en el navegador.

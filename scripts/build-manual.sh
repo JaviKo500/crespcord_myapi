@@ -6,6 +6,7 @@
 #   manual_app/USER_GUIDE.md          -> build/manual/index.html
 #   manual_app/guia/03_alicuotas_y_pagos.md -> build/manual/alicuotas-y-pagos/index.html
 #   manual_app/assets/*.png           -> build/manual/img/*.png
+#   manual_bot/USER_GUIDE.md          -> build/manual/whatsapp/index.html
 #
 # The conversion itself (link rewriting, screenshot grouping, pager) lives in
 # scripts/manual/manual.lua; the page layout and CSS in scripts/manual/template.html.
@@ -17,6 +18,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SRC="$(dirname "$SCRIPT_DIR")"
 MANUAL="$SRC/manual_app"
+BOT="$SRC/manual_bot"
 TOOLS="$SCRIPT_DIR/manual"
 OUT="$SRC/build/manual"
 
@@ -48,6 +50,23 @@ for page in "$MANUAL"/guia/*.md; do
   mkdir -p "$OUT/$slug"
   render "$page" "$OUT/$slug/index.html" "../"
 done
+
+# The WhatsApp bot manual (manual_bot/, copied from the crespcord-lambda repo):
+# a single page with its own numbered index, so no --toc, and its own img/ so
+# its screenshots never collide with the app's.
+if [ -f "$BOT/USER_GUIDE.md" ]; then
+  mkdir -p "$OUT/whatsapp/img"
+  cp "$BOT"/assets/*.png "$OUT/whatsapp/img/"
+  cp "$SRC/assets/crespcord-icon.png" "$OUT/whatsapp/img/"
+  pandoc -f gfm -t html5 --standalone \
+    --template="$TOOLS/template.html" \
+    --lua-filter="$TOOLS/manual.lua" \
+    -M root="" -M source_dir="$BOT" \
+    -M footer="CrespCord · Manual del asistente de pagos por WhatsApp" \
+    "$BOT/USER_GUIDE.md" -o "$OUT/whatsapp/index.html"
+else
+  echo "Aviso: no existe manual_bot/USER_GUIDE.md; se omite el manual de WhatsApp." >&2
+fi
 
 # Every #anchor must exist as an id in the page it points to.
 broken=0
