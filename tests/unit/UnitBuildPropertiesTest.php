@@ -491,8 +491,9 @@ class UnitBuildPropertiesTest extends TestCase {
 
   /**
    * A unit with neither name nor category (both LEFT JOINs empty) still comes
-   * back, with NULLs: the endpoint never hides a unit for having an incomplete
-   * node.
+   * back: the endpoint never hides a unit for having an incomplete node. The
+   * name travels as '' (the app reads it as a required string); the optional
+   * category stays NULL.
    */
   public function testUnitWithoutNameOrCategoryIsStillListed() {
     $properties = myapi_unit_build_properties(
@@ -504,7 +505,7 @@ class UnitBuildPropertiesTest extends TestCase {
 
     $unit = $properties[0]['units'][0];
     $this->assertSame(45, $unit['id']);
-    $this->assertNull($unit['name']);
+    $this->assertSame('', $unit['name']);
     $this->assertNull($unit['category']);
   }
 

@@ -288,7 +288,9 @@ function myapi_notification_build_item($row) {
     'id'         => (int) $row->id,
     'type'       => $row->type,
     'title'      => $row->title,
-    'body'       => $row->body,
+    // The column is nullable (a bulletin with no message stores NULL), but the
+    // app reads body as a required string: an empty body travels as ''.
+    'body'       => (string) ($row->body ?? ''),
     'deep_link'  => [
       'target'      => $row->deep_link_target,
       'id'          => $row->deep_link_id !== NULL ? (int) $row->deep_link_id : NULL,

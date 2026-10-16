@@ -127,6 +127,8 @@ matches the filtered list the user is looking at.
 - `unread_count` is the user's unread count for the **current scope**
   (`condominium`/`unit`), independent of the `unread` filter and of pagination —
   it is meant for the app badge. With no scope requested it is the total unread.
+- `body` is always a string. A row stored with a NULL body (a bulletin with
+  no `field_mensaje`) answers `""`, never `null`.
 - `deep_link.target` + `deep_link.id` are the same pair the push carries in its
   `data` payload, so opening from the list or from the push lands on the same
   screen.

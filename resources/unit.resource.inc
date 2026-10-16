@@ -111,7 +111,9 @@ function myapi_unit_build_properties($units, $condominiums, $occupant_uids, $use
 
     $properties_by_condominio[$condominio_nid]['units'][] = [
       'id'            => (int) $unit->nid,
-      'name'          => $unit->name,
+      // LEFT JOIN on field_nombre_vivienda: a unit with no name still comes
+      // back, as '' rather than NULL, because the app reads name as a string.
+      'name'          => (string) ($unit->name ?? ''),
       'category'      => $unit->category,
       'area_m2'       => $unit->area_m2 !== NULL ? (float) $unit->area_m2 : NULL,
       'owner_uid'     => $unit->owner_uid !== NULL ? (int) $unit->owner_uid : NULL,

@@ -992,6 +992,19 @@ class NotificationEndpointTest extends TestCase {
   }
 
   /**
+   * A row stored with a NULL body (a bulletin with no message) answers '':
+   * the app reads body as a required string.
+   */
+  public function testANullBodyTravelsAsAnEmptyString() {
+    $this->seed([['id' => 1, 'body' => NULL]]);
+
+    $result = $this->listRequest();
+
+    $this->assertSame('', $result['json']['data']['notifications'][0]['body']);
+    $this->assertStringContainsString('"body":""', $result['output']);
+  }
+
+  /**
    * The single item answered by the read endpoint has the SAME shape as an
    * item of the list: one mapper, one contract.
    */

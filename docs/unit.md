@@ -54,6 +54,8 @@ Notes:
   unpublished, or whose condominium node no longer exists, silently
   disappears from the response — there is no error or indicator for this
   case.
+- `name` is `field_nombre_vivienda_value`, or `""` (never `null`) when the
+  unit has no name: the unit is still listed.
 - `area_m2` always comes from `field_total_m2_value`, regardless of the
   unit's `category` — there is no per-category field mapping.
 - `owner_uid` is the `uid` of `field_propietario`, `null` when the unit has no
