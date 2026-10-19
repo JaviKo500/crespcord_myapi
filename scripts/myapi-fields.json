@@ -1,0 +1,548 @@
+{
+    "source": "https://crespcord.lamotora.com",
+    "exported_at": "2026-10-19T10:52:04-05:00",
+    "vocabularies": [
+        {
+            "machine_name": "metodos_pago",
+            "name": "metodos_pago",
+            "description": "Indica las opciones de pago para la ap",
+            "hierarchy": 0,
+            "module": "taxonomy",
+            "weight": 0
+        }
+    ],
+    "fields": [
+        {
+            "translatable": "0",
+            "settings": {
+                "max_length": "255"
+            },
+            "foreign keys": {
+                "format": {
+                    "table": "filter_format",
+                    "columns": {
+                        "format": "format"
+                    }
+                }
+            },
+            "indexes": {
+                "format": [
+                    "format"
+                ]
+            },
+            "field_name": "field_detalle",
+            "type": "text",
+            "module": "text",
+            "locked": "0",
+            "cardinality": "1"
+        },
+        {
+            "translatable": "0",
+            "settings": {
+                "display_field": 1,
+                "display_default": 0,
+                "uri_scheme": "public"
+            },
+            "foreign keys": {
+                "fid": {
+                    "table": "file_managed",
+                    "columns": {
+                        "fid": "fid"
+                    }
+                }
+            },
+            "indexes": {
+                "fid": [
+                    "fid"
+                ]
+            },
+            "field_name": "field_archivo",
+            "type": "file",
+            "module": "file",
+            "locked": "0",
+            "cardinality": "1"
+        },
+        {
+            "translatable": "0",
+            "settings": {
+                "allowed_values": [
+                    {
+                        "vocabulary": "bancos",
+                        "parent": "0"
+                    }
+                ]
+            },
+            "foreign keys": {
+                "tid": {
+                    "table": "taxonomy_term_data",
+                    "columns": {
+                        "tid": "tid"
+                    }
+                }
+            },
+            "indexes": {
+                "tid": [
+                    "tid"
+                ]
+            },
+            "field_name": "field_banco",
+            "type": "taxonomy_term_reference",
+            "module": "taxonomy",
+            "locked": "0",
+            "cardinality": "1"
+        },
+        {
+            "settings": {
+                "allowed_values": {
+                    "bot": "Bot de WhatsApp",
+                    "app": "App",
+                    "backoffice": "Back office"
+                },
+                "allowed_values_function": ""
+            },
+            "translatable": "0",
+            "foreign keys": [],
+            "indexes": {
+                "value": [
+                    "value"
+                ]
+            },
+            "field_name": "field_canal",
+            "type": "list_text",
+            "module": "list",
+            "locked": "0",
+            "cardinality": "1"
+        },
+        {
+            "settings": {
+                "max_length": 255
+            },
+            "translatable": "0",
+            "foreign keys": {
+                "format": {
+                    "table": "filter_format",
+                    "columns": {
+                        "format": "format"
+                    }
+                }
+            },
+            "indexes": {
+                "format": [
+                    "format"
+                ]
+            },
+            "field_name": "field_banco_emisor",
+            "type": "text",
+            "module": "text",
+            "locked": "0",
+            "cardinality": "1"
+        },
+        {
+            "settings": {
+                "max_length": 255
+            },
+            "translatable": "0",
+            "foreign keys": {
+                "format": {
+                    "table": "filter_format",
+                    "columns": {
+                        "format": "format"
+                    }
+                }
+            },
+            "indexes": {
+                "format": [
+                    "format"
+                ]
+            },
+            "field_name": "field_banco_destino",
+            "type": "text",
+            "module": "text",
+            "locked": "0",
+            "cardinality": "1"
+        },
+        {
+            "translatable": "0",
+            "settings": [],
+            "foreign keys": {
+                "format": {
+                    "table": "filter_format",
+                    "columns": {
+                        "format": "format"
+                    }
+                }
+            },
+            "indexes": {
+                "format": [
+                    "format"
+                ]
+            },
+            "field_name": "field_comprobante_ocr",
+            "type": "text_long",
+            "module": "text",
+            "locked": "0",
+            "cardinality": "1"
+        },
+        {
+            "translatable": "0",
+            "settings": {
+                "max_length": "255"
+            },
+            "foreign keys": {
+                "format": {
+                    "table": "filter_format",
+                    "columns": {
+                        "format": "format"
+                    }
+                }
+            },
+            "indexes": {
+                "format": [
+                    "format"
+                ]
+            },
+            "field_name": "field_tipo_pago",
+            "type": "text",
+            "module": "text",
+            "locked": "0",
+            "cardinality": "1"
+        }
+    ],
+    "instances": [
+        {
+            "label": "Detalle",
+            "widget": {
+                "weight": "7",
+                "type": "text_textfield",
+                "module": "text",
+                "active": 1,
+                "settings": {
+                    "size": "60"
+                }
+            },
+            "settings": {
+                "text_processing": "0",
+                "user_register_form": false
+            },
+            "display": {
+                "default": {
+                    "label": "above",
+                    "type": "text_default",
+                    "settings": [],
+                    "module": "text",
+                    "weight": 10
+                },
+                "teaser": {
+                    "type": "hidden",
+                    "label": "above",
+                    "settings": [],
+                    "weight": 0
+                }
+            },
+            "required": 0,
+            "description": "Opcional, mensaje para el usuario (App)",
+            "default_value": null,
+            "field_name": "field_detalle",
+            "entity_type": "node",
+            "bundle": "pagos"
+        },
+        {
+            "label": "Archivo",
+            "widget": {
+                "weight": "8",
+                "type": "file_generic",
+                "module": "file",
+                "active": 1,
+                "settings": {
+                    "progress_indicator": "throbber"
+                }
+            },
+            "settings": {
+                "file_directory": "",
+                "file_extensions": "pdf jpeg png jpg",
+                "max_filesize": "5 MB",
+                "description_field": 0,
+                "user_register_form": false
+            },
+            "display": {
+                "default": {
+                    "label": "above",
+                    "type": "file_default",
+                    "settings": [],
+                    "module": "file",
+                    "weight": 9
+                },
+                "teaser": {
+                    "type": "hidden",
+                    "label": "above",
+                    "settings": [],
+                    "weight": 0
+                }
+            },
+            "required": 0,
+            "description": "Adjunto con el detalle del apgo",
+            "field_name": "field_archivo",
+            "entity_type": "node",
+            "bundle": "pagos"
+        },
+        {
+            "label": "Banco",
+            "widget": {
+                "weight": "9",
+                "type": "options_select",
+                "module": "options",
+                "active": 1,
+                "settings": []
+            },
+            "settings": {
+                "user_register_form": false
+            },
+            "display": {
+                "default": {
+                    "label": "above",
+                    "type": "taxonomy_term_reference_link",
+                    "settings": [],
+                    "module": "taxonomy",
+                    "weight": 11
+                },
+                "teaser": {
+                    "type": "hidden",
+                    "label": "above",
+                    "settings": [],
+                    "weight": 0
+                }
+            },
+            "required": 0,
+            "description": "Opcional, solo para pagos desde la app (Referencial)",
+            "default_value": null,
+            "field_name": "field_banco",
+            "entity_type": "node",
+            "bundle": "pagos"
+        },
+        {
+            "display": {
+                "default": {
+                    "type": "hidden",
+                    "label": "above",
+                    "settings": [],
+                    "weight": 12
+                },
+                "teaser": {
+                    "type": "hidden",
+                    "label": "above",
+                    "settings": [],
+                    "weight": 1
+                }
+            },
+            "label": "Canal",
+            "required": 0,
+            "default_value": [
+                {
+                    "value": "backoffice"
+                }
+            ],
+            "widget": {
+                "type": "options_select",
+                "settings": [],
+                "weight": 10,
+                "module": "options"
+            },
+            "settings": {
+                "user_register_form": false
+            },
+            "description": "",
+            "field_name": "field_canal",
+            "entity_type": "node",
+            "bundle": "pagos"
+        },
+        {
+            "display": {
+                "default": {
+                    "type": "hidden",
+                    "label": "above",
+                    "settings": [],
+                    "weight": 13
+                },
+                "teaser": {
+                    "type": "hidden",
+                    "label": "above",
+                    "settings": [],
+                    "weight": 2
+                }
+            },
+            "label": "Banco emisor",
+            "required": 0,
+            "settings": {
+                "text_processing": 0,
+                "user_register_form": false
+            },
+            "widget": {
+                "type": "text_textfield",
+                "settings": {
+                    "size": 60
+                },
+                "weight": 11,
+                "module": "text"
+            },
+            "description": "",
+            "field_name": "field_banco_emisor",
+            "entity_type": "node",
+            "bundle": "pagos",
+            "default_value": null
+        },
+        {
+            "display": {
+                "default": {
+                    "type": "hidden",
+                    "label": "above",
+                    "settings": [],
+                    "weight": 14
+                },
+                "teaser": {
+                    "type": "hidden",
+                    "label": "above",
+                    "settings": [],
+                    "weight": 3
+                }
+            },
+            "label": "Banco destino",
+            "required": 0,
+            "settings": {
+                "text_processing": 0,
+                "user_register_form": false
+            },
+            "widget": {
+                "type": "text_textfield",
+                "settings": {
+                    "size": 60
+                },
+                "weight": 12,
+                "module": "text"
+            },
+            "description": "",
+            "field_name": "field_banco_destino",
+            "entity_type": "node",
+            "bundle": "pagos",
+            "default_value": null
+        },
+        {
+            "display": {
+                "default": {
+                    "type": "hidden",
+                    "label": "above",
+                    "settings": [],
+                    "weight": 15
+                },
+                "teaser": {
+                    "type": "hidden",
+                    "label": "above",
+                    "settings": [],
+                    "weight": 4
+                }
+            },
+            "label": "Lectura del comprobante (OCR)",
+            "required": 0,
+            "settings": {
+                "text_processing": 0,
+                "user_register_form": false
+            },
+            "widget": {
+                "type": "text_textarea",
+                "settings": {
+                    "rows": 10
+                },
+                "weight": 13,
+                "module": "text"
+            },
+            "description": "",
+            "field_name": "field_comprobante_ocr",
+            "entity_type": "node",
+            "bundle": "pagos",
+            "default_value": null
+        },
+        {
+            "label": "Detalle",
+            "widget": {
+                "weight": "8",
+                "type": "text_textfield",
+                "module": "text",
+                "active": 1,
+                "settings": {
+                    "size": "60"
+                }
+            },
+            "settings": {
+                "text_processing": "0",
+                "user_register_form": false
+            },
+            "display": {
+                "default": {
+                    "label": "above",
+                    "type": "text_default",
+                    "settings": [],
+                    "module": "text",
+                    "weight": 6
+                },
+                "teaser": {
+                    "type": "hidden",
+                    "label": "above",
+                    "settings": [],
+                    "weight": 0
+                }
+            },
+            "required": 0,
+            "description": "Descripción del valor extra, para entendimiento del usuario",
+            "default_value": null,
+            "field_name": "field_detalle",
+            "entity_type": "node",
+            "bundle": "alicuota_extra"
+        },
+        {
+            "label": "Tipo",
+            "widget": {
+                "weight": "1",
+                "type": "text_textfield",
+                "module": "text",
+                "active": 1,
+                "settings": {
+                    "size": "60"
+                }
+            },
+            "settings": {
+                "text_processing": "0",
+                "user_register_form": false
+            },
+            "display": {
+                "default": {
+                    "label": "above",
+                    "type": "text_default",
+                    "settings": [],
+                    "module": "text",
+                    "weight": 0
+                }
+            },
+            "required": 1,
+            "description": "",
+            "default_value": null,
+            "field_name": "field_tipo_pago",
+            "entity_type": "taxonomy_term",
+            "bundle": "metodos_pago"
+        }
+    ],
+    "allowed_values": {
+        "field_estado_pago": {
+            "Nuevo": "Nuevo",
+            "Completado": "Completado",
+            "Anulado": "Anulado",
+            "Pendiente de verificar": "Pendiente de verificar"
+        },
+        "field_forma_de_pago": {
+            "Deposito": "Deposito",
+            "Efectivo": "Efectivo",
+            "Cheque": "Cheque",
+            "Transferencia": "Transferencia",
+            "PayPhone": "PayPhone",
+            "Tarjeta": "Tarjeta"
+        }
+    }
+}

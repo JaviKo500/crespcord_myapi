@@ -46,6 +46,38 @@ Seguir **en orden**. Los valores entre `<...>` son secretos: nunca se suben al r
 El módulo **no crea** estos campos: los lee y los escribe. Sin ellos, los endpoints
 devuelven datos vacíos o fallan al guardar. Los nombres de máquina deben ser **exactos**.
 
+**Copiarlos de staging en vez de crearlos a mano.** `scripts/export-fields.php` saca
+de staging la definición exacta del vocabulario `metodos_pago`, de los campos de esta
+sección (incluidos los cuatro del bot en `pagos`) y de los valores permitidos de
+`field_estado_pago` y `field_forma_de_pago`. `scripts/import-fields.php` los crea en
+prod. El importador:
+- lo valida todo antes de escribir; si algo falla, no crea nada;
+- no toca lo que ya existe, salvo para **añadir** los valores permitidos que falten
+  (nunca quita ni cambia etiquetas);
+- rechaza un campo que exista con otro tipo;
+- se puede repetir sin efecto (idempotente).
+
+Exige `file_private_path` configurado (paso 2), porque `field_archivo` es privado.
+Por eso va **después** de `settings.php`.
+
+```bash
+# En tu equipo: subir los scripts a los dos servidores (deploy.sh no sube scripts/)
+scp -i ~/.ssh/crespcord.pem scripts/export-fields.php ubuntu@crespcord.lamotora.com:/tmp/
+scp -i ~/.ssh/LightsailDefaultKey-us-east-2-cresp.pem scripts/import-fields.php ubuntu@<IP_PROD>:/tmp/
+
+# En staging: exportar y traer el JSON
+cd /var/www/html && sudo -u www-data env MYAPI_FIELDS_FILE=/tmp/myapi-fields.json drush php-script /tmp/export-fields.php
+scp -i ~/.ssh/crespcord.pem ubuntu@crespcord.lamotora.com:/tmp/myapi-fields.json .
+scp -i ~/.ssh/LightsailDefaultKey-us-east-2-cresp.pem myapi-fields.json ubuntu@<IP_PROD>:/tmp/
+
+# En prod: primero en seco (no escribe nada), revisar el plan, y luego de verdad
+cd /var/www/html
+sudo -u www-data env MYAPI_IMPORT_DRY_RUN=1 MYAPI_FIELDS_FILE=/tmp/myapi-fields.json drush php-script /tmp/import-fields.php
+sudo -u www-data env MYAPI_FIELDS_FILE=/tmp/myapi-fields.json drush php-script /tmp/import-fields.php
+```
+Los términos de `metodos_pago` y `bancos` (los datos, no la estructura) se cargan
+después con `scripts/seed-catalogs.php`.
+
 ### Alícuotas extras (`alicuota_extra`)
 - [ ] `field_detalle`: texto largo. La API lo expone como `details`.
 
