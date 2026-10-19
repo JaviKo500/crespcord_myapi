@@ -1056,7 +1056,7 @@ function myapi_reservation_parse_time($hhmm) {
  */
 function myapi_reservation_add_minutes($hhmm, $minutes) {
   $total = myapi_reservation_parse_time($hhmm) + (int) $minutes;
-  $hours = intdiv($total, 60);
+  $hours = (int) ($total / 60);
   $mins = $total % 60;
   return sprintf('%02d:%02d', $hours, $mins);
 }
@@ -1079,7 +1079,7 @@ function myapi_reservation_add_minutes($hhmm, $minutes) {
  */
 function myapi_reservation_wrap_time($minutes) {
   $wrapped = (((int) $minutes % 1440) + 1440) % 1440;
-  return sprintf('%02d:%02d', intdiv($wrapped, 60), $wrapped % 60);
+  return sprintf('%02d:%02d', (int) ($wrapped / 60), $wrapped % 60);
 }
 
 /**
@@ -1150,7 +1150,7 @@ function myapi_reservation_effective_date($date, $start_min, $open_min, $close_m
  * @return array  [start_abs, end_abs] in absolute minutes.
  */
 function myapi_reservation_abs_interval($date, $start_min, $end_min) {
-  $base = intdiv(strtotime($date . ' 00:00:00'), 60);
+  $base = (int) (strtotime($date . ' 00:00:00') / 60);
   $end_abs = $base + $end_min + ($end_min <= $start_min ? 1440 : 0);
   return [$base + $start_min, $end_abs];
 }

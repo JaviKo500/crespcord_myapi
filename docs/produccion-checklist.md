@@ -208,6 +208,23 @@ Notas:
   Reiniciar PHP-FPM o Apache después.
 - [ ] Extensiones PHP: `openssl` (chat) y `fileinfo` (validación del tipo real de las subidas).
   Comprobar con `php -m`.
+- [ ] **Drush 8 instalado.** `scripts/deploy.sh` ejecuta `drush updb` y `drush cc all`,
+  y el cron (paso 5) también lo usa. Comprobar con `which drush`. Si no sale nada,
+  instalarlo. Para Drupal 7 hace falta **Drush 8**: Drush 9 o superior no lo soporta.
+  Drush 8 funciona en PHP 5.6, así que no hay que tocar el PHP del servidor:
+  ```bash
+  ssh -i ~/.ssh/LightsailDefaultKey-us-east-2-cresp.pem ubuntu@<IP_PROD>
+
+  cd /tmp
+  curl -fLO https://github.com/drush-ops/drush/releases/download/8.4.12/drush.phar
+  php drush.phar --version          # debe decir Drush 8.4.12, sin errores
+  sudo mv drush.phar /usr/local/bin/drush
+  sudo chmod +x /usr/local/bin/drush
+  cd /var/www/html && sudo -u www-data drush status
+  # ↑ debe mostrar "Drupal version: 7.64" y "Database: Connected"
+  ```
+  Es un solo fichero y no instala dependencias. Para quitarlo:
+  `sudo rm /usr/local/bin/drush`.
 - [ ] **Correo saliente por SMTP.** El servidor no tiene sendmail. Configurar el módulo
   `smtp` y comprobar que el sistema de correo por defecto es
   `HTMLMailSystem__SmtpMailSystem`. Si cae en `DefaultMailSystem`, cada correo falla

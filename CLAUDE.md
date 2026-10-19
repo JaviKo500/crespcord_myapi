@@ -15,7 +15,7 @@ Goal: a clean, reusable, scalable API where adding a new resource means creating
 ## Environment constraints (non-negotiable)
 
 - **Drupal 7.64.** Use only Drupal 7 APIs (`hook_menu()`, `db_select()`, `db_insert()`, `drupal_json_encode()`, etc.). Never suggest Drupal 8/9/10/11 solutions (YAML routes, Symfony controllers, annotations, DI services).
-- **PHP 7.4.33.** PHP 7.4 features are fine (arrow functions, typed properties, null-coalescing assignment). PHP 8.0+ syntax (`match`, named arguments, constructor property promotion, enums) will break.
+- **PHP 5.6 compatible.** Staging runs PHP 7.4.33, but production runs **PHP 5.6** (mod_php) and the server is not upgraded. Shipped code (`myapi.module`, `myapi.install`, `includes/`, `resources/`) must parse and run on 5.6: no `??`/`??=`, arrow functions, scalar/return type declarations, `define()` with arrays (use a file-level `const`), and no PHP 7-only functions (`random_bytes()` → `drupal_random_bytes()`, `intdiv($a, $b)` → `(int) ($a / $b)`). CI lints on 5.6 (`php56` job). Tests under `tests/` run on 7.4 and may use 7.4 syntax.
 - **Drupal 7 is EOL (January 2025).** No core security patches — validate and sanitize all input with extra care.
 - **HTTPS required** in production; credentials and tokens travel in requests.
 
@@ -162,7 +162,7 @@ Doc is updated in the same commit that creates or modifies the endpoint. An endp
 - No raw JSON output — always `myapi_respond()` / `myapi_error()`.
 - No logic duplication between resources — shared code goes to `includes/`.
 - No Drupal 8+ APIs.
-- No PHP 8.0+ syntax.
+- No PHP 7.0+ syntax or functions in shipped code (production is PHP 5.6).
 - No Spanish identifiers or comments — code is in English.
 - No endpoint without a doc file in `docs/`.
 

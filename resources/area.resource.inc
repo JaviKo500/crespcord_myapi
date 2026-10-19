@@ -32,8 +32,11 @@ module_load_include('inc', 'myapi', 'includes/myapi.text');
  * The criterion is by inclusion: only areas whose field_area_status is one of
  * these values are exposed. 'closed' and any area with no status row are
  * hidden, because "no status" is not a safe state to show.
+ *
+ * A const rather than define(): define() only takes arrays from PHP 7.0, and
+ * production runs PHP 5.6.
  */
-define('MYAPI_AREA_VISIBLE_STATUSES', ['active', 'maintenance']);
+const MYAPI_AREA_VISIBLE_STATUSES = ['active', 'maintenance'];
 
 /**
  * Dispatcher for /api/v1/condominiums/%/areas.

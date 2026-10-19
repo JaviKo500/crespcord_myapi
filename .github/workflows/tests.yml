@@ -94,6 +94,42 @@ jobs:
           path: coverage.xml
           if-no-files-found: warn
 
+  # Production runs PHP 5.6 under mod_php, while staging runs 7.4.
+  # The module has to load on both, so the shipped sources are also linted on
+  # 5.6. php -l only sees syntax: functions that 5.6 lacks parse fine and die
+  # at runtime, so the second step greps for the ones a PHP 7 habit reaches for.
+  # The test suite stays on 7.4 (PHPUnit 9 needs 7.3+).
+  php56:
+    name: PHP 5.6 · lint shipped sources
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up PHP 5.6
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '5.6'
+          coverage: none
+
+      - name: Lint myapi.module, myapi.install, includes/ and resources/
+        run: |
+          find myapi.module myapi.install includes resources \
+            \( -name '*.inc' -o -name '*.module' -o -name '*.install' \) -print0 \
+            | xargs -0 -n1 php -l > lint.log \
+            || { grep -v '^No syntax errors' lint.log; exit 1; }
+
+      - name: No PHP 7-only functions
+        run: |
+          # Docblock and // lines are skipped: comments may name these.
+          if grep -rnE '\b(random_bytes|random_int|intdiv|preg_replace_callback_array|array_key_first|array_key_last|is_iterable|is_countable|mb_str_split|hrtime|spl_object_id|str_contains|str_starts_with|str_ends_with|array_is_list)\(' \
+               myapi.module myapi.install includes resources \
+               | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(\*|//|/\*)'; then
+            echo "These functions do not exist on PHP 5.6 (production)."
+            exit 1
+          fi
+
   static:
     name: PHP 7.4 · static analysis
     runs-on: ubuntu-latest

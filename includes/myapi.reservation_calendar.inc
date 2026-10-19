@@ -1256,7 +1256,7 @@ function myapi_calendar_duration_label($row) {
   $minutes = $end_min - $start_min + ($end_min <= $start_min ? 1440 : 0);
 
   // Plain numeric formatting, nothing to translate.
-  return sprintf('%dh %dmin', intdiv($minutes, 60), $minutes % 60);
+  return sprintf('%dh %dmin', (int) ($minutes / 60), $minutes % 60);
 }
 
 /**

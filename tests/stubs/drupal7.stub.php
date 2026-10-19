@@ -358,6 +358,13 @@ function drupal_mail(...$arguments) {}
  *
  * @return mixed
  */
+function drupal_random_bytes(...$arguments) {}
+
+/**
+ * @param mixed ...$arguments
+ *
+ * @return mixed
+ */
 function drupal_realpath(...$arguments) {}
 
 /**

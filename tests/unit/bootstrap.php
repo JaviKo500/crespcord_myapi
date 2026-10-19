@@ -148,6 +148,16 @@ if (!function_exists('drupal_get_path')) {
 
 $GLOBALS['base_url'] = 'https://crespcord.example.com';
 
+/**
+ * Core's CSPRNG wrapper, used by the token generators so they also run on
+ * PHP 5.6. The suite runs on 7.4, where core itself delegates to random_bytes().
+ */
+if (!function_exists('drupal_random_bytes')) {
+  function drupal_random_bytes($count) {
+    return random_bytes($count);
+  }
+}
+
 if (!function_exists('drupal_strlen')) {
   function drupal_strlen($text) {
     return mb_strlen($text, 'UTF-8');

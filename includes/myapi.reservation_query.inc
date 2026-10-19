@@ -333,9 +333,9 @@ function myapi_reservation_occupancy_ranges($busy, $capacity) {
   $intervals = array();
   $labels = array();
   foreach ($busy as $range) {
-    $start_abs = intdiv(strtotime($range['start_date'] . ' 00:00:00'), 60)
+    $start_abs = (int) (strtotime($range['start_date'] . ' 00:00:00') / 60)
       + myapi_reservation_time_to_minutes($range['start_time']);
-    $end_abs = intdiv(strtotime($range['end_date'] . ' 00:00:00'), 60)
+    $end_abs = (int) (strtotime($range['end_date'] . ' 00:00:00') / 60)
       + myapi_reservation_time_to_minutes($range['end_time']);
 
     $intervals[] = array($start_abs, $end_abs);

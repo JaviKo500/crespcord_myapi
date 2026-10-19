@@ -28,10 +28,14 @@ define('MYAPI_TOKEN_REFRESH_TTL_DEFAULT', 2592000);
 /**
  * Generates an opaque access token.
  *
+ * Random bytes come from drupal_random_bytes(), not random_bytes(): production
+ * runs PHP 5.6, which has no random_bytes(), and core's helper uses it when it
+ * exists and falls back to OpenSSL otherwise.
+ *
  * @return string  64 hex chars (32 random bytes).
  */
 function myapi_token_generate_access() {
-  return bin2hex(random_bytes(32));
+  return bin2hex(drupal_random_bytes(32));
 }
 
 /**
@@ -40,7 +44,7 @@ function myapi_token_generate_access() {
  * @return string  128 hex chars (64 random bytes).
  */
 function myapi_token_generate_refresh() {
-  return bin2hex(random_bytes(64));
+  return bin2hex(drupal_random_bytes(64));
 }
 
 /**
@@ -101,7 +105,7 @@ function myapi_password_reset_ttl() {
  * @return string  64 hex chars (32 random bytes).
  */
 function myapi_token_generate_reset() {
-  return bin2hex(random_bytes(32));
+  return bin2hex(drupal_random_bytes(32));
 }
 
 /**
