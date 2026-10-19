@@ -211,18 +211,32 @@ Notas:
 - [ ] **Drush 8 instalado.** `scripts/deploy.sh` ejecuta `drush updb` y `drush cc all`,
   y el cron (paso 5) también lo usa. Comprobar con `which drush`. Si no sale nada,
   instalarlo. Para Drupal 7 hace falta **Drush 8**: Drush 9 o superior no lo soporta.
-  Drush 8 funciona en PHP 5.6, así que no hay que tocar el PHP del servidor:
+  Drush 8 funciona en PHP 5.6, así que no hay que tocar el PHP del servidor.
+  **Usar la 8.4.11, no la 8.4.12:** el `.phar` de la 8.4.12 trae un comprobador de
+  requisitos con sintaxis PHP 7 y en PHP 5.6 da `Parse error ... .box/src/Checker.php`.
   ```bash
   ssh -i ~/.ssh/LightsailDefaultKey-us-east-2-cresp.pem ubuntu@<IP_PROD>
 
   cd /tmp
-  curl -fLO https://github.com/drush-ops/drush/releases/download/8.4.12/drush.phar
-  php drush.phar --version          # debe decir Drush 8.4.12, sin errores
-  sudo mv drush.phar /usr/local/bin/drush
+  curl -fLO https://github.com/drush-ops/drush/releases/download/8.4.11/drush.phar
+  php drush.phar --version          # debe decir Drush 8.4.11, sin errores
+  cd /var/www/html && sudo -u www-data php /tmp/drush.phar status
+  # ↑ antes de instalarlo: debe mostrar "Drupal version: 7.64" y "Database: Connected"
+  sudo mv /tmp/drush.phar /usr/local/bin/drush
   sudo chmod +x /usr/local/bin/drush
-  cd /var/www/html && sudo -u www-data drush status
-  # ↑ debe mostrar "Drupal version: 7.64" y "Database: Connected"
+  sudo rm -rf /tmp/drush-www-data   # caché de Drush con la ruta /tmp/drush.phar
   ```
+  **Borrar la caché de Drush después de moverlo.** Drush guarda en su caché las rutas
+  de sus propios ficheros (`/tmp/drush.phar/...`). Si no se borra, todo comando que
+  carga Drupal entero (`php-eval`, `updb`, `cc all`, `en`) se corta con un
+  `Drush command terminated abnormally` sin más detalle. El motivo solo aparece en
+  `drush watchdog-show`: `PharStreamWrapper\Exception: Unexpected file extension in
+  "phar:///tmp/drush.phar/..."`. Lo provoca el filtro `phar://` de Drupal 7.62+.
+  Solo afecta a `www-data`, cuya caché va a `/tmp/drush-www-data` porque no puede
+  escribir en su home (`/var/www`).
+  Los avisos `stat failed for phar://.../sites/all/modules/*.drush.inc` son normales:
+  solo indican que no se cargan los comandos drush de los módulos contrib, que el
+  deploy no usa.
   Es un solo fichero y no instala dependencias. Para quitarlo:
   `sudo rm /usr/local/bin/drush`.
 - [ ] **Correo saliente por SMTP.** El servidor no tiene sendmail. Configurar el módulo
