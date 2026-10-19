@@ -60,7 +60,9 @@ done
 
 # The WhatsApp bot manual (manual_bot/, copied from the crespcord-lambda repo):
 # a single page with its own numbered index, so no --toc, and its own img/ so
-# its screenshots never collide with the app's.
+# its screenshots never collide with the app's. Its screenshots are landscape
+# WhatsApp Desktop captures, so it uses the wide layout: at the 280 px phone
+# width they shrink to unreadable.
 if [ -f "$BOT/USER_GUIDE.md" ]; then
   mkdir -p "$OUT/whatsapp/img"
   cp "$BOT"/assets/*.png "$OUT/whatsapp/img/"
@@ -69,7 +71,7 @@ if [ -f "$BOT/USER_GUIDE.md" ]; then
     --template="$TOOLS/template.html" \
     --lua-filter="$TOOLS/manual.lua" \
     -M root="" -M source_dir="$BOT" \
-    -M footer="CrespCord · Manual del asistente de pagos por WhatsApp" \
+    -M footer="CrespCord · Manual del asistente de pagos por WhatsApp" -M wide=true \
     "$BOT/USER_GUIDE.md" -o "$OUT/whatsapp/index.html"
 else
   echo "Aviso: no existe manual_bot/USER_GUIDE.md; se omite el manual de WhatsApp." >&2
