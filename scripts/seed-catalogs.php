@@ -220,7 +220,7 @@ foreach ($data['areas'] as $i => $row) {
     $wanted = isset($row['condominium']) ? myapi_seed_key($row['condominium']) : '';
     $matches = $wanted !== '' && isset($condominiums_by_title[$wanted]) ? $condominiums_by_title[$wanted] : [];
     if (count($matches) !== 1) {
-      $errors[] = $label . ': condominium "' . ($row['condominium'] ?? '') . '" '
+      $errors[] = $label . ': condominium "' . (isset($row['condominium']) ? $row['condominium'] : '') . '" '
         . (count($matches) ? 'matches ' . count($matches) . ' nodes (nids ' . implode(', ', $matches) . '); use "condominium_nid".' : 'not found.');
       continue;
     }

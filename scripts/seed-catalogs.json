@@ -5,10 +5,10 @@
     { "name": "Produbanco" }
   ],
   "payment_methods": [
-    { "name": "Cheque", "type_method": "cheque", "description": "" },
-    { "name": "Deposito", "type_method": "deposito", "description": "" },
-    { "name": "Efectivo", "type_method": "efectivo", "description": "" },
-    { "name": "Transferencia", "type_method": "transferencia", "description": "" }
+    { "name": "Cheque", "type_method": "Cheque", "description": "" },
+    { "name": "Deposito", "type_method": "Deposito", "description": "" },
+    { "name": "Efectivo", "type_method": "Efectivo", "description": "" },
+    { "name": "Transferencia", "type_method": "Transferencia", "description": "" }
   ],
   "areas": []
 }
