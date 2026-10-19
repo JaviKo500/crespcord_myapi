@@ -219,10 +219,19 @@ Notas:
 
 ```bash
 drush vset maintenance_mode 1   # en el servidor, antes de copiar
-./scripts/deploy.sh             # o scripts/deploy.ps1 en Windows
+./scripts/deploy.sh --env prod  # o scripts/deploy.ps1 -Env prod en Windows
 drush vset maintenance_mode 0   # tras comprobar que updb terminó bien
 ```
 El script sube el módulo, ejecuta `drush updb -y` y `drush cc all`.
+- **Entorno.** Sin flag (o con `--env staging`) despliega en staging
+  (`crespcord.lamotora.com`, `~/.ssh/crespcord.pem`). Con `--env prod` va a la
+  instancia de Lightsail de Ohio con `~/.ssh/LightsailDefaultKey-us-east-2-cresp.pem`
+  y pide escribir `prod` para confirmar (`--yes` se lo salta).
+  `scripts/deploy-manual.sh` acepta los mismos flags.
+- La IP de producción no está en el repo. Copiar `scripts/deploy.local.env.example`
+  a `scripts/deploy.local.env` (ignorado por git) y rellenar `MYAPI_PROD_HOST`, o
+  exportar la variable. En Windows, `$env:MYAPI_PROD_HOST`. `MYAPI_DEPLOY_KEY`
+  sigue sustituyendo la clave del entorno elegido.
 - El script **no** tiene `set -e`: si falla un `scp`, sigue con `updb` igualmente.
   Revisar la salida antes de quitar el modo mantenimiento.
 - El script usa `cp -r` y **no borra** en el servidor ficheros eliminados del repo.

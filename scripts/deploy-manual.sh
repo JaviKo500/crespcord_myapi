@@ -18,8 +18,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SRC="$(dirname "$SCRIPT_DIR")"
-KEY="${MYAPI_DEPLOY_KEY:-$HOME/.ssh/crespcord.pem}"
-SERVER="ubuntu@crespcord.lamotora.com"
+# Sets KEY, SERVER and SITE_URL from --env staging|prod (default staging).
+. "$SCRIPT_DIR/deploy-target.sh"
 DEST="/var/www/html/manual"
 TMP="manual_upload"
 BO_DEST="/var/www/manual-backoffice"
@@ -56,5 +56,5 @@ ssh -i "$KEY" "$SERVER" "
   test ! -e $DEST/backoffice
 "
 
-echo "Manual publicado: https://crespcord.lamotora.com/manual/"
-echo "Manual del back office (requiere sesión de back office): https://crespcord.lamotora.com/manual/backoffice/"
+echo "Manual publicado: $SITE_URL/manual/"
+echo "Manual del back office (requiere sesión de back office): $SITE_URL/manual/backoffice/"

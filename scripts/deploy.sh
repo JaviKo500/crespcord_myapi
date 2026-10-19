@@ -2,8 +2,8 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SRC="$(dirname "$SCRIPT_DIR")"
-KEY="${MYAPI_DEPLOY_KEY:-$HOME/.ssh/crespcord.pem}"
-SERVER="ubuntu@crespcord.lamotora.com"
+# Sets KEY and SERVER from --env staging|prod (default staging).
+. "$SCRIPT_DIR/deploy-target.sh"
 DEST="/var/www/html/sites/all/modules/myapi"
 TMP="~/myapi_upload"
 
@@ -43,4 +43,4 @@ ssh -i "$KEY" "$SERVER" "
   cd /var/www/html && sudo -u www-data drush updb -y && sudo -u www-data drush cc all
 "
 
-echo "Deploy completado."
+echo "Deploy completado en $DEPLOY_ENV: $SITE_URL"

@@ -1,6 +1,37 @@
-$key    = "$PSScriptRoot\crespcord.pem"
-$src    = Split-Path $PSScriptRoot -Parent
-$server = "ubuntu@crespcord.lamotora.com"
+# Usage: .\deploy.ps1 [-Env staging|prod] [-Yes]
+# Production host comes from $env:MYAPI_PROD_HOST; it is not committed.
+param(
+    [ValidateSet("staging", "prod")]
+    [Alias("Env")]
+    [string]$Environment = "staging",
+    [switch]$Yes
+)
+
+$src = Split-Path $PSScriptRoot -Parent
+
+if ($Environment -eq "prod") {
+    if (-not $env:MYAPI_PROD_HOST) {
+        Write-Error "Falta la variable de entorno MYAPI_PROD_HOST."
+        exit 1
+    }
+    $key    = "$PSScriptRoot\LightsailDefaultKey-us-east-2-cresp.pem"
+    $server = "ubuntu@$($env:MYAPI_PROD_HOST)"
+} else {
+    $key    = "$PSScriptRoot\crespcord.pem"
+    $server = "ubuntu@crespcord.lamotora.com"
+}
+if ($env:MYAPI_DEPLOY_KEY) { $key = $env:MYAPI_DEPLOY_KEY }
+
+Write-Host "Entorno: $Environment ($server)"
+
+if ($Environment -eq "prod" -and -not $Yes) {
+    $answer = Read-Host "Vas a desplegar en PRODUCCION. Escribe 'prod' para continuar"
+    if ($answer -ne "prod") {
+        Write-Host "Cancelado."
+        exit 1
+    }
+}
+
 $dest   = "/var/www/html/sites/all/modules/myapi"
 $tmp    = "~/myapi_upload"
 
@@ -42,4 +73,4 @@ cd /var/www/html && sudo -u www-data drush updb -y && sudo -u www-data drush cc 
 
 ssh -i $key $server $remote_commands
 
-Write-Host "Deploy completado."
+Write-Host "Deploy completado en $Environment."
