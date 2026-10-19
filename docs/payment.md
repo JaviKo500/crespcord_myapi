@@ -531,6 +531,10 @@ them to one by accident.
   the `bancos` vocabulary the app fills, with the same semantics and the same
   `invalid_bank` validation. The two new bank fields are plain text and live
   beside it; they do not replace it.
+- **The node edit form shows the three bot fields only while `field_canal` is
+  `bot`** (`myapi_form_pagos_node_form_alter()`). It is a `#states` rule, so
+  switching the channel in the form shows or hides them at once, and the values
+  are still submitted while hidden: nothing is blanked on save.
 - **No endpoint filters or searches by channel.** There is no `?channel=`
   parameter on any listing.
 - **Payments created before these fields existed** were all marked

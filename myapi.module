@@ -2332,6 +2332,18 @@ function myapi_form_service_transaction_node_form_alter(&$form, &$form_state, $f
 }
 
 /**
+ * Implements hook_form_FORM_ID_alter() for the 'pagos' node form (SPEC 130).
+ *
+ * Glue only, same criterion as the alters above: the include is loaded and
+ * the actual work — showing the three bot-only fields only while field_canal
+ * is 'bot' — is delegated entirely to includes/myapi.payment_workflow.inc.
+ */
+function myapi_form_pagos_node_form_alter(&$form, &$form_state, $form_id) {
+  module_load_include('inc', 'myapi', 'includes/myapi.payment_workflow');
+  myapi_payment_bot_fields_form_alter($form);
+}
+
+/**
  * Implements hook_node_validate().
  *
  * Glue only, dispatching by node type. Every type not named below falls

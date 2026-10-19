@@ -644,3 +644,52 @@ function myapi_payment_resident_mail_label($uid) {
     ? check_plain($account->mail)
     : MYAPI_PAYMENT_MAIL_EMPTY;
 }
+
+/* ---------------------------------------------------------------------------
+ * 'pagos' node form alter.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * The 'pagos' fields only the WhatsApp bot fills (SPEC 130).
+ *
+ * Listed here and not read from MYAPI_BOT_PAYMENT_*_FIELD: those constants
+ * live in resources/bot.resource.inc, and an include never reaches into a
+ * resource file.
+ *
+ * @return array  Field names.
+ */
+function myapi_payment_bot_only_fields() {
+  return array('field_banco_emisor', 'field_banco_destino', 'field_comprobante_ocr');
+}
+
+/**
+ * Delegate of myapi_form_pagos_node_form_alter() (myapi.module).
+ *
+ * Shows the bot-only fields only while field_canal is 'bot'. They are empty on
+ * every payment from the app or the back office, so on those they were three
+ * blank boxes the operator could only fill by mistake.
+ *
+ * #states and not #access = FALSE: the operator can still switch a payment's
+ * channel in the form and see the fields appear without saving first, and the
+ * values travel with the submit either way, so hiding never blanks the reading
+ * of a bot payment. It is presentation only; nothing here decides what gets
+ * stored.
+ *
+ * A form without field_canal (removed by field access or another module) is
+ * left untouched: with no select to watch, hiding would be permanent.
+ *
+ * @param array $form
+ */
+function myapi_payment_bot_fields_form_alter(array &$form) {
+  if (!isset($form[MYAPI_PAYMENT_CHANNEL_FIELD]['#language'])) {
+    return;
+  }
+
+  $selector = ':input[name="' . MYAPI_PAYMENT_CHANNEL_FIELD . '[' . $form[MYAPI_PAYMENT_CHANNEL_FIELD]['#language'] . ']"]';
+
+  foreach (myapi_payment_bot_only_fields() as $field_name) {
+    if (isset($form[$field_name])) {
+      $form[$field_name]['#states']['visible'][$selector] = array('value' => MYAPI_PAYMENT_CHANNEL_BOT);
+    }
+  }
+}
