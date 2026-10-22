@@ -15,7 +15,7 @@ Goal: a clean, reusable, scalable API where adding a new resource means creating
 ## Environment constraints (non-negotiable)
 
 - **Drupal 7.64.** Use only Drupal 7 APIs (`hook_menu()`, `db_select()`, `db_insert()`, `drupal_json_encode()`, etc.). Never suggest Drupal 8/9/10/11 solutions (YAML routes, Symfony controllers, annotations, DI services).
-- **PHP 5.6 compatible.** Staging runs PHP 7.4.33, but production runs **PHP 5.6** (mod_php) and the server is not upgraded. Shipped code (`myapi.module`, `myapi.install`, `includes/`, `resources/`) must parse and run on 5.6: no `??`/`??=`, arrow functions, scalar/return type declarations, `define()` with arrays (use a file-level `const`), and no PHP 7-only functions (`random_bytes()` → `drupal_random_bytes()`, `intdiv($a, $b)` → `(int) ($a / $b)`). CI lints on 5.6 (`php56` job). Tests under `tests/` run on 7.4 and may use 7.4 syntax.
+- **PHP 5.6 compatible.** Staging runs PHP 8.3.36 (PHP-FPM, Drupal 7.103), but production runs **PHP 5.6** (mod_php) and the server is not upgraded. Shipped code must also run on 8.3 without warnings, so staging catches PHP 8 breakage before the production migration. Shipped code (`myapi.module`, `myapi.install`, `includes/`, `resources/`) must parse and run on 5.6: no `??`/`??=`, arrow functions, scalar/return type declarations, `define()` with arrays (use a file-level `const`), and no PHP 7-only functions (`random_bytes()` → `drupal_random_bytes()`, `intdiv($a, $b)` → `(int) ($a / $b)`). CI lints on 5.6 (`php56` job). Tests under `tests/` run on 7.4 and may use 7.4 syntax.
 - **Drupal 7 is EOL (January 2025).** No core security patches — validate and sanitize all input with extra care.
 - **HTTPS required** in production; credentials and tokens travel in requests.
 
