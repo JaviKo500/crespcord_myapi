@@ -39,6 +39,12 @@ ssh -i "$KEY" "$SERVER" "
   sudo cp -r $TMP/js         $DEST/
   sudo cp -r $TMP/assets     $DEST/
   sudo chown -R www-data:www-data $DEST
+  # scp -r can land the directories as 700. drush run as any user other than
+  # www-data then cannot load MyapiHtmlMailSystem, and the mailsystem module
+  # wipes every myapi_* key from mail_system and resets default-system to
+  # DefaultMailSystem (no sendmail on the server: every mail fails).
+  sudo find $DEST -type d -exec chmod 755 {} +
+  sudo find $DEST -type f -exec chmod 644 {} +
   rm -rf $TMP
   cd /var/www/html && sudo -u www-data drush updb -y && sudo -u www-data drush cc all
 "

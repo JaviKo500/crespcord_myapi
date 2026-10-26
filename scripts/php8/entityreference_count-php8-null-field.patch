@@ -1,0 +1,18 @@
+--- a/sites/all/modules/entityreference_count/entityreference_count.module	2026-10-26 12:45:59
++++ b/sites/all/modules/entityreference_count/entityreference_count.module	2026-10-26 12:46:24
+@@ -318,10 +318,13 @@
+   $db = array();
+ 
+   if (!empty($field_names)) {
+-    foreach ($field_names as $field_name) {
++    // The instance settings hold the raw checkboxes array, where an unchecked
++    // field is stored as 0: skip those, and any field that no longer exists,
++    // instead of reading the storage of a NULL field (warning on PHP 8).
++    foreach (array_filter($field_names) as $field_name) {
+       $field = field_info_field($field_name);
+       // Make sure we are dealing with SQL storage.
+-      if ($field['storage']['type'] == 'field_sql_storage') {
++      if (!empty($field['storage']['type']) && $field['storage']['type'] == 'field_sql_storage') {
+         $db_info = $field['storage']['details']['sql']['FIELD_LOAD_CURRENT'];
+         $tables = array_keys($db_info);
+         $table = array_pop($tables);

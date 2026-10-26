@@ -240,6 +240,12 @@ Notas:
   Reiniciar PHP-FPM o Apache después.
 - [ ] Extensiones PHP: `openssl` (chat) y `fileinfo` (validación del tipo real de las subidas).
   Comprobar con `php -m`.
+- [ ] **Sin directorios `private:` ni `public:` en el docroot.** Con PHP-FPM, si existe
+  `/var/www/html/private:`, `move_uploaded_file()` deja las subidas ahí, en una ruta pública,
+  en vez de en `/var/www/private`, y la API responde `invalid_file_type`. Pasó en staging el
+  2026-10-23 (ver `docs/mitigacion-php-cve-2026-10.md`). Comprobar
+  `ls -ld "/var/www/html/private:" "/var/www/html/public:"`: no debe existir ninguno. Después,
+  subir un comprobante y confirmar que aparece en `/var/www/private/comprobantes_pago/`.
 - [ ] **Drush 8 instalado.** `scripts/deploy.sh` ejecuta `drush updb` y `drush cc all`,
   y el cron (paso 5) también lo usa. Comprobar con `which drush`. Si no sale nada,
   instalarlo. Para Drupal 7 hace falta **Drush 8**: Drush 9 o superior no lo soporta.
@@ -274,7 +280,20 @@ Notas:
 - [ ] **Correo saliente por SMTP.** El servidor no tiene sendmail. Configurar el módulo
   `smtp` y comprobar que el sistema de correo por defecto es
   `HTMLMailSystem__SmtpMailSystem`. Si cae en `DefaultMailSystem`, cada correo falla
-  3 veces y se descarta (olvidé mi contraseña incluido).
+  3 veces y se descarta (olvidé mi contraseña incluido). Para comprobarlo y dejarlo
+  bien en un solo paso, con las 24 claves `myapi_*` registradas y un correo de prueba:
+  ```bash
+  scp scripts/php8/fix_mail_system.php ubuntu@<host>:/tmp/
+  cd /var/www/html && sudo -u www-data drush php-script /tmp/fix_mail_system.php test
+  ```
+  **Trampa que lo deshace (vista en staging el 2026-10-26):** el módulo `mailsystem`
+  comprueba en cada arranque que exista la clase de cada clave de `mail_system`, y
+  borra las que no puede cargar. Si `drush` corre como un usuario que no puede leer
+  `sites/all/modules/myapi/includes/` (ver sección 8, permisos), no ve
+  `MyapiHtmlMailSystem`, borra todas las claves `myapi_*` y devuelve `default-system`
+  a `DefaultMailSystem`. Regla: **`drush` siempre como `sudo -u www-data`**, y
+  `drush vset mail_system` siempre con `--exact` (si no, pregunta entre `mail_system`
+  y `smtp_previous_mail_system` y es fácil elegir mal).
 
 ---
 
@@ -311,6 +330,7 @@ El script sube el módulo, ejecuta `drush updb -y` y `drush cc all`.
   drush php-script /tmp/seed-service-categories.php
   ```
   Los slugs (`plomeria`, `electricidad`…) son los que la app asocia a iconos.
+- **Al migrar a PHP 8:** ver la sección 8, que recoge los ajustes probados en staging.
 
 ---
 
@@ -462,3 +482,103 @@ Desde la app (o con curl usando `Authorization: Bearer`):
 - [ ] Chat: `POST /api/v1/chat/token` devuelve el token (no 503) y se puede enviar un mensaje.
 - [ ] Bot: `curl -H "X-Api-Key: <BOT_API_KEY>" "https://crespcord.lamotora.com/api/v1/bot/person?phone=..."`
   devuelve `condominium_payment_info`.
+
+---
+
+## 8. Migración de producción a PHP 8.3 + Drupal 7.103
+
+Todo lo de esta sección se probó en staging entre el 2026-10-22 y el 2026-10-26
+(`docs/mitigacion-php-cve-2026-10.md` tiene el detalle de la parte de servidor). El
+orden importa: primero el core, luego PHP, luego los ajustes, y al final la ventana de
+24 horas con el watchdog vacío. Se puede hacer con la misma clave de Lightsail del paso 3.
+
+### 8.1 Antes de tocar nada
+
+- [ ] Backup completo de base de datos, `sites/default/files/` y `/var/www/private`
+  (paso 0). **`drush sql-dump --tables-list=X` se ignora en ese Drush y vuelca la base
+  entera** (1,5 GB en dos minutos en staging). Para una sola tabla, `mysqldump` directo
+  con el prefijo `dr_`:
+  ```bash
+  mysqldump --single-transaction <bd> dr_rules_config > ~/backups/rules_config-$(date +%Y%m%d-%H%M).sql
+  ```
+- [ ] Copia del fichero del módulo contrib que se va a parchear:
+  `cp sites/all/modules/entityreference_count/entityreference_count.module ~/backups/`.
+- [ ] Exportar las 13 reglas de Rules con PHP embebido (viven en la base de datos, no
+  en ninguna feature): `admin/config/workflow/rules`, o el dump de `dr_rules_config`
+  de arriba sirve para volver atrás.
+- [ ] Comprobar que **no existen** `/var/www/html/private:` ni `/var/www/html/public:`
+  (paso 3). Con FPM, si existen, las subidas acaban ahí.
+- [ ] Anotar el `mail_system` actual: `drush vget --exact mail_system`. Debe tener
+  `default-system = HTMLMailSystem__SmtpMailSystem` y 24 claves `myapi_*`.
+
+### 8.2 Core y PHP
+
+- [ ] Actualizar el core a Drupal **7.103** antes de cambiar PHP: la 7.64 no arranca en
+  PHP 8. Después `sudo -u www-data drush updb -y` y `sudo -u www-data drush cc all`.
+- [ ] Instalar PHP 8.3 (Sury) con PHP-FPM y pasar Apache a `mpm_event` + `proxy_fcgi`,
+  como en staging. Mantener `CGIPassAuth On` (paso 3): con FPM sin él toda la app da 401.
+- [ ] **`php.ini` nuevo.** Los límites de subida del paso 3 hay que volver a ponerlos en
+  `/etc/php/8.3/fpm/php.ini`, no se heredan del 5.6. Reiniciar `php8.3-fpm`.
+- [ ] Purgar los paquetes `php5.6*` y `libapache2-mod-php5.6` cuando todo funcione, con
+  copia previa de `/etc/php/5.6`. El bloque `<IfModule mod_php5.c>` del `.htaccess` puede
+  quedarse: con FPM no se aplica.
+- [ ] Quitar las mitigaciones temporales de los CVE del `.htaccess` y del vhost
+  (`docs/mitigacion-php-cve-2026-10.md`): ya no hacen falta con PHP parcheado.
+
+### 8.3 Ajustes que PHP 8 exige (los tres fallaron en staging)
+
+- [ ] **Permisos del módulo.** `scp -r` deja `includes/`, `resources/` y `assets/` como
+  `700`. Ningún usuario distinto de `www-data` puede leerlos, y eso rompe el correo
+  (sección 3) y hace fallar `drush cc all` con `opendir ... Failed to open directory`.
+  `scripts/deploy.sh` ya los deja en 755/644 desde el 2026-10-26; en un servidor
+  desplegado antes, corregirlo a mano:
+  ```bash
+  sudo find /var/www/html/sites/all/modules/myapi -type d -exec chmod 755 {} +
+  sudo find /var/www/html/sites/all/modules/myapi -type f -exec chmod 644 {} +
+  ```
+- [ ] **Parche a `entityreference_count` 7.x-1.0-beta1.** El campo `field_payphone`
+  del condominio guarda su configuración como el array crudo de checkboxes, con los no
+  marcados a `0`; el módulo hace `field_info_field(0)` y lee `storage` de un `null`.
+  En PHP 5.6 era silencioso; en PHP 8 son 16 warnings por cada pago editado. No hay
+  parche en drupal.org (la cola del módulo no tiene ningún ticket de PHP 8).
+  ```bash
+  scp scripts/php8/entityreference_count-php8-null-field.patch ubuntu@<host>:/tmp/
+  cd /var/www/html && sudo patch -p1 < /tmp/entityreference_count-php8-null-field.patch
+  php -l sites/all/modules/entityreference_count/entityreference_count.module
+  ```
+- [ ] **PHP embebido en Rules.** Las plantillas de correo y los cálculos de alícuota
+  hacen `$node->field_x['und'][0]['value']` sobre campos vacíos y `round(null, 4)`:
+  en PHP 8 son «Undefined array key», «array offset on null» y la deprecación de
+  `round()`. El script reescribe esos accesos con `isset()` / `!empty()` y castea a
+  `(float)` antes de `round()`, pasa `php -l` a cada fragmento y sin `apply` solo simula.
+  En staging cambió 13 reglas; en producción puede haber más o menos: leer la
+  simulación antes de aplicar.
+  ```bash
+  scp scripts/php8/fix_rules_php.php ubuntu@<host>:/tmp/
+  cd /var/www/html
+  sudo -u www-data drush php-script /tmp/fix_rules_php.php          # simulación
+  sudo -u www-data drush php-script /tmp/fix_rules_php.php apply    # escribe
+  sudo -u www-data drush cc all
+  ```
+- [ ] **Correo.** Ejecutar `fix_mail_system.php test` como en la sección 3 y confirmar
+  que llega el correo de prueba. Hacerlo **después** de corregir los permisos; si no,
+  el siguiente `drush` lo deshace.
+
+### 8.4 Verificación
+
+- [ ] El smoke test del paso 7 completo.
+- [ ] Editar un pago, aprobarlo y generar un recibo con alícuota extra. Luego:
+  ```bash
+  sudo -u www-data drush watchdog-show --type=php     # vacío
+  sudo -u www-data drush watchdog-show --type=mail    # sin «Error sending e-mail»
+  sudo tail /var/log/php8.3-fpm-errors.log            # vacío
+  ```
+- [ ] Ventana de **24 horas** con `watchdog-show --type=php` vacío y uso real del
+  backoffice (reportes, exportaciones a Excel, PDF de alícuotas, Feeds, CKEditor, VBO).
+  La lista de pruebas de staging sirve de guion.
+- [ ] Al crear un pago desde la app llega el correo `payment_created_admin` a cada
+  usuario del rol `backend` con dirección real.
+
+**Para todo lo anterior: `drush` siempre como `sudo -u www-data`.** Como `ubuntu` no
+lee `myapi/includes` hasta corregir los permisos, deja un falso «Undefined constant
+MYAPI_…» en el watchdog y, peor, borra las claves de correo (sección 3).
