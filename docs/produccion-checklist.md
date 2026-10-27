@@ -492,40 +492,311 @@ Todo lo de esta sección se probó en staging entre el 2026-10-22 y el 2026-10-2
 orden importa: primero el core, luego PHP, luego los ajustes, y al final la ventana de
 24 horas con el watchdog vacío. Se puede hacer con la misma clave de Lightsail del paso 3.
 
+> Versión extendida, con el porqué de cada paso, el resultado esperado y la vuelta atrás:
+> `docs/migracion-php83-drupal7103.md`.
+
 ### 8.1 Antes de tocar nada
 
-- [ ] Backup completo de base de datos, `sites/default/files/` y `/var/www/private`
-  (paso 0). **`drush sql-dump --tables-list=X` se ignora en ese Drush y vuelca la base
-  entera** (1,5 GB en dos minutos en staging). Para una sola tabla, `mysqldump` directo
-  con el prefijo `dr_`:
+Lo de este bloque se puede hacer días antes de la ventana. Verificado el 2026-10-27 contra
+staging (lectura, sin cambios) y contra los tarballs oficiales de la 7.64 y la 7.103.
+
+- [ ] **Comprobar que el repositorio de Sury ya está en producción y ofrece la 8.3.36.**
+  Producción instaló PHP 5.6.40 desde Sury, así que el PPA `ondrej/php` debería estar.
+  Si el candidato no es `8.3.36-1+ubuntu22.04.1+deb.sury.org+1` (la versión exacta de
+  staging), añadirlo antes de la ventana:
   ```bash
-  mysqldump --single-transaction <bd> dr_rules_config > ~/backups/rules_config-$(date +%Y%m%d-%H%M).sql
+  apt-cache policy php8.3-fpm | head -3        # Candidate: 8.3.36-1+ubuntu22.04.1+deb.sury.org+1
+  grep -rh "ondrej/php" /etc/apt/sources.list.d/   # deb https://ppa.launchpadcontent.net/ondrej/php/ubuntu/ jammy main
+  # solo si falta:
+  sudo add-apt-repository ppa:ondrej/php && sudo apt update
   ```
-- [ ] Copia del fichero del módulo contrib que se va a parchear:
-  `cp sites/all/modules/entityreference_count/entityreference_count.module ~/backups/`.
-- [ ] Exportar las 13 reglas de Rules con PHP embebido (viven en la base de datos, no
-  en ninguna feature): `admin/config/workflow/rules`, o el dump de `dr_rules_config`
-  de arriba sirve para volver atrás.
+- [ ] **Lista de paquetes PHP de staging**, para instalar exactamente lo mismo. A fecha
+  2026-10-27 son estos 13 (todos en 8.3.36): `php8.3-cli php8.3-common php8.3-curl
+  php8.3-fpm php8.3-gd php8.3-intl php8.3-mbstring php8.3-mysql php8.3-opcache
+  php8.3-readline php8.3-soap php8.3-xml php8.3-zip`. Si ha cambiado, sacar la lista fresca:
+  ```bash
+  ssh -i ~/.ssh/crespcord.pem ubuntu@crespcord.lamotora.com "dpkg -l 'php8.3*' | awk '/^ii/{print \$2}'"
+  ```
+  `fileinfo` y `openssl` (paso 3) vienen dentro de `php8.3-common` y `php8.3-cli`; no son
+  paquetes aparte.
+- [ ] **Descargar y descomprimir los dos tarballs del core fuera del docroot.** El 7.64
+  sirve para saber qué tiene de personalizado el `.htaccess` de producción (paso 8.3):
+  ```bash
+  cd /tmp
+  curl -fLO https://ftp.drupal.org/files/projects/drupal-7.103.tar.gz && tar xzf drupal-7.103.tar.gz
+  curl -fLO https://ftp.drupal.org/files/projects/drupal-7.64.tar.gz  && tar xzf drupal-7.64.tar.gz
+  grep "define('VERSION'" drupal-7.103/includes/bootstrap.inc        # '7.103'
+  ```
+  La 7.103 (2024-12-04) es la última versión de Drupal 7 y la primera que pasa los tests en
+  PHP 8.3. Su mínimo es PHP 5.6 (`INSTALL.txt`), así que arranca en el PHP actual de
+  producción: por eso el core va antes que PHP.
+- [ ] **Qué va a cambiar el core.** Entre la 7.64 y la 7.103 hay 8 updates pendientes:
+  `system_update_7082` a `7088` y `user_update_7020`. Dos tienen efecto visible:
+  - **7086 cambia el formato de los IDs de sesión** (los hashea): **todos los usuarios del
+    backoffice quedan desconectados** al terminar. La app no se ve afectada: usa tokens
+    de `myapi_tokens`, no sesiones de Drupal.
+  - **7087 habilita el módulo `announcements_feed`** (avisos de drupal.org en el panel).
+    Se puede deshabilitar después con `drush dis announcements_feed`.
+  El `.htaccess` de la 7.103 solo añade endurecimiento (`web.config` a la lista de ficheros
+  denegados, `RequestHeader unset Proxy`, `no-brotli`) y conserva el bloque
+  `<IfModule mod_php5.c>`; no trae bloques `php7` ni `lsapi`. `robots.txt` no cambia.
+  `default.settings.php` solo añade claves comentadas: **no hay que tocar `settings.php`**.
+- [ ] **Comprobar qué hay en el docroot que no sea core.** El paso 8.3 borra una lista
+  explícita de ficheros y directorios del core (`profiles/`, `misc/`, `modules/`, los
+  `.php` y `.txt` de la raíz…). Si hay perfiles o ficheros propios, hay que conservarlos:
+  ```bash
+  cd /var/www/html
+  comm -23 <(ls -A /var/www/html | sort) <(ls -A /tmp/drupal-7.64 | sort)   # lo que no es core: anotarlo
+  ls profiles/                       # solo debe haber README.txt minimal standard testing (así está staging)
+  ls -ld includes index.php sites    # anotar propietario: el core nuevo debe quedar igual (staging: www-data:www-data)
+  ls /etc/apache2/mods-enabled/ | grep -E "php|mpm"   # php5.6.load y mpm_prefork: son los que se desactivan
+  which drush && drush --version     # /usr/local/bin/drush, 8.4.11: hace falta para la vuelta atrás
+  ```
 - [ ] Comprobar que **no existen** `/var/www/html/private:` ni `/var/www/html/public:`
   (paso 3). Con FPM, si existen, las subidas acaban ahí.
-- [ ] Anotar el `mail_system` actual: `drush vget --exact mail_system`. Debe tener
-  `default-system = HTMLMailSystem__SmtpMailSystem` y 24 claves `myapi_*`.
+- [ ] Anotar el `mail_system` actual: `sudo -u www-data drush vget --exact mail_system`.
+  Debe tener `default-system = HTMLMailSystem__SmtpMailSystem` y 24 claves `myapi_*`.
 
-### 8.2 Core y PHP
+### 8.2 Copias de seguridad (al inicio de la ventana)
 
-- [ ] Actualizar el core a Drupal **7.103** antes de cambiar PHP: la 7.64 no arranca en
-  PHP 8. Después `sudo -u www-data drush updb -y` y `sudo -u www-data drush cc all`.
-- [ ] Instalar PHP 8.3 (Sury) con PHP-FPM y pasar Apache a `mpm_event` + `proxy_fcgi`,
-  como en staging. Mantener `CGIPassAuth On` (paso 3): con FPM sin él toda la app da 401.
-- [ ] **`php.ini` nuevo.** Los límites de subida del paso 3 hay que volver a ponerlos en
-  `/etc/php/8.3/fpm/php.ini`, no se heredan del 5.6. Reiniciar `php8.3-fpm`.
-- [ ] Purgar los paquetes `php5.6*` y `libapache2-mod-php5.6` cuando todo funcione, con
-  copia previa de `/etc/php/5.6`. El bloque `<IfModule mod_php5.c>` del `.htaccess` puede
-  quedarse: con FPM no se aplica.
-- [ ] Quitar las mitigaciones temporales de los CVE del `.htaccess` y del vhost
-  (`docs/mitigacion-php-cve-2026-10.md`): ya no hacen falta con PHP parcheado.
+- [ ] **Carpeta de copias, lo primero.** Todos los pasos siguientes escriben ahí.
+  `/home/ubuntu` es `750` en Ubuntu 22.04: `www-data` no puede escribir en `~/backups`,
+  así que ninguna copia se hace como `www-data`.
+  ```bash
+  mkdir -p ~/backups && chmod 700 ~/backups
+  ```
+- [ ] **Modo mantenimiento:**
+  ```bash
+  cd /var/www/html && sudo -u www-data drush vset maintenance_mode 1
+  ```
+- [ ] **Pausar el cron de `www-data`.** Lanza `drush` cada minuto y fallaría con el core a
+  medio copiar. El borrado solo ocurre si la copia existe y no está vacía:
+  ```bash
+  sudo crontab -u www-data -l > ~/backups/crontab-www-data.txt \
+    && test -s ~/backups/crontab-www-data.txt \
+    && sudo crontab -u www-data -r
+  cat ~/backups/crontab-www-data.txt      # las tres líneas del paso 5
+  ```
+- [ ] **Snapshot de Lightsail**, después del mantenimiento para que no quede fuera ningún
+  dato: consola (Instancia → Snapshots → *Create snapshot*) o
+  `aws lightsail create-instance-snapshot --instance-name <nombre> --instance-snapshot-name pre-php83-$(date +%Y%m%d)`.
+  Esperar a que esté *Available*. Es la vuelta atrás completa, y la única fiable si falla
+  el core (ver «Vuelta atrás» en `docs/migracion-php83-drupal7103.md`).
+- [ ] **Credenciales de MySQL.** No hay `~/.my.cnf`. Se sacan de `settings.php` a un
+  fichero de opciones `600`, para que la contraseña no quede en el historial ni en `ps`:
+  ```bash
+  install -m 600 /dev/null ~/backups/mysql-prod.cnf
+  cd /var/www/html
+  sudo -u www-data drush php-eval '$d = Database::getConnectionInfo(); $d = $d["default"];
+    echo "[client]\nuser=" . $d["username"] . "\npassword=\"" . addcslashes($d["password"], "\"\\") . "\"\nhost=" . $d["host"] . "\n";
+    if (!empty($d["port"])) { echo "port=" . $d["port"] . "\n"; }' >> ~/backups/mysql-prod.cnf
+  DB=$(sudo -u www-data drush php-eval '$d = Database::getConnectionInfo(); echo $d["default"]["database"];')
+  mysql --defaults-extra-file=$HOME/backups/mysql-prod.cnf "$DB" -e "SELECT COUNT(*) FROM dr_rules_config"
+  ```
+  `addcslashes()` escapa `"` y `\` en la contraseña: los ficheros de opciones de MySQL
+  interpretan secuencias de escape (`\\`, `\n`, `\s`…) incluso entre comillas, y una barra
+  invertida sin escapar da `Access denied`.
+- [ ] **Backup de base de datos y ficheros.** Con `mysqldump`, no con `drush sql-dump`:
+  este corre como `www-data`, y además `--tables-list=X` se ignora en ese Drush y vuelca la
+  base entera (1,5 GB en dos minutos en staging). `--defaults-extra-file` tiene que ser la
+  primera opción.
+  ```bash
+  TS=$(date +%Y%m%d-%H%M)
+  mysqldump --defaults-extra-file=$HOME/backups/mysql-prod.cnf --single-transaction "$DB" | gzip > ~/backups/db-$TS.sql.gz
+  mysqldump --defaults-extra-file=$HOME/backups/mysql-prod.cnf --single-transaction "$DB" dr_rules_config > ~/backups/rules_config-$TS.sql
+  sudo tar czf ~/backups/files-$TS.tgz -C /var/www/html sites/default/files -C / var/www/private
+  gzip -t ~/backups/db-$TS.sql.gz && echo OK
+  ```
+- [ ] Copias de lo que la migración sobrescribe o purga:
+  ```bash
+  sudo cp -a /var/www/html/.htaccess  ~/backups/htaccess.pre-7.103
+  sudo cp -a /var/www/html/robots.txt ~/backups/robots.txt.pre-7.103
+  sudo tar czf ~/backups/etc-php-5.6.tgz /etc/php/5.6
+  sudo tar czf ~/backups/etc-apache2.tgz /etc/apache2
+  sudo cp -a /usr/local/bin/drush ~/backups/drush-8.4.11      # la 8.4.12 no parsea en PHP 5.6
+  cp /var/www/html/sites/all/modules/entityreference_count/entityreference_count.module ~/backups/
+  ```
+  El dump de `dr_rules_config` es la vuelta atrás del ajuste de Rules (paso 8.4): las 13
+  reglas con PHP embebido viven en esa tabla, no en ninguna feature.
 
-### 8.3 Ajustes que PHP 8 exige (los tres fallaron en staging)
+### 8.3 Core y PHP (ventana de mantenimiento)
+
+- [ ] **Actualizar el core a Drupal 7.103 todavía en PHP 5.6**: la 7.64 no arranca en
+  PHP 8. Es el procedimiento de `UPGRADE.txt` (quitar el core viejo salvo `sites/`, copiar
+  el nuevo, `updb`). Primero ver qué tiene de propio el `.htaccess` de producción:
+  ```bash
+  diff /tmp/drupal-7.64/.htaccess  ~/backups/htaccess.pre-7.103
+  diff /tmp/drupal-7.64/robots.txt ~/backups/robots.txt.pre-7.103   # sin salida = de serie
+  ```
+  Deben salir solo los bloques `php7_module` y `lsapi_module` de cPanel y las líneas
+  `# CVE-2026 mitigation:`. Los tres sobran en FPM, así que el `.htaccess` de serie de la
+  7.103 vale tal cual (staging lo usa sin modificar, md5 `054cda93…`). Si saliera algo
+  más (una redirección propia, por ejemplo), reaplicarlo sobre el nuevo. Lo mismo con
+  `robots.txt` si tuviera cambios.
+  Se borra una **lista explícita** de ficheros del core 7.64, no `*.php` ni `*.txt`, para
+  no llevarse ficheros propios del docroot:
+  ```bash
+  cd /var/www/html
+  OWNER=$(stat -c %U:%G index.php)      # propietario actual del core (staging: www-data:www-data)
+  CORE_DIRS="includes misc modules profiles scripts themes"
+  CORE_FILES=".htaccess .editorconfig .gitignore web.config robots.txt \
+    authorize.php cron.php index.php install.php update.php xmlrpc.php \
+    CHANGELOG.txt COPYRIGHT.txt INSTALL.txt INSTALL.mysql.txt INSTALL.pgsql.txt \
+    INSTALL.sqlite.txt LICENSE.txt MAINTAINERS.txt README.txt UPGRADE.txt"
+  sudo rm -rf $CORE_DIRS $CORE_FILES
+  for f in $CORE_DIRS $CORE_FILES; do sudo cp -a "/tmp/drupal-7.103/$f" .; done
+  sudo chown -R "$OWNER" $CORE_DIRS $CORE_FILES
+  comm -23 <(ls -A /var/www/html | sort) <(ls -A /tmp/drupal-7.103 | sort)   # lo mismo que en 8.1
+  sudo -u www-data drush updb -y            # 8 updates: system 7082-7088 y user 7020
+  sudo -u www-data drush cc all
+  sudo -u www-data drush status | grep "Drupal version"    # 7.103
+  ```
+  **No se toca `sites/`** (ahí están `settings.php`, `files/` y `sites/all/modules`).
+  Esto repone también `misc/typo3/` completo, que es lo que falla con el fatal
+  `Interface 'TYPO3\PharStreamWrapper\Assertable' not found` de `error.log`.
+- [ ] **`trusted_host_patterns`.** No es obligatorio, pero staging lo tiene y la 7.103 lo
+  documenta en `default.settings.php`. Añadir al final de `sites/default/settings.php`:
+  ```php
+  $conf['trusted_host_patterns'] = array('^sistema\.crespcord\.com$');
+  ```
+- [ ] **Instalar PHP 8.3 (Sury) con PHP-FPM** y pasar Apache a `mpm_event` + `proxy_fcgi`,
+  como en staging. `mpm_prefork` hay que desactivarlo antes de activar `mpm_event`, o
+  `a2enmod` se niega:
+  ```bash
+  sudo apt install -y php8.3-cli php8.3-common php8.3-curl php8.3-fpm php8.3-gd php8.3-intl \
+    php8.3-mbstring php8.3-mysql php8.3-opcache php8.3-readline php8.3-soap php8.3-xml php8.3-zip
+  sudo a2dismod php5.6 mpm_prefork
+  sudo a2enmod mpm_event proxy proxy_fcgi setenvif
+  sudo a2enconf php8.3-fpm                  # lo trae el paquete php8.3-fpm: SetHandler proxy:unix:/run/php/php8.3-fpm.sock
+  sudo update-alternatives --set php /usr/bin/php8.3
+  php -v                                    # PHP 8.3.36 (cli)
+  ```
+  El MPM `event` ignora `mpm_prefork.conf`, así que los ajustes de `MaxRequestWorkers 30`
+  y `MaxConnectionsPerChild 1` de la mitigación CVE dejan de aplicarse solos. Staging
+  usa `mpm_event.conf` de serie (`MaxRequestWorkers 150`, 25 hilos por proceso); con FPM
+  el límite real de procesos PHP es `pm.max_children`, no el de Apache.
+- [ ] **`CGIPassAuth On`** (paso 3). En staging vive en un `conf-available` propio con el
+  `<Directory>` del docroot. Crearlo igual en producción, porque con FPM sin él
+  `$_SERVER['HTTP_AUTHORIZATION']` llega vacío y **toda la app da 401**:
+  ```bash
+  sudo tee /etc/apache2/conf-available/drupal-docroot.conf >/dev/null <<'EOF'
+  <Directory /var/www/html>
+      Options FollowSymLinks
+      AllowOverride All
+      Require all granted
+      CGIPassAuth On
+  </Directory>
+  EOF
+  sudo a2enconf drupal-docroot
+  ```
+  Si el vhost actual ya tiene un `<Directory /var/www/html>` con `AllowOverride All`,
+  basta con añadirle la línea `CGIPassAuth On`; no duplicar el bloque.
+- [ ] **Valores de PHP para FPM.** No se heredan del 5.6, y **no van en `php.ini`**: staging
+  los tiene en un fichero aparte en `conf.d/`, que sobrevive a las actualizaciones del
+  paquete. Copiarlo literal (es el de staging a 2026-10-27; `10M` por fichero cubre los
+  5 MB del paso 3):
+  ```bash
+  sudo tee /etc/php/8.3/fpm/conf.d/99-crespcord.ini >/dev/null <<'EOF'
+  ; Crespcord: valores del sitio (antes en .htaccess, bloque php7_module) y endurecimiento.
+  memory_limit = 512M
+  max_execution_time = 300
+  max_input_time = 300
+  max_input_vars = 10000
+  post_max_size = 40M
+  upload_max_filesize = 10M
+  max_file_uploads = 10
+  session.gc_maxlifetime = 1440
+  session.upload_progress.enabled = 0
+  display_errors = Off
+  display_startup_errors = Off
+  log_errors = On
+  error_log = /var/log/php8.3-fpm-errors.log
+  expose_php = Off
+  zlib.output_compression = Off
+  EOF
+  sudo touch /var/log/php8.3-fpm-errors.log && sudo chown www-data:adm /var/log/php8.3-fpm-errors.log
+  ```
+  Este fichero es el que define el `/var/log/php8.3-fpm-errors.log` del paso 8.5. El otro
+  log, `/var/log/php8.3-fpm.log`, es el del *master* de FPM (arranques de hijos y avisos de
+  `pm.max_children`) y solo lo lee root.
+- [ ] **Pool de FPM.** El `www.conf` de serie trae `pm.max_children = 5` y
+  `pm.max_requests` comentado. Dejarlo como staging:
+  ```bash
+  F=/etc/php/8.3/fpm/pool.d/www.conf
+  sudo cp -a $F $F.orig
+  sudo sed -i -E 's/^pm\.max_children\s*=.*/pm.max_children = 8/' $F
+  sudo sed -i -E 's/^;?pm\.max_requests\s*=.*/pm.max_requests = 500/' $F
+  grep -E "^(pm|pm\.[a-z_]+)\s*=" $F      # dynamic, 8, 2, 1, 3, 500
+  ```
+  **`memory_limit = 512M` con 8 procesos, a propósito.** Es un techo por proceso, no un
+  consumo: la medida real en producción es de unos 56 MB de RSS por proceso, y staging probó
+  con 512M los PDF, las exportaciones a Excel y Feeds. Pero 8 × 512M son 4 GB, más que los
+  3,8 GB de producción con MariaDB dentro. Si alguna vez aparece un OOM en `dmesg` o muere
+  MariaDB, **bajar primero `pm.max_children`**, no `memory_limit`: lo segundo rompe los PDF
+  y las exportaciones, lo primero solo pone peticiones en cola. Para subir
+  `pm.max_children`, la señal es `server reached pm.max_children` en
+  `/var/log/php8.3-fpm.log`.
+- [ ] **Reiniciar y comprobar.** Con el sitio en mantenimiento, Drupal responde 503 a
+  **toda** petición anónima, también a `/api/v1/ping`: `myapi` no tiene bypass de
+  mantenimiento. Un 503 aquí es la buena señal (Drupal arranca en PHP 8.3); un 502 o un
+  500, no.
+  ```bash
+  sudo apache2ctl configtest && sudo systemctl restart php8.3-fpm apache2
+  systemctl is-active apache2 php8.3-fpm
+  curl -sI https://sistema.crespcord.com/ | head -1           # HTTP/2 503
+  sudo -u www-data drush status | grep -E "Drupal version|Database"
+  ```
+- [ ] **Comprobar `CGIPassAuth` antes de abrir el sitio.** Si falla, toda la app da 401,
+  y con la API en 503 no se vería hasta el paso 8.5. Script temporal fuera de Drupal, con
+  la misma técnica que la verificación de la mitigación CVE: nombre aleatorio, solo
+  responde a `127.0.0.1`, se borra al terminar. Comprueba de paso los límites de FPM.
+  ```bash
+  N=authcheck-$(openssl rand -hex 8).php
+  sudo tee /var/www/html/$N >/dev/null <<'EOF'
+  <?php
+  if ($_SERVER['REMOTE_ADDR'] !== '127.0.0.1') { http_response_code(404); exit; }
+  header('Content-Type: text/plain');
+  echo 'HTTP_AUTHORIZATION=', isset($_SERVER['HTTP_AUTHORIZATION']) ? $_SERVER['HTTP_AUTHORIZATION'] : '(missing)', "\n";
+  echo 'PHP=', PHP_VERSION, ' SAPI=', PHP_SAPI, "\n";
+  echo 'upload_max_filesize=', ini_get('upload_max_filesize'), ' post_max_size=', ini_get('post_max_size'), ' memory_limit=', ini_get('memory_limit'), "\n";
+  EOF
+  curl -s --resolve sistema.crespcord.com:443:127.0.0.1 -H "Authorization: Bearer x" https://sistema.crespcord.com/$N
+  sudo rm /var/www/html/$N
+  ```
+  Debe dar `HTTP_AUTHORIZATION=Bearer x`, `PHP=8.3.36 SAPI=fpm-fcgi` y
+  `upload_max_filesize=10M post_max_size=40M memory_limit=512M`. Con `(missing)`, revisar
+  `CGIPassAuth` **antes de seguir**.
+- [ ] **Drush a la 8.4.12.** La 8.4.11 del paso 3 se eligió porque la 8.4.12 no parsea en
+  PHP 5.6. En PHP 8.3 ya no hay ese problema y staging corre la **8.4.12** sin ningún aviso
+  (`drush status` limpio). Sustituir el phar y borrar la caché de Drush de `www-data`
+  (paso 3), que guarda rutas al phar:
+  ```bash
+  cd /tmp && curl -fLO https://github.com/drush-ops/drush/releases/download/8.4.12/drush.phar
+  php drush.phar --version                  # Drush Version : 8.4.12
+  sudo mv drush.phar /usr/local/bin/drush && sudo chmod +x /usr/local/bin/drush
+  sudo rm -rf /tmp/drush-www-data
+  cd /var/www/html && sudo -u www-data drush status | grep -E "Drupal version|PHP configuration"   # 7.103 y /etc/php/8.3/cli/php.ini
+  ```
+- [ ] Quitar las mitigaciones temporales de los CVE (`docs/mitigacion-php-cve-2026-10.md`):
+  ya no hacen falta con PHP parcheado. El `.htaccess` quedó limpio al actualizar el core;
+  el `.ini` de 5.6 desaparece con el purge; queda el `conf` de Apache:
+  ```bash
+  sudo a2disconf cve-2026-mitigation && sudo rm /etc/apache2/conf-available/cve-2026-mitigation.conf
+  sudo apache2ctl configtest && sudo systemctl reload apache2
+  ```
+- [ ] **Purgar PHP 5.6 solo al final**, tras la ventana de 24 horas del paso 8.5 (ya hay
+  copia de `/etc/php/5.6` en `~/backups`). Igual que se hizo en staging con el 7.4, y con
+  el mismo comando: `apt-get`, porque `apt` 2.x no acepta comodines como `php5.6*`.
+  ```bash
+  sudo apt-get purge -y 'php5.6*' libapache2-mod-php5.6 && sudo apt-get autoremove -y
+  dpkg -l 'php5.6*' | grep ^ii             # vacío
+  sudo apache2ctl configtest && systemctl is-active apache2 php8.3-fpm
+  shred -u ~/backups/mysql-prod.cnf        # credenciales del paso 8.2: ya no hacen falta
+  ```
+  El bloque `<IfModule mod_php5.c>` del `.htaccess` puede quedarse: con FPM no se aplica.
+  Cuando todo lleve unos días estable, borrar el snapshot de Lightsail del principio.
+
+### 8.4 Ajustes que PHP 8 exige (los tres fallaron en staging)
 
 - [ ] **Permisos del módulo.** `scp -r` deja `includes/`, `resources/` y `assets/` como
   `700`. Ningún usuario distinto de `www-data` puede leerlos, y eso rompe el correo
@@ -544,7 +815,10 @@ orden importa: primero el core, luego PHP, luego los ajustes, y al final la vent
   ```bash
   scp scripts/php8/entityreference_count-php8-null-field.patch ubuntu@<host>:/tmp/
   cd /var/www/html && sudo patch -p1 < /tmp/entityreference_count-php8-null-field.patch
-  php -l sites/all/modules/entityreference_count/entityreference_count.module
+  M=sites/all/modules/entityreference_count
+  sudo chown --reference=$M/entityreference_count.info $M/entityreference_count.module   # patch lo deja como root
+  sudo chmod --reference=$M/entityreference_count.info $M/entityreference_count.module
+  php -l $M/entityreference_count.module
   ```
 - [ ] **PHP embebido en Rules.** Las plantillas de correo y los cálculos de alícuota
   hacen `$node->field_x['und'][0]['value']` sobre campos vacíos y `round(null, 4)`:
@@ -560,13 +834,34 @@ orden importa: primero el core, luego PHP, luego los ajustes, y al final la vent
   sudo -u www-data drush php-script /tmp/fix_rules_php.php apply    # escribe
   sudo -u www-data drush cc all
   ```
+  Si la simulación muestra `!! LINT FAILED`, no aplicar. Para volver atrás tras aplicar,
+  restaurar la tabla y vaciar la caché, porque Rules guarda las reglas compiladas:
+  ```bash
+  mysql --defaults-extra-file=$HOME/backups/mysql-prod.cnf "$DB" < ~/backups/rules_config-<fecha>.sql
+  sudo -u www-data drush cc all
+  ```
 - [ ] **Correo.** Ejecutar `fix_mail_system.php test` como en la sección 3 y confirmar
   que llega el correo de prueba. Hacerlo **después** de corregir los permisos; si no,
   el siguiente `drush` lo deshace.
 
-### 8.4 Verificación
+### 8.5 Verificación
 
-- [ ] El smoke test del paso 7 completo.
+- [ ] **Límites de PHP reales en FPM.** Ya se vieron con el script temporal del paso 8.3.
+  `drush` lee `/etc/php/8.3/cli/php.ini`, no el de FPM, así que `drush php-eval "ini_get(...)"`
+  **no sirve** para comprobarlos (en staging devuelve los 2M/8M de serie aunque FPM corra
+  con 10M/40M). Si hace falta repetirlo: ese script, `admin/reports/status` → *Información
+  de PHP*, o subir un comprobante de más de 2 MB.
+- [ ] Salir de mantenimiento y restaurar el cron:
+  ```bash
+  cd /var/www/html && sudo -u www-data drush vset maintenance_mode 0
+  sudo crontab -u www-data ~/backups/crontab-www-data.txt
+  sudo crontab -u www-data -l              # las tres líneas
+  ```
+- [ ] El smoke test del paso 7 completo. Los usuarios del backoffice tendrán que volver a
+  iniciar sesión (update 7086).
+- [ ] Subir un comprobante desde la app y confirmar que aparece en
+  `/var/www/private/comprobantes_pago/` y que **no** ha nacido ningún
+  `/var/www/html/private:` (incidencia de staging del 2026-10-23).
 - [ ] Editar un pago, aprobarlo y generar un recibo con alícuota extra. Luego:
   ```bash
   sudo -u www-data drush watchdog-show --type=php     # vacío
@@ -582,3 +877,15 @@ orden importa: primero el core, luego PHP, luego los ajustes, y al final la vent
 **Para todo lo anterior: `drush` siempre como `sudo -u www-data`.** Como `ubuntu` no
 lee `myapi/includes` hasta corregir los permisos, deja un falso «Undefined constant
 MYAPI_…» en el watchdog y, peor, borra las claves de correo (sección 3).
+
+**Vuelta atrás.** Está en la sección 8 de `docs/migracion-php83-drupal7103.md`. Lo
+esencial:
+- **Si falla el core, la vuelta atrás es el snapshot**, o el dump de base de datos más el
+  core 7.64. Volver a copiar solo el core 7.64 no basta: el update 7086 cambió la tabla de
+  sesiones y el 7087 dejó habilitado un módulo que la 7.64 no tiene.
+- **El snapshot arranca en mantenimiento y sin cron.** Hay que hacer
+  `drush vset maintenance_mode 0` y restaurar `~/backups/crontab-www-data.txt`.
+- **Volver a PHP 5.6** no es solo Apache. También hay que parar y deshabilitar
+  `php8.3-fpm` (`systemctl stop` y `systemctl disable`, o vuelve a arrancar en cada
+  reinicio), restaurar `update-alternatives` a `php5.6`, Drush 8.4.11 desde `~/backups`, y
+  la mitigación CVE: el `conf` de Apache y el bloque comentado del `.htaccess`.
