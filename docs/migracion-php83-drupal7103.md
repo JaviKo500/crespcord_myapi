@@ -11,6 +11,11 @@ oficiales de Drupal 7.64 y 7.103. La versión resumida, en formato checklist, es
 sección 8 de `docs/produccion-checklist.md`; la parte de servidor y los CVE, en
 `docs/mitigacion-php-cve-2026-10.md`.
 
+**Se ejecutó en producción el 2026-10-28** (ventana de 14:30 a 15:35 UTC). Lo que salió
+distinto de lo previsto ya está corregido en los pasos de esta guía; el resumen, con el
+porqué de cada cambio, está en la sección 9. El más importante: **los módulos contrib de
+producción no eran los de staging** (paso 2.7 y 4.9).
+
 ---
 
 ## 1. Qué se cambia y por qué
@@ -48,7 +53,10 @@ variable `mail_system` y rompe el correo saliente.
 
 ## 2. Preparación (días antes, sin tocar nada)
 
-Nada de este bloque cambia el servidor. Se puede hacer con antelación.
+Nada de este bloque cambia el servidor, salvo retirar del docroot los ficheros sensibles
+que el paso 2.5 encuentre descargables. Se puede hacer con antelación, y conviene: el
+paso 2.7 puede destapar trabajo (módulos contrib que alinear) que no cabe improvisar en
+la ventana.
 
 ### 2.1 Comprobar que el repositorio de PHP ya ofrece la 8.3.36
 
@@ -148,14 +156,35 @@ ls profiles/
 ls -ld includes index.php sites
 ls /etc/apache2/mods-enabled/ | grep -E "php|mpm"
 ls -ld "/var/www/html/private:" "/var/www/html/public:"
+# core modificado: comm solo compara nombres; esto compara contenido
+CORE_DIRS="includes misc modules profiles scripts themes"
+CORE_FILES=".htaccess .editorconfig .gitignore web.config robots.txt \
+  authorize.php cron.php index.php install.php update.php xmlrpc.php \
+  CHANGELOG.txt COPYRIGHT.txt INSTALL.txt INSTALL.mysql.txt INSTALL.pgsql.txt \
+  INSTALL.sqlite.txt LICENSE.txt MAINTAINERS.txt README.txt UPGRADE.txt"
+for f in $CORE_DIRS $CORE_FILES; do sudo diff -rq "/tmp/drupal-7.64/$f" "/var/www/html/$f"; done 2>&1
 ```
 
 **Resultado esperado.**
 - `comm` lista lo que hay en el docroot y no en la 7.64. Nada de eso se borra en el paso
   4.1, porque allí se borra una lista explícita de ficheros del core. Aun así, anotarlo:
-  es lo que hay que conservar si alguna vez se restaura el core desde cero. Si sale un
-  `.php` o un `.txt` cuyo nombre coincide con uno del core, es una modificación local:
-  copiarlo a `~/backups` y reaplicarlo tras el 4.1.
+  es lo que hay que conservar si alguna vez se restaura el core desde cero.
+- `comm` **no** detecta un fichero del core modificado (mismo nombre); para eso está el
+  `diff -rq`. Un `Files ... differ` en un `.php` o un `.inc` es una modificación local:
+  mirarla con `diff` y, si es un parche propio, copiarlo a `~/backups` y reaplicarlo tras
+  el 4.1. En producción salieron `common.inc` y `request-sanitizer.inc` con un `is_int()`
+  / `is_string()` de compatibilidad con PHP 7, que la 7.103 ya trae.
+- `Only in /var/www/html/modules/...` con `.php` de nombre aleatorio (`acqumwek.php`) o
+  de WordPress (`wp-login.php`, `admin-ajax.php`) son **restos de malware**. En producción
+  eran 105 ficheros de 0 bytes y dos de 168 bytes con el texto «artifacts of previous
+  malicious infection… dangerous code has been removed», neutralizados por el hosting
+  anterior en 2024. Antes de seguir: abrirlos con `head -c 300 | cat -v` (sin ejecutarlos),
+  buscar `eval`/`base64_decode`/`$_POST` ejecutable y peticiones en
+  `/var/log/apache2/access.log*`. Si tienen código, **parar**: es un incidente, no una
+  migración. Los de `modules/` desaparecen en el 4.1; los de `sites/default/files/` no, y
+  hay que borrarlos a mano (paso 4.1).
+- `diff: ... authorize.php: No such file or directory` (o `xmlrpc.php`): alguien los quitó.
+  No reponerlos en el 4.1 (ver allí).
 - `profiles/` solo con `README.txt minimal standard testing` (así está staging). Si hay
   un perfil propio, copiarlo a `~/backups` antes del paso 4.1 y reponerlo después.
 - Propietario de `includes`, `index.php` y `sites`: anotarlo. En staging es
@@ -165,6 +194,25 @@ ls -ld "/var/www/html/private:" "/var/www/html/public:"
   directorios. Con FPM, si existen, `move_uploaded_file()` deja las subidas ahí, dentro
   del docroot, y la API responde `invalid_file_type` (incidencia de staging del
   2026-10-23). Si existe alguno, revisar qué contiene y borrarlo.
+
+**Ficheros sensibles descargables.** Lo que el `comm` lista como no-core puede ser
+accesible por HTTP. El `.htaccess` de Drupal bloquea `.sql`, pero **no** `.sql.gz`,
+`.zip`, `.ini.bak` ni `error_log`:
+
+```bash
+for f in $(comm -23 <(ls -A /var/www/html | sort) <(ls -A /tmp/drupal-7.64 | sort)); do
+  [ -f "/var/www/html/$f" ] && printf '%-30s %s\n' "$f" "$(curl -s -o /dev/null -w '%{http_code}' "https://sistema.crespcord.com/$f")"
+done
+sudo find /var/www/html -xdev -name error_log -type f
+```
+
+Todo lo que dé `200` y no deba ser público (volcados, copias del sitio, `php.ini`,
+`error_log`) se saca del docroot **ese mismo día**, a un directorio de `root`:
+`sudo install -d -m 700 /root/incident/docroot-leftovers && sudo mv <fichero> /root/incident/docroot-leftovers/`.
+En producción salieron un volcado completo de la base de datos (`pcordero_drupcon.sql.gz`),
+una copia entera del sitio con `settings.php` (`condominios.zip`), `php.ini.bak` y cinco
+`error_log` de cPanel. Si un volcado o un `settings.php` ha sido descargable, **la
+contraseña de la base de datos se rota** (sección 7).
 
 ### 2.6 Anotar el estado actual
 
@@ -183,6 +231,68 @@ drush --version
 y 24 claves `myapi_*`; Drupal 7.64; Drush 8.4.11 en `/usr/local/bin/drush`. Si `which`
 da otra ruta, usar esa en los pasos 3.5, 4.7 y en la vuelta atrás. Si `mail_system` ya está mal, arreglarlo
 con `fix_mail_system.php` (paso 5.4) **antes** de la migración, para no confundir causas.
+
+Con Drupal 7.64 y el Drush en `.phar`, cada comando imprime una veintena de avisos
+`stat(): stat failed for phar:///usr/local/bin/drush/...  PharStreamWrapper.php:453`. Es
+ruido del `misc/typo3` de la 7.64 y desaparece con la 7.103: ignorarlo. Por eso todos los
+`drush` cuya salida se guarda en un fichero o en una variable llevan `2>/dev/null`.
+
+### 2.7 Comparar los módulos contrib con staging y pasar el lint de PHP 8.3
+
+**Qué hace.** Comprueba que `sites/all` de producción (módulos, librerías, tema) es el
+mismo código que staging ya probó en PHP 8.3, fichero a fichero, y que todo compila en
+PHP 8.3.
+
+**Por qué.** Staging se clonó de producción, pero después se actualizaron en staging 21
+módulos contrib y el tema `bootstrap` sin pasar los cambios a producción. Producción tenía
+Views 7.x-3.20, que usa `$x{0}`: en PHP 8 es un **Fatal error** de compilación, que tumba
+cualquier vista con un filtro de texto y el propio `drush cc all`. Se descubrió con el
+sitio ya en PHP 8.3 (paso 5.3). Esta comprobación lo saca a la luz días antes.
+
+En **cada** servidor (cambiar `prod` por `staging` en los nombres):
+
+```bash
+cd /var/www/html
+sudo find sites/all -type f -print0 | sort -z | xargs -0 sha256sum > ~/backups/sitesall-prod.sha256
+sudo find sites/all -type f \( -name '*.php' -o -name '*.inc' -o -name '*.module' -o -name '*.install' -o -name '*.theme' -o -name '*.engine' \) -print0 \
+  | xargs -0 -n1 -P4 sh -c 'php8.3 -l "$0" 2>&1 | grep -E "Fatal error|Parse error"; true' | sort > ~/backups/lint-prod.txt
+wc -l < ~/backups/lint-prod.txt
+```
+
+En producción, antes del paso 4.3, no hay `php8.3`: el lint se hace en staging sobre una
+copia del `sites/all` de producción, o se repite en producción justo después del 4.3.
+El `sh -c '...; true'` es imprescindible: `php -l` sale con 255 en un fatal y `xargs`
+aborta en el primero.
+
+Comparar en el portátil, agrupando por directorio:
+
+```bash
+python3 - <<'EOF'
+import collections
+def load(p): return dict(l.rstrip('\n').split('  ', 1)[::-1] for l in open(p))
+P, S = load('sitesall-prod.sha256'), load('sitesall-staging.sha256')
+d = collections.Counter()
+for f in set(P) | set(S):
+    if P.get(f) != S.get(f): d['/'.join(f.split('/')[:4])] += 1
+for k in sorted(d): print(d[k], k)
+EOF
+```
+
+**Resultado esperado.** Solo `sites/all/modules/myapi` (si el despliegue va por detrás) y
+`myapi_test` (solo staging, no se copia). Cada otro directorio que salga se trae de
+staging en el paso 4.9. El lint de staging es la referencia: los fallos que tenga staging
+y no estén en uso se aceptan (a 2026-10-28, 19 ficheros de `libraries/PHPExcel` y
+`libraries/dompdf/include/autoload.inc.php`, con `print_pdf` deshabilitado); cualquier
+fallo de producción que **no** esté en el lint de staging tiene que desaparecer con el 4.9.
+
+Comprobar también que los módulos con código que PHP 8 ya no ejecuta no están en uso:
+
+```bash
+sudo -u www-data drush sqlq "SELECT name, status FROM dr_system WHERE name IN ('views_php','print_pdf')" 2>/dev/null
+```
+
+`views_php` usa `create_function()`, eliminado en PHP 8: falla al ejecutarse, no al
+compilar, así que el lint no lo ve. En producción y en staging está deshabilitado.
 
 ---
 
@@ -205,10 +315,18 @@ así el snapshot del paso siguiente queda consistente con lo que hay en disco.
 
 ```bash
 cd /var/www/html && sudo -u www-data drush vset maintenance_mode 1
+sudo -u www-data drush php-eval 'cache_clear_all("*", "cache_page", TRUE);' 2>/dev/null
+curl -sI https://sistema.crespcord.com/ | grep -iE '^HTTP/|^location|x-drupal-cache'
+curl -s -o /dev/null -w 'api: %{http_code}\n' https://sistema.crespcord.com/api/v1/catalogs
 ```
 
-**Resultado esperado.** La web muestra la página de mantenimiento. La API responde 503 a
-las peticiones de la app.
+**Resultado esperado.** La API responde `503`. La portada responde `302` hacia
+`?q=user/login` (el login sigue accesible en mantenimiento para los administradores) o
+`503`; nunca `200` con `X-Drupal-Cache: HIT`.
+
+**Por qué se vacía `cache_page`.** Drupal 7 sirve la caché de páginas anónimas **antes**
+de comprobar el modo mantenimiento: sin vaciarla, la portada siguió saliendo con `200` y
+`X-Drupal-Cache: HIT` en producción. Mientras dure el mantenimiento no se vuelve a llenar.
 
 ### 3.2 Pausar el cron de `www-data`
 
@@ -265,11 +383,16 @@ install -m 600 /dev/null ~/backups/mysql-prod.cnf
 cd /var/www/html
 sudo -u www-data drush php-eval '$d = Database::getConnectionInfo(); $d = $d["default"];
   echo "[client]\nuser=" . $d["username"] . "\npassword=\"" . addcslashes($d["password"], "\"\\") . "\"\nhost=" . $d["host"] . "\n";
-  if (!empty($d["port"])) { echo "port=" . $d["port"] . "\n"; }' >> ~/backups/mysql-prod.cnf
-DB=$(sudo -u www-data drush php-eval '$d = Database::getConnectionInfo(); echo $d["default"]["database"];')
+  if (!empty($d["port"])) { echo "port=" . $d["port"] . "\n"; }' 2>/dev/null >> ~/backups/mysql-prod.cnf
+DB=$(sudo -u www-data drush php-eval '$d = Database::getConnectionInfo(); echo $d["default"]["database"];' 2>/dev/null)
 echo "$DB"
+sed 's/^password=.*/password=***/' ~/backups/mysql-prod.cnf    # solo [client], user, password, host (y port)
 mysql --defaults-extra-file=$HOME/backups/mysql-prod.cnf "$DB" -e "SELECT COUNT(*) FROM dr_rules_config"
 ```
+
+El `2>/dev/null` evita que los avisos `stat failed for phar://` de Drush 8 con la 7.64 se
+cuelen en el fichero o en `$DB`. **No cerrar la sesión SSH** hasta el final: `$DB`, `$TS`
+y las variables del paso 4.1 viven en ella.
 
 **Resultado esperado.** `$DB` muestra el nombre de la base y la consulta devuelve un
 número. La contraseña va entre comillas dobles y con `"` y `\` escapadas por
@@ -338,26 +461,48 @@ Sustitución del core. Se borra una **lista explícita** de ficheros del core 7.
 `*.php` ni `*.txt`, para no llevarse ficheros propios del docroot (los que listó el
 `comm` del paso 2.5). `.gitlab-ci*` de la 7.103 no se copia: no lo usa el sitio.
 
+**`authorize.php` y `xmlrpc.php` no se reponen** si el paso 2.5 mostró que no existían.
+Nadie los usa (la app va por `myapi`; `authorize.php` solo sirve para instalar módulos
+desde la web) y `xmlrpc.php` es superficie de ataque. En producción no existían y
+no se repusieron; quitarlos de `CORE_FILES` si es el caso.
+
+El `rm -rf` va encadenado a tres comprobaciones (directorio, `settings.php` y propietario)
+para que un `cd` fallido no borre nada fuera del docroot.
+
 ```bash
 cd /var/www/html
-OWNER=$(stat -c %U:%G index.php)
+OWNER=$(stat -c %U:%G index.php); echo "OWNER=$OWNER"
 CORE_DIRS="includes misc modules profiles scripts themes"
 CORE_FILES=".htaccess .editorconfig .gitignore web.config robots.txt \
   authorize.php cron.php index.php install.php update.php xmlrpc.php \
   CHANGELOG.txt COPYRIGHT.txt INSTALL.txt INSTALL.mysql.txt INSTALL.pgsql.txt \
   INSTALL.sqlite.txt LICENSE.txt MAINTAINERS.txt README.txt UPGRADE.txt"
-sudo rm -rf $CORE_DIRS $CORE_FILES
-for f in $CORE_DIRS $CORE_FILES; do sudo cp -a "/tmp/drupal-7.103/$f" .; done
-sudo chown -R "$OWNER" $CORE_DIRS $CORE_FILES
+[ "$PWD" = /var/www/html ] && [ -f sites/default/settings.php ] && [ "$OWNER" = www-data:www-data ] \
+  && sudo rm -rf $CORE_DIRS $CORE_FILES \
+  && for f in $CORE_DIRS $CORE_FILES; do sudo cp -a "/tmp/drupal-7.103/$f" .; done \
+  && sudo chown -R "$OWNER" $CORE_DIRS $CORE_FILES \
+  && echo "== core sustituido =="
+# mitigación CVE (docs/mitigacion-php-cve-2026-10.md, paso 4): el .htaccess de serie la reactiva
+sudo sed -i '/^<IfModule mod_php5.c>$/,/^<\/IfModule>$/ s/^/# CVE-2026 mitigation: /' .htaccess
+sed -n '30,41p' .htaccess
+# restos de malware fuera de modules/ (paso 2.5), si los hubo
+sudo find sites -xdev -path '*/files/*' -name '*.php'
 comm -23 <(ls -A /var/www/html | sort) <(ls -A /tmp/drupal-7.103 | sort)   # lo mismo que en 2.5
+sudo -u www-data drush updb -n 2>&1 | grep -v -E 'stat failed for|PharStreamWrapper.php|^phar://'   # listar sin aplicar
 sudo -u www-data drush updb -y
 sudo -u www-data drush cc all
 sudo -u www-data drush status | grep "Drupal version"
 ```
 
-**Resultado esperado.** El `comm` final lista lo mismo que en el paso 2.5: nada propio se
-ha perdido. `drush updb` lista 8 updates (`system` 7082 a 7088, `user` 7020) y termina sin
-errores. `Drupal version : 7.103`. Si en el paso 2.5 se guardó algún fichero modificado o
+**Resultado esperado.** `== core sustituido ==`; si no sale, una de las comprobaciones
+falló y no se ha borrado nada. Las nueve líneas del bloque `mod_php5.c` empiezan por
+`# CVE-2026 mitigation: `: entre este paso y el 4.6 el sitio sigue en `mod_php` 5.6, y el
+bloque de serie volvería a aplicarse. El `find` de `files/` no debe listar nada (en
+producción salió `sites/default/files/kbpsvoai.php`, un resto neutralizado: borrarlo con
+`sudo rm -f`). El `comm` final lista lo mismo que en el paso 2.5 salvo `sites`, que la
+7.103 también trae. `drush updb -n` lista exactamente 8 updates (`system` 7082 a 7088,
+`user` 7020); si sale alguno de otro módulo, parar y mirarlo antes del `-y`. Termina sin
+errores y `Drupal version : 7.103`. Si en el paso 2.5 se guardó algún fichero modificado o
 un perfil propio, reponerlo ahora desde `~/backups`.
 
 **Si falla.**
@@ -369,12 +514,22 @@ un perfil propio, reponerlo ahora desde `~/backups`.
 ### 4.2 `trusted_host_patterns` (recomendado)
 
 **Qué hace.** Impide que Drupal acepte peticiones con una cabecera `Host` falsa. No es
-obligatorio, pero staging lo tiene y la 7.103 lo documenta. Añadir al final de
-`sites/default/settings.php`:
+obligatorio, pero staging lo tiene y la 7.103 lo documenta. Antes, ver qué nombres sirve
+Apache. `sites-enabled/` son enlaces simbólicos: `grep -r` (minúscula) **no** los sigue y
+no devuelve nada; hace falta `-R`.
 
-```php
-$conf['trusted_host_patterns'] = array('^sistema\.crespcord\.com$');
+```bash
+sudo grep -RhiE '^\s*(ServerName|ServerAlias)' /etc/apache2/sites-enabled/ | sort -u   # producción: solo sistema.crespcord.com
+cd /var/www/html
+sudo cp -a sites/default/settings.php ~/backups/settings.php.pre-trusted-host
+printf '\n$conf['"'"'trusted_host_patterns'"'"'] = array('"'"'^sistema\\.crespcord\\.com$'"'"');\n' | sudo tee -a sites/default/settings.php >/dev/null
+tail -2 sites/default/settings.php
+sudo -u www-data php -l sites/default/settings.php
+curl -s -o /dev/null -w 'host bueno: %{http_code}\n' https://sistema.crespcord.com/user/login                  # 200
+curl -sk -o /dev/null -w 'host falso: %{http_code}\n' -H 'Host: evil.example.com' https://127.0.0.1/user/login  # 400
 ```
+
+Si hay `ServerAlias` (por ejemplo `www.`), añadir un patrón por cada uno.
 
 **Si falla.** Si después el sitio responde «The provided host name is not valid for this
 server», el patrón no coincide con el dominio real: revisar el `ServerName` del vhost.
@@ -386,18 +541,34 @@ server», el patrón no coincide con el dominio real: revisar el `ServerName` de
 los `.php` al socket de FPM. `mpm_prefork` hay que desactivarlo **antes** de activar
 `mpm_event`, o `a2enmod` se niega.
 
+No ejecutar `apt update` antes: el candidato ya se comprobó en el paso 2.1 y un `update`
+podría traer otra 8.3.x distinta de la de staging. Primero se simula, y la instalación
+solo sigue si `apt` no va a desinstalar nada. `NEEDRESTART_MODE=l` evita el diálogo
+«Daemons using outdated libraries» de `needrestart`, que en producción ofreció reiniciar
+Apache y MariaDB a mitad de la ventana (si aparece: `<Cancel>`, que no deshace la
+instalación).
+
 ```bash
-sudo apt install -y php8.3-cli php8.3-common php8.3-curl php8.3-fpm php8.3-gd php8.3-intl \
-  php8.3-mbstring php8.3-mysql php8.3-opcache php8.3-readline php8.3-soap php8.3-xml php8.3-zip
-sudo a2dismod php5.6 mpm_prefork
-sudo a2enmod mpm_event proxy proxy_fcgi setenvif
-sudo a2enconf php8.3-fpm
-sudo update-alternatives --set php /usr/bin/php8.3
-php -v
+PKGS="php8.3-cli php8.3-common php8.3-curl php8.3-fpm php8.3-gd php8.3-intl php8.3-mbstring php8.3-mysql php8.3-opcache php8.3-readline php8.3-soap php8.3-xml php8.3-zip"
+sudo apt-get install -s $PKGS | grep -E '^(Inst|Remv)' | tee ~/backups/apt-sim-php83.txt
+grep -q '^Remv' ~/backups/apt-sim-php83.txt && echo "!!! apt quiere desinstalar algo: NO SIGAS" \
+  || { sudo NEEDRESTART_MODE=l apt-get install -y $PKGS \
+  && sudo a2dismod php5.6 mpm_prefork \
+  && sudo a2enmod mpm_event proxy proxy_fcgi setenvif \
+  && sudo a2enconf php8.3-fpm \
+  && sudo update-alternatives --set php /usr/bin/php8.3 \
+  && echo "== 4.3 aplicado =="; }
+php -v | head -1
+dpkg -l 'php8.3*' | awk '/^ii/{print $3}' | sort -u
 ```
 
-**Resultado esperado.** `PHP 8.3.36 (cli)`. Todavía **no** se reinicia Apache: faltan los
+**Resultado esperado.** La simulación solo trae líneas `Inst` (en producción, los 13
+paquetes más `libonig5`). `== 4.3 aplicado ==`, `PHP 8.3.36 (cli)` y una única versión,
+`8.3.36-1+ubuntu22.04.1+deb.sury.org+1`. Todavía **no** se reinicia Apache: faltan los
 dos pasos siguientes.
+
+**Desde aquí hasta el 4.7, no usar `drush`.** El `php` de la terminal ya es 8.3 y Drush
+8.4.11 no está preparado para PHP 8.3.
 
 **Qué pasa con la configuración antigua.** El MPM `event` ignora `mpm_prefork.conf`, así
 que los ajustes `MaxRequestWorkers 30` y `MaxConnectionsPerChild 1` de la mitigación CVE
@@ -498,19 +669,23 @@ Para subir `pm.max_children`, en cambio, la señal es otra: que `/var/log/php8.3
 ### 4.6 Reiniciar y comprobar
 
 ```bash
-sudo apache2ctl configtest
-sudo systemctl restart php8.3-fpm apache2
+sudo apache2ctl configtest && sudo systemctl restart php8.3-fpm apache2
 systemctl is-active apache2 php8.3-fpm
-curl -sI https://sistema.crespcord.com/ | head -1
-sudo -u www-data drush status | grep -E "Drupal version|Database"
+curl -s -o /dev/null -w 'portada: %{http_code} -> %{redirect_url}\n' https://sistema.crespcord.com/
+curl -s -o /dev/null -w 'login: %{http_code}\n' https://sistema.crespcord.com/user/login
+curl -s -o /dev/null -w 'api: %{http_code}\n' https://sistema.crespcord.com/api/v1/catalogs
 ```
 
 **Resultado esperado.**
 - `Syntax OK`, los dos servicios `active`.
-- La portada responde **`503`**: es la página de mantenimiento de Drupal, y que salga
-  significa que Drupal arranca en PHP 8.3 bajo FPM. Un `502` o un `500` es un fallo (ver
-  abajo).
-- `Drupal version : 7.103` y `Database : Connected`.
+- La portada responde como en el paso 3.1 (en producción, `302` hacia `?q=user/login`), el
+  login `200` y la API `503`. Que el login cargue significa que Drupal arranca en PHP 8.3
+  bajo FPM y conecta con la base de datos. Un `502` o un `500` es un fallo (ver abajo).
+- No se usa `drush status` aquí: sigue siendo la 8.4.11 (paso 4.7).
+
+El login cargando **no** garantiza que todo el código compile en PHP 8: no usa Views. El
+fatal de Views 3.20 apareció después, en el `cc all` del paso 5.3. Eso lo cubren el paso
+2.7 y el 4.9.
 
 **La cabecera `Authorization` no se puede comprobar con la API en este momento.** Con el
 sitio en mantenimiento, Drupal responde 503 a **toda** petición anónima, incluidas
@@ -567,10 +742,10 @@ que guarda rutas internas al fichero anterior; si no, todo comando que arranca D
 entero se corta con `Drush command terminated abnormally`.
 
 ```bash
-cd /tmp && curl -fLO https://github.com/drush-ops/drush/releases/download/8.4.12/drush.phar
-php drush.phar --version
-sudo mv drush.phar /usr/local/bin/drush && sudo chmod +x /usr/local/bin/drush
-sudo rm -rf /tmp/drush-www-data
+cd /tmp && rm -f drush.phar && curl -fLO https://github.com/drush-ops/drush/releases/download/8.4.12/drush.phar
+php /tmp/drush.phar --version | grep -q '8.4.12' \
+  && sudo mv /tmp/drush.phar /usr/local/bin/drush && sudo chmod 755 /usr/local/bin/drush \
+  && sudo rm -rf /tmp/drush-www-data && echo "== drush 8.4.12 instalado =="
 cd /var/www/html && sudo -u www-data drush status | grep -E "Drupal version|PHP configuration"
 ```
 
@@ -581,14 +756,85 @@ cd /var/www/html && sudo -u www-data drush status | grep -E "Drupal version|PHP 
 
 **Qué hace.** Las mitigaciones del 2026-10-22 reducían la superficie de ataque de un PHP
 sin parche. Con PHP 8.3.36 sobran. De las cuatro, dos ya han desaparecido solas: el
-`.htaccess` quedó limpio al actualizar el core (paso 4.1) y `mpm_prefork.conf` ya no se
-carga (paso 4.3). El `.ini` de `/etc/php/5.6/apache2/conf.d/` se irá con el purge
-(sección 7). Queda el `conf` de Apache con `LimitRequestBody`:
+bloque `mod_php5.c` del `.htaccess` sigue comentado desde el paso 4.1 pero con FPM no se
+evalúa, y `mpm_prefork.conf` ya no se carga (paso 4.3). El `.ini` de
+`/etc/php/5.6/apache2/conf.d/` se irá con el purge (sección 7). Queda el `conf` de Apache
+con `LimitRequestBody`:
 
 ```bash
+cat /etc/apache2/conf-available/cve-2026-mitigation.conf      # LimitRequestBody 41943040
 sudo a2disconf cve-2026-mitigation && sudo rm /etc/apache2/conf-available/cve-2026-mitigation.conf
 sudo apache2ctl configtest && sudo systemctl reload apache2
 ```
+
+### 4.9 Alinear los módulos contrib y el tema con staging
+
+**Qué hace.** Trae de staging los directorios de `sites/all` que el paso 2.7 marcó como
+distintos, con las versiones exactas que staging ya probó en PHP 8.3, y aplica sus
+updates de base de datos. Va aquí, con PHP 8.3 y Drush 8.4.12 ya en marcha, porque es la
+combinación que se probó; y **antes** de la sección 5, porque el `drush cc all` del paso
+5.3 compila todo el código y con un Views viejo da *Fatal*.
+
+**Por qué no se hizo en el plan original.** Se daba por hecho que staging y producción
+tenían el mismo contrib. En producción hizo falta traer, a 2026-10-28, estos 21 módulos y
+el tema: `admin_views ckeditor ctools date entity entityreference
+entityreference_view_widget feeds field_collection flood_control htmlmail print rules
+rules_conditional smtp token views views_aggregator views_bootstrap views_bulk_operations
+views_data_export` y `themes/bootstrap`. `myapi`, `entityreference_count` (ya parcheado en
+los dos), `views_php` y `libraries/` eran idénticos. `myapi_test` existe solo en staging y
+**no** se copia.
+
+**1. En staging**, empaquetar (la lista `D` es la que salga del paso 2.7):
+
+```bash
+cd /var/www/html
+D="admin_views ckeditor ctools date entity entityreference entityreference_view_widget feeds field_collection flood_control htmlmail print rules rules_conditional smtp token views views_aggregator views_bootstrap views_bulk_operations views_data_export"
+sudo tar czf ~/contrib-staging.tgz $(for m in $D; do echo sites/all/modules/$m; done) sites/all/themes/bootstrap
+sudo chown ubuntu:ubuntu ~/contrib-staging.tgz && sha256sum ~/contrib-staging.tgz
+```
+
+**2. En el portátil**, pasarlo a producción junto con los hashes de staging de esos
+directorios (sale de `sitesall-staging.sha256` del paso 2.7). `scp` moderno no expande
+`{a,b}` en rutas remotas: un `scp` por fichero.
+
+```bash
+grep -E '  sites/all/(modules/(admin_views|ckeditor|...|views_data_export)|themes/bootstrap)/' sitesall-staging.sha256 > contrib-staging-subset.sha256
+scp -i ~/.ssh/crespcord.pem ubuntu@crespcord.lamotora.com:contrib-staging.tgz .
+scp -i ~/.ssh/LightsailDefaultKey-us-east-2-cresp.pem contrib-staging.tgz ubuntu@<IP_PROD>:
+scp -i ~/.ssh/LightsailDefaultKey-us-east-2-cresp.pem contrib-staging-subset.sha256 ubuntu@<IP_PROD>:
+```
+
+**3. En producción**, apartar lo viejo (un `mv` en el mismo disco, reversible), poner lo
+nuevo y verificar fichero a fichero:
+
+```bash
+cd /var/www/html
+D="<la misma lista>"
+OLD=$HOME/backups/contrib-old-$TS
+[ "$PWD" = /var/www/html ] && [ ! -e "$OLD" ] && [ -s ~/contrib-staging.tgz ] \
+  && mkdir -p "$OLD/modules" "$OLD/themes" \
+  && for m in $D; do sudo mv "sites/all/modules/$m" "$OLD/modules/" || break; done \
+  && sudo mv sites/all/themes/bootstrap "$OLD/themes/" \
+  && sudo tar xzf ~/contrib-staging.tgz -C /var/www/html \
+  && sudo chown -R www-data:www-data $(for m in $D; do echo sites/all/modules/$m; done) sites/all/themes/bootstrap \
+  && echo "== contrib sustituido =="
+sudo sha256sum -c --quiet ~/contrib-staging-subset.sha256 && echo "hashes OK"
+sudo rm -rf /tmp/drush-www-data
+sudo -u www-data drush updb -n 2>&1 | tee ~/backups/contrib-updb-list.txt    # listar
+sudo -u www-data drush updb -y 2>&1 | tee ~/backups/contrib-updb-applied.txt
+sudo -u www-data drush cc all 2>&1 | tail -3
+```
+
+**Resultado esperado.** `== contrib sustituido ==` y `hashes OK`. En producción hubo 11
+updates: `admin_views` 7100–7102 (el 7101 habilita `admin_views_system_display`),
+`ckeditor` 7006, `date` 7006, 7007 y 7200, `field_collection` 7009, `print_pdf` 7206,
+`smtp` 7104 (activa la verificación TLS estricta; el correo siguió saliendo) y
+`views_bootstrap` 7101, que repite decenas de `Undefined array key "style_plugin"`: son
+avisos, termina en `[ok]`. Tardaron 16 segundos. El `cc all` termina en
+`'all' cache was cleared. [success]`, sin ningún *Fatal*.
+
+**Vuelta atrás.** Los updates de contrib cambian la base de datos: devolver los
+directorios de `$OLD` a su sitio no basta. La vuelta atrás es el snapshot del paso 3.3.
 
 ---
 
@@ -722,15 +968,29 @@ aunque FPM corra con 10M/40M. Hay que mirarlo desde una petición web: el script
 
 ### 6.2 Abrir el sitio y restaurar el cron
 
+El sitio solo se abre si el lint completo de `sites/all` no tiene más fallos que los
+aceptados en el paso 2.7 (a 2026-10-28, `libraries/PHPExcel` y `libraries/dompdf`):
+
 ```bash
-cd /var/www/html && sudo -u www-data drush vset maintenance_mode 0
-sudo crontab -u www-data ~/backups/crontab-www-data.txt
-sudo crontab -u www-data -l
+cd /var/www/html
+N=$(sudo find sites/all -type f \( -name '*.php' -o -name '*.inc' -o -name '*.module' -o -name '*.install' -o -name '*.theme' -o -name '*.engine' \) -print0 \
+  | xargs -0 -n1 -P4 sh -c 'php -l "$0" 2>&1 | grep -E "Fatal error|Parse error"; true' | grep -vcE 'libraries/(PHPExcel|dompdf)/')
+echo "fatales fuera de PHPExcel/dompdf: $N"
+[ "$N" = 0 ] \
+  && sudo -u www-data drush vset maintenance_mode 0 2>/dev/null \
+  && sudo crontab -u www-data ~/backups/crontab-www-data.txt \
+  && echo "== sitio abierto y cron restaurado =="
+sudo crontab -u www-data -l | grep -v '^#' | grep .
+curl -s -w '\n%{http_code}\n' https://sistema.crespcord.com/api/v1/ping
+curl -s -w '\n%{http_code}\n' -H "Authorization: Bearer x" https://sistema.crespcord.com/api/v1/units
 ```
 
-**Resultado esperado.** Las tres líneas del cron (`queue-run myapi_onesignal_push`,
-`queue-run myapi_mail_send`, `cron`) de vuelta. Al minuto siguiente,
-`sudo -u www-data drush watchdog-show --type=php` sigue vacío.
+**Resultado esperado.** `fatales fuera de PHPExcel/dompdf: 0`, `== sitio abierto y cron
+restaurado ==` y las tres líneas del cron (`queue-run myapi_onesignal_push`,
+`queue-run myapi_mail_send`, `cron`). `ping` da `200` con `{"success":true,"data":{"pong":true}}`
+y `units` con un token falso da **`401` con `invalid_token`**, no `missing_authorization`:
+eso prueba de punta a punta que la cabecera `Authorization` llega a `myapi`. Al minuto
+siguiente, `sudo -u www-data drush watchdog-show --type=php` solo tiene `Deprecated`.
 
 ### 6.3 Smoke test
 
@@ -755,7 +1015,7 @@ Desde la app:
 4. ★ Confirmar en el servidor que el fichero está donde debe y que FPM no ha creado el
    directorio trampa:
    ```bash
-   ls -lt /var/www/private/comprobantes_pago/ | head -3
+   sudo ls -lt /var/www/private/comprobantes_pago/ | head -3   # sin sudo: Permission denied (es 750, de www-data)
    ls -ld "/var/www/html/private:"            # debe seguir sin existir
    ```
 5. Crear un reclamo con varias fotos de unos 4 MB (comprueba `post_max_size`).
@@ -773,11 +1033,21 @@ Desde la app:
 Después de todo lo anterior:
 
 ```bash
-sudo -u www-data drush watchdog-show --type=php     # vacío
+sudo -u www-data drush watchdog-show --type=php | grep -v Deprecated   # solo continuaciones de Deprecated
 sudo -u www-data drush watchdog-show --type=mail    # sin «Error sending e-mail»
-sudo tail /var/log/php8.3-fpm-errors.log            # vacío
+sudo grep -c Fatal /var/log/php8.3-fpm-errors.log   # ninguno posterior a la apertura
 sudo tail /var/log/apache2/error.log                # sin fatales de PHP
 ```
+
+**Qué es normal en PHP 8.3.** `date` (`DateObject`, propiedades dinámicas y tipos de
+retorno), `views` (propiedades dinámicas en `views_handler->init()`) y `entity`
+(`callbacks.inc`, parámetros opcionales antes de obligatorios) dejan `Deprecated` en el
+watchdog y en el log de FPM en casi cada página. No rompen nada. Lo que **no** es normal:
+`Warning`, `Notice`, `Error` o cualquier `Fatal`.
+
+**Las pruebas dejan datos reales.** El pago, el reclamo y el saldo aplicado del smoke test
+quedan en la contabilidad del condominio de prueba: anularlos o corregirlos desde el
+backoffice al terminar.
 
 ### 6.4 Ventana de 24 horas
 
@@ -788,10 +1058,14 @@ exportaciones a Excel, PDF de alícuotas, Feeds, CKEditor, VBO.
 
 Revisar a las 24 horas:
 ```bash
-sudo -u www-data drush watchdog-show --type=php --count=50
-sudo tail -50 /var/log/php8.3-fpm-errors.log
+sudo -u www-data drush watchdog-show --type=php --count=200 | grep -E '^\s*[0-9]+ ' | grep -v Deprecated
+sudo grep -v Deprecated /var/log/php8.3-fpm-errors.log | tail -20
 sudo grep -c "pm.max_children" /var/log/php8.3-fpm.log     # 0; si no, subir el pool (paso 4.5)
+free -m | head -2; sudo dmesg -T | grep -ci 'out of memory' # 0
 ```
+
+El watchdog guarda unas 1000 filas y los `Deprecated` lo llenan deprisa: revisarlo antes
+de que empujen fuera algo útil, o filtrar por severidad (`--severity=warning`).
 
 Si aparece un warning nuevo de un módulo contrib, anotarlo con su ruta y fichero, y
 tratarlo como el de `entityreference_count` (parche en `scripts/php8/`).
@@ -811,7 +1085,7 @@ Se usa `apt-get` y no `apt`. Es el mismo comando que se usó en staging con el 7
 `php5.6*` en los nombres de paquete, solo patrones `?name(...)`; `apt-get` sí los acepta.
 
 ```bash
-sudo apt-get purge -y 'php5.6*' libapache2-mod-php5.6 && sudo apt-get autoremove -y
+sudo NEEDRESTART_MODE=l apt-get purge -y 'php5.6*' libapache2-mod-php5.6 && sudo NEEDRESTART_MODE=l apt-get autoremove -y
 dpkg -l 'php5.6*' | grep ^ii
 sudo apache2ctl configtest && systemctl is-active apache2 php8.3-fpm
 php -v
@@ -821,10 +1095,22 @@ php -v
 `PHP 8.3.36`. El bloque `<IfModule mod_php5.c>` del `.htaccess` puede quedarse: con FPM
 no se evalúa.
 
-Borrar el fichero de credenciales del paso 3.4, que ya no hace falta:
+**Reiniciar la instancia.** La instalación del paso 4.3 dejó reinicios de servicios
+aplazados (`needrestart`). Un `sudo reboot` fuera de horas resuelve todos a la vez y
+prueba que FPM, Apache y el cron arrancan solos. Después: `systemctl is-active apache2
+php8.3-fpm mariadb`, `curl` a `/api/v1/ping` y `sudo crontab -u www-data -l`.
+
+**Rotar la contraseña de la base de datos** si el paso 2.5 encontró un volcado o un
+`settings.php` descargable (en producción, sí). Nueva contraseña en MariaDB
+(`ALTER USER`), en `sites/default/settings.php` y en `~/backups/mysql-prod.cnf`, y
+comprobar con `drush status` (`Database : Connected`).
+
+Borrar el fichero de credenciales del paso 3.4, que ya no hace falta, y lo que quedó de la
+migración:
 
 ```bash
 shred -u ~/backups/mysql-prod.cnf
+rm -rf ~/backups/contrib-old-* ~/contrib-staging.tgz ~/contrib-staging-subset.sha256 /tmp/drupal-7.64* /tmp/drupal-7.103*
 ```
 
 Cuando el sitio lleve unos días estable, borrar el snapshot de Lightsail del paso 3.3
@@ -885,6 +1171,10 @@ Opciones, de mejor a peor:
 
 ### 8.3 Apache, FPM o PHP 8.3 fallan (pasos 4.3 a 4.8)
 
+**Solo antes del paso 4.9.** Después, los módulos contrib son los de staging y la base de
+datos tiene sus updates: volver a PHP 5.6 dejaría esa combinación, que nadie ha probado,
+en producción. A partir del 4.9, la vuelta atrás es el snapshot (8.1).
+
 Deja el servidor como antes del paso 4.3, con el core 7.103 (que funciona en PHP 5.6):
 
 ```bash
@@ -928,3 +1218,26 @@ versión de PHP. Salir de mantenimiento y restaurar el cron como en 8.1.
 | Las reglas de Rules (paso 5.3) | `mysql --defaults-extra-file=$HOME/backups/mysql-prod.cnf "$DB" < ~/backups/rules_config-<fecha>.sql` y después `sudo -u www-data drush cc all`. |
 | El parche de `entityreference_count` (paso 5.2) | `sudo cp -a ~/backups/entityreference_count.module sites/all/modules/entityreference_count/` y `drush cc all`. |
 | El correo deja de salir (paso 5.4) | Repetir 5.1 y después `fix_mail_system.php test`. |
+
+---
+
+## 9. Ejecución en producción (2026-10-28): qué salió distinto
+
+Ventana de 14:30 a 15:35 UTC, más la preparación de la sección 2 esa misma mañana. Resultado:
+Drupal 7.103, PHP 8.3.36 con FPM, Drush 8.4.12, contrib alineado con staging, las 11
+pruebas del smoke test correctas y ningún *Fatal* desde la apertura. Lo que no estaba
+previsto, en orden de aparición, y dónde ha quedado recogido en esta guía:
+
+| Qué pasó | Consecuencia | Dónde se corrige |
+|---|---|---|
+| El docroot tenía 105 `.php` vacíos y 2 esqueletos neutralizados de una infección de 2024 en el hosting anterior (cPanel de A2 Hosting), copiados al migrar al servidor actual el 2026-10-14 | Parecía un compromiso activo. Se hizo un snapshot forense y un paquete de evidencias antes de seguir; el análisis descartó actividad (sin código, sin accesos en los logs, sin persistencia) | Paso 2.5 |
+| `comm` no detecta ficheros del core modificados | `common.inc` y `request-sanitizer.inc` tenían un parche de PHP 7 que no se habría visto | Paso 2.5 (`diff -rq`) |
+| Un volcado completo de la base de datos, una copia del sitio con `settings.php`, `php.ini.bak` y cinco `error_log` se podían descargar por HTTP | Se retiraron a `/root/incident/docroot-leftovers/`. Los logs (desde el 2026-10-13) no muestran descargas, pero la contraseña de la base de datos se rota | Paso 2.5 y sección 7 |
+| La portada siguió dando `200` en mantenimiento | La caché de páginas se sirve antes de comprobar el modo mantenimiento | Paso 3.1 |
+| `grep -r` en `sites-enabled/` no devolvió nada | Son enlaces simbólicos; hace falta `-R` | Paso 4.2 |
+| El diálogo de `needrestart` apareció a mitad de la instalación de PHP 8.3 | Se canceló: Apache y MariaDB no se reiniciaron. Los reinicios aplazados se resuelven reiniciando la instancia | Paso 4.3 y sección 7 |
+| El `.htaccess` de serie de la 7.103 reactivaba el bloque `mod_php5.c` que la mitigación CVE había comentado | Se volvió a comentar en el mismo paso: entre el 4.1 y el 4.6 el sitio sigue en `mod_php` | Paso 4.1 |
+| `authorize.php` y `xmlrpc.php` no existían en producción | No se repusieron | Paso 4.1 |
+| **Views 7.x-3.20 da *Fatal* en PHP 8** (`$x{0}`) y apareció en el `cc all` del paso 5.3, con el sitio ya en PHP 8.3 | Producción tenía 21 módulos y el tema `bootstrap` más viejos que staging. Se trajeron de staging verificando hashes y se aplicaron 11 updates de contrib; unos 25 minutos más de ventana | Pasos 2.7 y 4.9 |
+| El primer lint completo abortó en el primer fallo | `xargs` corta cuando `php -l` sale con 255 | Paso 2.7 (`sh -c '...; true'`) |
+| `PHPExcel` (19 ficheros) y `dompdf` no compilan en PHP 8, **también en staging** | Se aceptan: `print_pdf` está deshabilitado y staging funciona igual. Queda pendiente ver quién usa PHPExcel | Paso 2.7 |
