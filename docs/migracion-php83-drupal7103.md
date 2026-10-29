@@ -1056,16 +1056,27 @@ usar cada pantalla. Un día de uso real del backoffice con el watchdog limpio es
 prueba de que no queda nada. La lista de pruebas de staging sirve de guion: reportes,
 exportaciones a Excel, PDF de alícuotas, Feeds, CKEditor, VBO.
 
-Revisar a las 24 horas:
+Revisar a las 24 horas. `SINCE` es la hora de apertura del paso 6.2, en UTC:
 ```bash
-sudo -u www-data drush watchdog-show --type=php --count=200 | grep -E '^\s*[0-9]+ ' | grep -v Deprecated
+cd /var/www/html; SINCE=$(date -d '2026-10-28 15:35 UTC' +%s)
+sudo -u www-data drush sqlq "SELECT 'php_desde_apertura', severity, COUNT(*) FROM dr_watchdog WHERE type='php' AND timestamp >= $SINCE GROUP BY severity"
+sudo -u www-data drush watchdog-show --severity=error --count=15
+sudo grep -c Fatal /var/log/php8.3-fpm-errors.log           # igual que antes de abrir
 sudo grep -v Deprecated /var/log/php8.3-fpm-errors.log | tail -20
-sudo grep -c "pm.max_children" /var/log/php8.3-fpm.log     # 0; si no, subir el pool (paso 4.5)
+sudo grep -c "pm.max_children" /var/log/php8.3-fpm.log      # 0; si no, subir el pool (paso 4.5)
 free -m | head -2; sudo dmesg -T | grep -ci 'out of memory' # 0
 ```
 
-El watchdog guarda unas 1000 filas y los `Deprecated` lo llenan deprisa: revisarlo antes
-de que empujen fuera algo útil, o filtrar por severidad (`--severity=warning`).
+En Drupal 7 los `Deprecated` se registran con severidad 7, los *Notice* con 5, los
+*Warning* con 4 y los errores con 3. La consulta solo debe devolver severidad 7, o nada:
+con el `error_reporting` del paso 4.5 (`E_ALL & ~E_DEPRECATED & ~E_STRICT`) Drupal ni
+siquiera registra los `Deprecated`. Una consulta sin filas no imprime nada en `sqlq`, ni
+cabecera. No filtrar `watchdog-show` con `grep -v Deprecated`: drush parte cada mensaje
+en varias líneas y los trozos sin la palabra se cuelan como si fueran otra cosa.
+
+El log de FPM tampoco basta por sí solo: el manejador de errores de Drupal se queda los
+*Warning* y *Notice* y no llegan a ese log. El log de FPM muestra la hora de
+`America/Guayaquil` (UTC−5).
 
 Si aparece un warning nuevo de un módulo contrib, anotarlo con su ruta y fichero, y
 tratarlo como el de `entityreference_count` (parche en `scripts/php8/`).
@@ -1084,37 +1095,177 @@ Se usa `apt-get` y no `apt`. Es el mismo comando que se usó en staging con el 7
 2.x (producción tiene Ubuntu 22.04, apt 2.4), `apt` ya no acepta comodines estilo
 `php5.6*` en los nombres de paquete, solo patrones `?name(...)`; `apt-get` sí los acepta.
 
+Desde aquí las filas 8.2 a 8.4 de la vuelta atrás dejan de valer: solo queda el snapshot.
+
+### 7.1 Purgar PHP 5.6
+
+Antes, comprobar que nada lo usa: ni `php5.6.load` en `mods-enabled`, ni una unidad
+`php5.6-fpm`, y que la alternativa `php` apunta a la 8.3.
+
 ```bash
+ls /etc/apache2/mods-enabled/ | grep -i php ; systemctl list-units --all 'php*' --no-legend
+update-alternatives --display php | head -3
 sudo NEEDRESTART_MODE=l apt-get purge -y 'php5.6*' libapache2-mod-php5.6 && sudo NEEDRESTART_MODE=l apt-get autoremove -y
-dpkg -l 'php5.6*' | grep ^ii
+dpkg -l 'php5.6*' 2>/dev/null | grep ^ii ; echo "dpkg-ii-5.6: $?"
 sudo apache2ctl configtest && systemctl is-active apache2 php8.3-fpm
-php -v
+php -v | head -1
 ```
 
-**Resultado esperado.** La lista de `dpkg` vacía, `Syntax OK`, los dos servicios activos,
-`PHP 8.3.36`. El bloque `<IfModule mod_php5.c>` del `.htaccess` puede quedarse: con FPM
-no se evalúa.
+**Resultado esperado.** `dpkg-ii-5.6: 1`, `Syntax OK`, los dos servicios activos,
+`PHP 8.3.36`. Los muchos `is not installed, so not removed` son normales: el comodín
+abarca todo el repositorio. En producción se quitaron 15 paquetes.
 
-**Reiniciar la instancia.** La instalación del paso 4.3 dejó reinicios de servicios
-aplazados (`needrestart`). Un `sudo reboot` fuera de horas resuelve todos a la vez y
-prueba que FPM, Apache y el cron arrancan solos. Después: `systemctl is-active apache2
-php8.3-fpm mariadb`, `curl` a `/api/v1/ping` y `sudo crontab -u www-data -l`.
-
-**Rotar la contraseña de la base de datos** si el paso 2.5 encontró un volcado o un
-`settings.php` descargable (en producción, sí). Nueva contraseña en MariaDB
-(`ALTER USER`), en `sites/default/settings.php` y en `~/backups/mysql-prod.cnf`, y
-comprobar con `drush status` (`Database : Connected`).
-
-Borrar el fichero de credenciales del paso 3.4, que ya no hace falta, y lo que quedó de la
-migración:
+dpkg avisa de que no borra `/etc/php/5.6/apache2/conf.d` ni `mods-available` porque no
+están vacíos: dentro queda el `99-cve-2026-mitigation.ini`, que no es de ningún paquete.
+Comprobar que está en la copia del paso 3.5 y borrar el directorio:
 
 ```bash
-shred -u ~/backups/mysql-prod.cnf
-rm -rf ~/backups/contrib-old-* ~/contrib-staging.tgz ~/contrib-staging-subset.sha256 /tmp/drupal-7.64* /tmp/drupal-7.103*
+sudo find /etc/php/5.6 -type f -ls
+tar tzf ~/backups/etc-php-5.6.tgz | grep -E 'mods-available/|apache2/conf.d/' | grep -v '/$'
+sudo rm -rf /etc/php/5.6 && ls /etc/php/      # solo 8.3
 ```
 
-Cuando el sitio lleve unos días estable, borrar el snapshot de Lightsail del paso 3.3
-(tiene coste mensual).
+El bloque `<IfModule mod_php5.c>` del `.htaccess` puede quedarse: con FPM no se evalúa.
+
+### 7.2 Rotar la contraseña de la base de datos
+
+Obligatorio si el paso 2.5 encontró un volcado o un `settings.php` descargable (en
+producción, sí). La contraseña no se muestra nunca: va por ficheros `600` y por stdin, y
+`mysql` en modo batch no escribe historial.
+
+**Antes**, ver qué entradas de `mysql.user` hay que cambiar, que la contraseña aparece una
+sola vez en `settings.php` y qué otros ficheros la contienen:
+
+```bash
+cd /var/www/html
+sudo -u www-data drush php-eval 'global $databases; $d=Database::getConnectionInfo(); $d=$d["default"]; $s=file_get_contents(DRUPAL_ROOT."/sites/default/settings.php"); echo "conexiones=".implode(",",array_keys($databases))." user=".$d["username"]."@".$d["host"]." pwlen=".strlen($d["password"])." apariciones=".substr_count($s,"\x27".$d["password"]."\x27")."\n";'
+sudo mysql -e "SELECT user, host, plugin FROM mysql.user ORDER BY user, host"
+install -m 600 /dev/null ~/backups/.oldpw
+sudo -u www-data drush php-eval '$d=Database::getConnectionInfo(); echo $d["default"]["password"];' > ~/backups/.oldpw
+sudo grep -rlsF -f ~/backups/.oldpw --exclude-dir=files /etc /root /home /var/spool/cron /usr/local /opt /var/www 2>/dev/null
+```
+
+Debe salir `conexiones=default` y `apariciones=1`. En producción la contraseña estaba,
+además de en lo esperado, en `/root/.mysql_history` (alguien la escribió en el cliente
+`mysql` como root) y en una copia vieja `~/backups/settings.php.antes-myapi`. Si aparece un
+script o un cron, hay que actualizarlo también.
+
+**Rotar.** El usuario solo existía como `@localhost`; si hay más filas, un `ALTER USER`
+por cada una. El hueco entre las dos órdenes es de milisegundos; el modo mantenimiento no
+sirve aquí porque Drupal necesita la base de datos para saber si está en mantenimiento.
+
+```bash
+sudo cp -a sites/default/settings.php ~/backups/settings.php.pre-dbrotate
+install -m 600 /dev/null ~/backups/.newpw && openssl rand -hex 20 | tr -d '\n' > ~/backups/.newpw
+printf "ALTER USER 'pcordero_drupcon'@'localhost' IDENTIFIED BY '%s';\n" "$(cat ~/backups/.newpw)" | sudo mysql && echo "ALTER USER OK" \
+&& sudo php -r '$f="/var/www/html/sites/default/settings.php"; $s=file_get_contents($f); $o="\x27".file_get_contents("/home/ubuntu/backups/.oldpw")."\x27"; $n="\x27".file_get_contents("/home/ubuntu/backups/.newpw")."\x27"; if (substr_count($s,$o)!==1) { fwrite(STDERR,"ABORT: apariciones != 1\n"); exit(1); } file_put_contents($f, str_replace($o,$n,$s)); echo "settings.php actualizado\n";'
+sudo php -l sites/default/settings.php; sudo -u www-data drush status --fields=db-status
+curl -s -o /dev/null -w 'ping %{http_code}\n' https://sistema.crespcord.com/api/v1/ping
+```
+
+**Resultado esperado.** `ALTER USER OK`, `settings.php actualizado`, `No syntax errors`,
+`Connected`, `ping 200`. `file_put_contents` conserva el propietario y los permisos.
+opcache vuelve a leer `settings.php` en unos 2 segundos (no se cambió
+`validate_timestamps`).
+
+**Si falla** después de `ALTER USER OK`, deshacer las dos cosas:
+
+```bash
+printf "ALTER USER 'pcordero_drupcon'@'localhost' IDENTIFIED BY '%s';\n" "$(cat ~/backups/.oldpw)" | sudo mysql
+sudo cp -a ~/backups/settings.php.pre-dbrotate /var/www/html/sites/default/settings.php
+```
+
+**Destruir las copias de la contraseña antigua.** Primero repetir la búsqueda con
+`.oldpw` y comprobar que solo salen los ficheros que se van a borrar. El fichero del paso
+3.4 ya no hace falta: si hay que restaurar un volcado, `sudo mysql pcordero_drupcon`
+entra como root por socket.
+
+```bash
+sudo shred -fu ~/backups/settings.php.pre-* ~/backups/settings.php.antes-myapi ~/backups/mysql-prod.cnf /root/.mysql_history
+shred -u ~/backups/.oldpw ~/backups/.newpw
+```
+
+### 7.3 Borrar los restos de la migración
+
+Los volcados y el zip con datos personales de `/root/incident` se pueden borrar solo si el
+snapshot del paso 2.5 se tomó **antes** de moverlos allí (así los conserva) y si el
+paquete de evidencias del portátil tiene el hash anotado:
+
+```bash
+# en el portátil
+shasum -a 256 ~/crespcord-incident/evidence-*.tgz
+aws lightsail get-instance-snapshot --instance-snapshot-name incident-evidence-20261028 \
+  --profile crespcord --region us-east-2 --query 'instanceSnapshot.[state,createdAt]' --output text
+```
+
+```bash
+# en el servidor
+sudo rm -rf ~/backups/contrib-old-*   # los ficheros son de www-data (se movieron desde el docroot)
+rm -rf ~/contrib-staging.tgz ~/contrib-staging-subset.sha256
+cd /tmp && rm -rf drupal-7.64* drupal-7.103* && cd ~
+sudo rm -rf /root/incident
+```
+
+En `/tmp` dejar `.htaccess`, `drush-www-data/` y `views_plugin_display/`: son de Drupal
+(usa `/tmp` como directorio temporal). Los scripts del paso 5 que se subieron a `/tmp` ya
+están en `scripts/php8/`. En producción había además un volcado completo anterior,
+`~/backups/prod-antes-myapi-2026-10-19.sql.gz`, superado por el de la ventana. Se
+recuperaron unos 5 GB.
+
+### 7.4 Reiniciar la instancia
+
+La instalación del paso 4.3 dejó reinicios aplazados; en producción `needrestart` listaba
+17 servicios, entre ellos `mariadb`, `ssh`, `dbus` y `systemd-manager`. Un reboot los
+resuelve todos y prueba que el servidor arranca solo. **De verdad fuera de horas**: en
+producción se hizo a las 10:07 de Guayaquil y un usuario se encontró un 503 en
+`admin/content`.
+
+**Antes**, comprobar el arranque automático y `fstab`, y hacer un snapshot nuevo: el del
+paso 3.3 ya no recoge los datos reales del día de observación, la purga ni la contraseña
+nueva.
+
+```bash
+sudo needrestart -b | grep -E '^NEEDRESTART-(KCUR|KEXP|KSTA|SVC)'
+systemctl is-enabled apache2 php8.3-fpm mariadb cron      # 4 x enabled
+sudo findmnt --verify ; echo "fstab rc=$?"                 # el aviso de /swapfile es normal
+```
+
+```bash
+# en el portátil; esperar a available (en producción, 90 segundos)
+aws lightsail create-instance-snapshot --instance-name CrespCord-Drupal-4Gb-OK \
+  --instance-snapshot-name pre-reboot-$(date +%Y%m%d) --profile crespcord --region us-east-2
+```
+
+**Que Apache arranque después de FPM.** Sin esto, Apache acepta peticiones un segundo
+antes de que exista `/run/php/php8.3-fpm.sock` y responde 503 (`AH01079`). En producción
+se vio en el primer reboot y se añadió después. Ponerlo antes del reboot:
+
+```bash
+sudo mkdir -p /etc/systemd/system/apache2.service.d
+printf '[Unit]\nAfter=php8.3-fpm.service\nWants=php8.3-fpm.service\n' | sudo tee /etc/systemd/system/apache2.service.d/after-php-fpm.conf
+sudo systemctl daemon-reload
+systemctl show apache2 -p After | grep -o 'php8.3-fpm.service'
+```
+
+Reiniciar con `sudo reboot` y, al volver a conectar (la shell empieza en el home: sin
+`cd`, `drush status` sale vacío):
+
+```bash
+cd /var/www/html
+systemctl is-active apache2 php8.3-fpm mariadb cron; systemctl --failed --no-legend
+sudo needrestart -b | grep -E '^NEEDRESTART-(KSTA|SVC)'   # KSTA: 1 y ninguna SVC
+sudo -u www-data drush status --fields=db-status
+curl -s -o /dev/null -w 'ping %{http_code}\n' https://sistema.crespcord.com/api/v1/ping
+sudo grep -c Fatal /var/log/php8.3-fpm-errors.log          # sin cambios
+journalctl -u cron -b --no-pager | grep -i www-data | tail -3   # tras unos minutos
+```
+
+El arranque vacía `/tmp` (`tmpfiles.d`): Drupal y drush recrean lo que necesitan.
+
+Cuando el sitio lleve unos días estable, borrar los snapshots `pre-php83-*` y
+`pre-reboot-*` (tienen coste mensual) y, con ellos, el volcado y el tar de ficheros de
+`~/backups`, que llevan datos personales. El de evidencias se conserva hasta cerrar la
+revisión de seguridad.
 
 ---
 
@@ -1221,11 +1372,13 @@ versión de PHP. Salir de mantenimiento y restaurar el cron como en 8.1.
 
 ---
 
-## 9. Ejecución en producción (2026-10-28): qué salió distinto
+## 9. Ejecución en producción (2026-10-28 y 29): qué salió distinto
 
-Ventana de 14:30 a 15:35 UTC, más la preparación de la sección 2 esa misma mañana. Resultado:
-Drupal 7.103, PHP 8.3.36 con FPM, Drush 8.4.12, contrib alineado con staging, las 11
-pruebas del smoke test correctas y ningún *Fatal* desde la apertura. Lo que no estaba
+Ventana de 14:30 a 15:35 UTC del 28, más la preparación de la sección 2 esa misma mañana; la
+revisión de 24 horas y la sección 7 se hicieron el 29. Resultado: Drupal 7.103, PHP 8.3.36
+con FPM, Drush 8.4.12, contrib alineado con staging, las 11 pruebas del smoke test
+correctas, ningún *Fatal* ni *Warning* desde la apertura, PHP 5.6 purgado, contraseña de la
+base de datos rotada y la instancia reiniciada sin intervención. Lo que no estaba
 previsto, en orden de aparición, y dónde ha quedado recogido en esta guía:
 
 | Qué pasó | Consecuencia | Dónde se corrige |
@@ -1241,3 +1394,8 @@ previsto, en orden de aparición, y dónde ha quedado recogido en esta guía:
 | **Views 7.x-3.20 da *Fatal* en PHP 8** (`$x{0}`) y apareció en el `cc all` del paso 5.3, con el sitio ya en PHP 8.3 | Producción tenía 21 módulos y el tema `bootstrap` más viejos que staging. Se trajeron de staging verificando hashes y se aplicaron 11 updates de contrib; unos 25 minutos más de ventana | Pasos 2.7 y 4.9 |
 | El primer lint completo abortó en el primer fallo | `xargs` corta cuando `php -l` sale con 255 | Paso 2.7 (`sh -c '...; true'`) |
 | `PHPExcel` (19 ficheros) y `dompdf` no compilan en PHP 8, **también en staging** | Se aceptan: `print_pdf` está deshabilitado y staging funciona igual. Queda pendiente ver quién usa PHPExcel | Paso 2.7 |
+| A las 24 horas, `watchdog-show \| grep -v Deprecated` sacó líneas sospechosas | Eran trozos de mensajes `Deprecated` que drush parte en varias líneas. Se comprobó por SQL: 0 entradas `php` desde la apertura | Paso 6.4 (consulta por severidad) |
+| La purga de 5.6 dejó `/etc/php/5.6` con el `.ini` de la mitigación CVE | No es de ningún paquete; se comprobó que estaba en la copia y se borró el directorio | Paso 7.1 |
+| La contraseña de la base de datos estaba también en `/root/.mysql_history` y en una copia vieja de `settings.php` | Se rotó sin mostrarla y se destruyeron todas las copias de la antigua | Paso 7.2 |
+| `rm -rf ~/backups/contrib-old-*` dio cientos de `Permission denied` | Los ficheros conservan el propietario `www-data` del docroot | Paso 7.3 (`sudo`) |
+| El reboot se hizo en horario de uso y Apache arrancó un segundo antes que FPM | Un usuario recibió un 503. Se añadió el *drop-in* de systemd para que Apache espere a FPM | Paso 7.4 |

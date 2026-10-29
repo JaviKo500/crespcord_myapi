@@ -830,10 +830,16 @@ staging (lectura, sin cambios) y contra los tarballs oficiales de la 7.64 y la 7
   shred -u ~/backups/mysql-prod.cnf        # credenciales del paso 8.2: ya no hacen falta
   ```
   El bloque `<IfModule mod_php5.c>` del `.htaccess` puede quedarse: con FPM no se aplica.
-  Después, `sudo reboot` fuera de horas (resuelve los reinicios que `needrestart` dejó
-  aplazados y prueba que FPM y el cron arrancan solos) y, si hubo ficheros sensibles
-  descargables (paso 8.1), rotar la contraseña de la base de datos. Cuando todo lleve unos
-  días estable, borrar el snapshot de Lightsail del principio.
+  Borrar también `/etc/php/5.6`, que dpkg deja con el `.ini` de la mitigación CVE.
+  Procedimiento completo en la sección 7 de la guía.
+- [ ] **Rotar la contraseña de la base de datos** si hubo ficheros sensibles descargables
+  (paso 8.1), sin mostrarla, y destruir todas las copias de la antigua: en producción
+  también estaba en `/root/.mysql_history` (paso 7.2 de la guía).
+- [ ] **Reiniciar la instancia fuera de horas** (resuelve los reinicios que `needrestart`
+  dejó aplazados y prueba que todo arranca solo). Antes: snapshot nuevo y el *drop-in*
+  `apache2.service.d/after-php-fpm.conf` para que Apache espere a FPM; sin él, el primer
+  segundo tras el arranque da 503 (paso 7.4 de la guía). Cuando todo lleve unos días
+  estable, borrar los snapshots de la migración.
 
 ### 8.4 Ajustes que PHP 8 exige (los tres fallaron en staging)
 
