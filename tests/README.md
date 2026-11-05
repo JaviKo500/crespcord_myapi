@@ -18,7 +18,7 @@ request handlers, up to the first `db_select()`.
 | E2E | `tests/e2e/` | Postman/Newman + Node | Production (`https://crespcord.lamotora.com`) |
 
 Since SPEC 123 the unit and contract layers run on **every push and pull
-request**, under PHP 7.4; SPEC 124 added coverage measurement and the static
+request**, under PHP 8.3; SPEC 124 added coverage measurement and the static
 layer to the same trigger — see "Continuous integration" below.
 
 ---
@@ -26,9 +26,9 @@ layer to the same trigger — see "Continuous integration" below.
 ## Continuous integration
 
 `.github/workflows/tests.yml` runs on every push to any branch and on every pull
-request, on **PHP 7.4** — the version production runs, and the reason the job
-exists at all: `php -l` on a developer machine running PHP 8 proves nothing
-about the target, because PHP 8 syntax parses fine there. Two jobs, kept apart
+request, on **PHP 8.3** — the version production runs, and the reason the job
+exists at all: `php -l` on a developer machine running a newer PHP proves
+nothing about the target, because newer syntax parses fine there. Two jobs, kept apart
 because they fail for unrelated reasons and which one went red should be
 readable without opening the log.
 
@@ -482,7 +482,7 @@ into order-dependent state. Five classes assert `myapi_get_lang() === 'es'` in
 whole process, so a file that resolved it to `en` first would silently change
 what every later class expects.
 
-**Prerequisites:** PHP 7.4, Composer.
+**Prerequisites:** PHP 8.3, Composer.
 
 **Run:**
 

@@ -1,10 +1,10 @@
 # Continuous integration for the myapi module (SPEC 123, extended by SPEC 124).
 #
-# Everything here runs on PHP 7.4, which is the point: production is
-# 7.4.33 and most developer machines are not, so `php -l` on a laptop proves
-# nothing about the target — PHP 8 syntax parses fine on the machine that
-# wrote it. Linting and running the whole suite under 7.4 is what turns
-# "no PHP 8.0+ syntax" (CLAUDE.md) from a rule into a check.
+# Everything here runs on PHP 8.3, which is the point: production and staging
+# run 8.3.36 and developer machines may run something newer, so `php -l` on a
+# laptop proves nothing about the target. Linting and running the whole suite
+# under 8.3 is what turns "nothing newer than PHP 8.3" (CLAUDE.md) from a rule
+# into a check.
 #
 # The unit suite needs no database and no Drupal: it runs against the
 # production .inc files with the stubs in tests/unit/bootstrap.php. The
@@ -36,7 +36,7 @@ on:
 
 jobs:
   unit:
-    name: PHP 7.4 · lint + unit suite + coverage
+    name: PHP 8.3 · lint + unit suite + coverage
     runs-on: ubuntu-latest
 
     steps:
@@ -46,10 +46,10 @@ jobs:
       # pcov, not xdebug: it only does line coverage, which is all the gate
       # reads, and it costs a fraction of xdebug's slowdown on a suite this
       # size.
-      - name: Set up PHP 7.4
+      - name: Set up PHP 8.3
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '7.4'
+          php-version: '8.3'
           coverage: pcov
           tools: composer:v2
 
@@ -66,7 +66,7 @@ jobs:
       # xargs exits non-zero if any php -l did, which is what fails the step.
       # The output is buffered so a green run stays quiet and a red one prints
       # the offending file and line.
-      - name: Lint every source under PHP 7.4
+      - name: Lint every source under PHP 8.3
         run: |
           find . -path ./vendor -prune -o \
             \( -name '*.php' -o -name '*.inc' -o -name '*.module' \
@@ -94,54 +94,18 @@ jobs:
           path: coverage.xml
           if-no-files-found: warn
 
-  # Production runs PHP 5.6 under mod_php, while staging runs 7.4.
-  # The module has to load on both, so the shipped sources are also linted on
-  # 5.6. php -l only sees syntax: functions that 5.6 lacks parse fine and die
-  # at runtime, so the second step greps for the ones a PHP 7 habit reaches for.
-  # The test suite stays on 7.4 (PHPUnit 9 needs 7.3+).
-  php56:
-    name: PHP 5.6 · lint shipped sources
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up PHP 5.6
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: '5.6'
-          coverage: none
-
-      - name: Lint myapi.module, myapi.install, includes/ and resources/
-        run: |
-          find myapi.module myapi.install includes resources \
-            \( -name '*.inc' -o -name '*.module' -o -name '*.install' \) -print0 \
-            | xargs -0 -n1 php -l > lint.log \
-            || { grep -v '^No syntax errors' lint.log; exit 1; }
-
-      - name: No PHP 7-only functions
-        run: |
-          # Docblock and // lines are skipped: comments may name these.
-          if grep -rnE '\b(random_bytes|random_int|intdiv|preg_replace_callback_array|array_key_first|array_key_last|is_iterable|is_countable|mb_str_split|hrtime|spl_object_id|str_contains|str_starts_with|str_ends_with|array_is_list)\(' \
-               myapi.module myapi.install includes resources \
-               | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(\*|//|/\*)'; then
-            echo "These functions do not exist on PHP 5.6 (production)."
-            exit 1
-          fi
-
   static:
-    name: PHP 7.4 · static analysis
+    name: PHP 8.3 · static analysis
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up PHP 7.4
+      - name: Set up PHP 8.3
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '7.4'
+          php-version: '8.3'
           coverage: none
           tools: composer:v2
 

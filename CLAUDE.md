@@ -15,7 +15,7 @@ Goal: a clean, reusable, scalable API where adding a new resource means creating
 ## Environment constraints (non-negotiable)
 
 - **Drupal 7.64.** Use only Drupal 7 APIs (`hook_menu()`, `db_select()`, `db_insert()`, `drupal_json_encode()`, etc.). Never suggest Drupal 8/9/10/11 solutions (YAML routes, Symfony controllers, annotations, DI services).
-- **PHP 5.6 compatible.** Staging runs PHP 8.3.36 (PHP-FPM, Drupal 7.103), but production runs **PHP 5.6** (mod_php) and the server is not upgraded. Shipped code must also run on 8.3 without warnings, so staging catches PHP 8 breakage before the production migration. Shipped code (`myapi.module`, `myapi.install`, `includes/`, `resources/`) must parse and run on 5.6: no `??`/`??=`, arrow functions, scalar/return type declarations, `define()` with arrays (use a file-level `const`), and no PHP 7-only functions (`random_bytes()` → `drupal_random_bytes()`, `intdiv($a, $b)` → `(int) ($a / $b)`). CI lints on 5.6 (`php56` job). Tests under `tests/` run on 7.4 and may use 7.4 syntax.
+- **PHP 8.3.** Production and staging both run PHP 8.3.36 (PHP-FPM) with Drupal 7.103; production was migrated on 2026-10-28 and PHP 5.6 was purged from the server (`docs/migracion-php83-drupal7103.md`). Shipped code (`myapi.module`, `myapi.install`, `includes/`, `resources/`) may use PHP 8.3 syntax and functions, but must run without `Warning`/`Notice`/`Deprecated` on 8.3. There is no rollback to 5.6 other than restoring a Lightsail snapshot, so 5.6 compatibility is no longer required. CI lints, tests and analyses on 8.3.
 - **Drupal 7 is EOL (January 2025).** No core security patches — validate and sanitize all input with extra care.
 - **HTTPS required** in production; credentials and tokens travel in requests.
 
@@ -162,7 +162,7 @@ Doc is updated in the same commit that creates or modifies the endpoint. An endp
 - No raw JSON output — always `myapi_respond()` / `myapi_error()`.
 - No logic duplication between resources — shared code goes to `includes/`.
 - No Drupal 8+ APIs.
-- No PHP 7.0+ syntax or functions in shipped code (production is PHP 5.6).
+- No syntax or functions newer than PHP 8.3 in shipped code (production is PHP 8.3).
 - No Spanish identifiers or comments — code is in English.
 - No endpoint without a doc file in `docs/`.
 

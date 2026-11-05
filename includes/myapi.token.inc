@@ -28,9 +28,9 @@ define('MYAPI_TOKEN_REFRESH_TTL_DEFAULT', 2592000);
 /**
  * Generates an opaque access token.
  *
- * Random bytes come from drupal_random_bytes(), not random_bytes(): production
- * runs PHP 5.6, which has no random_bytes(), and core's helper uses it when it
- * exists and falls back to OpenSSL otherwise.
+ * Random bytes come from drupal_random_bytes(), which delegates to
+ * random_bytes() on PHP 7+. It dates from when production ran PHP 5.6, which
+ * has no random_bytes().
  *
  * @return string  64 hex chars (32 random bytes).
  */

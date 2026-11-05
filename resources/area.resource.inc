@@ -33,8 +33,8 @@ module_load_include('inc', 'myapi', 'includes/myapi.text');
  * these values are exposed. 'closed' and any area with no status row are
  * hidden, because "no status" is not a safe state to show.
  *
- * A const rather than define(): define() only takes arrays from PHP 7.0, and
- * production runs PHP 5.6.
+ * A const rather than define(): it dates from when production ran PHP 5.6,
+ * where define() does not take arrays.
  */
 const MYAPI_AREA_VISIBLE_STATUSES = ['active', 'maintenance'];
 

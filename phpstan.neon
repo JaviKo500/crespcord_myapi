@@ -26,12 +26,12 @@
 # and reports every dereference after it. Raising the level is a real piece of
 # work with a real payoff; it is not a knob to turn on a whim.
 #
-# Both are run in CI on PHP 7.4 — phpVersion below pins the analysis to the
+# Both are run in CI on PHP 8.3 — phpVersion below pins the analysis to the
 # version production runs, not the one the developer has.
 
 parameters:
     level: 1
-    phpVersion: 70433
+    phpVersion: 80336
 
     paths:
         - includes
