@@ -1399,3 +1399,27 @@ previsto, en orden de aparición, y dónde ha quedado recogido en esta guía:
 | La contraseña de la base de datos estaba también en `/root/.mysql_history` y en una copia vieja de `settings.php` | Se rotó sin mostrarla y se destruyeron todas las copias de la antigua | Paso 7.2 |
 | `rm -rf ~/backups/contrib-old-*` dio cientos de `Permission denied` | Los ficheros conservan el propietario `www-data` del docroot | Paso 7.3 (`sudo`) |
 | El reboot se hizo en horario de uso y Apache arrancó un segundo antes que FPM | Un usuario recibió un 503. Se añadió el *drop-in* de systemd para que Apache espere a FPM | Paso 7.4 |
+
+### 9.1 Después del cierre (2026-11-05)
+
+Una semana después de la apertura, sin incidencias en el servidor:
+
+- **Snapshots.** Los automáticos de Lightsail (diarios a las 07:16 UTC, se guardan los 7
+  últimos) existían todos desde el 2026-10-30, así que se borró el manual
+  `post-cierre-20261029`. Quedan los automáticos y `incident-evidence-20261028`.
+- **Volcados.** Se borraron `~/backups/db-20261028-1441.sql.gz` y
+  `~/backups/files-20261028-1441.tgz` (1,07 GB, con datos personales). El tar es de
+  `root`: hace falta `sudo rm`.
+- **Código.** El commit `7f77884` retira la regla de compatibilidad con PHP 5.6 de
+  `CLAUDE.md` y pasa el CI, Composer y PHPStan a PHP 8.3. La única vuelta atrás a 5.6
+  es ya restaurar un snapshot anterior a la ventana. Solo queda uno:
+  `incident-evidence-20261028` (09:13 UTC−5 del 28), y se borrará al cerrar la revisión de
+  seguridad.
+
+Pendiente:
+
+| Qué | Cuándo se da por cerrado |
+|---|---|
+| Revisión de seguridad: borrar los 105 `.php` vacíos de `modules/translation/tests/`, `modules/shortcut/admin.php`, `sites/default/files/kbpsvoai.php`, `cgi-bin` y los bloques `php7_module`/`lsapi_module` del `.htaccess`; auditar los usuarios administradores de Drupal y sus contraseñas | Hecho lo anterior, borrar `incident-evidence-20261028` y el paquete `~/crespcord-incident/evidence-*.tgz` del portátil |
+| Ver quién usa `PHPExcel`, que no compila en PHP 8 (paso 2.7) | Sustituido, o confirmado que nadie lo carga |
+| Anular en el backoffice el pago, el reclamo y el saldo del smoke test (paso 6.3) | Contabilidad del condominio de prueba corregida |
