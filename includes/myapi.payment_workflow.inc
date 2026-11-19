@@ -693,3 +693,48 @@ function myapi_payment_bot_fields_form_alter(array &$form) {
     }
   }
 }
+
+/**
+ * Delegate of myapi_form_pagos_node_form_alter() (myapi.module).
+ *
+ * Removes from the field_estado_pago select the status a payment must never
+ * jump to from the one it has stored:
+ *
+ * - Stored "Pendiente de verificar": "Completado" is removed. Approving a
+ *   payment means choosing "Nuevo", which fires the verification workflow
+ *   (balance update, forced "Completado", notification). A direct jump to
+ *   "Completado" skips all of it and leaves the unit balance wrong.
+ * - Stored "Completado": "Pendiente de verificar" is removed. Sending a
+ *   completed payment back to pending re-arms the workflow, and approving it
+ *   again would discount the same amount twice.
+ *
+ * The option is removed from #options, not hidden with CSS or #states: Drupal's
+ * form validation then rejects a hand-crafted POST with that value as an
+ * illegal choice, so the form path is enforced and not only shaped.
+ *
+ * Only an existing payment is touched (the stored value comes from the node
+ * loaded into the form). The new-payment form, any other stored status and a
+ * form without the select are left untouched.
+ *
+ * @param array $form
+ */
+function myapi_payment_status_form_alter(array &$form) {
+  if (empty($form['#node']->nid) || !isset($form['field_estado_pago']['#language'])) {
+    return;
+  }
+
+  $langcode = $form['field_estado_pago']['#language'];
+  if (!isset($form['field_estado_pago'][$langcode]['#options'])) {
+    return;
+  }
+
+  $forbidden = array(
+    MYAPI_PAYMENT_STATUS_PENDING => MYAPI_PAYMENT_STATUS_COMPLETED,
+    MYAPI_PAYMENT_STATUS_COMPLETED => MYAPI_PAYMENT_STATUS_PENDING,
+  );
+
+  $stored = myapi_payment_field_value($form['#node'], 'field_estado_pago');
+  if ($stored !== NULL && isset($forbidden[$stored])) {
+    unset($form['field_estado_pago'][$langcode]['#options'][$forbidden[$stored]]);
+  }
+}

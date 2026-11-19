@@ -214,6 +214,22 @@ changing `field_estado_pago`. Recipients therefore need permission to edit
 Text is fixed in Spanish, not translated via `myapi_t()` — same criterion as
 the notifications above.
 
+## Status options in the back-office form
+
+`myapi_payment_status_form_alter()` (called from
+`myapi_form_pagos_node_form_alter()`) trims the `field_estado_pago` select
+when an **existing** payment is edited, based on its stored status:
+
+| Stored status | Option removed | Why |
+|---|---|---|
+| `"Pendiente de verificar"` | `"Completado"` | Approving is done by choosing `"Nuevo"`, which fires this workflow. A direct jump to `"Completado"` skips the balance update and the notification. |
+| `"Completado"` | `"Pendiente de verificar"` | Sending it back to pending re-arms the workflow; approving it again would discount the amount twice. |
+
+Any other stored status, and the form for a new payment, keep every option.
+The option is removed from `#options`, so Drupal's form validation rejects a
+forged POST carrying it ("illegal choice"). The API endpoints do not go through
+this form and are not affected.
+
 ## Out of scope
 
 - A REST verification endpoint (`PUT /api/v1/payments/%/verify`).
