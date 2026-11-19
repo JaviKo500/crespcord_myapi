@@ -17,3 +17,4 @@ build/
 
 # Local deploy targets (production host), see scripts/deploy-target.sh.
 scripts/deploy.local.env
+.DS_Store
