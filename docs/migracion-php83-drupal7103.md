@@ -1416,10 +1416,16 @@ Una semana después de la apertura, sin incidencias en el servidor:
   `incident-evidence-20261028` (09:13 UTC−5 del 28), y se borrará al cerrar la revisión de
   seguridad.
 
+- **Docroot.** Los restos de 2024 ya no están: el paso 4.1 sustituyó `modules/` y el
+  `.htaccess` (con ellos, los 105 `.php` vacíos, `modules/shortcut/admin.php` y los
+  bloques `php7_module`/`lsapi_module`), y `kbpsvoai.php` se borró en el mismo paso. El
+  2026-11-05 se borró `cgi-bin` (vacío) y el docroot, que estaba en `777`, pasó a `755`:
+  era lo único escribible por cualquier usuario.
+
 Pendiente:
 
 | Qué | Cuándo se da por cerrado |
 |---|---|
-| Revisión de seguridad: borrar los 105 `.php` vacíos de `modules/translation/tests/`, `modules/shortcut/admin.php`, `sites/default/files/kbpsvoai.php`, `cgi-bin` y los bloques `php7_module`/`lsapi_module` del `.htaccess`; auditar los usuarios administradores de Drupal y sus contraseñas | Hecho lo anterior, borrar `incident-evidence-20261028` y el paquete `~/crespcord-incident/evidence-*.tgz` del portátil |
+| Revisión de seguridad: auditar los usuarios con permisos de administración y los módulos que ejecutan PHP; cambiar sus contraseñas, `$drupal_hash_salt` y `drupal_private_key`; cambiar los secretos que ya existían en 2024 (contraseña del SMTP y claves de contrib en `dr_variable`) | Hecho lo anterior, borrar `incident-evidence-20261028` y el paquete `~/crespcord-incident/evidence-*.tgz` del portátil |
 | Ver quién usa `PHPExcel`, que no compila en PHP 8 (paso 2.7) | Sustituido, o confirmado que nadie lo carga |
 | Anular en el backoffice el pago, el reclamo y el saldo del smoke test (paso 6.3) | Contabilidad del condominio de prueba corregida |
