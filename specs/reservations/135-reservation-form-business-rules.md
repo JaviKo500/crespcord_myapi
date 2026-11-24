@@ -1,6 +1,6 @@
 # SPEC 135 — Reglas de negocio en el formulario de reserva del back office
 
-> **Estado:** Implemented (desplegada y verificada manualmente en producción el 2026-11-24; permisos de `pagos` y `supervisor` aplazados, ver *Pendiente*) · **Depende de:** SPEC 35 (crear reserva), SPEC 41 (reservas que cruzan la medianoche), SPEC 45 (cupo simultáneo), SPEC 52 (formato de horas), SPEC 134 (selectores dependientes) · **Fecha:** 2026-11-24
+> **Estado:** Implemented (desplegada y verificada manualmente en producción el 2026-11-24; quedan sin hacer las dos pruebas de bloqueo con MySQL y aplazados los permisos de `pagos` y `supervisor`, ver *Pendiente*) · **Depende de:** SPEC 35 (crear reserva), SPEC 41 (reservas que cruzan la medianoche), SPEC 45 (cupo simultáneo), SPEC 52 (formato de horas), SPEC 134 (selectores dependientes) · **Fecha:** 2026-11-24
 >
 > **Objetivo:** Que una reserva guardada desde `node/add/reservation` o `node/{nid}/edit` cumpla las mismas reglas que una creada con `POST /api/v1/reservations`. **La única que el back office puede saltarse es el saldo de la vivienda.**
 
@@ -110,6 +110,7 @@ El bloqueo solo se toma si las reglas anteriores pasaron, y dura una petición.
 
 ## Pendiente
 
+- **Pruebas de bloqueo con MySQL.** Las dos de la matriz manual no se hicieron. Los tests unitarios afirman que el bloqueo se pide dentro de una transacción, antes de contar, y que se suelta; que de verdad hace esperar a otro escritor (formulario o app) no está comprobado en ningún entorno. Hacerlas en staging o, en producción, solo con un área del condominio de pruebas y sin dejar la sesión de MySQL abierta.
 - **Permiso de `pagos` y `supervisor` — aplazado.** En producción (consultado el 2026-11-24) ninguno de los dos roles tiene permisos sobre reservas, al contrario de lo que decía SPEC 134: solo `backend` (crear, editar, borrar) y `administrador edificio` (crear, editar cualquiera) los tienen. El cliente no ha confirmado todavía si deben crear reservas. Cuando lo confirme, el propietario los concederá a mano en `admin/people/permissions`; no requiere código, porque la validación de esta spec no distingue roles. Para estos dos roles nada recorta por condominio: verán viviendas, áreas y solicitantes de todo el sitio, igual que `backend`.
 
 ---
@@ -129,8 +130,8 @@ Manuales. Hechos directamente en **producción** el 2026-11-24 por el propietari
 
 - [x] Crear una reserva válida como `backend`: se guarda, aparece el aviso *«Reserva … se ha creado»* y la reserva está en el listado. (Confirma el formato de fecha y que la transacción se confirma.)
 - [x] **Vista previa** de una reserva válida: se muestra, y al pulsar **Guardar** se guarda. (Confirma que la caché del formulario se confirma por la función de cierre.)
-- [x] **Bloqueo.** En una sesión de MySQL: `BEGIN; SELECT nid FROM dr_node WHERE nid = <área> FOR UPDATE;`. Guardar en el navegador una reserva válida de esa área: la página se queda esperando. Al hacer `COMMIT;` en MySQL, la reserva se guarda.
-- [x] **Bloqueo, sentido contrario.** Con la misma sesión de MySQL bloqueando el área, crear una reserva de esa área desde la app: la petición espera hasta el `COMMIT;`.
+- [ ] **Bloqueo.** En una sesión de MySQL: `BEGIN; SELECT nid FROM dr_node WHERE nid = <área> FOR UPDATE;`. Guardar en el navegador una reserva válida de esa área: la página se queda esperando. Al hacer `COMMIT;` en MySQL, la reserva se guarda. — *No realizada (2026-11-24).*
+- [ ] **Bloqueo, sentido contrario.** Con la misma sesión de MySQL bloqueando el área, crear una reserva de esa área desde la app: la petición espera hasta el `COMMIT;`. — *No realizada (2026-11-24).*
 - [x] Crear una reserva encima de otra en un área de cupo 1: no guarda y marca **Hora de inicio**.
 - [x] Crear una reserva fuera del horario del área, en el pasado y en un área inactiva: no guarda y marca el campo de cada una.
 - [x] Crear una reserva para una vivienda con saldo pendiente: **sí** se guarda.
