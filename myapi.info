@@ -86,6 +86,7 @@ files[] = includes/myapi.bot_auth.inc
 files[] = resources/bot.resource.inc
 files[] = includes/myapi.reservations_admin.inc
 files[] = includes/myapi.providers_admin.inc
+files[] = includes/myapi.provider_account.inc
 files[] = includes/myapi.service_offers_admin.inc
 files[] = includes/myapi.service_ratings_admin.inc
 files[] = includes/myapi.payments_admin.inc

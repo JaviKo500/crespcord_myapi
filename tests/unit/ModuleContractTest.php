@@ -57,6 +57,7 @@ class ModuleContractTest extends TestCase {
     'admin/content/reservations/autocomplete/%/%',
     'admin/content/reservations/area-schedule/%',
     'admin/content/providers',
+    'admin/content/providers/user-autocomplete',
     'admin/content/service-offers',
     'admin/content/service-ratings',
     'admin/content/payments',

@@ -119,7 +119,7 @@ Si es una persona nueva:
 1. Entra en **Nuevo** → **Proveedor**. Se abre **Crear Proveedor**.
 2. Completa los campos obligatorios:
    - **Nombre comercial**: el nombre que verán los residentes.
-   - **Usuarios asociados**: escribe el nombre de la cuenta del paso 1 y elígela de la lista. Con **Añadir otro elemento** puedes vincular más cuentas si el proveedor tiene varias personas.
+   - **Usuarios asociados**: escribe el nombre, el usuario o el correo de la cuenta del paso 1 y elígela de la lista. Solo aparecen cuentas activas con el rol **proveedor**: si no sale, le falta el rol o la cuenta no existe. El enlace **Crear usuario** de la ayuda del campo abre **Añadir usuario** en otra pestaña sin perder lo que llevas escrito. Con **Añadir otro elemento** puedes vincular más cuentas si el proveedor tiene varias personas.
    - **Teléfono**.
    - **Descripción de servicios**: qué hace el proveedor.
    - **Caducidad de la habilitación**: año, mes, día, hora y minuto hasta los que el proveedor puede trabajar. **Viene rellenada con la fecha y hora de ahora: cámbiala**, o el proveedor quedará vencido en cuanto lo guardes.

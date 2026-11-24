@@ -877,6 +877,18 @@ function myapi_menu() {
     'file'             => 'includes/myapi.providers_admin.inc',
   ];
 
+  // Autocomplete of "Usuarios asociados" on the 'provider' node form: active
+  // accounts holding the 'proveedor' role, matched by user name, e-mail or
+  // name. The search string follows as extra path segments. Like the
+  // reservation one above, it answers Drupal's autocomplete JSON and not the
+  // API envelope.
+  $items['admin/content/providers/user-autocomplete'] = [
+    'page callback'    => 'myapi_provider_account_autocomplete',
+    'access callback'  => 'myapi_provider_account_access',
+    'type'             => MENU_CALLBACK,
+    'file'             => 'includes/myapi.provider_account.inc',
+  ];
+
   // Back-office service-offer listing (SPEC 131). Same access as the provider
   // directory just above: myapi_marketplace_admin_access().
   $items['admin/content/service-offers'] = [
@@ -1365,6 +1377,21 @@ function myapi_reservation_form_access() {
   return user_access('create reservation content')
     || user_access('edit any reservation content')
     || user_access('edit own reservation content');
+}
+
+/**
+ * Access callback of admin/content/providers/user-autocomplete.
+ *
+ * By PERMISSION, same criterion as myapi_reservation_form_access(): the route
+ * only exists to serve the 'provider' node form, so whoever Drupal lets into
+ * that form is exactly who may ask it.
+ *
+ * @return bool  TRUE when the current user may use the provider form.
+ */
+function myapi_provider_account_access() {
+  return user_access('create provider content')
+    || user_access('edit any provider content')
+    || user_access('edit own provider content');
 }
 
 /**
@@ -2409,6 +2436,20 @@ function myapi_form_reservation_node_form_alter(&$form, &$form_state, $form_id) 
 function myapi_form_area_node_form_alter(&$form, &$form_state, $form_id) {
   module_load_include('inc', 'myapi', 'includes/myapi.area_admin');
   myapi_area_form_alter($form);
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter() for the 'provider' node form.
+ *
+ * Glue only, same criterion as the alters above: the include is loaded and
+ * the actual work — pointing "Usuarios asociados" at the role-filtered
+ * autocomplete and linking its help text to the user creation page — is
+ * delegated entirely to includes/myapi.provider_account.inc.
+ */
+function myapi_form_provider_node_form_alter(&$form, &$form_state, $form_id) {
+  module_load_include('inc', 'myapi', 'includes/myapi.provider_role');
+  module_load_include('inc', 'myapi', 'includes/myapi.provider_account');
+  myapi_provider_account_form_alter($form, $form_state);
 }
 
 /**
