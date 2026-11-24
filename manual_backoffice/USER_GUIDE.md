@@ -14,7 +14,7 @@ El back office muestra cosas distintas según el rol de tu usuario:
 | Qué condominios ve | Todos. | Solo los condominios que tiene asignados. |
 | Pagos | Revisa, aprueba y anula pagos. Reporte de pagos y CSV. | No tiene acceso. |
 | Reclamos | Ve, edita y da seguimiento. | Igual, pero solo de sus condominios. |
-| Reservas y áreas | Listado y calendario. | Listado y calendario de sus condominios. Crea reservas y áreas. |
+| Reservas y áreas | Listado y calendario. Crea reservas y áreas. | Listado y calendario de sus condominios. Crea reservas y áreas. |
 | Servicios de proveedores | Solicitudes, proveedores, ofertas y calificaciones. | Solo consulta las solicitudes de sus condominios. |
 | Boletines | Crea boletines generales, por condominio o personalizados. | Crea boletines solo de tipo *Condominio*, para sus condominios. |
 

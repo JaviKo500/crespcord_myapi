@@ -2,7 +2,7 @@
 
 # 4. Reservas, calendario y áreas comunes
 
-Los residentes reservan las áreas comunes (asadero, piscina, gimnasio…) desde la app. Aquí se consultan esas reservas y, si eres administrador edificio, también se crean reservas y áreas.
+Los residentes reservan las áreas comunes (asadero, piscina, gimnasio…) desde la app. Aquí se consultan esas reservas y también se crean reservas y áreas.
 
 > **Backend** ve las reservas de todos los condominios. **Administrador edificio** ve solo las de sus condominios.
 
@@ -110,7 +110,9 @@ Aparece el aviso *«Reserva … ha sido actualizado»*. En **Listado de reservas
 
 - Cancela en lugar de borrar: la reserva cancelada queda en el historial con su motivo. El administrador edificio solo tiene los botones **Guardar** y **Vista previa**, sin **Eliminar**.
 
-## Crear una reserva (administrador edificio)
+## Crear una reserva
+
+> Backend y administrador edificio. Las capturas son de backend; el administrador edificio ve un menú más corto.
 
 **¿Para qué sirve?**
 Para reservar un área en nombre de un residente.
@@ -123,7 +125,7 @@ Menú **Navegación** → **Nuevo** → **Reserva**.
 ![Formulario Crear Reserva, con el autocompletado de Condominio](../assets/ae_reserva_nueva.png)
 
 1. **Título**.
-2. **Condominio**, **Vivienda**, **Solicitante** y **Área**: se rellenan escribiendo y eligiendo una sugerencia de la lista. Solo aparecen los de tus condominios. En la captura, al escribir *co* solo sale *Condominio jk*.
+2. **Condominio**, **Vivienda**, **Solicitante** y **Área**: se rellenan escribiendo y eligiendo una sugerencia de la lista. Si eres administrador edificio, solo aparecen los de tus condominios. En la captura, al escribir *prue* salen los dos condominios de prueba.
    - **Vivienda** y **Área** están bloqueadas hasta que eliges el **Condominio**, y solo ofrecen las de ese condominio.
    - **Solicitante** está bloqueado hasta que eliges la **Vivienda**, y solo ofrece al propietario y a los ocupantes de esa vivienda. Se busca por su nombre de usuario.
 3. **Fecha**: año, mes y día.
@@ -165,12 +167,14 @@ Aparece el aviso *«Reserva … se ha creado»* y se abre la reserva, en estado 
   - la vivienda ya tiene otra reserva **activa** en esa área;
   - el área es solo para propietarios (o solo para inquilinos) y el solicitante no lo es.
 - La única diferencia con la app: desde aquí **sí** puedes reservar para una vivienda con saldo pendiente.
-- Estas reglas se revisan al crear la reserva y al cambiarle la vivienda, el solicitante, el área, la fecha o las horas. **Cancelar** una reserva nunca las revisa.
+- Estas reglas se revisan al crear la reserva, al cambiarle la vivienda, el solicitante, el área, la fecha o las horas, y al volver a poner en *Confirmada* una reserva cancelada. **Cancelar** una reserva nunca las revisa.
 - Si el formulario marca dos problemas en el mismo campo, muestra el primero; al corregirlo y guardar, muestra el siguiente.
 - Si otra persona reserva el mismo horario a la vez (desde aquí o desde la app), solo entra una de las dos: la otra ve el aviso de que el horario se cruza con una reserva existente.
 - Si aparece *«No se pudo leer este campo para comprobar las reglas del área»*, revisa el valor de ese campo; si es correcto, avisa al equipo técnico.
 
-## Crear un área común (administrador edificio)
+## Crear un área común
+
+> Backend y administrador edificio.
 
 **¿Para qué sirve?**
 Para dar de alta un área reservable (piscina, asadero, cancha…) y fijar sus reglas de uso.
@@ -184,7 +188,7 @@ Menú **Navegación** → **Nuevo** → **Área**.
 
 1. **Nombre del área** y **Condominio** (obligatorio, con autocompletado).
 2. **Imagen**: PNG o JPG.
-3. **Hora de apertura** y **Hora de cierre**: cada una con dos listas, la hora (00 a 23) y los minutos (de 5 en 5).
+3. **Hora de apertura** y **Hora de cierre**: cada una con dos listas, la hora (00 a 23) y los minutos (de 5 en 5, más *59* para poder cerrar a las *23:59*).
 4. **Tamaño del bloque (min)**: viene en 60. **Duración máxima (min)**: viene en 120.
 5. **Estado del área**: *Activo*, *Cerrado* o *En Mantenimiento*.
 6. **Quién puede reservar**: *Ambos*, *Propietario* o *Arrendatario*.
@@ -198,10 +202,8 @@ Menú **Navegación** → **Nuevo** → **Área**.
 
 **Consideraciones**
 
-- Si falta el condominio o una hora no tiene el formato correcto, el formulario no se guarda y muestra los errores arriba, con el campo marcado en rojo:
+- Si falta un campo obligatorio, el formulario no se guarda y muestra el error arriba, con el campo marcado en rojo. En la captura falta el condominio: *«El campo Condominio es obligatorio.»*
 
-  ![Errores al crear un área](../assets/ae_area_error_hora.png)
+  ![Error al crear un área sin condominio](../assets/area_error_condominio.png)
 
-  - *«El campo Condominio es obligatorio.»*
-  - *«Hora de apertura: el formato debe ser HH:MM en 24 horas (por ejemplo 08:00 o 22:30).»* (en la captura se escribió *8:00*).
-  - *«Hora de cierre: …»* (en la captura se escribió *24:00*, que no se acepta).
+- Con las listas ya no se puede escribir mal una hora. Si al abrir un área antigua una hora aparece como cuadro de texto en lugar de listas, es que está mal guardada: escríbela en formato **HH:MM** de 24 horas (**08:00**, no *8:00*; *24:00* no se acepta). Mientras no lo esté, el formulario no se guarda y muestra *«Hora de apertura: el formato debe ser HH:MM en 24 horas (por ejemplo 08:00 o 22:30).»*

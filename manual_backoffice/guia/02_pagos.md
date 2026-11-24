@@ -132,7 +132,8 @@ En el reporte de pagos, ese pago ya aparece como **Completado**.
 
 **Consideraciones**
 
-- Elige **Nuevo**, no *Completado*. Al guardar en *Nuevo* el sistema aplica el pago y lo completa él solo.
+- Para aprobar se elige **Nuevo**: al guardar en *Nuevo* el sistema aplica el pago y lo completa él solo. Por eso, en un pago **Pendiente de verificar** la lista **Estado** no ofrece *Completado*.
+- En un pago ya **Completado**, la lista **Estado** no ofrece *Pendiente de verificar*: un pago aprobado no se puede devolver a pendiente.
 
 ## Anular un pago
 
