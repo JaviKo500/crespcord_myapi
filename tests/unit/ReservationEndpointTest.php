@@ -33,15 +33,17 @@ require_once __DIR__ . '/../../resources/reservation.resource.inc';
  * and only before the area's deadline — and each of the three answers a
  * different code, in a fixed order, so a client can tell them apart.
  *
- * WHAT THIS LAYER CANNOT REACH, stated once: myapi_request_body() reads
- * php://input, which a unit test cannot write. POST /api/v1/reservations takes
- * ALL of its input from that body, so only its first guard — "the body is
- * empty, so unit_id is missing" — is reachable here, and the eight ordered
- * validations behind it belong to tests/integration. What this class does
- * instead is exercise the pieces those validations are built out of, directly:
- * the time arithmetic, the active-reservation lookup, the balance rule and the
- * node builder. Same for the optional 'cancel_reason' of the cancel endpoint —
- * its validator is exercised as a pure function.
+ * WHAT THIS CLASS DOES NOT REACH, stated once: myapi_request_body() reads
+ * php://input and caches it in a function static, so a test in this process
+ * always sees an empty body. POST /api/v1/reservations takes ALL of its input
+ * from that body, so only its first guard — "the body is empty, so unit_id is
+ * missing" — is reachable here. The eight ordered validations behind it are
+ * covered by ReservationCreateRulesTest, which runs each case in its own
+ * process and serves php://input itself. What this class does is exercise the
+ * pieces those validations are built out of, directly: the time arithmetic,
+ * the active-reservation lookup, the balance rule and the node builder. The
+ * optional 'cancel_reason' of the cancel endpoint is still out of reach here,
+ * for the same reason — its validator is exercised as a pure function.
  */
 class ReservationEndpointTest extends TestCase {
 

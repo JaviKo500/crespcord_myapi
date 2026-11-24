@@ -1815,6 +1815,10 @@ function myapi_node_presave($node) {
  *   not fire either (only insert of a published node).
  */
 function myapi_node_insert($node) {
+  if ($node->type === 'reservation') {
+    myapi_reservation_form_saved();
+    return;
+  }
   if ($node->type === 'pagos') {
     module_load_include('inc', 'myapi', 'includes/myapi.payment_workflow');
     if (myapi_payment_field_value($node, 'field_estado_pago') === MYAPI_PAYMENT_STATUS_COMPLETED) {
@@ -1933,6 +1937,7 @@ function myapi_node_update($node) {
     return;
   }
   if ($node->type === 'reservation') {
+    myapi_reservation_form_saved();
     module_load_include('inc', 'myapi', 'includes/myapi.reservation_notification');
     if (myapi_reservation_is_cancellation_transition($node)) {
       myapi_reservation_notify_cancelled($node);
@@ -2397,6 +2402,21 @@ function myapi_form_pagos_node_form_alter(&$form, &$form_state, $form_id) {
 }
 
 /**
+ * Releases the area lock the reservation node form may be holding (SPEC 135).
+ *
+ * Called from myapi_node_insert() and myapi_node_update() once a 'reservation'
+ * is written. The lock is taken by myapi_reservation_hold_area_lock() during
+ * the form's validation, in includes/myapi.reservation_admin.inc; when that
+ * file was never loaded in this request — the reservation endpoints, drush, an
+ * import — there is nothing to release and nothing to load.
+ */
+function myapi_reservation_form_saved() {
+  if (function_exists('myapi_reservation_release_area_lock')) {
+    myapi_reservation_release_area_lock();
+  }
+}
+
+/**
  * Implements hook_node_validate().
  *
  * Glue only, dispatching by node type. Every type not named below falls
@@ -2406,7 +2426,7 @@ function myapi_form_pagos_node_form_alter(&$form, &$form_state, $form_id) {
  * - 'boletin' — a building admin may only publish 'Condominio' bulletins of
  *   their assigned condominiums (SPEC 49), in
  *   includes/myapi.building_admin.inc. Every other user passes through.
- * - 'reservation' — three validations, in this order:
+ * - 'reservation' — four validations, in this order:
  *   1. HH:MM format of field_start_time / field_end_time (SPEC 52), in
  *      includes/myapi.reservation_admin.inc. Applies to EVERY user.
  *   2. the unit and the area must belong to the condominium, and the requester
@@ -2415,6 +2435,12 @@ function myapi_form_pagos_node_form_alter(&$form, &$form_state, $form_id) {
  *   3. a building admin may only book for a person they can see and on a unit
  *      of their condominiums (SPEC 51), in
  *      includes/myapi.building_admin_user.inc. Every other user passes through.
+ *   4. the business rules POST /api/v1/reservations applies — who may reserve
+ *      the area, its status, a start in the past, its opening window, its
+ *      maximum duration, its concurrent capacity and one active reservation
+ *      per unit and area — except the balance of the unit (SPEC 135), in
+ *      includes/myapi.reservation_admin.inc. Applies to EVERY user, and only
+ *      when the three above raised nothing.
  *   The two that apply to everybody go first. form_set_error() accumulates, so
  *   a building admin who submits a malformed time AND a unit outside their
  *   condominiums sees both messages at once. Validations 2 and 3 can both
@@ -2449,6 +2475,8 @@ function myapi_node_validate($node, $form, &$form_state) {
 
       module_load_include('inc', 'myapi', 'includes/myapi.building_admin_user');
       myapi_building_admin_validate_reservation($node, $form, $form_state);
+
+      myapi_reservation_validate_rules($node, $form, $form_state);
       return;
   }
 }

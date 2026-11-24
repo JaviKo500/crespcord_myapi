@@ -96,7 +96,7 @@ function myapi_reservation_effective_capacity($raw) {
  *
  * Pure function (no DB, no Drupal). It receives intervals ALREADY projected
  * onto the absolute-minute axis of SPEC 41 — see
- * myapi_reservation_abs_interval() in resources/reservation.resource.inc — so
+ * myapi_reservation_abs_interval() in includes/myapi.reservation_rules.inc — so
  * midnight crossings are already resolved and need no special case here.
  *
  * @param array $intervals   List of [start_abs, end_abs] pairs, absolute

@@ -39,9 +39,10 @@
  * validation.
  *
  * WHAT IT DOES NOT DO. Availability. Overlap with another reservation, the
- * area's concurrent capacity, its opening window and a date in the past are
- * still checked on POST /api/v1/reservations only — the gap written down in
- * includes/myapi.reservation_admin.inc is exactly as open as it was.
+ * area's concurrent capacity, its opening window and a date in the past were
+ * out of this file's scope and arrived with SPEC 135, in
+ * myapi_reservation_validate_rules() (includes/myapi.reservation_admin.inc),
+ * which runs after this validation and only when it raised nothing.
  *
  * POST /api/v1/reservations is untouched: the endpoint saves its node
  * programmatically and never reaches a form alter or hook_node_validate().

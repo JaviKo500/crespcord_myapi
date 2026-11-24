@@ -32,8 +32,9 @@
  */
 
 // Reservation field readers (myapi_reservation_node_value() /
-// myapi_reservation_node_target_id()) live in the reservation resource. They are
-// reused instead of repeating the LANGUAGE_NONE unwrapping, exactly as
+// myapi_reservation_node_target_id()) live in includes/myapi.reservation_rules.inc
+// since SPEC 135, and the resource loads that file. They are reused instead of
+// repeating the LANGUAGE_NONE unwrapping, exactly as
 // includes/myapi.reservation_calendar.inc reuses myapi_reservation_valid_date().
 module_load_include('inc', 'myapi', 'resources/reservation.resource');
 

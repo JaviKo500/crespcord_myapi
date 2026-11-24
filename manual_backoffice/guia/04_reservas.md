@@ -153,6 +153,19 @@ Aparece el aviso *«Reserva … se ha creado»* y se abre la reserva, en estado 
 - Si cambias el **Condominio**, se vacían **Vivienda**, **Solicitante** y **Área**. Si cambias la **Vivienda**, se vacía el **Solicitante**.
 - Si la vivienda o el área no son del condominio, o el solicitante no vive en la vivienda, la reserva no se guarda y el formulario marca el campo en rojo.
 - Las horas siguen la misma regla que en las áreas (ver abajo): *8:00* o *24:00* no son válidas.
+- La reserva tiene que cumplir las reglas del área, igual que si el residente la hiciera desde la app. No se guarda, y el formulario marca el campo en rojo, si:
+  - el área no está **activa**;
+  - la fecha y la hora de inicio ya pasaron;
+  - el horario queda fuera del **horario de atención** del área, o cruza la medianoche en un área que cierra el mismo día;
+  - dura más que la **duración máxima** del área;
+  - se cruza con otra reserva y el área ya no tiene **cupo** en ese horario;
+  - la vivienda ya tiene otra reserva **activa** en esa área;
+  - el área es solo para propietarios (o solo para inquilinos) y el solicitante no lo es.
+- La única diferencia con la app: desde aquí **sí** puedes reservar para una vivienda con saldo pendiente.
+- Estas reglas se revisan al crear la reserva y al cambiarle la vivienda, el solicitante, el área, la fecha o las horas. **Cancelar** una reserva nunca las revisa.
+- Si el formulario marca dos problemas en el mismo campo, muestra el primero; al corregirlo y guardar, muestra el siguiente.
+- Si otra persona reserva el mismo horario a la vez (desde aquí o desde la app), solo entra una de las dos: la otra ve el aviso de que el horario se cruza con una reserva existente.
+- Si aparece *«No se pudo leer este campo para comprobar las reglas del área»*, revisa el valor de ese campo; si es correcto, avisa al equipo técnico.
 
 ## Crear un área común (administrador edificio)
 

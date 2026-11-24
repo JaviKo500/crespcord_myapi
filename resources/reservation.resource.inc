@@ -22,6 +22,9 @@ module_load_include('inc', 'myapi', 'includes/myapi.token');
 module_load_include('inc', 'myapi', 'includes/myapi.auth');
 module_load_include('inc', 'myapi', 'includes/myapi.unit_access');
 module_load_include('inc', 'myapi', 'includes/myapi.reservation_query');
+// The rules a reservation must respect, the field readers and the clock
+// arithmetic are shared with the back-office node form since SPEC 135.
+module_load_include('inc', 'myapi', 'includes/myapi.reservation_rules');
 
 /**
  * Dispatcher for /api/v1/units/%/reservations.
@@ -93,50 +96,6 @@ function myapi_reservation_details_dispatch($reservation_id) {
   else {
     myapi_error('method_not_allowed', 405);
   }
-}
-
-/**
- * Reads the first 'value' of a single-value Field API field on a node.
- *
- * @param object $node   The node to read from.
- * @param string $field  The field machine name (e.g. 'field_area_status').
- *
- * @return mixed  The stored value, or NULL if the field has no value.
- */
-function myapi_reservation_node_value($node, $field) {
-  return isset($node->{$field}[LANGUAGE_NONE][0]['value'])
-    ? $node->{$field}[LANGUAGE_NONE][0]['value']
-    : NULL;
-}
-
-/**
- * Reads the first 'target_id' of a single-value entity-reference field.
- *
- * @param object $node   The node to read from.
- * @param string $field  The field machine name (e.g. 'field_condominio').
- *
- * @return int|NULL  The referenced entity id, or NULL if the field is empty.
- */
-function myapi_reservation_node_target_id($node, $field) {
-  return isset($node->{$field}[LANGUAGE_NONE][0]['target_id'])
-    ? $node->{$field}[LANGUAGE_NONE][0]['target_id']
-    : NULL;
-}
-
-/**
- * Reads field_date's plain 'Y-m-d', regardless of whether $node is the
- * in-memory node built by myapi_reservation_build_node() (value already
- * 'Y-m-d') or one freshly loaded from the DB (Date field, full
- * 'Y-m-d H:i:s' value) — same truncation as every SQL read of this field
- * (SUBSTR(field_date_value, 1, 10)) in this file.
- *
- * @param object $node  The reservation node to read from.
- *
- * @return string|NULL  'Y-m-d', or NULL if the field has no value.
- */
-function myapi_reservation_node_date($node) {
-  $value = myapi_reservation_node_value($node, 'field_date');
-  return $value !== NULL ? substr($value, 0, 10) : NULL;
 }
 
 /**
@@ -222,33 +181,14 @@ function myapi_reservation_create() {
   // 1. Role vs field_who_can_reserve: 'owner'/'tenant' must match the caller's
   // relation to the unit; any other value (including 'both' or empty) allows
   // either role.
-  $who_can_reserve = myapi_reservation_node_value($area, 'field_who_can_reserve');
-  if ($who_can_reserve === 'owner' && !in_array($unit_id, myapi_user_owned_unit_nids($uid))) {
-    myapi_error('reservation_role_not_allowed', 403);
-  }
-  if ($who_can_reserve === 'tenant' && !in_array($unit_id, myapi_user_occupied_unit_nids($uid))) {
+  if (!myapi_reservation_requester_may_reserve(myapi_reservation_node_value($area, 'field_who_can_reserve'), $unit_id, $uid)) {
     myapi_error('reservation_role_not_allowed', 403);
   }
 
-  // 2. field_area_status must be exactly 'active'.
-  if (myapi_reservation_node_value($area, 'field_area_status') !== 'active') {
-    myapi_error('area_not_active', 409);
-  }
-
-  // 3. date + start_time must not be in the past (site timezone, comparable
-  // with REQUEST_TIME since Drupal sets the PHP default timezone at bootstrap).
-  // Operates on the SPEC 41 normalized $date, so an early-morning slot moved to
-  // D+1 (e.g. 01:00 in a 12:00-02:00 area, booked the evening of D) is no
-  // longer wrongly rejected as being in the past.
-  $start_timestamp = strtotime($date . ' ' . $start_time . ':00');
-  if ($start_timestamp === FALSE || $start_timestamp < REQUEST_TIME) {
-    myapi_error('invalid_field', 422, ['@field' => 'date']);
-  }
-
-  // end_time is computed once here, before validations 4 and 5 both need it.
-  // add_minutes() does not wrap at 24:00, so a range crossing midnight surfaces
-  // as end_minutes >= 1440 (e.g. '25:00' -> 1500), which the checks below rely
-  // on. $start_minutes was parsed at the normalization step above.
+  // end_time is computed once here. add_minutes() does not wrap at 24:00, so a
+  // range crossing midnight surfaces as end_minutes >= 1440 (e.g. '25:00' ->
+  // 1500), which validations 4 to 6 rely on. $start_minutes was parsed at the
+  // normalization step above.
   $end_time = myapi_reservation_add_minutes($start_time, $duration_minutes);
   $end_minutes = myapi_reservation_parse_time($end_time);
   // Value persisted on the node: the wrapped clock time (mod 24h). A crossing
@@ -258,26 +198,33 @@ function myapi_reservation_create() {
   // $start_minutes/$end_minutes above.
   $end_time_stored = myapi_reservation_wrap_time($end_minutes);
 
-  // 4. Opening hours (SPEC 41). First the midnight-crossing cut: a range that
-  // crosses midnight in an area that does NOT wrap past midnight gets its own
-  // error, so the client can tell it apart from a plain out-of-hours request.
-  // Then the window itself — an area missing its open/close row fails closed,
-  // and a wrapping area is checked against the extended window [open, close+24h]
-  // inside myapi_reservation_within_hours(). $open_minutes/$close_minutes were
-  // parsed at the normalization step above.
-  if (myapi_reservation_crosses_disallowed($start_minutes, $end_minutes, $open_minutes, $close_minutes)) {
-    myapi_error('reservation_crosses_midnight', 422);
-  }
-  if ($open_minutes === NULL || $close_minutes === NULL
-    || !myapi_reservation_within_hours($start_minutes, $end_minutes, $open_minutes, $close_minutes)) {
-    myapi_error('reservation_outside_hours', 422);
-  }
-
-  // 5. duration_minutes <= field_max_minutes. An area with no max_minutes row
-  // has no limit to enforce.
-  $max_minutes = myapi_reservation_node_value($area, 'field_max_minutes');
-  if ($max_minutes !== NULL && $duration_minutes > (int) $max_minutes) {
-    myapi_error('reservation_duration_exceeded', 422);
+  // 2-5. The area's own rules, in this order: field_area_status must be
+  // exactly 'active'; date + start_time must not be in the past (site
+  // timezone, on the SPEC 41 normalized $date, so an early-morning slot moved
+  // to D+1 is not wrongly rejected); the range must not cross midnight in an
+  // area that closes the same day and must fit the opening window, an area
+  // missing its open/close row failing closed (SPEC 41); and duration_minutes
+  // must not exceed field_max_minutes, when the area declares one.
+  //
+  // The rules themselves live in myapi_reservation_schedule_violations(),
+  // shared with the back-office form (SPEC 135). The endpoint aborts on the
+  // first one, so the order of the list is the order of the contract.
+  $violations = myapi_reservation_schedule_violations(
+    myapi_reservation_node_value($area, 'field_area_status'),
+    $date,
+    $start_time,
+    $end_minutes,
+    $open_minutes,
+    $close_minutes,
+    myapi_reservation_node_value($area, 'field_max_minutes'),
+    REQUEST_TIME
+  );
+  if ($violations) {
+    $violation = reset($violations);
+    if ($violation === 'reservation_in_past') {
+      myapi_error('invalid_field', 422, ['@field' => 'date']);
+    }
+    myapi_error($violation, $violation === 'area_not_active' ? 409 : 422);
   }
 
   // 6-8. Overlap, active-reservation and balance checks, plus the insert
@@ -290,12 +237,7 @@ function myapi_reservation_create() {
   // underlying tables to use the InnoDB engine (Drupal 7's default).
   $transaction = db_transaction();
 
-  db_select('node', 'n')
-    ->fields('n', ['nid'])
-    ->condition('n.nid', $area_id)
-    ->forUpdate()
-    ->execute()
-    ->fetchField();
+  myapi_reservation_lock_area($area_id);
 
   // 6. Concurrent capacity of the area (SPEC 45). Until SPEC 45 a single
   // overlap rejected the request; the area now declares in
@@ -310,34 +252,13 @@ function myapi_reservation_create() {
   // exceedable. With capacity 1 the race already existed; with capacity N it is
   // easier to hit, because more legitimate requests compete for the same slot.
   $capacity = myapi_reservation_effective_capacity(myapi_reservation_node_value($area, 'field_concurrent_reservations'));
-  $intervals = myapi_reservation_fetch_abs_intervals($area_id, $date, $start_minutes, $end_minutes);
-  list($cand_start_abs, $cand_end_abs) = myapi_reservation_abs_interval($date, $start_minutes, $end_minutes);
-
-  // The peak can never exceed the number of reservations overlapping the
-  // candidate, so fewer overlaps than slots is already an accept. Exact, not an
-  // approximation: it just keeps the happy path — most requests — out of the
-  // O(n^2) scan. Same half-open criterion as everywhere else (SPEC 35).
-  $overlapping = 0;
-  foreach ($intervals as $interval) {
-    if ($interval[0] < $cand_end_abs && $interval[1] > $cand_start_abs) {
-      $overlapping++;
-    }
-  }
-
-  if ($overlapping >= $capacity) {
-    // The +1 is the candidate itself: rejecting means it would push some
-    // instant of its own window above the area's capacity. Counting the
-    // reservations that overlap would be wrong here — two bookings can both
-    // overlap the candidate and never coincide with each other.
-    $peak = myapi_reservation_peak_concurrency($intervals, $cand_start_abs, $cand_end_abs);
-    if ($peak + 1 > $capacity) {
-      $transaction->rollback();
-      // Capacity-1 areas — all of them before SPEC 45 — keep the exact
-      // error_code they already returned, so a behaviour that did not change
-      // does not force a client release. The new code only shows up in
-      // situations that could not happen before.
-      myapi_error($capacity === 1 ? 'reservation_overlap' : 'area_capacity_full', 409);
-    }
+  if (myapi_reservation_slot_is_full($area_id, $capacity, $date, $start_minutes, $end_minutes)) {
+    $transaction->rollback();
+    // Capacity-1 areas — all of them before SPEC 45 — keep the exact
+    // error_code they already returned, so a behaviour that did not change
+    // does not force a client release. The new code only shows up in
+    // situations that could not happen before.
+    myapi_error($capacity === 1 ? 'reservation_overlap' : 'area_capacity_full', 409);
   }
 
   // 7. Only one active 'confirmed' reservation per unit+area (start not yet
@@ -348,7 +269,9 @@ function myapi_reservation_create() {
   }
 
   // 8. Balance: current debt blocks new reservations unless the most recent
-  // sent receipt shows no previous balance due.
+  // sent receipt shows no previous balance due. The ONLY validation of this
+  // list the back-office form does not apply (SPEC 135): an operator may book
+  // for a unit in debt.
   if (!myapi_reservation_check_balance($unit_id)) {
     $transaction->rollback();
     myapi_error('insufficient_balance', 403);
@@ -576,113 +499,6 @@ function myapi_reservation_details($reservation_id) {
   $cancel_deadline_minutes = $area ? myapi_reservation_node_value($area, 'field_cancel_deadline_minutes') : NULL;
 
   myapi_respond(['reservation' => myapi_reservation_build_item_from_node($node, $area_title, $area_category, $cancel_deadline_minutes)], 200);
-}
-
-/**
- * Fetches the 'confirmed' reservations of an area that could touch a candidate
- * on day D, projected onto the absolute minute axis (SPEC 41).
- *
- * Until SPEC 45 this was myapi_reservation_has_overlap() and answered a
- * yes/no question. Validation 6 now enforces a capacity of N simultaneous
- * reservations instead of rejecting on the first overlap, so it needs the
- * INTERVALS themselves to compute the concurrency peak. The query is unchanged;
- * only what is done with the rows is.
- *
- * Each reservation is projected onto an absolute axis anchored at the midnight
- * of its own field_date (myapi_reservation_abs_interval), so same-day,
- * midnight-crossing and early-morning reservations all compare uniformly. To
- * catch the tails that a single-date query would miss, reservations are fetched
- * for three days: field_date IN (D-1, D, D+1). D-1 covers a previous-day
- * reservation whose tail runs past midnight into $date; D+1 covers an
- * early-morning reservation of the next day that a crossing candidate could
- * hit. The per-area/day volume stays low, so interval math is done in PHP.
- *
- * The candidate's own range is NOT used to filter here: the caller projects it
- * with myapi_reservation_abs_interval() and hands both to
- * myapi_reservation_peak_concurrency(), which applies the half-open criterion
- * (unchanged from SPEC 35, so back-to-back reservations still do not overlap).
- * $start_minutes/$end_minutes are kept in the signature per SPEC 45 so the call
- * site reads the same as before the rename.
- *
- * @param int    $area_id       The 'area' nid.
- * @param string $date          Normalized 'YYYY-MM-DD' of the candidate (D).
- * @param int    $start_minutes Candidate start, minutes since midnight.
- * @param int    $end_minutes   Candidate end, minutes since midnight (unbounded
- *                              when the candidate crosses midnight).
- *
- * @return array  List of [start_abs, end_abs] pairs, absolute minutes, one per
- *                confirmed reservation of the three days. Empty when none.
- */
-function myapi_reservation_fetch_abs_intervals($area_id, $date, $start_minutes, $end_minutes) {
-  $prev = date('Y-m-d', strtotime($date . ' -1 day'));
-  $next = date('Y-m-d', strtotime($date . ' +1 day'));
-
-  $query = db_select('node', 'n')
-    ->condition('n.type', 'reservation')
-    ->condition('n.status', 1);
-
-  $query->innerJoin('field_data_field_area', 'fa', "fa.entity_id = n.nid AND fa.entity_type = 'node' AND fa.deleted = 0");
-  $query->condition('fa.field_area_target_id', $area_id);
-
-  $query->innerJoin('field_data_field_reservation_status', 'fst', "fst.entity_id = n.nid AND fst.entity_type = 'node' AND fst.deleted = 0");
-  $query->condition('fst.field_reservation_status_value', 'confirmed');
-
-  $query->innerJoin('field_data_field_date', 'fd', "fd.entity_id = n.nid AND fd.entity_type = 'node' AND fd.deleted = 0");
-  $query->where('SUBSTR(fd.field_date_value, 1, 10) IN (:dates)', [':dates' => [$prev, $date, $next]]);
-  $query->addField('fd', 'field_date_value', 'date');
-
-  $query->innerJoin('field_data_field_start_time', 'fs', "fs.entity_id = n.nid AND fs.entity_type = 'node' AND fs.deleted = 0");
-  $query->addField('fs', 'field_start_time_value', 'start_time');
-
-  $query->innerJoin('field_data_field_end_time', 'fe', "fe.entity_id = n.nid AND fe.entity_type = 'node' AND fe.deleted = 0");
-  $query->addField('fe', 'field_end_time_value', 'end_time');
-
-  $intervals = [];
-  $rows = $query->execute()->fetchAll();
-  foreach ($rows as $existing) {
-    $existing_date = substr($existing->date, 0, 10);
-    $existing_start = myapi_reservation_parse_time($existing->start_time);
-    $existing_end = myapi_reservation_parse_time($existing->end_time);
-    $intervals[] = myapi_reservation_abs_interval($existing_date, $existing_start, $existing_end);
-  }
-
-  return $intervals;
-}
-
-/**
- * Checks whether a unit already has a 'confirmed' reservation for the same
- * area whose start date/time has not passed yet.
- *
- * @param int $unit_id  The 'vivienda' nid.
- * @param int $area_id  The 'area' nid.
- *
- * @return bool  TRUE when such a reservation exists.
- */
-function myapi_reservation_has_active_reservation($unit_id, $area_id) {
-  $today = date('Y-m-d', REQUEST_TIME);
-  $now = date('H:i', REQUEST_TIME);
-
-  $query = db_select('node', 'n')
-    ->condition('n.type', 'reservation')
-    ->condition('n.status', 1);
-
-  $query->innerJoin('field_data_field_unit', 'fu', "fu.entity_id = n.nid AND fu.entity_type = 'node' AND fu.deleted = 0");
-  $query->condition('fu.field_unit_target_id', $unit_id);
-
-  $query->innerJoin('field_data_field_area', 'fa', "fa.entity_id = n.nid AND fa.entity_type = 'node' AND fa.deleted = 0");
-  $query->condition('fa.field_area_target_id', $area_id);
-
-  $query->innerJoin('field_data_field_reservation_status', 'fst', "fst.entity_id = n.nid AND fst.entity_type = 'node' AND fst.deleted = 0");
-  $query->condition('fst.field_reservation_status_value', 'confirmed');
-
-  $query->innerJoin('field_data_field_date', 'fd', "fd.entity_id = n.nid AND fd.entity_type = 'node' AND fd.deleted = 0");
-  $query->innerJoin('field_data_field_start_time', 'fs', "fs.entity_id = n.nid AND fs.entity_type = 'node' AND fs.deleted = 0");
-  $query->where(
-    '(SUBSTR(fd.field_date_value, 1, 10) > :today) OR (SUBSTR(fd.field_date_value, 1, 10) = :today AND fs.field_start_time_value > :now)',
-    [':today' => $today, ':now' => $now]
-  );
-
-  return (bool) $query->countQuery()->execute()->fetchField();
 }
 
 /**
@@ -1023,196 +839,6 @@ function myapi_reservation_apply_range($query, $from, $to, $time_from = NULL, $t
       $query->where('SUBSTR(fdate.field_date_value, 1, 10) <= :date_to', [':date_to' => $to]);
     }
   }
-}
-
-/**
- * Converts an 'HH:MM' time string into minutes since midnight.
- *
- * Assumes $hhmm already matches the 'HH:MM' 24h format (validated at the
- * request-body stage before this is ever called).
- *
- * @param string $hhmm  Time in 'HH:MM' format.
- *
- * @return int  Minutes since midnight (0-1439).
- */
-function myapi_reservation_parse_time($hhmm) {
-  list($hours, $minutes) = explode(':', $hhmm);
-  return ((int) $hours) * 60 + (int) $minutes;
-}
-
-/**
- * Adds a number of minutes to an 'HH:MM' time string.
- *
- * Deliberately does not wrap around at 24:00: a result of 24:00 or later is
- * returned as-is (e.g. '25:30'). The midnight crossing is derived afterwards
- * by comparison (SPEC 41): a same-day area rejects it via
- * myapi_reservation_crosses_disallowed(), while an area that closes after
- * midnight accepts it through the extended-window check.
- *
- * @param string $hhmm     Start time in 'HH:MM' format.
- * @param int    $minutes  Minutes to add (duration_minutes from the body).
- *
- * @return string  Resulting time in 'HH:MM' format, hours unbounded.
- */
-function myapi_reservation_add_minutes($hhmm, $minutes) {
-  $total = myapi_reservation_parse_time($hhmm) + (int) $minutes;
-  $hours = (int) ($total / 60);
-  $mins = $total % 60;
-  return sprintf('%02d:%02d', $hours, $mins);
-}
-
-/**
- * Wraps a minutes-since-midnight value back into a 24h 'HH:MM' clock string.
- *
- * The counterpart to myapi_reservation_add_minutes(): where that returns the
- * unbounded value ('26:00') needed by the opening-hours math, this returns the
- * clock time actually persisted on the node ('02:00'), so a range crossing
- * midnight is stored as a real time-of-day and its crossing is derived
- * downstream by comparison (end <= start) — the convention the reservation
- * list and GET /api/v1/areas/%/availability (SPEC 40) both rely on.
- *
- * Pure arithmetic helper: no DB, no Drupal calls.
- *
- * @param int $minutes  Minutes since midnight, possibly >= 1440.
- *
- * @return string  Clock time in 'HH:MM', wrapped into [00:00, 24:00).
- */
-function myapi_reservation_wrap_time($minutes) {
-  $wrapped = (((int) $minutes % 1440) + 1440) % 1440;
-  return sprintf('%02d:%02d', (int) ($wrapped / 60), $wrapped % 60);
-}
-
-/**
- * Determines whether an area's opening hours wrap past midnight.
- *
- * An area "wraps" when its close time is at or before its open time on the
- * clock (e.g. open 12:00, close 02:00), meaning it stays open into the early
- * hours of the next calendar day. A normal area (close strictly after open)
- * never wraps.
- *
- * Pure arithmetic helper: no DB, no Drupal calls, unit-testable in isolation
- * (SPEC 41).
- *
- * @param int $open_min   field_open_time as minutes since midnight.
- * @param int $close_min  field_close_time as minutes since midnight.
- *
- * @return bool  TRUE when the area closes after midnight.
- */
-function myapi_reservation_area_wraps($open_min, $close_min) {
-  return $close_min <= $open_min;
-}
-
-/**
- * Normalizes the clock day (field_date) a reservation is stored under.
- *
- * The client always sends date = D (the day it shows on the calendar). When
- * the area wraps past midnight AND the start falls in the early-morning tail
- * [00:00, close) — e.g. a 01:00 start in a 12:00-02:00 area — the reservation
- * actually belongs to the next calendar day, so field_date is normalized to
- * D+1 (same clock-day convention SPEC 40 already uses to show the crossing).
- * Every other case keeps D: a non-wrapping area never normalizes, and neither
- * does the dead gap between close and open (e.g. 05:00 in 12:00-02:00, where
- * start_min < close_min is false), which correctly stays out of hours.
- *
- * Pure arithmetic + date() helper: no DB, no Drupal calls (SPEC 41).
- *
- * @param string $date       'YYYY-MM-DD' as sent by the client (day D).
- * @param int    $start_min  Reservation start, minutes since midnight.
- * @param int    $open_min   field_open_time as minutes since midnight.
- * @param int    $close_min  field_close_time as minutes since midnight.
- *
- * @return string  'YYYY-MM-DD': D+1 when normalized, otherwise D.
- */
-function myapi_reservation_effective_date($date, $start_min, $open_min, $close_min) {
-  if (myapi_reservation_area_wraps($open_min, $close_min) && $start_min < $close_min) {
-    return date('Y-m-d', strtotime($date . ' +1 day'));
-  }
-  return $date;
-}
-
-/**
- * Projects a reservation onto an absolute minute axis anchored at the midnight
- * of its stored field_date.
- *
- * The end is carried one day forward when it wraps below the start
- * (end_min <= start_min, the derived-cross representation of a stored
- * reservation such as 20:00 -> 02:00), so a candidate and every existing
- * reservation can be compared on a single continuous axis regardless of
- * whether either crosses midnight (SPEC 41, validation 6).
- *
- * Pure arithmetic + strtotime() helper: no DB, no Drupal calls.
- *
- * @param string $date       'YYYY-MM-DD' the reservation is stored under.
- * @param int    $start_min  Start, minutes since midnight.
- * @param int    $end_min    End, minutes since midnight (may be <= start_min
- *                           when the stored end already wrapped past midnight).
- *
- * @return array  [start_abs, end_abs] in absolute minutes.
- */
-function myapi_reservation_abs_interval($date, $start_min, $end_min) {
-  $base = (int) (strtotime($date . ' 00:00:00') / 60);
-  $end_abs = $base + $end_min + ($end_min <= $start_min ? 1440 : 0);
-  return [$base + $start_min, $end_abs];
-}
-
-/**
- * Tells whether a candidate range crosses midnight in an area that does NOT
- * wrap — the case that must be rejected with reservation_crosses_midnight
- * before the opening-hours window is even evaluated (SPEC 41, validation 4).
- *
- * A range crosses midnight when its end lands at or past 24:00 (end_min >=
- * 1440, the unbounded representation produced by
- * myapi_reservation_add_minutes()) or wraps below its start (end_min <=
- * start_min). When the area itself wraps past midnight, crossing is legal, so
- * this returns FALSE.
- *
- * Pure arithmetic helper: no DB, no Drupal calls.
- *
- * @param int $start_min  Candidate start, minutes since midnight.
- * @param int $end_min    Candidate end, minutes since midnight (unbounded).
- * @param int $open_min   field_open_time as minutes since midnight.
- * @param int $close_min  field_close_time as minutes since midnight.
- *
- * @return bool  TRUE when the range crosses midnight but the area closes the
- *               same clock day.
- */
-function myapi_reservation_crosses_disallowed($start_min, $end_min, $open_min, $close_min) {
-  if (myapi_reservation_area_wraps($open_min, $close_min)) {
-    return FALSE;
-  }
-  return $end_min >= 1440 || $end_min <= $start_min;
-}
-
-/**
- * Checks whether a candidate range falls within an area's opening hours,
- * handling areas that wrap past midnight (SPEC 41, validation 4).
- *
- * A non-wrapping area keeps the original linear check (start at or after open,
- * end at or before close). A wrapping area is evaluated on an extended axis
- * [open_min, close_min + 1440]: a start in the early-morning tail
- * ([00:00, close)) is projected forward by 24h, and the end is projected onto
- * that same frame as start_eff + (end_min - start_min) — for the candidate,
- * end_min - start_min is exactly the duration, so this rejects a tail start
- * whose duration overruns the projected close (e.g. 01:00 + 120min -> 03:00 in
- * a 12:00-02:00 area) instead of wrongly accepting it.
- *
- * Pure arithmetic helper: no DB, no Drupal calls.
- *
- * @param int $start_min  Candidate start, minutes since midnight.
- * @param int $end_min    Candidate end, minutes since midnight (unbounded).
- * @param int $open_min   field_open_time as minutes since midnight.
- * @param int $close_min  field_close_time as minutes since midnight.
- *
- * @return bool  TRUE when the range fits inside the area's opening hours.
- */
-function myapi_reservation_within_hours($start_min, $end_min, $open_min, $close_min) {
-  if (!myapi_reservation_area_wraps($open_min, $close_min)) {
-    return $start_min >= $open_min && $end_min <= $close_min;
-  }
-
-  $start_eff = ($start_min < $close_min) ? $start_min + 1440 : $start_min;
-  $end_eff = $start_eff + ($end_min - $start_min);
-  return $start_eff >= $open_min && $end_eff <= $close_min + 1440;
 }
 
 /**

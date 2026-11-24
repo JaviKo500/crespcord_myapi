@@ -683,6 +683,18 @@ function form_load_include(...$arguments) {}
 function form_set_error(...$arguments) {}
 
 /**
+ * @return mixed
+ */
+function form_get_errors() {}
+
+/**
+ * @param mixed ...$arguments
+ *
+ * @return mixed
+ */
+function drupal_register_shutdown_function(...$arguments) {}
+
+/**
  * @param mixed ...$arguments
  *
  * @return mixed

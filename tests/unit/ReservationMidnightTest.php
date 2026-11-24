@@ -6,7 +6,7 @@ require_once __DIR__ . '/../../resources/reservation.resource.inc';
 
 /**
  * Unit tests for the pure overnight-reservation helpers added by SPEC 41 in
- * resources/reservation.resource.inc:
+ * includes/myapi.reservation_rules.inc (loaded by the resource, SPEC 135):
  *
  *   - myapi_reservation_area_wraps()
  *   - myapi_reservation_effective_date()

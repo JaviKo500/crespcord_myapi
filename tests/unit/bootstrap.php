@@ -275,6 +275,53 @@ if (!function_exists('form_set_error')) {
 }
 
 /**
+ * A DatabaseTransaction that only counts (SPEC 135): how many are open right
+ * now, in $GLOBALS['myapi_test_transactions_open']. Like Drupal's, it ends
+ * when the object is destroyed.
+ */
+class MyapiTestTransaction {
+
+  public function __construct() {
+    $GLOBALS['myapi_test_transactions_open'] = ($GLOBALS['myapi_test_transactions_open'] ?? 0) + 1;
+  }
+
+  public function rollback() {
+  }
+
+  public function __destruct() {
+    $GLOBALS['myapi_test_transactions_open']--;
+  }
+
+}
+
+if (!function_exists('db_transaction')) {
+  function db_transaction($name = NULL, array $options = []) {
+    return new MyapiTestTransaction();
+  }
+}
+
+if (!function_exists('drupal_register_shutdown_function')) {
+  /**
+   * Records the callback instead of registering it: nothing may run at the
+   * end of the PHPUnit process on behalf of a test that finished long ago.
+   */
+  function drupal_register_shutdown_function($callback = NULL, ...$arguments) {
+    $GLOBALS['myapi_test_shutdown_functions'][] = $callback;
+  }
+}
+
+if (!function_exists('form_get_errors')) {
+  /**
+   * The read side of form_set_error() (SPEC 135): the map recorded so far, or
+   * NULL when the form has no error, which is what Drupal answers and what
+   * myapi_reservation_validate_rules() tests with a plain truthiness check.
+   */
+  function form_get_errors() {
+    return !empty($GLOBALS['myapi_test_form_errors']) ? $GLOBALS['myapi_test_form_errors'] : NULL;
+  }
+}
+
+/**
  * form_error(), the element-level sibling of form_set_error() (SPEC 77).
  *
  * Drupal resolves the element's #parents into the same flat name
@@ -1168,6 +1215,20 @@ class MyapiTestSelectQuery implements IteratorAggregate {
 
   public function range($start = NULL, $length = NULL) {
     $this->range = ['start' => (int) $start, 'length' => $length];
+
+    return $this;
+  }
+
+  /**
+   * SELECT ... FOR UPDATE (SPEC 135). The fixture has no rows to lock, so the
+   * request is only recorded — table and transaction depth at that moment — in
+   * a list of its own, leaving the shape of the recorded queries untouched.
+   */
+  public function forUpdate($set = TRUE) {
+    $GLOBALS['myapi_test_db_locks'][] = [
+      'table'          => $this->table,
+      'in_transaction' => !empty($GLOBALS['myapi_test_transactions_open']),
+    ];
 
     return $this;
   }

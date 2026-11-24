@@ -32,7 +32,7 @@ require_once __DIR__ . '/../../includes/myapi.reservation_query.inc';
  * Intervals reach peak_concurrency() ALREADY projected onto the absolute-minute
  * axis of SPEC 41, so the tests project their own fixtures with a local helper
  * that mirrors myapi_reservation_abs_interval(). That function stays in
- * resources/reservation.resource.inc and is deliberately NOT loaded here: the
+ * includes/myapi.reservation_rules.inc and is deliberately NOT loaded here: the
  * helpers under test must not depend on it.
  *
  * Fixed dates are used throughout so the day arithmetic is deterministic.

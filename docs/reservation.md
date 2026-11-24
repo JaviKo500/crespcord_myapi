@@ -398,6 +398,11 @@ before the node is ever touched:
 | 7 | Unit has no other `confirmed` reservation for the same area whose start has not passed | `409 reservation_already_active` |
 | 8 | Unit's balance allows reserving (see below) | `403 insufficient_balance` |
 
+Validations 1–7 are shared with the back-office node form since SPEC 135
+(`includes/myapi.reservation_rules.inc`); see
+[reservation-form.md](reservation-form.md#business-rules-on-save). Validation
+8 is the only one the form does not apply.
+
 **Balance check (validation 8)**
 
 1. If the unit's current balance (`field_saldo_actual`) is `<= 0` (or the unit
