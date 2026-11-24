@@ -124,6 +124,8 @@ Menú **Navegación** → **Nuevo** → **Reserva**.
 
 1. **Título**.
 2. **Condominio**, **Vivienda**, **Solicitante** y **Área**: se rellenan escribiendo y eligiendo una sugerencia de la lista. Solo aparecen los de tus condominios. En la captura, al escribir *co* solo sale *Condominio jk*.
+   - **Vivienda** y **Área** están bloqueadas hasta que eliges el **Condominio**, y solo ofrecen las de ese condominio.
+   - **Solicitante** está bloqueado hasta que eliges la **Vivienda**, y solo ofrece al propietario y a los ocupantes de esa vivienda. Se busca por su nombre de usuario.
 3. **Fecha**: año, mes y día.
 4. **Hora de inicio** y **Hora de fin**: en formato **HH:MM** de 24 horas.
 5. **Estado de la reserva**, **Cancelada por** y **Motivo de cancelación**: para una reserva nueva, deja *Confirmada*.
@@ -131,7 +133,7 @@ Menú **Navegación** → **Nuevo** → **Reserva**.
 **Cómo utilizarla**
 
 1. Escribe el **Título**.
-2. En **Condominio**, **Vivienda**, **Solicitante** y **Área**, escribe unas letras y elige de la lista.
+2. En **Condominio**, escribe unas letras y elige de la lista. Haz lo mismo, en este orden, con **Vivienda**, **Solicitante** y **Área**.
 3. Elige la **Fecha** y escribe las horas (por ejemplo, *10:00* y *11:00*).
 
    ![Formulario de reserva relleno](../assets/ae_reserva_llena.png)
@@ -147,6 +149,9 @@ Aparece el aviso *«Reserva … se ha creado»* y se abre la reserva, en estado 
 **Consideraciones**
 
 - Si te equivocas, no la puedes borrar: cancélala (ver [Cancelar una reserva](#cancelar-una-reserva)).
+- Elige siempre una sugerencia de la lista: si escribes el nombre a mano sin elegirlo, los campos que dependen de él siguen bloqueados.
+- Si cambias el **Condominio**, se vacían **Vivienda**, **Solicitante** y **Área**. Si cambias la **Vivienda**, se vacía el **Solicitante**.
+- Si la vivienda o el área no son del condominio, o el solicitante no vive en la vivienda, la reserva no se guarda y el formulario marca el campo en rojo.
 - Las horas siguen la misma regla que en las áreas (ver abajo): *8:00* o *24:00* no son válidas.
 
 ## Crear un área común (administrador edificio)

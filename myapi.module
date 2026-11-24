@@ -840,6 +840,20 @@ function myapi_menu() {
     'file'             => 'includes/myapi.reservations_admin.inc',
   ];
 
+  // Autocomplete of the dependent selectors of the 'reservation' node form
+  // (SPEC 134): units and areas of a condominium, people of a unit. The two
+  // wildcards are the selector ('unit', 'area', 'requester') and the id of its
+  // parent; the search string follows as extra path segments. It answers
+  // Drupal's autocomplete JSON for misc/autocomplete.js, not the API envelope,
+  // which is why it hangs off the back-office tree and lives in includes/.
+  $items['admin/content/reservations/autocomplete/%/%'] = [
+    'page callback'    => 'myapi_reservation_form_autocomplete',
+    'page arguments'   => [4, 5],
+    'access callback'  => 'myapi_reservation_form_access',
+    'type'             => MENU_CALLBACK,
+    'file'             => 'includes/myapi.reservation_form.inc',
+  ];
+
   // Back-office provider directory (SPEC 131). 'administrator' and 'backend'
   // only: a provider has no condominium of its own, so the
   // 'administrador edificio' has nothing to be scoped to (decision 2).
@@ -1320,6 +1334,25 @@ function myapi_reservations_admin_access() {
   }
 
   return (bool) array_intersect($user->roles, myapi_reservations_admin_roles());
+}
+
+/**
+ * Access callback of admin/content/reservations/autocomplete/%/% (SPEC 134).
+ *
+ * By PERMISSION, unlike the listings above: the route only exists to serve the
+ * 'reservation' node form, so whoever Drupal lets into that form — to create
+ * or to edit — is exactly who may ask it. user_access() already answers TRUE
+ * for uid 1.
+ *
+ * What is offered once in belongs to the queries: they carry the 'node_access'
+ * tag, so a building admin only gets units and areas of their condominiums.
+ *
+ * @return bool  TRUE when the current user may use the reservation form.
+ */
+function myapi_reservation_form_access() {
+  return user_access('create reservation content')
+    || user_access('edit any reservation content')
+    || user_access('edit own reservation content');
 }
 
 /**
@@ -2332,6 +2365,23 @@ function myapi_form_service_transaction_node_form_alter(&$form, &$form_state, $f
 }
 
 /**
+ * Implements hook_form_FORM_ID_alter() for the 'reservation' node form
+ * (SPEC 134).
+ *
+ * Glue only, same criterion as the alters above: the include is loaded and
+ * the actual work — chaining the unit and area selectors to the condominium
+ * and the requester selector to the unit — is delegated entirely to
+ * includes/myapi.reservation_form.inc.
+ *
+ * This does NOT replace myapi_reservation_form_validate_scope(), reached from
+ * myapi_node_validate() below: shaping a form is not enforcing a rule.
+ */
+function myapi_form_reservation_node_form_alter(&$form, &$form_state, $form_id) {
+  module_load_include('inc', 'myapi', 'includes/myapi.reservation_form');
+  myapi_reservation_form_alter($form, $form_state);
+}
+
+/**
  * Implements hook_form_FORM_ID_alter() for the 'pagos' node form (SPEC 130).
  *
  * Glue only, same criterion as the alters above: the include is loaded and
@@ -2356,15 +2406,22 @@ function myapi_form_pagos_node_form_alter(&$form, &$form_state, $form_id) {
  * - 'boletin' — a building admin may only publish 'Condominio' bulletins of
  *   their assigned condominiums (SPEC 49), in
  *   includes/myapi.building_admin.inc. Every other user passes through.
- * - 'reservation' — two validations, in this order:
+ * - 'reservation' — three validations, in this order:
  *   1. HH:MM format of field_start_time / field_end_time (SPEC 52), in
  *      includes/myapi.reservation_admin.inc. Applies to EVERY user.
- *   2. a building admin may only book for a person they can see and on a unit
+ *   2. the unit and the area must belong to the condominium, and the requester
+ *      to the unit (SPEC 134), in includes/myapi.reservation_form.inc. Applies
+ *      to EVERY user.
+ *   3. a building admin may only book for a person they can see and on a unit
  *      of their condominiums (SPEC 51), in
  *      includes/myapi.building_admin_user.inc. Every other user passes through.
- *   Format goes first because it is the one that applies to everybody:
- *   form_set_error() accumulates, so a building admin who submits a malformed
- *   time AND a unit outside their condominiums sees both messages at once.
+ *   The two that apply to everybody go first. form_set_error() accumulates, so
+ *   a building admin who submits a malformed time AND a unit outside their
+ *   condominiums sees both messages at once. Validations 2 and 3 can both
+ *   speak about the same field — a unit that is neither of the picked
+ *   condominium nor of an assigned one — and then BOTH messages show: 2 flags
+ *   the input itself ('field_unit][und][0][target_id') and 3 the field
+ *   ('field_unit'), which are different keys to form_set_error().
  *
  * This hook is reached from node_form_validate() only, so it guards the admin
  * node form (node/add/... and node/%/edit) and nothing else: a programmatic
@@ -2386,6 +2443,9 @@ function myapi_node_validate($node, $form, &$form_state) {
     case 'reservation':
       module_load_include('inc', 'myapi', 'includes/myapi.reservation_admin');
       myapi_reservation_validate_times($node, $form, $form_state);
+
+      module_load_include('inc', 'myapi', 'includes/myapi.reservation_form');
+      myapi_reservation_form_validate_scope($node, $form, $form_state);
 
       module_load_include('inc', 'myapi', 'includes/myapi.building_admin_user');
       myapi_building_admin_validate_reservation($node, $form, $form_state);

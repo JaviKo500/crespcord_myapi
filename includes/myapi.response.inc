@@ -87,3 +87,29 @@ function myapi_error($key, $status = 400, $replacements = []) {
   ]);
   drupal_exit();
 }
+
+/**
+ * Sends the suggestions of a back-office autocomplete and exits (SPEC 134).
+ *
+ * The one response of this module that is NOT the envelope, and the reason it
+ * lives here rather than in its caller: misc/autocomplete.js, Drupal core's
+ * widget, dictates the body — a bare JSON object of 'value' => 'HTML label' —
+ * and would show nothing if handed { success, data }. Keeping the print in
+ * this file keeps the rule "every response goes through a helper" true, and
+ * keeps the cache headers above on a body that carries people's names.
+ *
+ * Never use it for an api/v1 endpoint: the app is only entitled to the
+ * envelope.
+ *
+ * @param array $matches
+ *   Value written into the input when picked => already-escaped HTML shown in
+ *   the list.
+ */
+function myapi_respond_autocomplete(array $matches) {
+  myapi_response_headers(200);
+
+  // (object): an empty PHP array would be encoded as a JSON list, and the
+  // widget expects an object either way.
+  print drupal_json_encode((object) $matches);
+  drupal_exit();
+}

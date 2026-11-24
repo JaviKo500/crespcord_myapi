@@ -305,4 +305,31 @@ class ResponseEnvelopeTest extends TestCase {
     $this->assertSame('Demasiados intentos. Inténtalo de nuevo más tarde.', $result['json']['error']);
   }
 
+  /**
+   * The back-office autocomplete (SPEC 134) is the one body that is not the
+   * envelope: Drupal's widget reads a bare object of value => label.
+   */
+  public function testAutocompleteAnswersABareObjectOfSuggestions() {
+    $result = myapi_test_capture(function () {
+      myapi_respond_autocomplete(['Motora 2 (30057)' => '<div>Motora 2</div>']);
+    });
+
+    $this->assertTrue($result['exited']);
+    $this->assertSame(200, $result['status']);
+    $this->assertSame('application/json', $result['headers']['Content-Type']);
+    $this->assertStringContainsString('no-store', $result['headers']['Cache-Control']);
+    $this->assertSame(['Motora 2 (30057)' => '<div>Motora 2</div>'], $result['json']);
+  }
+
+  /**
+   * No suggestions is an empty OBJECT, never an empty list.
+   */
+  public function testAutocompleteWithNoSuggestionsIsAnEmptyObject() {
+    $result = myapi_test_capture(function () {
+      myapi_respond_autocomplete([]);
+    });
+
+    $this->assertSame('{}', $result['output']);
+  }
+
 }

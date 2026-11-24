@@ -42,6 +42,7 @@ files[] = includes/myapi.reservation_query.inc
 files[] = includes/myapi.time_format.inc
 files[] = includes/myapi.area_admin.inc
 files[] = includes/myapi.reservation_admin.inc
+files[] = includes/myapi.reservation_form.inc
 files[] = includes/myapi.reservation_calendar.inc
 files[] = includes/myapi.mail_queue.inc
 files[] = includes/myapi.reservation_notification.inc
