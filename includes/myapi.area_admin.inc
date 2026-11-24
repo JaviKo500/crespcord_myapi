@@ -47,3 +47,39 @@ function myapi_area_validate_times($node, $form, &$form_state) {
     'field_close_time' => 'Hora de cierre',
   ]);
 }
+
+/**
+ * Tags the two time inputs of the 'area' node form (SPEC 136).
+ *
+ * Called from myapi_form_area_node_form_alter(). js/myapi.time_select.js swaps
+ * each tagged input for an hour select and a minute select that write 'HH:MM'
+ * into it, so a time can no longer be mistyped. The inputs stay text fields
+ * on the server: what is stored and myapi_area_validate_times() are unchanged,
+ * and a browser without JavaScript keeps typing.
+ *
+ * A field that is not the plain text widget — somebody changed it from the
+ * field UI — is skipped; the script is only attached when something was
+ * tagged.
+ *
+ * @param array $form
+ *   The node form, by reference.
+ */
+function myapi_area_form_alter(array &$form) {
+  module_load_include('inc', 'myapi', 'includes/myapi.time_format');
+
+  $tagged = FALSE;
+
+  foreach (['field_open_time', 'field_close_time'] as $field) {
+    $language = myapi_time_format_text_input_langcode($form, $field);
+    if ($language === NULL) {
+      continue;
+    }
+
+    $form[$field][$language][0]['value']['#attributes']['data-myapi-time-select'] = '1';
+    $tagged = TRUE;
+  }
+
+  if ($tagged) {
+    $form['#attached']['js'][] = drupal_get_path('module', 'myapi') . '/js/myapi.time_select.js';
+  }
+}

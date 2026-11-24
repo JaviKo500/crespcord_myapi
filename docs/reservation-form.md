@@ -15,6 +15,9 @@ condominium ─┬─> unit ──> requester
 - A selector is **disabled** until its parent holds a value, and is **emptied**
   when its parent changes.
 
+- **Hora de inicio** and **Hora de fin** are selects of the times of the
+  picked **area** — see [time selects](#time-selects) (SPEC 136).
+
 It applies to every role, on create and on edit. `POST /api/v1/reservations`
 is not involved: the endpoint saves its node programmatically.
 
@@ -33,6 +36,8 @@ is not involved: the endpoint saves its node programmatically.
 | `includes/myapi.response.inc` | `myapi_respond_autocomplete()` — the only non-envelope response of the module. |
 | `js/myapi.reservation_form.js` | Re-points, empties and enables/disables the selectors. Attached through the form's `#attached`, never from `myapi.info`. |
 | `tests/unit/ReservationFormTest.php` | Both halves of the include under the test stubs, plus the route's access callback. The JavaScript is not covered. |
+| `tests/unit/ReservationFormTimesTest.php` | The time grid, the area-schedule route and the tagging of the time inputs on the `reservation` and `area` forms (SPEC 136). The JavaScript is not covered. |
+| `js/myapi.time_select.js` | Hour and minute selects of the `area` form (SPEC 136). Attached by `myapi_area_form_alter()`, in `includes/myapi.area_admin.inc`. |
 | `includes/myapi.reservation_rules.inc` | The business rules of a reservation, shared by this form and by `POST /api/v1/reservations` (SPEC 135). |
 | `includes/myapi.reservation_admin.inc` | `myapi_reservation_validate_rules()`: applies those rules to the form. Also the HH:MM format of SPEC 52. |
 | `tests/unit/ReservationAdminRulesTest.php` | The shared rules and their application to the form. |
@@ -115,6 +120,82 @@ applies on top: an `administrador edificio` asking for a condominium, or for
 the people of a unit, outside their assignment gets `{}`.
 `myapi_building_admin_validate_reservation()` (SPEC 51) keeps running after
 this validation.
+
+---
+
+## Time selects
+
+SPEC 136. `field_start_time` and `field_end_time` are text fields holding
+`HH:MM`, and stay so: storage, the SPEC 52 format rule and the business rules
+below are unchanged. What changes is how the operator fills them.
+
+- `myapi_reservation_form_alter()` tags the two inputs with
+  `data-myapi-reservation-time` (`start` / `end`). If either is not a plain
+  text widget, neither is tagged; the selectors keep working.
+- `js/myapi.reservation_form.js` hides each input behind a `<select>` with no
+  `name` that writes into it. The options come from the route below, for the
+  area currently picked.
+- **Start** offers every time of the grid but the closing time. **End** offers
+  the times after the picked start, no further than the area's maximum
+  duration (`field_max_minutes`).
+- No area picked: both selects are disabled (*- Elige un área -*). Changing
+  the area, or the start, empties a time the new options no longer contain.
+- On page load nothing is emptied: a stored time that is off the grid is kept
+  as an extra option, so opening and saving a reservation never changes it.
+- If the area has no usable schedule (no block size, a malformed time) or the
+  request fails, the text inputs come back as they were.
+
+The grid is a convenience, **not a rule**: nothing on the server refuses a time
+that is off the block size, exactly as `POST /api/v1/reservations` never did.
+
+The `area` form gets the simpler version (`js/myapi.time_select.js`): opening
+and closing time become an hour select (00–23) and a minute select (every five
+minutes, plus 59, plus the stored minute). A stored value that is not `HH:MM`
+is left as a text input so it can be seen and fixed.
+
+### GET admin/content/reservations/area-schedule/{area}
+
+Back-office route, not part of the app's API. Same access as the autocomplete:
+any of the three reservation permissions. The area is resolved through a
+`node_access` query, so a building admin gets an empty grid for an area of
+another condominium.
+
+**Success response (200)** — the usual envelope:
+
+```json
+{
+  "success": true,
+  "data": {
+    "open_time": "08:00",
+    "close_time": "10:30",
+    "slot_minutes": 60,
+    "max_minutes": 120,
+    "grid": [
+      { "time": "08:00", "offset": 0 },
+      { "time": "09:00", "offset": 60 },
+      { "time": "10:00", "offset": 120 },
+      { "time": "10:30", "offset": 150 }
+    ]
+  }
+}
+```
+
+- `grid` runs from the opening to the closing time in steps of `slot_minutes`.
+  `offset` is minutes from the opening time, so durations can be measured
+  across midnight (`22:00`–`02:00` gives `22:00`/0 … `02:00`/240).
+- The last entry is always the closing time, also when the window is not a
+  multiple of the block.
+- `slot_minutes` and `max_minutes` are the stored integers, `null` when nothing
+  numeric is stored. `null` is the only "no limit" for `max_minutes`, same as
+  on save: a stored `0` leaves the end select with no options.
+
+It never answers an error: an id that is not a number, an area that does not
+exist or is not visible, and an area with no usable schedule all answer the
+same body with four `null`s and `"grid": []`.
+
+| Code | When |
+|------|------|
+| 403  | The user holds none of the reservation permissions. |
 
 ---
 

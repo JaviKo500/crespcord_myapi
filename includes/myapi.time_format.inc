@@ -139,3 +139,36 @@ function myapi_time_format_validate_fields(array $form_state, array $fields) {
     }
   }
 }
+
+/**
+ * The language key of a time field rendered as the plain text widget.
+ *
+ * The two form alters of SPEC 136 only hand an input to their JavaScript when
+ * it is the single text input the scripts were written for. This is that
+ * check, once: somebody switching the widget from the field UI must leave the
+ * form as Drupal built it, on either bundle.
+ *
+ * What to do when a field does not qualify is the caller's business — the
+ * 'area' form skips that field, the 'reservation' form skips both.
+ *
+ * @param array $form
+ *   The node form.
+ * @param string $field
+ *   The field machine name, e.g. 'field_open_time'.
+ *
+ * @return string|null
+ *   The language key under which $form[$field][...][0]['value'] is the text
+ *   input, or NULL when the field is absent or is not that widget.
+ */
+function myapi_time_format_text_input_langcode(array $form, $field) {
+  if (empty($form[$field]['#language'])) {
+    return NULL;
+  }
+
+  $language = $form[$field]['#language'];
+  if (!isset($form[$field][$language][0]['value']['#type']) || $form[$field][$language][0]['value']['#type'] !== 'textfield') {
+    return NULL;
+  }
+
+  return $language;
+}

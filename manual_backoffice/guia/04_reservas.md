@@ -127,14 +127,14 @@ Menú **Navegación** → **Nuevo** → **Reserva**.
    - **Vivienda** y **Área** están bloqueadas hasta que eliges el **Condominio**, y solo ofrecen las de ese condominio.
    - **Solicitante** está bloqueado hasta que eliges la **Vivienda**, y solo ofrece al propietario y a los ocupantes de esa vivienda. Se busca por su nombre de usuario.
 3. **Fecha**: año, mes y día.
-4. **Hora de inicio** y **Hora de fin**: en formato **HH:MM** de 24 horas.
+4. **Hora de inicio** y **Hora de fin**: dos listas con las horas del área elegida, en formato de 24 horas (*13:00*, *17:00*). Están bloqueadas hasta que eliges el **Área**.
 5. **Estado de la reserva**, **Cancelada por** y **Motivo de cancelación**: para una reserva nueva, deja *Confirmada*.
 
 **Cómo utilizarla**
 
 1. Escribe el **Título**.
 2. En **Condominio**, escribe unas letras y elige de la lista. Haz lo mismo, en este orden, con **Vivienda**, **Solicitante** y **Área**.
-3. Elige la **Fecha** y escribe las horas (por ejemplo, *10:00* y *11:00*).
+3. Elige la **Fecha**, luego la **Hora de inicio** y después la **Hora de fin** (por ejemplo, *10:00* y *11:00*).
 
    ![Formulario de reserva relleno](../assets/ae_reserva_llena.png)
 
@@ -152,7 +152,10 @@ Aparece el aviso *«Reserva … se ha creado»* y se abre la reserva, en estado 
 - Elige siempre una sugerencia de la lista: si escribes el nombre a mano sin elegirlo, los campos que dependen de él siguen bloqueados.
 - Si cambias el **Condominio**, se vacían **Vivienda**, **Solicitante** y **Área**. Si cambias la **Vivienda**, se vacía el **Solicitante**.
 - Si la vivienda o el área no son del condominio, o el solicitante no vive en la vivienda, la reserva no se guarda y el formulario marca el campo en rojo.
-- Las horas siguen la misma regla que en las áreas (ver abajo): *8:00* o *24:00* no son válidas.
+- Las horas que ofrecen las listas salen del área: van desde su **Hora de apertura** hasta su **Hora de cierre**, de bloque en bloque (**Tamaño del bloque**). La **Hora de fin** solo ofrece horas posteriores a la de inicio y dentro de la **Duración máxima** del área.
+- Si cambias el **Área**, o la **Hora de inicio**, se vacía la hora que ya no esté entre las nuevas opciones: vuelve a elegirla.
+- Al abrir una reserva antigua cuya hora no coincide con los bloques del área (por ejemplo, *16:20*), la hora se conserva y aparece al final de la lista.
+- Si el área no tiene bien puestos su horario o su tamaño de bloque, en lugar de las listas aparecen los cuadros de texto de antes: escribe la hora en formato **HH:MM** de 24 horas (*8:00* o *24:00* no son válidas).
 - La reserva tiene que cumplir las reglas del área, igual que si el residente la hiciera desde la app. No se guarda, y el formulario marca el campo en rojo, si:
   - el área no está **activa**;
   - la fecha y la hora de inicio ya pasaron;
@@ -181,7 +184,7 @@ Menú **Navegación** → **Nuevo** → **Área**.
 
 1. **Nombre del área** y **Condominio** (obligatorio, con autocompletado).
 2. **Imagen**: PNG o JPG.
-3. **Hora de apertura** y **Hora de cierre**: formato **HH:MM** de 24 horas.
+3. **Hora de apertura** y **Hora de cierre**: cada una con dos listas, la hora (00 a 23) y los minutos (de 5 en 5).
 4. **Tamaño del bloque (min)**: viene en 60. **Duración máxima (min)**: viene en 120.
 5. **Estado del área**: *Activo*, *Cerrado* o *En Mantenimiento*.
 6. **Quién puede reservar**: *Ambos*, *Propietario* o *Arrendatario*.
@@ -190,7 +193,7 @@ Menú **Navegación** → **Nuevo** → **Área**.
 **Cómo utilizarla**
 
 1. Rellena los campos obligatorios (marcados con \*).
-2. Escribe las horas con dos cifras: **08:00**, no *8:00*.
+2. En cada hora, elige primero la hora y después los minutos. Si solo eliges la hora, los minutos quedan en *00*.
 3. Pulsa **Guardar**.
 
 **Consideraciones**

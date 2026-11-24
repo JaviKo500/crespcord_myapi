@@ -854,6 +854,18 @@ function myapi_menu() {
     'file'             => 'includes/myapi.reservation_form.inc',
   ];
 
+  // Schedule of one area for the time selects of the 'reservation' node form
+  // (SPEC 136): opening and closing times, block size, maximum duration and
+  // the grid of bookable times. The wildcard is the area nid. Same access as
+  // the autocomplete above: it only exists to serve that form.
+  $items['admin/content/reservations/area-schedule/%'] = [
+    'page callback'    => 'myapi_reservation_form_area_schedule',
+    'page arguments'   => [4],
+    'access callback'  => 'myapi_reservation_form_access',
+    'type'             => MENU_CALLBACK,
+    'file'             => 'includes/myapi.reservation_form.inc',
+  ];
+
   // Back-office provider directory (SPEC 131). 'administrator' and 'backend'
   // only: a provider has no condominium of its own, so the
   // 'administrador edificio' has nothing to be scoped to (decision 2).
@@ -2384,6 +2396,19 @@ function myapi_form_service_transaction_node_form_alter(&$form, &$form_state, $f
 function myapi_form_reservation_node_form_alter(&$form, &$form_state, $form_id) {
   module_load_include('inc', 'myapi', 'includes/myapi.reservation_form');
   myapi_reservation_form_alter($form, $form_state);
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter() for the 'area' node form (SPEC 136).
+ *
+ * Glue only, same criterion as the alters above: the include is loaded and
+ * the actual work — tagging the opening and closing time inputs so that
+ * js/myapi.time_select.js turns them into hour and minute selects — is
+ * delegated entirely to includes/myapi.area_admin.inc.
+ */
+function myapi_form_area_node_form_alter(&$form, &$form_state, $form_id) {
+  module_load_include('inc', 'myapi', 'includes/myapi.area_admin');
+  myapi_area_form_alter($form);
 }
 
 /**
