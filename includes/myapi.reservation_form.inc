@@ -434,8 +434,10 @@ function myapi_reservation_form_node_matches($kind, $condominium_nid, $string) {
  * people of a unit are only as visible as the unit is.
  *
  * USER NAME ONLY, and no e-mail in the answer. The route is open to every role
- * holding a reservation permission, which on this site includes 'supervisor'
- * and 'pagos', and for those roles nothing narrows the query: matching or
+ * holding a reservation permission, and only building admins are narrowed. A
+ * role like 'supervisor' or 'pagos' may be granted one from the permissions
+ * page at any time (SPEC 135 leaves that pending), and for it nothing narrows
+ * the query: matching or
  * printing u.mail would turn this route into a way of reading the e-mail of
  * the residents of any unit. It is the same data entityreference's own
  * autocomplete exposed before this file: a name and a uid.

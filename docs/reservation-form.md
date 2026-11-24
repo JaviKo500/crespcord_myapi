@@ -100,10 +100,13 @@ An unknown selector, a parent of `0`, an empty text or no match all answer
 
 ### Other roles
 
-On this site `supervisor` and `pagos` also hold a reservation permission, and
-nothing narrows the queries for them. That is why `requester` answers a user
-name and a uid and nothing else — what entityreference's own autocomplete
-already exposed.
+The route is open to any role holding a reservation permission, and only
+building admins are narrowed. In production (checked 2026-11-24) only `backend`
+and `administrador edificio` hold one; `supervisor` and `pagos` hold none, and
+granting it to them is pending the client's confirmation (SPEC 135). The day
+they get it, nothing narrows the queries for them. That is why `requester`
+answers a user name and a uid and nothing else — what entityreference's own
+autocomplete already exposed.
 
 ### Building admins
 
@@ -125,7 +128,8 @@ validations 1–7). Both read them from `includes/myapi.reservation_rules.inc`.
 may book for a unit in debt. Nothing else is skipped, for any role —
 `administrator`, `backend`, `administrador edificio`, `supervisor` and `pagos`
 are all validated alike. Which of them can open the form at all is decided by
-Drupal's node permissions, not by this module.
+Drupal's node permissions, not by this module: today `backend` and
+`administrador edificio` (and `administrator`).
 
 | # | Rule | Input flagged | Message |
 |---|---|---|---|
