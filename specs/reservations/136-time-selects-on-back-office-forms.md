@@ -1,6 +1,6 @@
 # SPEC 136 — Desplegables de hora en los formularios de reserva y de área del back office
 
-> **Estado:** Implemented, **pendiente de verificación manual** (ni staging ni producción) · **Depende de:** SPEC 32 (tipos de contenido de reservas), SPEC 41 (áreas que cierran pasada la medianoche), SPEC 46 y 52 (formato de horas), SPEC 134 (selectores dependientes), SPEC 135 (reglas de negocio en el formulario) · **Fecha:** 2026-11-24
+> **Estado:** Implemented (desplegada y verificada manualmente por el propietario en producción el 2026-11-24) · **Depende de:** SPEC 32 (tipos de contenido de reservas), SPEC 41 (áreas que cierran pasada la medianoche), SPEC 46 y 52 (formato de horas), SPEC 134 (selectores dependientes), SPEC 135 (reglas de negocio en el formulario) · **Fecha:** 2026-11-24
 >
 > **Objetivo:** Que las horas de `node/add/reservation`, `node/add/area` y sus formularios de edición se **elijan de una lista** en vez de escribirse, siempre en formato de 24 horas. En la reserva, las horas ofrecidas dependen del **área** elegida.
 
@@ -77,19 +77,19 @@ Automáticos (`vendor/bin/phpunit`):
 
 Fuera de la suite: los dos scripts se ejercitaron una vez con jsdom y jQuery 1.4.4 (alta, edición con hora fuera de bloque, cambio de área, área nocturna, área sin horario, petición fallida, respuesta tardía). No queda como test en el repositorio.
 
-Manuales, en staging tras `drush cc all` — **ninguno hecho todavía**:
+Manuales — *verificados por el propietario en producción el 2026-11-24*:
 
-- [ ] `node/add/reservation`: las dos horas aparecen bloqueadas con *- Elige un área -*.
-- [ ] Al elegir el área se cargan las horas de inicio según su apertura, cierre y bloque, en 24 horas.
-- [ ] Al elegir el inicio, la hora de fin solo ofrece horas posteriores y dentro de la duración máxima.
-- [ ] Cambiar el área, o el condominio, vacía las horas que ya no aplican.
-- [ ] Guardar una reserva elegida con las listas funciona y pasa por las reglas de SPEC 135.
-- [ ] `node/{nid}/edit` de una reserva existente llega con sus dos horas seleccionadas; una hora fuera de bloque se conserva.
-- [ ] Un formulario devuelto con errores conserva las horas elegidas y marca la lista en rojo.
-- [ ] Un área que cierra pasada la medianoche ofrece las horas de madrugada.
-- [ ] `node/add/area` y `node/{nid}/edit`: apertura y cierre con hora y minutos; guardar funciona; un área existente llega con sus horas seleccionadas.
-- [ ] Con el tema del back office (Bootstrap) las listas se ven alineadas con el resto de campos.
-- [ ] Como `administrador edificio`: `…/area-schedule/{área ajena}` responde `"grid": []`.
+- [x] `node/add/reservation`: las dos horas aparecen bloqueadas con *- Elige un área -*.
+- [x] Al elegir el área se cargan las horas de inicio según su apertura, cierre y bloque, en 24 horas.
+- [x] Al elegir el inicio, la hora de fin solo ofrece horas posteriores y dentro de la duración máxima.
+- [x] Cambiar el área, o el condominio, vacía las horas que ya no aplican.
+- [x] Guardar una reserva elegida con las listas funciona y pasa por las reglas de SPEC 135.
+- [x] `node/{nid}/edit` de una reserva existente llega con sus dos horas seleccionadas; una hora fuera de bloque se conserva.
+- [x] Un formulario devuelto con errores conserva las horas elegidas y marca la lista en rojo.
+- [x] Un área que cierra pasada la medianoche ofrece las horas de madrugada.
+- [x] `node/add/area` y `node/{nid}/edit`: apertura y cierre con hora y minutos; guardar funciona; un área existente llega con sus horas seleccionadas.
+- [x] Con el tema del back office (Bootstrap) las listas se ven alineadas con el resto de campos.
+- [x] Como `administrador edificio`: `…/area-schedule/{área ajena}` responde `"grid": []`.
 
 ---
 
@@ -104,7 +104,7 @@ Manuales, en staging tras `drush cc all` — **ninguno hecho todavía**:
 
 ## Riesgos
 
-- **Sin verificar en navegador real.** Ni el aspecto con el tema Bootstrap ni la convivencia con el autocompletado del core están vistos en el sitio.
+- **Sin test automático del JavaScript.** Los dos scripts dependen de la matriz manual de arriba.
 - **Una hora fuera de bloque ya no se puede teclear** desde el back office mientras el área tenga horario válido. Las ya guardadas se conservan, pero no se pueden crear nuevas.
 - **Bloques muy pequeños dan listas muy largas.** Un área con bloque de 5 minutos abierta 14 horas ofrece 168 horas de inicio.
 - **Una petición por cambio de área.** Si falla, el formulario vuelve a los cuadros de texto sin avisar.
