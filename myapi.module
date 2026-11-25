@@ -2492,27 +2492,29 @@ function myapi_reservation_form_saved() {
  * - 'boletin' — a building admin may only publish 'Condominio' bulletins of
  *   their assigned condominiums (SPEC 49), in
  *   includes/myapi.building_admin.inc. Every other user passes through.
- * - 'reservation' — four validations, in this order:
+ * - 'reservation' — five validations, in this order:
  *   1. HH:MM format of field_start_time / field_end_time (SPEC 52), in
  *      includes/myapi.reservation_admin.inc. Applies to EVERY user.
  *   2. the unit and the area must belong to the condominium, and the requester
  *      to the unit (SPEC 134), in includes/myapi.reservation_form.inc. Applies
  *      to EVERY user.
- *   3. a building admin may only book for a person they can see and on a unit
+ *   3. a reservation saved as cancelled must carry its reason (SPEC 137), in
+ *      includes/myapi.reservation_form.inc. Applies to EVERY user.
+ *   4. a building admin may only book for a person they can see and on a unit
  *      of their condominiums (SPEC 51), in
  *      includes/myapi.building_admin_user.inc. Every other user passes through.
- *   4. the business rules POST /api/v1/reservations applies — who may reserve
+ *   5. the business rules POST /api/v1/reservations applies — who may reserve
  *      the area, its status, a start in the past, its opening window, its
  *      maximum duration, its concurrent capacity and one active reservation
  *      per unit and area — except the balance of the unit (SPEC 135), in
  *      includes/myapi.reservation_admin.inc. Applies to EVERY user, and only
- *      when the three above raised nothing.
- *   The two that apply to everybody go first. form_set_error() accumulates, so
+ *      when the four above raised nothing.
+ *   All but 4 apply to everybody. form_set_error() accumulates, so
  *   a building admin who submits a malformed time AND a unit outside their
- *   condominiums sees both messages at once. Validations 2 and 3 can both
+ *   condominiums sees both messages at once. Validations 2 and 4 can both
  *   speak about the same field — a unit that is neither of the picked
  *   condominium nor of an assigned one — and then BOTH messages show: 2 flags
- *   the input itself ('field_unit][und][0][target_id') and 3 the field
+ *   the input itself ('field_unit][und][0][target_id') and 4 the field
  *   ('field_unit'), which are different keys to form_set_error().
  *
  * This hook is reached from node_form_validate() only, so it guards the admin
@@ -2538,12 +2540,28 @@ function myapi_node_validate($node, $form, &$form_state) {
 
       module_load_include('inc', 'myapi', 'includes/myapi.reservation_form');
       myapi_reservation_form_validate_scope($node, $form, $form_state);
+      myapi_reservation_form_validate_cancel_reason($node, $form, $form_state);
 
       module_load_include('inc', 'myapi', 'includes/myapi.building_admin_user');
       myapi_building_admin_validate_reservation($node, $form, $form_state);
 
       myapi_reservation_validate_rules($node, $form, $form_state);
       return;
+  }
+}
+
+/**
+ * Implements hook_node_submit().
+ *
+ * Glue only. Invoked by Drupal while it builds a node out of a submitted node
+ * form, and never by a programmatic node_save(): for a 'reservation' it
+ * delegates to myapi_reservation_form_apply_cancelled_by(), which decides
+ * field_cancelled_by so that the operator cannot (SPEC 137).
+ */
+function myapi_node_submit($node, $form, &$form_state) {
+  if ($node->type === 'reservation') {
+    module_load_include('inc', 'myapi', 'includes/myapi.reservation_form');
+    myapi_reservation_form_apply_cancelled_by($node);
   }
 }
 

@@ -3083,8 +3083,13 @@ function myapi_test_field_seed_allowed_values(array $fields = []) {
  */
 function myapi_test_node_seed(array $nodes = []) {
   $GLOBALS['myapi_test_nodes'] = [];
+  $GLOBALS['myapi_test_nodes_stored'] = [];
   foreach ($nodes as $nid => $node) {
     $GLOBALS['myapi_test_nodes'][$nid] = is_object($node) ? $node : (object) $node;
+    // What "the database" holds, for entity_load_unchanged(): a copy taken
+    // now, so a test that later mutates the seeded object — as Drupal does
+    // with the statically cached node of a node form — does not change it.
+    $GLOBALS['myapi_test_nodes_stored'][(int) $nid] = serialize($GLOBALS['myapi_test_nodes'][$nid]);
   }
 }
 
@@ -3236,6 +3241,30 @@ if (!function_exists('node_load')) {
     return isset($GLOBALS['myapi_test_nodes'][(int) $nid])
       ? $GLOBALS['myapi_test_nodes'][(int) $nid]
       : FALSE;
+  }
+}
+
+if (!function_exists('entity_load_unchanged')) {
+  /**
+   * The database copy of a node, whatever the static cache holds (SPEC 137).
+   *
+   * Faithful to Drupal in the one thing its caller depends on: the answer is
+   * NOT the object node_load() hands out, so writing into that one — what a
+   * submitted node form does — is not seen here. A node put in
+   * $GLOBALS['myapi_test_nodes'] without myapi_test_node_seed() has no stored
+   * copy and answers a clone of itself.
+   */
+  function entity_load_unchanged($entity_type, $id) {
+    if ($entity_type !== 'node') {
+      return FALSE;
+    }
+    if (isset($GLOBALS['myapi_test_nodes_stored'][(int) $id])) {
+      return unserialize($GLOBALS['myapi_test_nodes_stored'][(int) $id]);
+    }
+
+    $node = node_load($id);
+
+    return $node ? clone $node : FALSE;
   }
 }
 

@@ -89,16 +89,14 @@ En **Listado de reservas**, pulsa el **ID** de la reserva. También desde el cal
 ![Reserva a punto de cancelarse (resaltados los tres campos)](../assets/reserva_cancelar.png)
 
 1. **Estado de la reserva**: *Confirmada* o *Cancelada*.
-2. **Cancelada por**: *Usuario* o *Admin*.
-3. **Motivo de cancelación**: texto libre.
-4. **Guardar**.
+2. **Motivo de cancelación**: texto libre. Es obligatorio para cancelar: al elegir *Cancelada* aparece el asterisco rojo.
+3. **Guardar**.
 
 **Cómo utilizarla**
 
 1. Cambia **Estado de la reserva** a **Cancelada**.
-2. En **Cancelada por**, elige **Admin**.
-3. Escribe el **Motivo de cancelación**.
-4. Pulsa **Guardar**.
+2. Escribe el **Motivo de cancelación**.
+3. Pulsa **Guardar**.
 
 **Resultado**
 
@@ -108,6 +106,9 @@ Aparece el aviso *«Reserva … ha sido actualizado»*. En **Listado de reservas
 
 **Consideraciones**
 
+- Sin **Motivo de cancelación** la reserva no se guarda: aparece el aviso *«Escriba el motivo de cancelación: es obligatorio para cancelar una reserva»*. El residente ve ese motivo.
+- **Cancelada por** no se elige: el sistema anota *Admin* al cancelar desde aquí y *Usuario* cuando el residente cancela desde la app. El campo no aparece hasta que la reserva queda guardada como cancelada; a partir de entonces se muestra bloqueado, solo para consulta.
+- Si vuelves a poner una reserva cancelada en *Confirmada*, **Cancelada por** se vacía.
 - Cancela en lugar de borrar: la reserva cancelada queda en el historial con su motivo. El administrador edificio solo tiene los botones **Guardar** y **Vista previa**, sin **Eliminar**.
 
 ## Crear una reserva
@@ -130,7 +131,7 @@ Menú **Navegación** → **Nuevo** → **Reserva**.
    - **Solicitante** está bloqueado hasta que eliges la **Vivienda**, y solo ofrece al propietario y a los ocupantes de esa vivienda. Se busca por su nombre de usuario.
 3. **Fecha**: año, mes y día.
 4. **Hora de inicio** y **Hora de fin**: dos listas con las horas del área elegida, en formato de 24 horas (*13:00*, *17:00*). Están bloqueadas hasta que eliges el **Área**.
-5. **Estado de la reserva**, **Cancelada por** y **Motivo de cancelación**: para una reserva nueva, deja *Confirmada*.
+5. **Estado de la reserva** y **Motivo de cancelación**: para una reserva nueva, deja *Confirmada* y el motivo vacío.
 
 **Cómo utilizarla**
 

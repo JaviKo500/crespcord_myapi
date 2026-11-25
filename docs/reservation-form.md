@@ -18,6 +18,10 @@ condominium ─┬─> unit ──> requester
 - **Hora de inicio** and **Hora de fin** are selects of the times of the
   picked **area** — see [time selects](#time-selects) (SPEC 136).
 
+- **Motivo de cancelación** is required to cancel, and **Cancelada por** is
+  written by the module, never by the operator — see
+  [cancellation fields](#cancellation-fields) (SPEC 137).
+
 It applies to every role, on create and on edit. `POST /api/v1/reservations`
 is not involved: the endpoint saves its node programmatically.
 
@@ -41,6 +45,7 @@ is not involved: the endpoint saves its node programmatically.
 | `includes/myapi.reservation_rules.inc` | The business rules of a reservation, shared by this form and by `POST /api/v1/reservations` (SPEC 135). |
 | `includes/myapi.reservation_admin.inc` | `myapi_reservation_validate_rules()`: applies those rules to the form. Also the HH:MM format of SPEC 52. |
 | `tests/unit/ReservationAdminRulesTest.php` | The shared rules and their application to the form. |
+| `tests/unit/ReservationFormCancellationTest.php` | The cancellation reason rule, who cancelled, and the shaping of the two fields (SPEC 137). |
 
 ---
 
@@ -272,7 +277,61 @@ rule passed, and lasts one request.
 
 ---
 
+## Cancellation fields
+
+Since SPEC 137 the two cancellation fields are no longer free inputs.
+
+**Motivo de cancelación (`field_cancel_reason`) — required to cancel.**
+`myapi_reservation_form_validate_cancel_reason()`, reached from
+`hook_node_validate()`, refuses the save and flags the input with *Escriba el
+motivo de cancelación: es obligatorio para cancelar una reserva.*
+
+| Saved as | Stored before | Reason sent | Result |
+|---|---|---|---|
+| *Cancelada* | new, or *Confirmada* | empty or only spaces | Refused |
+| *Cancelada* | new, or *Confirmada* | text | Saved |
+| *Cancelada* | *Cancelada* with a reason | empty | Refused — a stored reason cannot be erased |
+| *Cancelada* | *Cancelada* without a reason | empty | Saved — see below |
+| *Confirmada* | anything | anything | Saved; the rule does not apply |
+
+A reservation already cancelled **without** a reason stays editable: the
+resident's `PUT /api/v1/reservations/{id}/cancel` keeps its optional reason
+([reservation.md](reservation.md)), and so do the cancellations stored before
+this rule.
+
+The form marks the input with an asterisk while **Estado de la reserva** says
+*Cancelada* (`#states`, drawn by `misc/states.js`). The field is not
+`#required`: a confirmed reservation is saved without a reason.
+
+**Cancelada por (`field_cancelled_by`) — written by the module.**
+
+| Reservation | In the form |
+|---|---|
+| New, confirmed, or cancelled with no stored value | Hidden (`#access` FALSE) |
+| Stored as cancelled with a value | Shown, locked (`#disabled`) |
+
+In both cases Drupal discards whatever a request submits for it.
+`myapi_reservation_form_apply_cancelled_by()`, reached from
+`hook_node_submit()`, decides the value on every form save:
+
+| Saved as | Stored before | `field_cancelled_by` |
+|---|---|---|
+| *Cancelada* | new, or *Confirmada* | `admin` |
+| *Cancelada* | *Cancelada* | The stored value, untouched (`user`, `admin` or empty) |
+| *Confirmada* | anything | Emptied |
+
+"Stored before" is read with `entity_load_unchanged()`, from the database, and
+never with `node_load()`: on `node/<nid>/edit` the node the form carries is the
+object `node_load()` keeps in its static cache, and Drupal has already written
+the submitted values into it by the time `hook_node_submit()` runs.
+
+`hook_node_submit()` only runs while Drupal builds a node out of a submitted
+node form, so the endpoints — which write `user` themselves — and any
+programmatic `node_save()` are untouched.
+
+---
+
 ## Deploy
 
-`drush cc all` — a new route, a new include and a new hook implementation.
+`drush cc all` — a new hook implementation (`hook_node_submit()`, SPEC 137).
 No schema change, no `drush updb`.

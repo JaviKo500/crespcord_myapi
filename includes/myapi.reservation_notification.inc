@@ -499,7 +499,7 @@ function myapi_reservation_notify_created($node) {
  *   reservation is not a new cancellation.
  *
  * The transition is read from the status field and never from
- * field_cancelled_by, which an operator may well leave empty.
+ * field_cancelled_by, which old cancellations may hold empty.
  *
  * @param object $node  The 'reservation' node being updated.
  *

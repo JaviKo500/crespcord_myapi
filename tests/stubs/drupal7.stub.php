@@ -435,6 +435,13 @@ function entity_load(...$arguments) {}
  *
  * @return mixed
  */
+function entity_load_unchanged(...$arguments) {}
+
+/**
+ * @param mixed ...$arguments
+ *
+ * @return mixed
+ */
 function field_cache_clear(...$arguments) {}
 
 /**

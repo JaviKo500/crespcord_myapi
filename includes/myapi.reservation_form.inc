@@ -54,8 +54,17 @@
  * A time off the grid is NOT refused by anything: the endpoint never enforced
  * the block size and neither does this form.
  *
- * POST /api/v1/reservations is untouched: the endpoint saves its node
- * programmatically and never reaches a form alter or hook_node_validate().
+ * THE CANCELLATION FIELDS (SPEC 137). Two rules about who writes what:
+ * - field_cancel_reason is REQUIRED when the form cancels a reservation.
+ *   myapi_reservation_form_validate_cancel_reason() refuses the save; the form
+ *   alter only adds the asterisk, through #states.
+ * - field_cancelled_by is never typed by the operator. It is hidden until the
+ *   reservation is stored as cancelled, shown locked from then on, and written
+ *   by myapi_reservation_form_apply_cancelled_by() on every form save.
+ *
+ * POST /api/v1/reservations and PUT /api/v1/reservations/%/cancel are
+ * untouched: the endpoints save their node programmatically and never reach a
+ * form alter, hook_node_validate() or hook_node_submit().
  */
 
 /* ---------------------------------------------------------------------------
@@ -258,6 +267,87 @@ function myapi_reservation_form_scope_errors($condominium, $unit, array $unit_co
   return $errors;
 }
 
+/**
+ * Whether a field value holds text: a string with something besides spaces.
+ *
+ * The one reading of "there is a reason" and "there is a canceller" for the
+ * cancellation fields (SPEC 137). Pure.
+ *
+ * @param mixed $value
+ *   A field value, or NULL when the field is empty.
+ *
+ * @return bool
+ */
+function myapi_reservation_form_has_text($value) {
+  return is_string($value) && trim($value) !== '';
+}
+
+/**
+ * Whether a save must be refused for lack of a cancellation reason (SPEC 137).
+ *
+ * The reason is required whenever the reservation is saved as cancelled. The
+ * one exception is a reservation that ALREADY is cancelled and stored without
+ * a reason — cancelled by its resident from the app, where the reason is
+ * optional, or by an operator before this rule existed: editing it must not
+ * demand a reason nobody gave. A reason that is stored cannot be erased.
+ *
+ * A whitespace-only reason is no reason, same reading as the endpoint.
+ *
+ * Pure.
+ *
+ * @param mixed $status
+ *   The submitted field_reservation_status.
+ * @param mixed $reason
+ *   The submitted field_cancel_reason.
+ * @param mixed $stored_status
+ *   The stored status; NULL for a new reservation.
+ * @param mixed $stored_reason
+ *   The stored reason; NULL for a new reservation or when there is none.
+ *
+ * @return bool
+ */
+function myapi_reservation_form_cancel_reason_missing($status, $reason, $stored_status, $stored_reason) {
+  if ($status !== 'cancelled' || myapi_reservation_form_has_text($reason)) {
+    return FALSE;
+  }
+
+  return $stored_status !== 'cancelled' || myapi_reservation_form_has_text($stored_reason);
+}
+
+/**
+ * Who cancelled a reservation saved from the form (SPEC 137).
+ *
+ * - Not saved as cancelled: nobody. A reservation brought back to 'confirmed'
+ *   loses the mark, so a later cancellation does not inherit a stale one.
+ * - Already cancelled: whoever the stored value says, untouched. Editing a
+ *   reservation its resident cancelled must not turn it into an operator's.
+ * - Otherwise this save is the cancellation, and the form is only ever used
+ *   by operators: 'admin'.
+ *
+ * Pure.
+ *
+ * @param mixed $status
+ *   The submitted field_reservation_status.
+ * @param mixed $stored_status
+ *   The stored status; NULL for a new reservation.
+ * @param mixed $stored_cancelled_by
+ *   The stored field_cancelled_by; NULL when there is none.
+ *
+ * @return string|null
+ *   'user', 'admin' or NULL for an empty field.
+ */
+function myapi_reservation_form_cancelled_by($status, $stored_status, $stored_cancelled_by) {
+  if ($status !== 'cancelled') {
+    return NULL;
+  }
+
+  if ($stored_status === 'cancelled') {
+    return myapi_reservation_form_has_text($stored_cancelled_by) ? $stored_cancelled_by : NULL;
+  }
+
+  return 'admin';
+}
+
 /* ---------------------------------------------------------------------------
  * Drupal-facing helpers.
  *
@@ -375,6 +465,10 @@ function myapi_reservation_form_autocomplete_base_path() {
  *   The form state, by reference. Unused; kept to mirror the hook.
  */
 function myapi_reservation_form_alter(&$form, &$form_state) {
+  // On its own, before the all-or-nothing of the selectors: who cancelled a
+  // reservation must stay out of reach whatever happens to the other widgets.
+  myapi_reservation_form_alter_cancellation($form);
+
   $selectors = myapi_reservation_form_selectors();
   $elements = [];
 
@@ -783,4 +877,147 @@ function myapi_reservation_form_validate_scope($node, $form, &$form_state) {
     $language = isset($form[$field]['#language']) ? $form[$field]['#language'] : 'und';
     form_set_error($field . '][' . $language . '][0][target_id', $error['message']);
   }
+}
+
+/* ---------------------------------------------------------------------------
+ * The cancellation fields (SPEC 137).
+ * ------------------------------------------------------------------------ */
+
+/**
+ * The stored status, reason and canceller of a reservation.
+ *
+ * Read with entity_load_unchanged(), straight from the database, and NEVER
+ * with node_load(). On node/%/edit the node the form carries IS the object
+ * node_load() keeps in its static cache — the menu loaded it and node_form()
+ * stored it as is — and Drupal writes the submitted values into that very
+ * object before it invokes hook_node_submit(). node_load() would then answer
+ * what was just submitted: a reservation being cancelled would already read
+ * as cancelled, and nobody would be written as its canceller.
+ *
+ * Also loads includes/myapi.reservation_rules.inc, whose
+ * myapi_reservation_node_value() the callers use on their own node.
+ *
+ * @param object|null $node
+ *   The reservation, as the form or a hook holds it; only its nid is read.
+ *
+ * @return array
+ *   'status', 'reason' and 'cancelled_by', each NULL when the reservation is
+ *   new, is no longer in the database or holds no value.
+ */
+function myapi_reservation_form_stored_cancellation($node) {
+  module_load_include('inc', 'myapi', 'includes/myapi.reservation_rules');
+
+  $stored = ['status' => NULL, 'reason' => NULL, 'cancelled_by' => NULL];
+
+  $unchanged = !empty($node->nid) ? entity_load_unchanged('node', $node->nid) : FALSE;
+  if ($unchanged) {
+    $stored['status'] = myapi_reservation_node_value($unchanged, 'field_reservation_status');
+    $stored['reason'] = myapi_reservation_node_value($unchanged, 'field_cancel_reason');
+    $stored['cancelled_by'] = myapi_reservation_node_value($unchanged, 'field_cancelled_by');
+  }
+
+  return $stored;
+}
+
+/**
+ * Shapes the two cancellation fields of the 'reservation' node form.
+ *
+ * "Cancelada por" is hidden while there is nothing to show — a new
+ * reservation, a confirmed one, a cancelled one with no stored canceller — and
+ * shown LOCKED once the reservation is stored as cancelled. Either way Drupal
+ * ignores whatever a request submits for it; the value is written by
+ * myapi_reservation_form_apply_cancelled_by().
+ *
+ * "Motivo de cancelación" gets its asterisk while the status select says
+ * 'cancelled', and a help text that no longer calls it optional. The rule
+ * itself is myapi_reservation_form_validate_cancel_reason().
+ *
+ * @param array $form
+ *   The node form, by reference.
+ */
+function myapi_reservation_form_alter_cancellation(array &$form) {
+  module_load_include('inc', 'myapi', 'includes/myapi.time_format');
+
+  if (isset($form['field_cancelled_by'])) {
+    $stored = myapi_reservation_form_stored_cancellation(isset($form['#node']) ? $form['#node'] : NULL);
+
+    if ($stored['status'] === 'cancelled' && myapi_reservation_form_has_text($stored['cancelled_by'])) {
+      $form['field_cancelled_by']['#disabled'] = TRUE;
+    }
+    else {
+      $form['field_cancelled_by']['#access'] = FALSE;
+    }
+  }
+
+  $language = myapi_time_format_text_input_langcode($form, 'field_cancel_reason');
+  if ($language === NULL) {
+    return;
+  }
+
+  $reason = &$form['field_cancel_reason'][$language][0]['value'];
+  $reason['#description'] = 'Obligatorio al cancelar la reserva. Se muestra al residente.';
+
+  if (!empty($form['field_reservation_status']['#language'])) {
+    $status_name = 'field_reservation_status[' . $form['field_reservation_status']['#language'] . ']';
+    $reason['#states']['required'] = [
+      ':input[name="' . $status_name . '"]' => ['value' => 'cancelled'],
+    ];
+  }
+}
+
+/**
+ * Refuses a cancellation saved without its reason (SPEC 137).
+ *
+ * Called from myapi_node_validate() for 'reservation' nodes, for EVERY user.
+ * Reached from node_form_validate() only, so the resident's own
+ * PUT /api/v1/reservations/%/cancel keeps its optional reason.
+ *
+ * @param object $node
+ *   The pseudo-node built from the submitted values.
+ * @param array $form
+ *   The node form; read only to name the offending input.
+ * @param array $form_state
+ *   The form state, by reference. Unused; kept to mirror the hook.
+ */
+function myapi_reservation_form_validate_cancel_reason($node, $form, &$form_state) {
+  $stored = myapi_reservation_form_stored_cancellation($node);
+
+  $missing = myapi_reservation_form_cancel_reason_missing(
+    myapi_reservation_node_value($node, 'field_reservation_status'),
+    myapi_reservation_node_value($node, 'field_cancel_reason'),
+    $stored['status'],
+    $stored['reason']
+  );
+  if (!$missing) {
+    return;
+  }
+
+  $language = isset($form['field_cancel_reason']['#language']) ? $form['field_cancel_reason']['#language'] : 'und';
+  form_set_error('field_cancel_reason][' . $language . '][0][value', 'Escriba el motivo de cancelación: es obligatorio para cancelar una reserva.');
+}
+
+/**
+ * Writes who cancelled a reservation saved from the node form (SPEC 137).
+ *
+ * Called from myapi_node_submit(), which Drupal only invokes while building
+ * the node out of a submitted node form: no endpoint and no programmatic
+ * node_save() reaches it. The operator has no say — the field is hidden or
+ * locked — so the value is decided here from the status alone, see
+ * myapi_reservation_form_cancelled_by().
+ *
+ * @param object $node
+ *   The node being built from the form, modified in place.
+ */
+function myapi_reservation_form_apply_cancelled_by($node) {
+  $stored = myapi_reservation_form_stored_cancellation($node);
+
+  $cancelled_by = myapi_reservation_form_cancelled_by(
+    myapi_reservation_node_value($node, 'field_reservation_status'),
+    $stored['status'],
+    $stored['cancelled_by']
+  );
+
+  $node->field_cancelled_by[LANGUAGE_NONE] = $cancelled_by === NULL
+    ? []
+    : [0 => ['value' => $cancelled_by]];
 }
