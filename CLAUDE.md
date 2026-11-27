@@ -39,6 +39,25 @@ drush updb
 
 There is no automated test runner. Manual testing is done via HTTP client (curl, Postman, etc.) against the running Drupal site.
 
+### Local environment (Docker)
+
+There is no staging server: every change is tried locally before production. The local
+site runs in Docker with production's code and sanitized data, and this repository is
+mounted live as `sites/all/modules/myapi`. Full guide: `docs/desarrollo-local.md`.
+
+```bash
+make up            # start web (PHP 8.3 FPM + Apache), MariaDB 10.6 and Mailpit
+make cc            # drush cc all, inside the container as www-data
+make updb          # drush updb -y && drush cc all
+make test          # PHPUnit on PHP 8.3      make stan   # PHPStan
+make queue         # drain the mail/push queues (no automatic cron locally)
+scripts/local/drush.sh <command>
+```
+
+Site: `http://localhost:8080` — all mail lands in Mailpit, `http://localhost:8025`.
+`make pull-code` and `make pull-db` read from production and ask for confirmation;
+production is read-only for everything under `scripts/local/`.
+
 ---
 
 ## Architecture rules
