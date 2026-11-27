@@ -1,0 +1,66 @@
+# Local development environment for the Drupal 7 site that hosts myapi.
+# Usage and first-time setup: docs/desarrollo-local.md.
+#
+# Versions mirror production: PHP 8.3 (FPM) + Apache 2.4 event,
+# MariaDB 10.6.23. Values come from .env (see .env.example).
+
+name: ${COMPOSE_PROJECT_NAME:-crespcord}
+
+services:
+  web:
+    build: ./docker/web
+    image: crespcord-web:local
+    depends_on:
+      db:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    ports:
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}:80"
+    volumes:
+      # Core + contrib pulled from production (scripts/local/pull-code.sh).
+      - ./.local/docroot:/var/www/html
+      # The module under development: this repository, live.
+      - .:/var/www/html/sites/all/modules/myapi
+      # Same paths as production for private files and the back-office manual.
+      - ./.local/private:/var/www/private
+      - ./.local/manual-backoffice:/var/www/manual-backoffice
+    tmpfs:
+      # Hides .local/ (docroot copy, dumps) from inside the module mount.
+      - /var/www/html/sites/all/modules/myapi/.local
+
+  db:
+    image: mariadb:10.6.23
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_general_ci
+      - --sql-mode=STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION
+      - --max-allowed-packet=16M
+      # Production runs with 128M; a larger pool only makes the import faster.
+      - --innodb-buffer-pool-size=${DB_BUFFER_POOL:-768M}
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?set DB_ROOT_PASSWORD in .env}
+      MARIADB_DATABASE: ${DB_NAME:-crespcord}
+      MARIADB_USER: ${DB_USER:-crespcord}
+      MARIADB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${DB_PORT:-33066}:3306"
+    volumes:
+      - dbdata:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  mailpit:
+    image: axllent/mailpit:v1.21
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+      MP_MAX_MESSAGES: "2000"
+    ports:
+      - "127.0.0.1:${MAILPIT_PORT:-8025}:8025"
+
+volumes:
+  dbdata:

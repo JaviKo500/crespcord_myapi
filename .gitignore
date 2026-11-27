@@ -18,3 +18,11 @@ build/
 # Local deploy targets (production host), see scripts/deploy-target.sh.
 scripts/deploy.local.env
 .DS_Store
+
+# Local development environment (docs/desarrollo-local.md): docroot pulled from
+# production, database dumps, generated settings.php, local credentials.
+.local/
+.env
+*.sql
+*.sql.gz
+!schema.sql
