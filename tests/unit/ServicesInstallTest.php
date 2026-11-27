@@ -1078,6 +1078,12 @@ class ServicesInstallTest extends TestCase {
     // database did not have, and every bot payment failed — including the ones
     // that worked before — until 7049 existed.
     //
+    // 7051 AND 7052 ARE SPEC 138's: they create the three payment receipt
+    // tables and add the four condominium fiscal/start-number fields. Both are
+    // idempotent — they skip whatever already exists — and neither renumbers a
+    // hook any site has already recorded as applied, so the ceiling moves with
+    // them exactly like it did for every update before.
+    //
     // WHICH IS WHY THE ASSERTIONS BELOW EARN THEIR LINES. They are not
     // bookkeeping: each pins a number some site has already recorded as
     // applied, and a test that fails when somebody edits one of these hooks
@@ -1099,7 +1105,9 @@ class ServicesInstallTest extends TestCase {
     $this->assertStringContainsString('function myapi_update_7048()', $source);
     $this->assertStringContainsString('function myapi_update_7049()', $source);
     $this->assertStringContainsString('function myapi_update_7050()', $source);
-    $this->assertStringNotContainsString('function myapi_update_7051', $source);
+    $this->assertStringContainsString('function myapi_update_7051()', $source);
+    $this->assertStringContainsString('function myapi_update_7052()', $source);
+    $this->assertStringNotContainsString('function myapi_update_7053', $source);
     // 7028 is still SPEC 81's, not this spec's.
     $this->assertStringContainsString(
       '_myapi_services_install();',

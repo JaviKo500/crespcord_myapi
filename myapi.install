@@ -362,6 +362,209 @@ function myapi_schema() {
     ],
   ];
 
+  // SPEC 138. Billing data of a payer, per user and unit. A user may keep
+  // several rows per unit (one per billing identity), and the "one active per
+  // user and unit" rule is enforced by the endpoint code, not by the database:
+  // MySQL has no partial unique indexes. Rows are never deleted; they move to
+  // 'inactive' so the receipts that point at them keep resolving.
+  $schema['myapi_receipt_billing_data'] = [
+    'description' => 'Billing data of a payer, per user and unit.',
+    'fields' => [
+      'id' => [
+        'description' => 'Primary key.',
+        'type'        => 'serial',
+        'unsigned'    => TRUE,
+        'not null'    => TRUE,
+      ],
+      'uid' => [
+        'description' => 'Logical FK to dr_users.uid. Owner of the billing data.',
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'not null'    => TRUE,
+      ],
+      'unit_nid' => [
+        'description' => 'Logical FK to the unit (vivienda) node (nid).',
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'not null'    => TRUE,
+      ],
+      'first_name' => [
+        'description' => 'Payer first names.',
+        'type'        => 'varchar',
+        'length'      => 128,
+        'not null'    => TRUE,
+      ],
+      'last_name' => [
+        'description' => 'Payer last names.',
+        'type'        => 'varchar',
+        'length'      => 128,
+        'not null'    => TRUE,
+      ],
+      'document_number' => [
+        'description' => 'Cédula or RUC, stored as typed; validated by a later spec.',
+        'type'        => 'varchar',
+        'length'      => 13,
+        'not null'    => TRUE,
+      ],
+      'email' => [
+        'description' => 'Payer email.',
+        'type'        => 'varchar',
+        'length'      => 254,
+        'not null'    => TRUE,
+      ],
+      'address' => [
+        'description' => 'Payer address.',
+        'type'        => 'varchar',
+        'length'      => 255,
+        'not null'    => TRUE,
+        'default'     => '',
+      ],
+      'phone' => [
+        'description' => 'Payer phone.',
+        'type'        => 'varchar',
+        'length'      => 20,
+        'not null'    => TRUE,
+        'default'     => '',
+      ],
+      'status' => [
+        'description' => "Billing data state. 'active' or 'inactive'.",
+        'type'        => 'varchar',
+        'length'      => 16,
+        'not null'    => TRUE,
+        'default'     => 'active',
+      ],
+      'created' => [
+        'description' => 'Unix timestamp when the row was created.',
+        'type'        => 'int',
+        'not null'    => TRUE,
+      ],
+      'changed' => [
+        'description' => 'Unix timestamp of the last change.',
+        'type'        => 'int',
+        'not null'    => TRUE,
+      ],
+    ],
+    'primary key' => ['id'],
+    'indexes' => [
+      'uid_unit_status' => ['uid', 'unit_nid', 'status'],
+    ],
+  ];
+
+  // SPEC 138. One row per emitted version of a payment receipt. All versions
+  // of the same payment share `number`; each version has its own security
+  // code, PDF and snapshot of the payer data. The three unique keys are the
+  // second barrier against two emissions colliding: the sequence table and its
+  // FOR UPDATE lock order them, and a duplicate here fails loudly if it did
+  // not.
+  $schema['myapi_payment_receipts'] = [
+    'description' => 'Versioned payment receipts, one row per emitted version.',
+    'fields' => [
+      'id' => [
+        'description' => 'Primary key.',
+        'type'        => 'serial',
+        'unsigned'    => TRUE,
+        'not null'    => TRUE,
+      ],
+      'condominium_nid' => [
+        'description' => 'Logical FK to the issuing condominium node (nid).',
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'not null'    => TRUE,
+      ],
+      'number' => [
+        'description' => 'Sequential number within the condominium. Shared by every version of the payment.',
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'not null'    => TRUE,
+      ],
+      'version' => [
+        'description' => 'Version of the receipt, starting at 1 and raised on regeneration.',
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'not null'    => TRUE,
+        'default'     => 1,
+      ],
+      'payment_nid' => [
+        'description' => 'Logical FK to the payment (pagos) node (nid).',
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'not null'    => TRUE,
+      ],
+      'billing_data_id' => [
+        'description' => 'Logical FK to myapi_receipt_billing_data.id. NULL when the row was deleted.',
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'not null'    => FALSE,
+      ],
+      'billing_snapshot' => [
+        'description' => 'JSON copy of the payer data at emission time.',
+        'type'        => 'text',
+        'not null'    => TRUE,
+      ],
+      'security_code' => [
+        'description' => '20-character Base32 code of the QR and barcode.',
+        'type'        => 'varchar',
+        'length'      => 20,
+        'not null'    => TRUE,
+      ],
+      'pdf_fid' => [
+        'description' => 'Logical FK to file_managed.fid. NULL while there is no PDF.',
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'not null'    => FALSE,
+      ],
+      'status' => [
+        'description' => "Receipt state: 'pending', 'generated', 'failed', 'voided' or 'superseded'.",
+        'type'        => 'varchar',
+        'length'      => 16,
+        'not null'    => TRUE,
+        'default'     => 'pending',
+      ],
+      'created' => [
+        'description' => 'Unix timestamp when the version was created.',
+        'type'        => 'int',
+        'not null'    => TRUE,
+      ],
+    ],
+    'primary key' => ['id'],
+    'unique keys' => [
+      'payment_version'             => ['payment_nid', 'version'],
+      'condominium_number_version'  => ['condominium_nid', 'number', 'version'],
+      'security_code'               => ['security_code'],
+    ],
+    'indexes' => [
+      'condominium_status' => ['condominium_nid', 'status'],
+    ],
+  ];
+
+  // SPEC 138. One counter per condominium. It exists so the next number is
+  // reserved with SELECT ... FOR UPDATE inside the receipt's transaction,
+  // instead of MAX(number) + 1, which two simultaneous emissions both read.
+  // A rollback moves the counter back and the number is not lost.
+  $schema['myapi_receipt_sequences'] = [
+    'description' => 'Last receipt number handed out per condominium.',
+    'fields' => [
+      'condominium_nid' => [
+        'description' => 'Primary key. Logical FK to the condominium node (nid).',
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'not null'    => TRUE,
+      ],
+      'last_number' => [
+        'description' => 'Last number handed out. 0 when none has been emitted yet.',
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'not null'    => TRUE,
+      ],
+      'changed' => [
+        'description' => 'Unix timestamp of the last change.',
+        'type'        => 'int',
+        'not null'    => TRUE,
+      ],
+    ],
+    'primary key' => ['condominium_nid'],
+  ];
+
   return $schema;
 }
 
@@ -5386,4 +5589,154 @@ function myapi_update_7050() {
     return t('Límite de subida: todas las instancias ya estaban en 5 MB.');
   }
   return t('Límite de subida subido a 5 MB en: @list.', ['@list' => implode(', ', $updated)]);
+}
+
+/**
+ * SPEC 138: creates the three payment receipt tables.
+ *
+ * Same shape as myapi_update_7048(): each table is read from the module's own
+ * hook_schema() with drupal_get_schema_unprocessed() and created only when it
+ * does not exist. A site that already has one of them — a re-run, or a
+ * partially applied deployment — keeps it untouched, and a second `drush updb`
+ * has nothing to do because the hook is not offered again.
+ *
+ * The counter table is created here too, not by the emission code: reserving a
+ * number needs the row to exist before the first INSERT ... ON DUPLICATE KEY
+ * UPDATE of myapi_payment_receipt_next_number().
+ */
+function myapi_update_7051() {
+  $tables = [
+    'myapi_receipt_billing_data',
+    'myapi_payment_receipts',
+    'myapi_receipt_sequences',
+  ];
+
+  $created = [];
+  foreach ($tables as $table) {
+    if (db_table_exists($table)) {
+      continue;
+    }
+    $schema = drupal_get_schema_unprocessed('myapi', $table);
+    db_create_table($table, $schema);
+    $created[] = $table;
+  }
+
+  if (!$created) {
+    return t('SPEC 138: las tres tablas de comprobantes ya existían; nada que hacer.');
+  }
+
+  return t('SPEC 138: tablas de comprobantes creadas: @list.', ['@list' => implode(', ', $created)]);
+}
+
+/**
+ * SPEC 138: adds the condominium fiscal fields and the receipt start number.
+ *
+ * Four optional fields on the 'condominio' bundle:
+ *
+ *  - field_ruc: RUC / Cédula, plain text, 13 characters.
+ *  - field_direccion: address, plain text, 255 characters.
+ *  - field_telefono: phone, plain text, 20 characters.
+ *  - field_receipt_start_number: first receipt number, integer >= 1,
+ *    default 1.
+ *
+ * The first three are read live when a receipt is rendered, so a regenerated
+ * PDF shows the condominium's current address. The start number is read ONLY
+ * when the condominium's counter row is created, which is why its description
+ * warns that changing it later has no effect.
+ *
+ * Reuses the idempotent _myapi_reservations_ensure_field() and
+ * _myapi_reservations_ensure_instance() helpers: a field or instance that
+ * already exists — a re-run, or one adjusted by hand — is left untouched.
+ */
+function myapi_update_7052() {
+  $fields = [
+    'field_ruc' => [
+      'field_name'  => 'field_ruc',
+      'type'        => 'text',
+      'cardinality' => 1,
+      'settings'    => [
+        'max_length'      => 13,
+        'text_processing' => 0,
+      ],
+    ],
+    'field_direccion' => [
+      'field_name'  => 'field_direccion',
+      'type'        => 'text',
+      'cardinality' => 1,
+      'settings'    => [
+        'max_length'      => 255,
+        'text_processing' => 0,
+      ],
+    ],
+    'field_telefono' => [
+      'field_name'  => 'field_telefono',
+      'type'        => 'text',
+      'cardinality' => 1,
+      'settings'    => [
+        'max_length'      => 20,
+        'text_processing' => 0,
+      ],
+    ],
+    'field_receipt_start_number' => [
+      'field_name'  => 'field_receipt_start_number',
+      'type'        => 'number_integer',
+      'cardinality' => 1,
+    ],
+  ];
+
+  foreach ($fields as $field_name => $definition) {
+    _myapi_reservations_ensure_field($field_name, $definition);
+  }
+
+  $instances = [
+    'field_ruc' => [
+      'label'         => 'RUC / Cédula',
+      'description'   => '',
+      'settings'      => ['text_processing' => 0],
+      'widget'        => ['type' => 'text_textfield'],
+      'default_value' => NULL,
+    ],
+    'field_direccion' => [
+      'label'         => 'Dirección',
+      'description'   => '',
+      'settings'      => ['text_processing' => 0],
+      'widget'        => ['type' => 'text_textfield'],
+      'default_value' => NULL,
+    ],
+    'field_telefono' => [
+      'label'         => 'Teléfono',
+      'description'   => '',
+      'settings'      => ['text_processing' => 0],
+      'widget'        => ['type' => 'text_textfield'],
+      'default_value' => NULL,
+    ],
+    'field_receipt_start_number' => [
+      'label'         => 'Número inicial de comprobantes',
+      'description'   => 'Solo se aplica al emitir el primer comprobante del condominio; después no tiene efecto.',
+      'settings'      => [
+        'min'                => 1,
+        'max'                => '',
+        'prefix'             => '',
+        'suffix'             => '',
+        'user_register_form' => FALSE,
+      ],
+      'widget'        => ['type' => 'number'],
+      'default_value' => [['value' => 1]],
+    ],
+  ];
+
+  foreach ($instances as $field_name => $instance) {
+    _myapi_reservations_ensure_instance($field_name, 'condominio', $instance + [
+      'field_name'  => $field_name,
+      'entity_type' => 'node',
+      'bundle'      => 'condominio',
+      'required'    => 0,
+      'display'     => [
+        'default' => [
+          'label' => 'hidden',
+          'type'  => 'hidden',
+        ],
+      ],
+    ]);
+  }
 }
