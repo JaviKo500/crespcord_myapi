@@ -44,12 +44,13 @@
 
 | Campo | Tipo | Ajustes | Etiqueta |
 |---|---|---|---|
-| `field_ruc` | `text` | `max_length` 13, `text_processing` 0 | RUC / Cédula |
+| `field_ruc` | `text` | `max_length` 255 (campo compartido), `text_processing` 0 | RUC / Cédula |
 | `field_direccion` | `text` | `max_length` 255, `text_processing` 0 | Dirección |
-| `field_telefono` | `text` | `max_length` 20, `text_processing` 0 | Teléfono |
+| `field_telefono` | `text` | `max_length` 255 (campo compartido), `text_processing` 0 | Teléfono |
 | `field_receipt_start_number` | `number_integer` | `min` 1, valor por defecto 1 | Número inicial de comprobantes |
 
 - Los cuatro son opcionales (`required` 0), con widget de texto o número y display `hidden`.
+- `field_ruc` y `field_telefono` ya existen como campos compartidos (`tokens_payphone` y el perfil de `user`) con `max_length` 255. El update solo añade la instancia en `condominio` y no cambia el campo. Ver la decisión 16.
 - La descripción de `field_receipt_start_number` avisa: *"Solo se aplica al emitir el primer comprobante del condominio; después no tiene efecto."*
 
 ### `myapi_receipt_billing_data`: datos de facturación del pagador
@@ -190,6 +191,7 @@ Manuales en local (`make up`):
 13. **Sí: `pdf_fid`; no: ruta de texto.** El punto 3 guarda el PDF como archivo gestionado, y con el `fid` Drupal controla el acceso y la limpieza.
 14. **Sí: dos updates (`7051` tablas, `7052` campos).** Cada paso del plan se puede commitear y ejecutar con `updb` por separado.
 15. **No: validar el RUC o la cédula aquí.** Va en otra spec, igual que la URL de verificación del QR.
+16. **Sí: reutilizar `field_ruc` y `field_telefono` tal como existen (`max_length` 255); no: reducirlos a 13 y 20.** *(Enmienda del 2026-11-27, tras la implementación.)* Los dos campos ya existían, compartidos con `tokens_payphone` y con el perfil de `user`. En Drupal 7 `max_length` es un ajuste del campo, no de la instancia, así que reducirlo afectaría a esos otros bundles y a sus datos guardados. El límite de 13 caracteres del RUC o la cédula se aplicará en la spec que los valida (decisión 15).
 
 ---
 

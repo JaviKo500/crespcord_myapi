@@ -23,9 +23,9 @@ optional, with a text or number widget, and hidden from the node display.
 
 | Field | Type | Settings | Label |
 |---|---|---|---|
-| `field_ruc` | `text` | `max_length` 13, `text_processing` 0 | RUC / Cédula |
+| `field_ruc` | `text` | `max_length` 255 (shared field), `text_processing` 0 | RUC / Cédula |
 | `field_direccion` | `text` | `max_length` 255, `text_processing` 0 | Dirección |
-| `field_telefono` | `text` | `max_length` 20, `text_processing` 0 | Teléfono |
+| `field_telefono` | `text` | `max_length` 255 (shared field), `text_processing` 0 | Teléfono |
 | `field_receipt_start_number` | `number_integer` | `min` 1, default 1 | Número inicial de comprobantes |
 
 Two different lifetimes, and the difference matters:
@@ -86,7 +86,7 @@ One row per emitted version of a payment receipt.
 | `number` | int unsigned | no | — | Sequential number within the condominium; shared by every version |
 | `version` | int unsigned | no | 1 | Raised on regeneration |
 | `payment_nid` | int unsigned | no | — | Payment (`pagos`) node |
-| `billing_data_id` | int unsigned | yes | — | Source billing row; `NULL` if it was deleted |
+| `billing_data_id` | int unsigned | yes | — | Source billing row; `NULL` if the receipt was not built from a stored row (billing rows are never deleted) |
 | `billing_snapshot` | text | no | — | JSON copy of the payer data at emission |
 | `security_code` | varchar 20 | no | — | Code of the QR and the barcode |
 | `pdf_fid` | int unsigned | yes | — | `file_managed.fid`; `NULL` while there is no PDF |

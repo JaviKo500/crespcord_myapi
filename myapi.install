@@ -491,7 +491,7 @@ function myapi_schema() {
         'not null'    => TRUE,
       ],
       'billing_data_id' => [
-        'description' => 'Logical FK to myapi_receipt_billing_data.id. NULL when the row was deleted.',
+        'description' => 'Logical FK to myapi_receipt_billing_data.id. NULL when the receipt was not built from a stored billing row.',
         'type'        => 'int',
         'unsigned'    => TRUE,
         'not null'    => FALSE,
@@ -5600,9 +5600,9 @@ function myapi_update_7050() {
  * partially applied deployment — keeps it untouched, and a second `drush updb`
  * has nothing to do because the hook is not offered again.
  *
- * The counter table is created here too, not by the emission code: reserving a
- * number needs the row to exist before the first INSERT ... ON DUPLICATE KEY
- * UPDATE of myapi_payment_receipt_next_number().
+ * The counter table is created here too, not by the emission code: the first
+ * INSERT ... ON DUPLICATE KEY UPDATE of myapi_payment_receipt_next_number()
+ * needs the table to exist. The condominium's row is created by that INSERT.
  */
 function myapi_update_7051() {
   $tables = [
@@ -5633,11 +5633,20 @@ function myapi_update_7051() {
  *
  * Four optional fields on the 'condominio' bundle:
  *
- *  - field_ruc: RUC / Cédula, plain text, 13 characters.
+ *  - field_ruc: RUC / Cédula, plain text.
  *  - field_direccion: address, plain text, 255 characters.
- *  - field_telefono: phone, plain text, 20 characters.
+ *  - field_telefono: phone, plain text.
  *  - field_receipt_start_number: first receipt number, integer >= 1,
  *    default 1.
+ *
+ * field_ruc and field_telefono ALREADY EXIST as shared fields (field_ruc on
+ * 'tokens_payphone', field_telefono on the user profile) with max_length 255.
+ * In Drupal 7 max_length is a FIELD setting, not an instance one, so the 13
+ * and 20 of the definitions below only apply on a site where the field does
+ * not exist yet; where it does, only the 'condominio' instance is added and
+ * the shared field keeps its 255. Shrinking it would touch the other bundles
+ * and their stored data. Length validation of the RUC belongs to the spec that
+ * validates the document number.
  *
  * The first three are read live when a receipt is rendered, so a regenerated
  * PDF shows the condominium's current address. The start number is read ONLY
