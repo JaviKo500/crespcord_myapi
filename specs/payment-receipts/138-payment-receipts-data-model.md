@@ -1,6 +1,6 @@
 # SPEC 138 — Modelo de datos de los comprobantes de pago
 
-> **Estado:** Approved · **Depende de:** SPEC 01 (esqueleto del módulo y `myapi.install`), SPEC 20 (nodo `pagos`), SPEC 123 (`ModuleContractTest` y el gate de CI) · **Fecha:** 2026-11-27
+> **Estado:** Implemented · **Depende de:** SPEC 01 (esqueleto del módulo y `myapi.install`), SPEC 20 (nodo `pagos`), SPEC 123 (`ModuleContractTest` y el gate de CI) · **Fecha:** 2026-11-27
 >
 > **Objetivo:** Crear el modelo de datos de los comprobantes de pago: datos fiscales del condominio, datos de facturación por usuario y vivienda, comprobantes versionados con código de seguridad, y numeración secuencial por condominio sin colisiones.
 
@@ -150,27 +150,27 @@ Si la transacción hace rollback, el contador vuelve atrás y el número no se p
 
 Automáticos (`make test`, `make stan`):
 
-- [ ] `PaymentReceiptModelTest`: el código de seguridad tiene 20 caracteres, todos del alfabeto `23456789ABCDEFGHJKLMNPQRSTUVWXYZ`.
-- [ ] `PaymentReceiptModelTest`: 1 000 códigos generados seguidos no se repiten.
-- [ ] `PaymentReceiptModelTest`: `myapi_payment_receipt_next_number()` lanza `LogicException` sin transacción abierta.
-- [ ] `PaymentReceiptModelTest`: el primer número de un condominio sin `field_receipt_start_number` es 1.
-- [ ] `PaymentReceiptModelTest`: con `field_receipt_start_number = 500` los tres primeros números son 500, 501 y 502.
-- [ ] `PaymentReceiptModelTest`: dos condominios distintos empiezan cada uno en su propio número inicial.
-- [ ] `PaymentReceiptModelTest`: cambiar `field_receipt_start_number` después del primer número no altera la secuencia.
-- [ ] `ModuleContractTest` pasa con las tres tablas y el include nuevos.
-- [ ] PHPStan sin errores nuevos.
+- [x] `PaymentReceiptModelTest`: el código de seguridad tiene 20 caracteres, todos del alfabeto `23456789ABCDEFGHJKLMNPQRSTUVWXYZ`.
+- [x] `PaymentReceiptModelTest`: 1 000 códigos generados seguidos no se repiten.
+- [x] `PaymentReceiptModelTest`: `myapi_payment_receipt_next_number()` lanza `LogicException` sin transacción abierta.
+- [x] `PaymentReceiptModelTest`: el primer número de un condominio sin `field_receipt_start_number` es 1.
+- [x] `PaymentReceiptModelTest`: con `field_receipt_start_number = 500` los tres primeros números son 500, 501 y 502.
+- [x] `PaymentReceiptModelTest`: dos condominios distintos empiezan cada uno en su propio número inicial.
+- [x] `PaymentReceiptModelTest`: cambiar `field_receipt_start_number` después del primer número no altera la secuencia.
+- [x] `ModuleContractTest` pasa con las tres tablas y el include nuevos.
+- [x] PHPStan sin errores nuevos.
 
 Manuales en local (`make up`):
 
-- [ ] `make updb` ejecuta `7051` y `7052` sin `Warning` / `Notice` / `Deprecated` en el watchdog.
-- [ ] Un segundo `make updb` no tiene updates pendientes, y ejecutar las dos funciones otra vez con `drush php-eval` no da error.
-- [ ] `SHOW CREATE TABLE` de las tres tablas muestra las columnas, la PK, los tres índices únicos de `myapi_payment_receipts` y el índice `uid_unit_status`.
-- [ ] El formulario de un condominio muestra **RUC / Cédula**, **Dirección**, **Teléfono** y **Número inicial de comprobantes** (este último con 1 por defecto) y los guarda.
-- [ ] Guardar **Número inicial de comprobantes** con `0` da error de validación.
-- [ ] Concurrencia: dos `drush php-eval` lanzados a la vez sobre el mismo condominio abren una transacción, piden número y esperan 5 s antes del commit. Obtienen números consecutivos distintos y el segundo espera a que el primero termine.
-- [ ] Rollback: pedir un número dentro de una transacción que hace rollback y pedir otro después devuelve el mismo número.
-- [ ] Insertar a mano en `myapi_payment_receipts` dos filas con el mismo `security_code`, o con el mismo `(payment_nid, version)`, falla por clave duplicada.
-- [ ] `docs/payment-receipt-model.md` existe y describe los campos, las tablas, los estados y `billing_snapshot`.
+- [x] `make updb` ejecuta `7051` y `7052` sin `Warning` / `Notice` / `Deprecated` en el watchdog.
+- [x] Un segundo `make updb` no tiene updates pendientes, y ejecutar las dos funciones otra vez con `drush php-eval` no da error.
+- [x] `SHOW CREATE TABLE` de las tres tablas muestra las columnas, la PK, los tres índices únicos de `myapi_payment_receipts` y el índice `uid_unit_status`.
+- [x] El formulario de un condominio muestra **RUC / Cédula**, **Dirección**, **Teléfono** y **Número inicial de comprobantes** (este último con 1 por defecto) y los guarda.
+- [x] Guardar **Número inicial de comprobantes** con `0` da error de validación.
+- [x] Concurrencia: dos `drush php-eval` lanzados a la vez sobre el mismo condominio abren una transacción, piden número y esperan 5 s antes del commit. Obtienen números consecutivos distintos y el segundo espera a que el primero termine.
+- [x] Rollback: pedir un número dentro de una transacción que hace rollback y pedir otro después devuelve el mismo número.
+- [x] Insertar a mano en `myapi_payment_receipts` dos filas con el mismo `security_code`, o con el mismo `(payment_nid, version)`, falla por clave duplicada.
+- [x] `docs/payment-receipt-model.md` existe y describe los campos, las tablas, los estados y `billing_snapshot`.
 
 ---
 
