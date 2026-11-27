@@ -1008,3 +1008,23 @@ function watchdog(...$arguments) {}
  * @return mixed
  */
 function watchdog_exception(...$arguments) {}
+
+/**
+ * The database connection factory (SPEC 138).
+ *
+ * myapi_payment_receipt_next_number() asks it whether a transaction is open
+ * before taking the row lock that orders two simultaneous emissions. As with
+ * the functions in this file, only the name is asserted: the connection is
+ * returned as mixed and never modelled, which is what keeps a wrong signature
+ * here from failing CI on correct code.
+ */
+class Database {
+
+  /**
+   * @param mixed ...$arguments
+   *
+   * @return mixed
+   */
+  public static function getConnection(...$arguments) {}
+
+}

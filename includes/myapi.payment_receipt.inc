@@ -102,3 +102,87 @@ function myapi_payment_receipt_security_code() {
 
   return $code;
 }
+
+/**
+ * Reserves the next receipt number of a condominium.
+ *
+ * MUST BE CALLED INSIDE AN OPEN TRANSACTION. The row lock this function takes
+ * is released at the end of the transaction, not at the end of the function:
+ * outside a transaction, the SELECT ... FOR UPDATE would lock nothing by the
+ * time the receipt is inserted, and two emissions could take the same number.
+ * The LogicException is the guard that turns that silent race into a bug the
+ * caller sees immediately.
+ *
+ * The three statements, in order:
+ *
+ *  1. INSERT ... ON DUPLICATE KEY UPDATE creates the condominium's counter row
+ *     with last_number = field_receipt_start_number - 1, or 0 when the field is
+ *     empty. The no-op UPDATE branch is what makes the statement idempotent
+ *     without ever resetting a counter that already exists.
+ *  2. SELECT ... FOR UPDATE locks that row until the transaction commits or
+ *     rolls back.
+ *  3. UPDATE last_number = last_number + 1 and the new value is returned.
+ *
+ * A rollback moves the counter back with the rest of the transaction, so the
+ * number is not lost. A failed PDF keeps the row in 'failed' and its number,
+ * and a retry reuses it.
+ *
+ * The number is read from the condominium's field ONLY while creating the
+ * counter row: changing field_receipt_start_number afterwards has no effect,
+ * which is what the field description warns about.
+ *
+ * MySQL/MariaDB dependency, stated on purpose: INSERT ... ON DUPLICATE KEY
+ * UPDATE and SELECT ... FOR UPDATE are not portable SQL. Production and local
+ * both run MariaDB.
+ *
+ * @param int $condominium_nid
+ *   The condominium node id.
+ *
+ * @return int
+ *   The reserved number.
+ *
+ * @throws LogicException
+ *   When there is no open database transaction.
+ */
+function myapi_payment_receipt_next_number($condominium_nid) {
+  if (!Database::getConnection()->inTransaction()) {
+    throw new LogicException('myapi_payment_receipt_next_number() must run inside an open transaction.');
+  }
+
+  $condominium_nid = (int) $condominium_nid;
+
+  // The start number is read only here, when the counter row is created. An
+  // empty or invalid field means "start at 1", which is last_number = 0.
+  $node = node_load($condominium_nid);
+  $start = 0;
+  if ($node && isset($node->field_receipt_start_number[LANGUAGE_NONE][0]['value'])) {
+    $start = (int) $node->field_receipt_start_number[LANGUAGE_NONE][0]['value'];
+  }
+  if ($start < 1) {
+    $start = 0;
+  }
+
+  db_query(
+    'INSERT INTO {myapi_receipt_sequences} (condominium_nid, last_number, changed) VALUES (:condominium_nid, :last_number, :changed) ON DUPLICATE KEY UPDATE condominium_nid = condominium_nid',
+    [
+      ':condominium_nid' => $condominium_nid,
+      ':last_number'     => $start > 0 ? $start - 1 : 0,
+      ':changed'         => REQUEST_TIME,
+    ]
+  );
+
+  $last = db_query(
+    'SELECT last_number FROM {myapi_receipt_sequences} WHERE condominium_nid = :condominium_nid FOR UPDATE',
+    [':condominium_nid' => $condominium_nid]
+  )->fetchField();
+
+  db_query(
+    'UPDATE {myapi_receipt_sequences} SET last_number = last_number + 1, changed = :changed WHERE condominium_nid = :condominium_nid',
+    [
+      ':changed'         => REQUEST_TIME,
+      ':condominium_nid' => $condominium_nid,
+    ]
+  );
+
+  return (int) $last + 1;
+}

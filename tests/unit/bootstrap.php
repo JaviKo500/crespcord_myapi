@@ -294,6 +294,34 @@ class MyapiTestTransaction {
 
 }
 
+/**
+ * The connection object behind Database::getConnection() (SPEC 138).
+ *
+ * One method is modelled: inTransaction(), the guard that makes
+ * myapi_payment_receipt_next_number() refuse to run outside a transaction. It
+ * reads the same counter db_transaction() writes, so a test with an open
+ * transaction and one without are told apart exactly as Drupal tells them
+ * apart. The connection models nothing else — no query execution, no schema,
+ * no credentials.
+ */
+class MyapiTestDatabaseConnection {
+
+  public function inTransaction() {
+    return !empty($GLOBALS['myapi_test_transactions_open']);
+  }
+
+}
+
+if (!class_exists('Database')) {
+  class Database {
+
+    public static function getConnection($target = 'default', $key = NULL) {
+      return new MyapiTestDatabaseConnection();
+    }
+
+  }
+}
+
 if (!function_exists('db_transaction')) {
   function db_transaction($name = NULL, array $options = []) {
     return new MyapiTestTransaction();
@@ -2778,8 +2806,83 @@ function myapi_test_db_writes($table = NULL) {
   }));
 }
 
+/**
+ * The receipt counter table, as a fixture (SPEC 138).
+ *
+ * myapi_payment_receipt_next_number() speaks three statements to
+ * {myapi_receipt_sequences}: the INSERT ... ON DUPLICATE KEY UPDATE that seeds
+ * the row, the SELECT ... FOR UPDATE that reads it and the UPDATE that
+ * increments it. The generic db_query() stub only records and returns nothing,
+ * and fetchField() on nothing is a fatal, so these three are recognized by
+ * their table and simulated over $GLOBALS['myapi_test_receipt_sequences'], a
+ * map of condominium_nid => last_number.
+ *
+ * What is NOT simulated is the row lock. The SELECT records that it was asked
+ * for — and whether a transaction was open at that moment — in
+ * $GLOBALS['myapi_test_receipt_sequence_locks'], so a test can assert the
+ * function took it inside the caller's transaction. Whether a second
+ * connection actually waits is a question for tests/integration.
+ *
+ * Any other statement against that table throws instead of returning a
+ * plausible nothing: a fixture that quietly answered NULL would let a broken
+ * query pass.
+ */
+function myapi_test_receipt_sequence_query($query, array $args) {
+  $GLOBALS['myapi_test_receipt_sequences'] = $GLOBALS['myapi_test_receipt_sequences'] ?? [];
+  $rows = &$GLOBALS['myapi_test_receipt_sequences'];
+  $nid = (int) $args[':condominium_nid'];
+
+  if (strpos($query, 'INSERT INTO {myapi_receipt_sequences}') !== FALSE) {
+    // ON DUPLICATE KEY UPDATE condominium_nid = condominium_nid: an existing
+    // counter is never reseeded, which is what the production statement does.
+    if (!isset($rows[$nid])) {
+      $rows[$nid] = (int) $args[':last_number'];
+    }
+
+    return new MyapiTestReceiptSequenceResult(NULL);
+  }
+
+  if (strpos($query, 'SELECT last_number FROM {myapi_receipt_sequences}') !== FALSE) {
+    $GLOBALS['myapi_test_receipt_sequence_locks'][] = [
+      'condominium_nid' => $nid,
+      'in_transaction'  => !empty($GLOBALS['myapi_test_transactions_open']),
+    ];
+
+    return new MyapiTestReceiptSequenceResult(isset($rows[$nid]) ? $rows[$nid] : NULL);
+  }
+
+  if (strpos($query, 'UPDATE {myapi_receipt_sequences} SET last_number = last_number + 1') !== FALSE) {
+    $rows[$nid] = (int) $rows[$nid] + 1;
+
+    return new MyapiTestReceiptSequenceResult(NULL);
+  }
+
+  throw new RuntimeException('db_query(): unrecognized {myapi_receipt_sequences} statement: ' . $query);
+}
+
+/**
+ * The one method the receipt counter fixture needs from a query result.
+ */
+class MyapiTestReceiptSequenceResult {
+
+  private $value;
+
+  public function __construct($value) {
+    $this->value = $value;
+  }
+
+  public function fetchField($index = 0) {
+    return $this->value;
+  }
+
+}
+
 if (!function_exists('db_query')) {
   function db_query($query, array $args = [], array $options = []) {
+    if (strpos($query, '{myapi_receipt_sequences}') !== FALSE) {
+      return myapi_test_receipt_sequence_query($query, $args);
+    }
+
     myapi_test_record_write('db_query', $query);
   }
 }
