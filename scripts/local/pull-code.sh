@@ -25,7 +25,7 @@ set -euo pipefail
 [ "${1:-}" = "--yes" ] && MYAPI_LOCAL_ASSUME_YES=1
 load_prod_target
 require_free_mb 2048
-confirm_prod "Se va a copiar el core y sites/all de producción a $DOCROOT (rsync, unos 100 MB)."
+confirm_prod "Se va a copiar el core y sites/all de producción a $DOCROOT (rsync: ~25 MB de transferencia, ~75 MB en disco)."
 
 echo "Copiando el core y sites/all desde producción..."
 rsync -az --delete --stats \

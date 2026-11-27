@@ -47,7 +47,7 @@ cp .env.example .env
 make build
 make up
 
-# 3. Código: core + sites/all de producción (rsync, ~25 MB, pide confirmación)
+# 3. Código: core + sites/all de producción (rsync, ~25 MB de transferencia, ~75 MB en disco; pide confirmación)
 make pull-code
 
 # 4. Datos: volcado de producción (~90 MB comprimido, ~1 min, pide confirmación)
@@ -273,8 +273,9 @@ make reset       # recrea la base desde .local/dumps/local-sanitized.sql.gz
 
 - `.local/dumps/local-sanitized.sql.gz` (~90 MB): el único volcado que se conserva, ya
   saneado. El volcado de producción se borra al terminar `make import`.
-- `make clean-dumps` borra los volcados; `make destroy` borra contenedores **y** el
-  volumen de la base.
+- `make clean-dumps` borra **todos** los volcados, también el saneado: después
+  `make reset` no funciona hasta repetir `make pull-db` y `make import`.
+  `make destroy` borra contenedores **y** el volumen de la base.
 
 Todo `.local/`, `.env` y cualquier `*.sql` / `*.sql.gz` están en `.gitignore`.
 

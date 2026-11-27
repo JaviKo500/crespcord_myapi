@@ -26,3 +26,4 @@ scripts/deploy.local.env
 *.sql
 *.sql.gz
 !schema.sql
+!scripts/local/sanitize.sql

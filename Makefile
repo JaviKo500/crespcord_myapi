@@ -100,7 +100,7 @@ mail-test: ## Send two test mails; they must show up in Mailpit
 watchdog: ## Last warnings and errors in Drupal's log
 	$(L)/drush.sh watchdog-show --severity=warning --count=30
 
-clean-dumps: ## Delete every dump in .local/dumps
+clean-dumps: ## Delete every dump in .local/dumps (make reset then needs a new make pull-db)
 	rm -f .local/dumps/*.sql.gz .local/dumps/*.partial
 
 destroy: ## Remove containers AND the database volume
